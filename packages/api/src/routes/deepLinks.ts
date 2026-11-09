@@ -9,7 +9,7 @@ import {
 	errorResponses,
 	jsonBody,
 	jsonContent,
-	loadAuthorizedNotebook,
+	loadAuthorizedNotebookMeta,
 	loadVisibleProject,
 	loadSessionProject,
 	NotebookIdParam,
@@ -110,7 +110,7 @@ app.openapi({ ...resolve, path: '/deep-links/:slug{[\\s\\S]+}', hide: true }, as
 		user,
 		deps,
 	);
-	const { meta } = await loadAuthorizedNotebook(
+	const meta = await loadAuthorizedNotebookMeta(
 		deps,
 		project,
 		link.target.notebook_id,
@@ -133,7 +133,7 @@ app.openapi(list, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await loadVisibleProject(deps.services.projects, pid, user, deps);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'project.read');
 	return c.json(
 		{
 			success: true as const,
@@ -153,7 +153,7 @@ app.openapi(register, async (c) => {
 		'deep-link.manage',
 		deps,
 	);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'deep-link.manage');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'deep-link.manage');
 	const link = await deps.services.deepLinks.register(
 		c.req.valid('json').slug,
 		{ kind: 'app', project_id: pid, notebook_id: nid },
@@ -172,7 +172,7 @@ app.openapi({ ...release, path: `${notebookPath}/:slug{[\\s\\S]+}`, hide: true }
 		'deep-link.manage',
 		deps,
 	);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'deep-link.manage');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'deep-link.manage');
 	await deps.services.deepLinks.release(
 		slug,
 		{ kind: 'app', project_id: pid, notebook_id: nid },

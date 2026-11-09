@@ -257,7 +257,12 @@ separate components:
   principal at request time. It never reads them from raw login claims or stores
   them in the session cookie. Set
   `MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND=library` to load a trusted provider.
-  Each decision batch resolves one strict, time-bounded context.
+  Decisions share a context for the same principal object within a request.
+  Expired contexts require resolution again. Concurrent calls share failures,
+  but later decisions retry null, invalid, or failed results.
+  Hono requests own separate promise memos, even if the authenticator reuses a principal.
+  Explicit MCP authorization refreshes start a new memo. Unscoped authorization
+  calls resolve context independently.
 - `AuthorizationService` requires both `roleAllowed` and
   `constraintsSatisfied`. Project labels and notebook overrides can only reduce
   access. `LocalResourceConstraintPolicy` applies

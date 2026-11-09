@@ -1,3 +1,4 @@
+import { PromiseMemo } from '../../async';
 /**
  * Resource-security composition: `roleAllowed AND constraintsSatisfied`.
  * Labels only remove access — super admins included — and every failure mode
@@ -579,5 +580,135 @@ describe('AuthorizationService: adapter trust boundary', () => {
 		).resolves.toEqual([true, false]);
 		expect(evaluate).not.toHaveBeenCalled();
 		expect(evaluateMany).not.toHaveBeenCalled();
+	});
+});
+
+describe('request subject context memo', () => {
+	const scopedService = (
+		subjectContext: SubjectSecurityContextProvider,
+		reads = new PromiseMemo(),
+	) => new AuthorizationService({}, { constraints: local(), subjectContext }, reads);
+
+	it('does not share contexts between scopes even when the principal object is reused', async () => {
+		const resolve = vi.fn().mockResolvedValueOnce(context()).mockResolvedValue(null);
+		const user = principal();
+		const resource = { kind: 'project' as const, project: labeled };
+		expect(
+			(await scopedService({ resolve }).authorize(user, 'project.read', resource)).allowed,
+		).toBe(true);
+		expect(
+			(await scopedService({ resolve }).authorize(user, 'project.read', resource)).allowed,
+		).toBe(false);
+		expect(resolve).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not retain a context across calls without an explicit scope', async () => {
+		const resolve = vi.fn().mockResolvedValueOnce(context()).mockResolvedValue(null);
+		const authz = service({ subjectContext: { resolve } });
+		const user = principal();
+		const resource = { kind: 'project' as const, project: labeled };
+		expect((await authz.authorize(user, 'project.read', resource)).allowed).toBe(true);
+		expect((await authz.authorize(user, 'project.read', resource)).allowed).toBe(false);
+		expect(resolve).toHaveBeenCalledTimes(2);
+	});
+
+	it('shares concurrent and sequential decisions only for the same principal object', async () => {
+		const resolve = vi.fn(async () => context());
+		const authz = scopedService({ resolve });
+		const user = principal();
+		const resource = { kind: 'project' as const, project: labeled };
+		const decisions = await Promise.all([
+			authz.authorize(user, 'project.read', resource),
+			authz.authorize(user, 'notebook.write', resource),
+			authz.authorize(user, 'notebook.manage', resource),
+		]);
+		expect(decisions.every((decision) => decision.allowed)).toBe(true);
+		await authz.authorize(user, 'project.read', resource);
+		expect(resolve).toHaveBeenCalledTimes(1);
+		await authz.authorize({ ...user }, 'project.read', resource);
+		expect(resolve).toHaveBeenCalledTimes(2);
+	});
+
+	it('re-resolves expired contexts even when concurrent callers see the expiry', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		try {
+			const now = Date.now();
+			const resolve = vi.fn(async () =>
+				context({ expiresAt: new Date(Date.now() + 1000).toISOString() }),
+			);
+			const authz = scopedService({ resolve });
+			const user = principal();
+			const resource = { kind: 'project' as const, project: labeled };
+			await authz.authorize(user, 'project.read', resource);
+			vi.setSystemTime(now + 1001);
+			const decisions = await Promise.all(
+				Array.from({ length: 3 }, () => authz.authorize(user, 'project.read', resource)),
+			);
+			expect(decisions.every((decision) => decision.allowed)).toBe(true);
+			expect(resolve).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(['null', 'expired', 'invalid', 'rejected'] as const)(
+		'shares a concurrent %s resolution, fails closed, and permits a later retry',
+		async (failure) => {
+			const pending = Promise.withResolvers<SubjectSecurityContext | null>();
+			const resolve = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(context());
+			const authz = scopedService({ resolve });
+			const user = principal();
+			const resource = { kind: 'project' as const, project: labeled };
+			const decisions = Promise.all(
+				Array.from({ length: 3 }, () => authz.authorize(user, 'project.read', resource)),
+			);
+			await vi.waitFor(() => expect(resolve).toHaveBeenCalledTimes(1));
+			if (failure === 'rejected') pending.reject(new Error('provider unavailable'));
+			else
+				pending.resolve(
+					failure === 'null'
+						? null
+						: context({
+								expiresAt: failure === 'expired' ? new Date(0).toISOString() : 'not-a-date',
+							}),
+				);
+			expect((await decisions).every((decision) => !decision.allowed)).toBe(true);
+			expect(resolve).toHaveBeenCalledTimes(1);
+			expect((await authz.authorize(user, 'project.read', resource)).allowed).toBe(true);
+			expect(resolve).toHaveBeenCalledTimes(2);
+		},
+	);
+
+	it('revokes access exactly at the cached context expiry', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		try {
+			const expires = Date.now() + 1000;
+			const resolve = vi
+				.fn()
+				.mockResolvedValueOnce(context({ expiresAt: new Date(expires).toISOString() }))
+				.mockResolvedValue(context({ classification: 'CUI' }));
+			const authz = scopedService({ resolve });
+			const user = principal();
+			const resource = { kind: 'project' as const, project: labeled };
+			expect((await authz.authorize(user, 'project.read', resource)).allowed).toBe(true);
+			vi.setSystemTime(expires);
+			expect((await authz.authorize(user, 'project.read', resource)).allowed).toBe(false);
+			expect(resolve).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('fails closed on provider failure and retries on the next decision', async () => {
+		const resolve = vi
+			.fn()
+			.mockRejectedValueOnce(new Error('unavailable'))
+			.mockResolvedValue(context());
+		const authz = scopedService({ resolve });
+		const user = principal();
+		const resource = { kind: 'project' as const, project: labeled };
+		expect((await authz.authorize(user, 'project.read', resource)).allowed).toBe(false);
+		expect((await authz.authorize(user, 'project.read', resource)).allowed).toBe(true);
+		expect(resolve).toHaveBeenCalledTimes(2);
 	});
 });

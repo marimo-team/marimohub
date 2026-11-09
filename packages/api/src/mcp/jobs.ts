@@ -54,7 +54,7 @@ interface ToolContext {
 
 async function resolveJob(deps: ApiDeps, target: AuthorizedNotebook, value: string) {
 	const pid = target.project.id;
-	const nid = target.notebook.meta.id;
+	const nid = target.notebook.id;
 	if (JobId.is(value)) {
 		try {
 			return await deps.services.jobs.getJob(pid, nid, value);
@@ -136,7 +136,7 @@ export function registerJobTools(
 		}),
 		'project.read',
 		async (input, { target }) =>
-			result(await listNotebookJobs(deps, target.project.id, target.notebook.meta.id, input)),
+			result(await listNotebookJobs(deps, target.project.id, target.notebook.id, input)),
 	);
 
 	register(
@@ -150,7 +150,7 @@ export function registerJobTools(
 		) => {
 			const job = await idempotentOperation(
 				deps,
-				`${principal.id}:mcp:create_job:${target.project.id}:${target.notebook.meta.id}`,
+				`${principal.id}:mcp:create_job:${target.project.id}:${target.notebook.id}`,
 				idempotency_key,
 				async () => {
 					signal.throwIfAborted();
@@ -208,7 +208,7 @@ export function registerJobTools(
 				request,
 				signal,
 				{
-					scope: `${principal.id}:mcp:run_job:${target.project.id}:${target.notebook.meta.id}:${job.id}`,
+					scope: `${principal.id}:mcp:run_job:${target.project.id}:${target.notebook.id}:${job.id}`,
 					key: input.idempotency_key,
 				},
 			);

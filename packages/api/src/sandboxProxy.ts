@@ -1,3 +1,4 @@
+import { deploymentState, withRequestMemo } from './requestMemo';
 /**
  * HTTP and WebSocket proxies share admission checks. Each request keeps its own
  * path and query. The Node relay closes sockets at the returned authorization deadline.
@@ -68,17 +69,17 @@ class AdmissionRejectedError extends Error {
 }
 
 function admissionCache(deps: ApiDeps): AdmissionCache {
-	let cache = ADMISSION_CACHES.get(deps);
-	if (!cache) {
-		cache = new LazyMap(
-			async () => {
-				throw new Error('An admission load function is required.');
-			},
-			{ maxSize: 10_000 },
-		);
-		ADMISSION_CACHES.set(deps, cache);
-	}
-	return cache;
+	return deploymentState(
+		deps,
+		ADMISSION_CACHES,
+		() =>
+			new LazyMap(
+				async () => {
+					throw new Error('An admission load function is required.');
+				},
+				{ maxSize: 10_000 },
+			),
+	);
 }
 
 function getFreshAdmission(
@@ -121,7 +122,7 @@ function trimTrailingSlash(s: string): string {
  */
 export async function authorizeProxyRequest(
 	request: Request,
-	deps: ApiDeps,
+	rawDeps: ApiDeps,
 ): Promise<ProxyDecision> {
 	const url = new URL(request.url);
 	const kernelMatch = PROXY_PREFIX.exec(url.pathname);
@@ -129,7 +130,7 @@ export async function authorizeProxyRequest(
 	if (!kernelMatch && !surfaceMatch) return { kind: 'pass' };
 
 	// The proxy signing secret travels with the ProxyExposure (subdomain mode has none).
-	const exposure = deps.sandbox.exposure;
+	const exposure = rawDeps.sandbox.exposure;
 	const secret = exposure instanceof ProxyExposure ? exposure.signingSecret : undefined;
 	if (!secret) {
 		// Proxy mode isn't configured (e.g. subdomain deployment) — a `/proxy/*` URL
@@ -137,6 +138,7 @@ export async function authorizeProxyRequest(
 		return { kind: 'pass' };
 	}
 
+	const deps = withRequestMemo(rawDeps);
 	const token = (kernelMatch ?? surfaceMatch)![1];
 	const verified = await verifyProxyToken(token, secret);
 	if (!verified) {

@@ -1667,6 +1667,10 @@ Soft deletion retains thumbnail objects during the recovery grace period.
 Hard deletion or garbage collection removes them. Images require notebook
 authorization and have no public bucket URLs.
 
+The image route serves the current thumbnail. A matching `?r=<revision>` gets
+`Cache-Control: private, max-age=86400`. Missing or stale revisions get
+`private, no-cache`, including on 304 responses. The revision does not select a historical image.
+
 ## App pool records
 
 `_system/app-pools/{pid}/{nid}.json` is a versioned CAS record owned by `AppPoolStore`.

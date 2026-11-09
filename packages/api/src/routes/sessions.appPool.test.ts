@@ -152,7 +152,7 @@ describe('app pool HTTP integration', () => {
 			[pid, first.session_id],
 			[pid, concurrent.session_id],
 		]);
-		expect(put.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(4);
+		expect(put.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(3);
 		expect((await pool.store.read(pid, nid))?.assignments).toMatchObject([
 			{
 				user_id: uid('bob'),
@@ -271,7 +271,7 @@ describe('app pool HTTP integration', () => {
 			client.request('POST', path(), { mode: 'app', app_visit_id: visitId });
 		const first = await expectOk<any>(await enter('first'));
 		await expectOk(await enter('second'));
-		const create = vi.spyOn(client.deps.services.sessions, 'createSession');
+		const create = vi.spyOn(client.deps.services.sessions, 'createSessionWithEtag');
 		const rejected = await enter('third');
 		expect(rejected.headers.get('Retry-After')).toBeTruthy();
 		await expectError(rejected, 429, 'RESOURCE_EXHAUSTED');
@@ -673,7 +673,7 @@ describe('app pool HTTP integration', () => {
 		const client = api();
 		const put = bucket.put.bind(bucket);
 		let sessionId: SessionId | undefined;
-		const create = vi.spyOn(client.deps.services.sessions, 'createSession');
+		const create = vi.spyOn(client.deps.services.sessions, 'createSessionWithEtag');
 		const failure = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
 			const requested = create.mock.calls.at(-1)?.[0];
 			if (requested?.session_id && key === paths.session(pid, requested.session_id)) {
@@ -865,7 +865,7 @@ describe('app pool HTTP integration', () => {
 				deps: { policy: { defaultRole: 'editor', appPool: policy } },
 			});
 			const sessions = client.deps.services.sessions;
-			const create = sessions.createSession.bind(sessions);
+			const create = sessions.createSessionWithEtag.bind(sessions);
 			let release!: () => void;
 			let entered!: () => void;
 			const gate = new Promise<void>((resolve) => {
@@ -874,7 +874,7 @@ describe('app pool HTTP integration', () => {
 			const creating = new Promise<void>((resolve) => {
 				entered = resolve;
 			});
-			vi.spyOn(sessions, 'createSession').mockImplementation(async (input) => {
+			vi.spyOn(sessions, 'createSessionWithEtag').mockImplementation(async (input) => {
 				entered();
 				await gate;
 				return create(input);
@@ -905,7 +905,7 @@ describe('app pool HTTP integration', () => {
 			expect(joined.session_id).toBe(running.session_id);
 			expect(joined.reused).toBe(true);
 			expect((await sessions.getSession(pid, running.session_id)).user_id).toBe(uid('alice'));
-			expect(sessions.createSession).toHaveBeenCalledTimes(1);
+			expect(sessions.createSessionWithEtag).toHaveBeenCalledTimes(1);
 			expect(fake.calls.startProcess).toHaveLength(1);
 		},
 	);

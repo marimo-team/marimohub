@@ -17,6 +17,7 @@ import type {
 	HostRuntimeHandle,
 } from '@marimo-hub/host-protocol';
 import type { ApiDeps } from '../context';
+import { withRequestMemo } from '../requestMemo';
 import { refreshIdentityFor } from '../identity';
 import { authorizeMcpSession, sessionAuthorizationDeadline } from '../mcp/sessionActivity';
 import {
@@ -138,6 +139,7 @@ export function createHubHostPlatform(deps: ApiDeps): HubHostPlatform {
 		catalogVersion: async () => (await deps.bucket.head(paths.catalog))?.etag ?? null,
 
 		async runtimes(principal, snapshot, visible, signal) {
+			const scoped = withRequestMemo(deps);
 			const discovered: HostRuntimeDiscovery<HubHostRuntime>[] = [];
 			for (const [pid, sessions] of snapshot.sessions) {
 				for (const session of sessions) {
@@ -155,7 +157,7 @@ export function createHubHostPlatform(deps: ApiDeps): HubHostPlatform {
 					};
 					if (visible.has(notebookId)) {
 						try {
-							const decision = await authorizeMcpSession(deps, principal, session);
+							const decision = await authorizeMcpSession(scoped, principal, session);
 							sessionAuthorizationDeadline(session, principal, decision.subjectContextExpiresAt);
 							entry.authorized = true;
 						} catch {

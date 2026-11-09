@@ -22,7 +22,7 @@ import {
 	releaseSingletonClaim,
 	withCasRetry,
 } from '../catalog/cas';
-import type { SingletonClaimConfig } from '../catalog/cas';
+import type { KnownObject, SingletonClaimConfig } from '../catalog/cas';
 import { createSessionId } from '../../ids';
 import type { NotebookId, ProjectId, SandboxId, SessionId, UserId, VersionId } from '../../ids';
 import { paths } from '../../paths';
@@ -200,6 +200,7 @@ export class SessionService {
 		projectId: ProjectId,
 		id: SessionId,
 		apply: (session: Session) => Session | null,
+		known?: KnownObject<Session>,
 	): Promise<Session> {
 		const value = await mutateObject(
 			this.bucket,
@@ -207,6 +208,7 @@ export class SessionService {
 			(raw) => parseStored(SessionSchema, raw, paths.session(projectId, id)),
 			apply,
 			{
+				known,
 				notFound: () => new NotFoundError(`Session ${id} not found`),
 				onConflict: () => this.metrics.increment('sessions.cas.conflict'),
 				onExhausted: () => this.metrics.increment('sessions.cas.exhausted'),
@@ -216,6 +218,10 @@ export class SessionService {
 	}
 
 	async createSession(input: CreateSessionInput): Promise<Session> {
+		return (await this.createSessionWithEtag(input)).value;
+	}
+
+	async createSessionWithEtag(input: CreateSessionInput): Promise<KnownObject<Session>> {
 		if (input.kernel_auth_token !== undefined) {
 			assertValidKernelAuthToken(input.kernel_auth_token);
 		}
@@ -277,7 +283,7 @@ export class SessionService {
 				);
 			}
 		}
-		return session;
+		return { value: session, etag: written.etag };
 	}
 
 	private async failCreatedSession(
@@ -332,13 +338,17 @@ export class SessionService {
 	}
 
 	async getSession(projectId: ProjectId, id: SessionId): Promise<Session> {
+		return (await this.getSessionWithEtag(projectId, id)).value;
+	}
+
+	async getSessionWithEtag(projectId: ProjectId, id: SessionId): Promise<KnownObject<Session>> {
 		const key = paths.session(projectId, id);
 		const obj = await this.bucket.get(key);
 		if (!obj) {
 			throw new NotFoundError(`Session ${id} not found`);
 		}
 
-		return readStored(SessionSchema, obj, key);
+		return { value: await readStored(SessionSchema, obj, key), etag: obj.etag };
 	}
 
 	/** Promote `starting` → `running` with the kernel URL. No-op if the session was
@@ -352,33 +362,39 @@ export class SessionService {
 		expiresAt?: string,
 		integrations?: Session['integrations'],
 		sandboxDeadlineAt?: string,
+		known?: KnownObject<Session>,
 	): Promise<Session> {
-		return this.mutate(projectId, id, (session) => {
-			if (isTerminal(session.status) || session.status === 'terminating') return null;
-			return {
-				...session,
-				status: 'running',
-				sandbox_url: sandboxUrl,
-				surfaces: {
-					...session.surfaces,
-					marimo: {
-						status: 'ready',
-						port: MARIMO_PORT,
-						url: sandboxUrl,
-						started_at: new Date().toISOString(),
+		return this.mutate(
+			projectId,
+			id,
+			(session) => {
+				if (isTerminal(session.status) || session.status === 'terminating') return null;
+				return {
+					...session,
+					status: 'running',
+					sandbox_url: sandboxUrl,
+					surfaces: {
+						...session.surfaces,
+						marimo: {
+							status: 'ready',
+							port: MARIMO_PORT,
+							url: sandboxUrl,
+							started_at: new Date().toISOString(),
+						},
 					},
-				},
-				// Persisted only in `proxy` exposure mode (the forwarder's target); absent
-				// in `subdomain` mode where the client reaches the kernel directly.
-				sandbox_origin_url: originUrl,
-				used_fallback: usedFallback,
-				...(expiresAt ? { expires_at: expiresAt } : {}),
-				...(sandboxDeadlineAt ? { sandbox_deadline_at: sandboxDeadlineAt } : {}),
-				...(session.integrations === undefined && integrations && integrations.length > 0
-					? { integrations }
-					: {}),
-			};
-		});
+					// Persisted only in `proxy` exposure mode (the forwarder's target); absent
+					// in `subdomain` mode where the client reaches the kernel directly.
+					sandbox_origin_url: originUrl,
+					used_fallback: usedFallback,
+					...(expiresAt ? { expires_at: expiresAt } : {}),
+					...(sandboxDeadlineAt ? { sandbox_deadline_at: sandboxDeadlineAt } : {}),
+					...(session.integrations === undefined && integrations && integrations.length > 0
+						? { integrations }
+						: {}),
+				};
+			},
+			known,
+		);
 	}
 
 	/** Slide a live session's graceful-teardown deadline forward (the lifecycle
@@ -605,65 +621,85 @@ export class SessionService {
 		}));
 	}
 
-	/** Heartbeats persist at most once per 60 seconds, but always recheck the session's status. */
-	async heartbeat(projectId: ProjectId, id: SessionId): Promise<Session> {
-		return this.mutate(projectId, id, (session) => {
-			const now = Date.now();
-			if (session.status !== 'running' || isPastAuthorizationDeadline(session, now)) return null;
-			if (now - Date.parse(session.last_heartbeat) < HEARTBEAT_PERSIST_INTERVAL_MS) return null;
-			return { ...session, last_heartbeat: new Date(now).toISOString() };
-		});
+	async heartbeat(
+		projectId: ProjectId,
+		id: SessionId,
+		known?: KnownObject<Session>,
+	): Promise<Session> {
+		const result = await this.mutate(
+			projectId,
+			id,
+			(session) => {
+				const now = Date.now();
+				if (
+					session.status !== 'running' ||
+					isPastAuthorizationDeadline(session, now) ||
+					now - Date.parse(session.last_heartbeat) < HEARTBEAT_PERSIST_INTERVAL_MS
+				) {
+					return null;
+				}
+				return { ...session, last_heartbeat: new Date(now).toISOString() };
+			},
+			known,
+		);
+		// A no-op returns the known object itself, without a CAS to detect termination or deletion.
+		return result === known?.value ? this.getSession(projectId, id) : result;
 	}
 
 	/**
-	 * Mark a session `terminating` (stop requested; teardown in flight). Visible to
-	 * pollers as `Stopping…`. No-op on a session that is already
-	 * terminal/terminating — `transitioned` reports whether THIS call won the
-	 * transition, so exactly one racer owns the teardown (a loser must not run a
-	 * second save-and-destroy over the same sandbox).
+	 * Only the caller with `transitioned: true` owns teardown.
+	 * Terminal or terminating sessions return unchanged, including after a CAS retry.
 	 */
 	async beginTerminating(
 		projectId: ProjectId,
 		id: SessionId,
 		attribution?: { reason: 'takeover'; by: UserId },
+		known?: KnownObject<Session>,
 	): Promise<{ session: Session; transitioned: boolean }> {
 		let transitioned = false;
-		const session = await this.mutate(projectId, id, (current) => {
-			const next = nextStatus(current.status, 'terminate');
-			transitioned = next !== null;
-			if (!next) return null;
-			const now = new Date().toISOString();
-			const surfaces = Object.fromEntries(
-				Object.entries(current.surfaces ?? {}).map(([surface, state]) => {
-					if (
-						surface === 'marimo' ||
-						(state.status !== 'starting' && state.status !== 'ready' && state.status !== 'stopping')
-					) {
-						return [surface, state];
-					}
-					const cancelledAttemptId =
-						state.status === 'starting' ? state.attempt_id : state.cancelled_attempt_id;
-					return [
-						surface,
-						{
-							status: 'stopping' as const,
-							attempt_id: crypto.randomUUID(),
-							attempt_started_at: now,
-							...(cancelledAttemptId ? { cancelled_attempt_id: cancelledAttemptId } : {}),
-						},
-					];
-				}),
-			);
-			return {
-				...current,
-				status: next,
-				terminating_at: now,
-				...(current.surfaces ? { surfaces } : {}),
-				...(attribution
-					? { ended_reason: attribution.reason, ended_by_user_id: attribution.by }
-					: {}),
-			};
-		});
+		const session = await this.mutate(
+			projectId,
+			id,
+			(current) => {
+				const next = nextStatus(current.status, 'terminate');
+				transitioned = next !== null;
+				if (!next) return null;
+				const now = new Date().toISOString();
+				const surfaces = Object.fromEntries(
+					Object.entries(current.surfaces ?? {}).map(([surface, state]) => {
+						if (
+							surface === 'marimo' ||
+							(state.status !== 'starting' &&
+								state.status !== 'ready' &&
+								state.status !== 'stopping')
+						) {
+							return [surface, state];
+						}
+						const cancelledAttemptId =
+							state.status === 'starting' ? state.attempt_id : state.cancelled_attempt_id;
+						return [
+							surface,
+							{
+								status: 'stopping' as const,
+								attempt_id: crypto.randomUUID(),
+								attempt_started_at: now,
+								...(cancelledAttemptId ? { cancelled_attempt_id: cancelledAttemptId } : {}),
+							},
+						];
+					}),
+				);
+				return {
+					...current,
+					status: next,
+					terminating_at: now,
+					...(current.surfaces ? { surfaces } : {}),
+					...(attribution
+						? { ended_reason: attribution.reason, ended_by_user_id: attribution.by }
+						: {}),
+				};
+			},
+			known,
+		);
 		return { session, transitioned };
 	}
 

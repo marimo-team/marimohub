@@ -1,3 +1,4 @@
+import { withRequestMemo } from '../requestMemo';
 import { EXTERNAL_TOKEN_SCOPE_PRESETS } from '@marimo-hub/core/token-grants';
 import { initializeForSubject } from '../shared';
 import { Hono } from 'hono';
@@ -136,9 +137,10 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 		}),
 	);
 	app.all('/mcp', async (c) => {
+		const scoped = withRequestMemo(deps);
 		const authenticated = await authenticateMcpRequest(c, deps);
 		if (authenticated instanceof Response) return authenticated;
-		await initializeForSubject(deps, authenticated);
+		await initializeForSubject(scoped, authenticated);
 		const disconnected = new AbortController();
 		const request = {
 			requestId: c.get('requestId'),
@@ -148,10 +150,10 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 			appBaseUrl: publicBaseUrl,
 			signal: AbortSignal.any([c.req.raw.signal, disconnected.signal]),
 		};
-		const server = createMcpServer(deps, authenticated, request);
+		const server = createMcpServer(scoped, authenticated, request);
 		// Registered here, not in createMcpServer: chat itself drives that server
 		// in-process, and its tool must not be offered back to the model.
-		if (chatAvailable(deps)) registerConversationTools(server, deps, authenticated, request);
+		if (chatAvailable(deps)) registerConversationTools(server, scoped, authenticated, request);
 		const transport = new StreamableHTTPTransport({ sessionIdGenerator: undefined });
 		await server.connect(transport);
 		const response = await transport.handleRequest(c);

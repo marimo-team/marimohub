@@ -111,6 +111,97 @@ describe('JobScheduler', () => {
 		await s.drain();
 	};
 
+	it('checks idle job heads while sharing their parent reads', async () => {
+		for (let i = 0; i < 50; i++)
+			await createJob({ name: `idle-${i}`, schedule: { cron: '0 0 * * *', timezone: 'UTC' } });
+		await env.catalog.mutateSnapshot('test.index-lag', ACTOR, (snapshot) => {
+			for (const project of snapshot.projects)
+				for (const notebook of project.notebooks) {
+					for (const entry of notebook.jobs ?? [])
+						entry.updated_at = new Date(T0 - DAY).toISOString();
+				}
+			return snapshot;
+		});
+		const getJob = vi.spyOn(env.jobs, 'getJob');
+		const getProject = vi.spyOn(env.projects, 'getProject');
+		const getNotebook = vi.spyOn(env.notebooks, 'getNotebookMeta');
+		const runner = fakeRunner(env);
+		expect(await scheduler(runner).tick()).toMatchObject({ fired: 0, errors: 0 });
+		expect(getJob).toHaveBeenCalledTimes(50);
+		expect(getProject).toHaveBeenCalledTimes(1);
+		expect(getNotebook).toHaveBeenCalledTimes(1);
+	});
+
+	it.each(['disabled', 'manual', 'rescheduled', 'invalid'] as const)(
+		'checks an old %s index entry against the authoritative due job',
+		async (state) => {
+			const job = await createJob();
+			await env.catalog.updateNotebookEntry('test.index-lag', ACTOR, pid, nid, (notebook) => ({
+				jobs: (notebook.jobs ?? []).map((entry) => ({
+					...entry,
+					enabled: state !== 'disabled',
+					schedule:
+						state === 'manual'
+							? undefined
+							: { cron: state === 'invalid' ? 'bad cron' : '0 0 * * *', timezone: 'UTC' },
+					updated_at: new Date(T0 - DAY).toISOString(),
+				})),
+			}));
+			const clock = scheduler(fakeRunner(env), { config: { ...CONFIG, maxConcurrentRuns: 0 } });
+			expect(await clock.tick()).toMatchObject({ fired: 1, errors: 0 });
+			expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
+			expect(await clock.tick()).toMatchObject({ fired: 0, errors: 0 });
+			expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
+		},
+	);
+
+	it.each(['cron', 'timezone', 'storage'] as const)(
+		'continues firing healthy jobs after a %s failure and retries on the next tick',
+		async (failure) => {
+			const broken = await createJob({ name: 'broken' });
+			const healthy = await createJob({ name: 'healthy' });
+			const getJob = env.jobs.getJob.bind(env.jobs);
+			const read = vi.spyOn(env.jobs, 'getJob').mockImplementation(async (...args) => {
+				const job = await getJob(...args);
+				if (job.id !== broken.id) return job;
+				if (failure === 'storage') throw new Error('storage unavailable');
+				return {
+					...job,
+					schedule: {
+						cron: failure === 'cron' ? 'bad cron' : '* * * * *',
+						timezone: failure === 'timezone' ? 'Mars/Olympus_Mons' : 'UTC',
+					},
+				};
+			});
+			const clock = scheduler(fakeRunner(env), { config: { ...CONFIG, maxConcurrentRuns: 0 } });
+			expect(await clock.tick()).toMatchObject({ fired: 1, errors: failure === 'cron' ? 0 : 1 });
+			expect(await env.jobRuns.listRuns(pid, nid, healthy.id)).toHaveLength(1);
+			expect(await env.jobRuns.listRuns(pid, nid, broken.id)).toHaveLength(0);
+			read.mockRestore();
+			expect(await clock.tick()).toMatchObject({ fired: 1, errors: 0 });
+			expect(await env.jobRuns.listRuns(pid, nid, healthy.id)).toHaveLength(1);
+			expect(await env.jobRuns.listRuns(pid, nid, broken.id)).toHaveLength(1);
+		},
+	);
+
+	it.each([0, 1])(
+		'checks index lag at the catch-up boundary plus %i milliseconds',
+		async (offset) => {
+			const job = await createJob();
+			await env.catalog.updateNotebookEntry('test.jobs.boundary', ACTOR, pid, nid, (notebook) => ({
+				jobs: (notebook.jobs ?? []).map((entry) => ({
+					...entry,
+					enabled: false,
+					schedule: undefined,
+					updated_at: new Date(now - CONFIG.catchupWindowMs - offset).toISOString(),
+				})),
+			}));
+			const clock = scheduler(fakeRunner(env), { config: { ...CONFIG, maxConcurrentRuns: 0 } });
+			expect(await clock.tick()).toMatchObject({ fired: 1, errors: 0 });
+			expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
+		},
+	);
+
 	it('reads source metadata once and does not load the readme when firing', async () => {
 		await createJob();
 		const get = vi.spyOn(env.bucket, 'get');
@@ -262,9 +353,9 @@ describe('JobScheduler', () => {
 
 		expect((await s.tick()).dispatched).toBe(0);
 
-		// Fire checks each job once; admission shares one read per parent and job.
-		expect(projectReads).toHaveBeenCalledTimes(jobs.length + 1);
-		expect(notebookReads).toHaveBeenCalledTimes(jobs.length + 1);
+		// Fire and admission each share parent reads; admission rechecks after firing.
+		expect(projectReads).toHaveBeenCalledTimes(2);
+		expect(notebookReads).toHaveBeenCalledTimes(2);
 		expect(jobReads).toHaveBeenCalledTimes(jobs.length * 2);
 		await env.notebooks.deleteNotebook(pid, nid, ACTOR);
 		expect((await s.tick()).dispatched).toBe(0);
@@ -871,29 +962,45 @@ describe('JobScheduler', () => {
 			vi.restoreAllMocks();
 		});
 
-		it('ignores an indexed job whose stored cron is invalid and keeps ticking', async () => {
-			const bad = await createJob({
-				name: 'bad',
-				schedule: { cron: '0 6 * * *', timezone: 'UTC' },
-			});
-			const key = paths.project(pid).notebook(nid).job(bad.id).head;
-			await env.bucket.put(
-				key,
-				JSON.stringify({ ...bad, schedule: { cron: 'nope', timezone: 'UTC' } }),
-			);
-			const good = await createJob({ name: 'good' });
-			const s = scheduler(fakeRunner(env));
-			const result = await s.tick();
-			expect(result).toMatchObject({ fired: 1, errors: 0 });
-			await settle(s);
-			expect(await env.jobRuns.listRuns(pid, nid, good.id)).toHaveLength(1);
-			expect(await env.jobRuns.listRuns(pid, nid, bad.id)).toEqual([]);
-			expect(
-				vi
-					.mocked(console.error)
-					.mock.calls.some((c) => String(c[0]).includes('job_schedule_invalid')),
-			).toBe(true);
-		});
+		it.each([0, DAY])(
+			'ignores invalid cron with an index %i ms old and keeps ticking',
+			async (age) => {
+				const bad = await createJob({
+					name: 'bad',
+					schedule: { cron: '0 6 * * *', timezone: 'UTC' },
+				});
+				const key = paths.project(pid).notebook(nid).job(bad.id).head;
+				await env.bucket.put(
+					key,
+					JSON.stringify({ ...bad, schedule: { cron: 'nope', timezone: 'UTC' } }),
+				);
+				await env.catalog.updateNotebookEntry(
+					'test.invalid-schedule',
+					ACTOR,
+					pid,
+					nid,
+					(notebook) => ({
+						jobs: (notebook.jobs ?? []).map((entry) => ({
+							...entry,
+							schedule: { cron: 'nope', timezone: 'UTC' },
+							updated_at: new Date(now - age).toISOString(),
+						})),
+					}),
+				);
+				const good = await createJob({ name: 'good' });
+				const s = scheduler(fakeRunner(env));
+				const result = await s.tick();
+				expect(result).toMatchObject({ fired: 1, errors: 0 });
+				await settle(s);
+				expect(await env.jobRuns.listRuns(pid, nid, good.id)).toHaveLength(1);
+				expect(await env.jobRuns.listRuns(pid, nid, bad.id)).toEqual([]);
+				expect(
+					vi
+						.mocked(console.error)
+						.mock.calls.some((c) => String(c[0]).includes('job_schedule_invalid')),
+				).toBe(true);
+			},
+		);
 
 		it('skips an indexed job whose definition is gone', async () => {
 			const job = await createJob();

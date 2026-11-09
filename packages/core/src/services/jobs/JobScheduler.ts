@@ -1,17 +1,17 @@
-import { cachedRead } from '../../async';
+import { PromiseMemo } from '../../async';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import type { ProjectAlertDispatcher } from '../../ports/projectAlerts';
 import type { SandboxProvider } from '../../ports/sandbox';
-import { InFlightWork } from '../../concurrency';
+import { InFlightWork, mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
-import { NotFoundError, UnavailableError } from '../../errors';
+import { NotFoundError, UnavailableError, ValidationError } from '../../errors';
 import { createRunId, SandboxId, SYSTEM_ACTOR } from '../../ids';
-import type { JobId, NotebookId, ProjectId, RunId, VersionId } from '../../ids';
+import type { ProjectId, RunId, VersionId } from '../../ids';
 import { logEvent } from '../../logs';
 import { logOperationalError } from '../../operationalLog';
 import { notificationRouter } from '../../notifications';
-import type { JobDefinition, JobRun, NotebookMeta, Project } from '../../schema';
+import type { JobDefinition, JobRun } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import type { EventService } from '../catalog/EventService';
 import type { NotebookService } from '../content/NotebookService';
@@ -77,12 +77,6 @@ const DEFAULT_WATCHDOG_GRACE_MS = Millis.minutes(2);
 
 /** How long a marker may outlive its record before it is considered dangling. */
 const DANGLING_GRACE_MS = Millis.minutes(10);
-
-interface JobReadCache {
-	projects: Map<ProjectId, Promise<Project>>;
-	notebooks: Map<NotebookId, Promise<NotebookMeta>>;
-	jobs: Map<JobId, Promise<JobDefinition>>;
-}
 
 interface LocalExecution {
 	finalizedExternally: boolean;
@@ -195,29 +189,40 @@ export class JobScheduler {
 				run && !isTerminalRunStatus(run.status) ? [`${marker.project_id}:${marker.job_id}`] : [],
 			),
 		);
-		for (const { projectId, notebookId, entry } of indexedJobs(snapshot)) {
-			if (!beforeFire.complete) break;
-			try {
-				const jobKey = `${projectId}:${entry.id}`;
-				const fired = await this.fire(projectId, notebookId, entry.id, now, activeJobs.has(jobKey));
-				if (fired === 'fired') result.fired++;
-				else if (fired === 'repaired') result.repaired++;
-				else if (fired === 'skipped') result.skipped++;
-				if (fired === 'fired' || fired === 'repaired') activeJobs.add(jobKey);
-			} catch (err) {
-				result.errors++;
-				logOperationalError(
-					'job_fire_failed',
-					{
-						operation: 'job.scheduler.fire',
-						project_id: projectId,
-						notebook_id: notebookId,
-						job_id: entry.id,
-					},
-					err,
-				);
-			}
-		}
+		const fireReads = new PromiseMemo();
+		await mapWithConcurrency(
+			beforeFire.complete ? indexedJobs(snapshot) : [],
+			4,
+			async ({ projectId, notebookId, entry }) => {
+				try {
+					const jobKey = `${projectId}:${entry.id}`;
+					const fired = await this.fire(
+						projectId,
+						notebookId,
+						entry.id,
+						now,
+						activeJobs.has(jobKey),
+						fireReads,
+					);
+					if (fired === 'fired') result.fired++;
+					else if (fired === 'repaired') result.repaired++;
+					else if (fired === 'skipped') result.skipped++;
+					if (fired === 'fired' || fired === 'repaired') activeJobs.add(jobKey);
+				} catch (err) {
+					result.errors++;
+					logOperationalError(
+						'job_fire_failed',
+						{
+							operation: 'job.scheduler.fire',
+							project_id: projectId,
+							notebook_id: notebookId,
+							job_id: entry.id,
+						},
+						err,
+					);
+				}
+			},
+		);
 
 		const active = await this.deps.runs.listActiveSnapshot();
 		if (!beforeFire.complete || !active.complete) {
@@ -227,11 +232,7 @@ export class JobScheduler {
 
 		const queued: JobRun[] = [];
 		const running: JobRun[] = [];
-		const admissionReads: JobReadCache = {
-			projects: new Map(),
-			notebooks: new Map(),
-			jobs: new Map(),
-		};
+		const admissionReads = new PromiseMemo();
 		let ownershipComplete = active.complete;
 		for (const { marker, run } of active.entries) {
 			if (!run) {
@@ -313,16 +314,24 @@ export class JobScheduler {
 		jobId: JobRun['job_id'],
 		now: number,
 		hasActive: boolean,
+		cache: PromiseMemo,
 	): Promise<'fired' | 'repaired' | 'skipped' | 'none'> {
 		const jobRef = { project_id: projectId, notebook_id: notebookId, id: jobId };
 		return this.deps.runs.withJobMutation(jobRef, async () => {
 			if (await this.deps.jobs.isDeleting(jobRef)) return 'none';
-			const job = await this.loadJob(projectId, notebookId, jobId);
+			// An old index entry can precede a newly enabled or rescheduled job head.
+			const job = await this.loadJob(projectId, notebookId, jobId, cache);
 			if (!job?.enabled || !job.schedule) return 'none';
-			let cron;
+			let occurrence;
 			try {
-				cron = parseCron(job.schedule.cron);
+				occurrence = previousOccurrence(
+					parseCron(job.schedule.cron),
+					job.schedule.timezone,
+					now,
+					this.deps.config.catchupWindowMs,
+				);
 			} catch (err) {
+				if (!(err instanceof ValidationError)) throw err;
 				logOperationalError(
 					'job_schedule_invalid',
 					{
@@ -335,12 +344,6 @@ export class JobScheduler {
 				);
 				return 'none';
 			}
-			const occurrence = previousOccurrence(
-				cron,
-				job.schedule.timezone,
-				now,
-				this.deps.config.catchupWindowMs,
-			);
 			if (occurrence === null) return 'none';
 			const scheduledFor = new Date(occurrence).toISOString();
 			const outcome = job.concurrency_policy === 'forbid' && hasActive ? 'skip' : 'run';
@@ -385,18 +388,18 @@ export class JobScheduler {
 		projectId: ProjectId,
 		notebookId: JobRun['notebook_id'],
 		jobId: JobRun['job_id'],
-		cache?: JobReadCache,
+		cache = new PromiseMemo(),
 	): Promise<JobDefinition | null> {
 		try {
-			const project = await cachedRead(cache?.projects, projectId, () =>
+			const project = await cache.read(['project', projectId], () =>
 				this.deps.projects.getProject(projectId),
 			);
 			if (project.status === 'deleted') return null;
-			const notebook = await cachedRead(cache?.notebooks, notebookId, () =>
+			const notebook = await cache.read(['notebook', projectId, notebookId], () =>
 				this.deps.notebooks.getNotebookMeta(projectId, notebookId),
 			);
 			if (notebook.status === 'deleted') return null;
-			return await cachedRead(cache?.jobs, jobId, () =>
+			return await cache.read(['job', projectId, notebookId, jobId], () =>
 				this.deps.jobs.getJob(projectId, notebookId, jobId),
 			);
 		} catch (err) {
@@ -422,7 +425,7 @@ export class JobScheduler {
 		return true;
 	}
 
-	private async cancelRunIfDeleted(run: JobRun, cache?: JobReadCache): Promise<boolean> {
+	private async cancelRunIfDeleted(run: JobRun, cache?: PromiseMemo): Promise<boolean> {
 		if (await this.loadJob(run.project_id, run.notebook_id, run.job_id, cache)) return false;
 		await this.deps.runs.cancel(run, SYSTEM_ACTOR);
 		return true;

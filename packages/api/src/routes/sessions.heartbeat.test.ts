@@ -37,9 +37,11 @@ describe('heartbeat read scheduling', () => {
 	it('starts project and session reads before either resolves, then preserves authorization order', async () => {
 		const f = await fixture();
 		const projectRead = deferredRead<typeof f.project>();
-		const sessionRead = deferredRead<typeof f.session>();
+		const sessionRead = deferredRead<{ value: typeof f.session; etag: string }>();
 		vi.spyOn(f.client.deps.services.projects, 'getProject').mockImplementation(projectRead.read);
-		vi.spyOn(f.client.deps.services.sessions, 'getSession').mockImplementation(sessionRead.read);
+		vi.spyOn(f.client.deps.services.sessions, 'getSessionWithEtag').mockImplementation(
+			sessionRead.read,
+		);
 		const labels = vi.spyOn(f.client.deps.services.notebooks, 'getSecurityLabels');
 		const authorize = vi.spyOn(AuthorizationService.prototype, 'authorize');
 		const pending = f.heartbeat();
@@ -47,12 +49,12 @@ describe('heartbeat read scheduling', () => {
 			await Promise.all([projectRead.started, sessionRead.started]);
 			expect(authorize).not.toHaveBeenCalled();
 			expect(labels).not.toHaveBeenCalled();
-			sessionRead.resolve(f.session);
+			sessionRead.resolve({ value: f.session, etag: 'unused-noop-etag' });
 			await Promise.resolve();
 			expect(labels).not.toHaveBeenCalled();
 		} finally {
 			projectRead.resolve(f.project);
-			sessionRead.resolve(f.session);
+			sessionRead.resolve({ value: f.session, etag: 'unused-noop-etag' });
 		}
 		await expectOk(await pending);
 		expect(authorize.mock.calls.slice(0, 2).map((call) => call[1])).toEqual([
@@ -65,8 +67,10 @@ describe('heartbeat read scheduling', () => {
 		'returns project denial without waiting for the session and handles its %s rejection',
 		async (timing) => {
 			const f = await fixture();
-			const sessionRead = deferredRead<typeof f.session>();
-			vi.spyOn(f.client.deps.services.sessions, 'getSession').mockImplementation(sessionRead.read);
+			const sessionRead = deferredRead<{ value: typeof f.session; etag: string }>();
+			vi.spyOn(f.client.deps.services.sessions, 'getSessionWithEtag').mockImplementation(
+				sessionRead.read,
+			);
 			const authz = AuthorizationService.prototype;
 			const authorize = authz.authorize;
 			vi.spyOn(authz, 'authorize').mockImplementation(async function (
@@ -95,8 +99,10 @@ describe('heartbeat read scheduling', () => {
 		new UnavailableError('Project storage unavailable'),
 	])('preserves project storage failure precedence: $code', async (error) => {
 		const f = await fixture();
-		const sessionRead = deferredRead<typeof f.session>();
-		vi.spyOn(f.client.deps.services.sessions, 'getSession').mockReturnValue(sessionRead.promise);
+		const sessionRead = deferredRead<{ value: typeof f.session; etag: string }>();
+		vi.spyOn(f.client.deps.services.sessions, 'getSessionWithEtag').mockReturnValue(
+			sessionRead.promise,
+		);
 		vi.spyOn(f.client.deps.services.projects, 'getProject').mockRejectedValue(error);
 		const labels = vi.spyOn(f.client.deps.services.notebooks, 'getSecurityLabels');
 		const renew = vi.spyOn(f.client.deps.services.sessions, 'heartbeat');
@@ -117,7 +123,7 @@ describe('heartbeat read scheduling', () => {
 		'preserves the session error after project authorization: $code',
 		async (error) => {
 			const f = await fixture();
-			vi.spyOn(f.client.deps.services.sessions, 'getSession').mockRejectedValue(error);
+			vi.spyOn(f.client.deps.services.sessions, 'getSessionWithEtag').mockRejectedValue(error);
 			const put = vi.spyOn(f.bucket, 'put');
 			await expectError(
 				await f.heartbeat(),
@@ -206,11 +212,11 @@ describe('heartbeat authorization boundaries', () => {
 });
 
 describe('heartbeat dependency failures', () => {
-	it.each(['notebook', 'pool', 'fresh session mutation', 'session mutation'] as const)(
+	it.each(['notebook', 'pool', 'fresh session', 'due session'] as const)(
 		'fails without writes when the %s read fails, then recovers on retry',
 		async (record) => {
 			const f = await fixture();
-			if (record === 'session mutation') {
+			if (record === 'due session') {
 				makeHeartbeatDue();
 				await new AppPoolService(f.bucket, f.services.sessions).heartbeat(
 					f.project.id,
@@ -229,7 +235,7 @@ describe('heartbeat dependency failures', () => {
 			const get = f.bucket.get.bind(f.bucket);
 			let reads = 0;
 			const failure = vi.spyOn(f.bucket, 'get').mockImplementation((key) => {
-				if (key === keyToFail && ++reads === (record.endsWith('session mutation') ? 2 : 1))
+				if (key === keyToFail && ++reads === 1)
 					throw new UnavailableError('Storage temporarily unavailable');
 				return get(key);
 			});
@@ -239,7 +245,7 @@ describe('heartbeat dependency failures', () => {
 			failure.mockRestore();
 			expect((await expectOk(await f.heartbeat())).status).toBe('running');
 			expect(put.mock.calls.map(([key]) => key)).toEqual(
-				record === 'session mutation' ? [f.sessionKey] : [],
+				record === 'due session' ? [f.sessionKey] : [],
 			);
 		},
 	);
@@ -311,7 +317,7 @@ describe('heartbeat dependency failures', () => {
 
 describe('fresh heartbeat races', () => {
 	it.each(['terminate', 'delete'] as const)(
-		'rechecks the session when %s wins after the initial session read',
+		'observes a concurrent %s on a fresh heartbeat',
 		async (race) => {
 			const f = await fixture();
 			const entered = Promise.withResolvers<void>();

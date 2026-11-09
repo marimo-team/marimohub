@@ -1,3 +1,4 @@
+import { createAppSessionFixture } from './testing/appSession';
 /**
  * Characterization of the API's authorization outcomes now that every guard
  * routes through `AuthorizationService`. Each case pins a pre-existing result —
@@ -1081,5 +1082,29 @@ describe('authorization characterization: start-gate ordering', () => {
 			404,
 			'NOT_FOUND',
 		);
+	});
+});
+
+describe('request-scoped subject contexts', () => {
+	it('resolves once per labeled session poll and rechecks the provider on the next request', async () => {
+		const f = await createAppSessionFixture(new MemoryBucket(), true);
+		await f.services.notebooks.setSecurityLabels(
+			f.project.id,
+			f.notebook.id,
+			{ classification: 'SECRET', compartments: [] },
+			f.project.owner,
+		);
+		const principal = await f.client.deps.authenticator.authenticate(
+			new Request('https://hub.test'),
+		);
+		vi.spyOn(f.client.deps.authenticator, 'authenticate').mockResolvedValue(principal);
+		const resolve = vi.spyOn(f.resourceSecurity.subjectContext!, 'resolve');
+		const path = `/projects/${f.project.id}/notebooks/${f.notebook.id}/sessions/${f.session.session_id}`;
+		await expectOk(await f.client.request('GET', path));
+		expect(resolve).toHaveBeenCalledTimes(1);
+		await expectOk(await f.client.request('GET', path));
+		expect(resolve).toHaveBeenCalledTimes(2);
+		resolve.mockResolvedValue(null);
+		await expectError(await f.client.request('GET', path), 404);
 	});
 });

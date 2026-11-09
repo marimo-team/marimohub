@@ -7,7 +7,7 @@ import type {
 	NotebookId,
 	ProjectId,
 } from '@marimo-hub/core';
-import { localResourceSecurity } from '@marimo-hub/core/testing';
+import { localResourceSecurity, makeSubjectContext } from '@marimo-hub/core/testing';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { externalTokenGrant } from '@marimo-hub/core/token-grants';
 import {
@@ -25,6 +25,7 @@ import {
 } from '../testing/mcp';
 import { createApi } from '../createApi';
 import { DEFAULT_JOBS_CONFIG } from '../context';
+import { withRequestMemo } from '../requestMemo';
 
 const TOOL_NAMES = ['list_jobs', 'create_job', 'schedule_job', 'run_job', 'get_job_run'];
 const publicBaseUrl = 'https://hub.example.com/hub';
@@ -669,6 +670,46 @@ describe('MCP job edge cases', () => {
 });
 
 describe('MCP waiting', () => {
+	it.each(['SECRET', 'UNCLASSIFIED'])(
+		'uses refreshed %s entitlements for log links after waiting',
+		async (classification) => {
+			const run = await enqueue();
+			const security = localResourceSecurity(['UNCLASSIFIED', 'SECRET'], makeSubjectContext());
+			const evaluate = security.constraints.evaluate.bind(security.constraints);
+			vi.spyOn(security.constraints, 'evaluate').mockImplementation(
+				async (context, action, resource, signal) =>
+					action === 'notebook.write' && context?.classification !== 'SECRET'
+						? { satisfied: false, reason: 'constraint' }
+						: evaluate(context, action, resource, signal),
+			);
+			deps.resourceSecurity = security;
+			await deps.services.notebooks.setSecurityLabels(
+				pid,
+				nid,
+				{ classification: 'UNCLASSIFIED', compartments: [] },
+				USER.id,
+			);
+			client = await connectMcpClient(withRequestMemo(deps), USER, requestContext);
+			const resolve = vi.spyOn(security.subjectContext!, 'resolve');
+			vi.useFakeTimers();
+			const pending = call('get_job_run', { run_id: run.run_id, wait: true });
+			await vi.advanceTimersByTimeAsync(1);
+			const initialReads = resolve.mock.calls.length;
+			expect(initialReads).toBeGreaterThan(0);
+			resolve.mockResolvedValue(makeSubjectContext({ classification }));
+			await finish(run);
+			await vi.advanceTimersByTimeAsync(2000);
+			const response = await pending;
+			expect(response.isError).not.toBe(true);
+			expect(response.structuredContent).toMatchObject({ completed: true });
+			expect(response.structuredContent?.links).toHaveProperty('html');
+			if (classification === 'SECRET')
+				expect(response.structuredContent?.links).toHaveProperty('logs');
+			else expect(response.structuredContent?.links).not.toHaveProperty('logs');
+			expect(resolve).toHaveBeenCalledTimes(initialReads + 1);
+		},
+	);
+
 	it('expires the wait without cancelling, then resumes observation', async () => {
 		const run = await enqueue();
 		vi.useFakeTimers();
@@ -744,6 +785,39 @@ describe('MCP waiting', () => {
 		await vi.advanceTimersByTimeAsync(4000);
 		expect(read).toHaveBeenCalledTimes(2);
 	});
+
+	it.each([1, 3, 10])(
+		'refreshes subject context before a %s-second wait returns data',
+		async (waitSeconds) => {
+			const run = await enqueue();
+			const security = localResourceSecurity(['UNCLASSIFIED', 'SECRET'], makeSubjectContext());
+			deps.resourceSecurity = security;
+			await deps.services.notebooks.setSecurityLabels(
+				pid,
+				nid,
+				{ classification: 'SECRET', compartments: [] },
+				USER.id,
+			);
+			client = await connectMcpClient(deps, VIEWER, requestContext);
+			const resolve = vi.spyOn(security.subjectContext!, 'resolve');
+			vi.useFakeTimers();
+			const pending = call('get_job_run', {
+				run_id: run.run_id,
+				wait: true,
+				wait_seconds: waitSeconds,
+			});
+			// Populate a polling scope before changing the provider, except when expiry precedes polling.
+			await vi.advanceTimersByTimeAsync(waitSeconds === 1 ? 1 : 2001);
+			expect(resolve).toHaveBeenCalled();
+			resolve.mockResolvedValue(makeSubjectContext({ classification: 'UNCLASSIFIED' }));
+			if (waitSeconds === 10) await finish(run);
+			await vi.advanceTimersByTimeAsync(2000);
+			const response = await pending;
+			expect(response).toMatchObject({ isError: true, structuredContent: { code: 'NOT_FOUND' } });
+			expect(response.structuredContent).not.toHaveProperty('run');
+			expect(response.structuredContent).not.toHaveProperty('links');
+		},
+	);
 
 	it.each(['membership', 'notebook-labels', 'notebook-deletion'])(
 		'stops returning run data after %s changes during a wait',
@@ -843,7 +917,7 @@ describe('MCP waiting', () => {
 			const read =
 				resource === 'notebook'
 					? vi
-							.spyOn(deps.services.notebooks, 'getNotebook')
+							.spyOn(deps.services.notebooks, 'getNotebookMeta')
 							.mockImplementation(() => new Promise(() => {}))
 					: vi.spyOn(deps.services.jobs, 'getJob').mockImplementation(() => new Promise(() => {}));
 			await vi.advanceTimersByTimeAsync(1000);

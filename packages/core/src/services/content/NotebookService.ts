@@ -446,9 +446,13 @@ export class NotebookService {
 		return meta.security_labels ?? null;
 	}
 
-	async getNotebookContent(projectId: ProjectId, notebookId: NotebookId): Promise<string> {
-		const { source } = await this.getNotebook(projectId, notebookId);
-		return this.getContentForSource(projectId, notebookId, source);
+	async getNotebookContent(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		source?: Source,
+	): Promise<string> {
+		const resolvedSource = source ?? (await this.getNotebook(projectId, notebookId)).source;
+		return this.getContentForSource(projectId, notebookId, resolvedSource);
 	}
 
 	private async getContentForSource(

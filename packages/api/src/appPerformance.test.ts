@@ -83,6 +83,25 @@ afterEach(() => {
 });
 
 describe('app operation budgets', () => {
+	it('loads notebook detail only once for content and uses metadata alone for deep links', async () => {
+		const f = await fixture();
+		const nb = paths.project(f.project.id).notebook(f.notebook.id);
+		const base = `/projects/${f.project.id}/notebooks/${f.notebook.id}`;
+		f.bucket.operations = [];
+		expect(await expectOk(await f.client.request('GET', `${base}/content`))).toEqual({
+			code: 'original',
+		});
+		for (const key of [nb.source, nb.readme])
+			expect(
+				f.bucket.operations.filter((op) => op.method === 'get' && op.key === key),
+			).toHaveLength(1);
+		f.bucket.operations = [];
+		await expectOk(await f.client.request('GET', `${base}/deep-links`));
+		expect(
+			f.bucket.operations.filter((op) => op.key === nb.source || op.key === nb.readme),
+		).toEqual([]);
+	});
+
 	it('coalesces fresh heartbeats and never renews for a burst of proxy requests or upgrades', async () => {
 		const f = await fixture();
 		f.bucket.operations = [];
@@ -100,6 +119,9 @@ describe('app operation budgets', () => {
 			{ method: 'get', key: paths.editorClaim(f.project.id, f.notebook.id) },
 		]);
 		expect(f.bucket.operations.some((op) => op.method === 'list')).toBe(false);
+		expect(
+			f.bucket.operations.filter((op) => op.method === 'get' && op.key === f.sessionKey),
+		).toHaveLength(2);
 		expect(f.bucket.operations).not.toContainEqual({ method: 'head', key: paths.catalog });
 		const renew = vi.spyOn(f.client.deps.services.sessions, 'heartbeat');
 		f.bucket.operations = [];

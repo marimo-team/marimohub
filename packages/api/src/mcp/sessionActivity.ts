@@ -1,3 +1,4 @@
+import { withRequestMemo } from '../requestMemo';
 import { BadRequestError, withAbortSignal } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, Project, Session } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
@@ -53,10 +54,11 @@ function activeDeadline(
 }
 
 export async function authorizeMcpSession(
-	deps: ApiDeps,
+	rawDeps: ApiDeps,
 	principal: AuthenticatedPrincipal,
 	session: Session,
 ) {
+	const deps = rawDeps.readMemo ? rawDeps : withRequestMemo(rawDeps);
 	const project = await loadVisibleProject(
 		deps.services.projects,
 		session.project_id,
@@ -103,7 +105,8 @@ export async function withMcpSessionActivity<T>(
 		if (finished) return deadline;
 		deadline = Math.min(deadline, activeDeadline(current, principal));
 		armExpiry();
-		const decision = await authorizeMcpSession(deps, principal, current);
+		// Long-running work must observe revocation even before the cached context expires.
+		const decision = await authorizeMcpSession(withRequestMemo(deps), principal, current);
 		if (finished) return deadline;
 		deadline = Math.min(
 			deadline,

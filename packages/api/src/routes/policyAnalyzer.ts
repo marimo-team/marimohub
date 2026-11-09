@@ -42,7 +42,7 @@ import {
 	createApp,
 	errorResponses,
 	jsonContent,
-	loadAuthorizedNotebook,
+	loadAuthorizedNotebookMeta,
 	loadVisibleProject,
 	SESSION_ONLY_SECURITY,
 } from '../shared';
@@ -450,7 +450,7 @@ async function storedResource(
 		) {
 			throw new Error('stored_notebook_session_mismatch');
 		}
-		const notebook = await loadAuthorizedNotebook(
+		const notebook = await loadAuthorizedNotebookMeta(
 			deps,
 			project,
 			sessionResourceNotebookId(session),
@@ -461,19 +461,19 @@ async function storedResource(
 			kind: 'session',
 			project,
 			session,
-			notebookLabels: notebook.meta.security_labels,
+			notebookLabels: notebook.security_labels,
 		};
 	}
 	let notebookLabels = input.notebook_labels;
 	if (input.notebook_id) {
-		const notebook = await loadAuthorizedNotebook(
+		const notebook = await loadAuthorizedNotebookMeta(
 			deps,
 			project,
 			NotebookId.parse(input.notebook_id),
 			caller,
 			'project.read',
 		);
-		notebookLabels = notebook.meta.security_labels;
+		notebookLabels = notebook.security_labels;
 	}
 	if (input.kind === 'project') return { kind: 'project', project, notebookLabels };
 	if (input.kind === 'session-start') {

@@ -88,11 +88,15 @@ export class ThumbnailService {
 	}
 
 	async image(pid: ProjectId, nid: NotebookId) {
+		return (await this.imageWithRevision(pid, nid))?.image ?? null;
+	}
+
+	async imageWithRevision(pid: ProjectId, nid: NotebookId) {
 		const record = await this.get(pid, nid);
 		const image = record?.custom ?? record?.automatic;
-		return image
-			? this.bucket.get(paths.project(pid).notebook(nid).thumbnailImage(image.id))
-			: null;
+		if (!image || !record) return null;
+		const object = await this.bucket.get(paths.project(pid).notebook(nid).thumbnailImage(image.id));
+		return object ? { image: object, revision: record.revision } : null;
 	}
 
 	private async getProject(pid: ProjectId) {

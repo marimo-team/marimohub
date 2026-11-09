@@ -12,7 +12,7 @@ import type { ApiDeps } from '../context';
 import {
 	assertProjectActionOn,
 	authorizationService,
-	loadAuthorizedNotebook,
+	loadAuthorizedNotebookMeta,
 	loadSessionProject,
 } from '../shared';
 
@@ -131,6 +131,6 @@ export async function resolveAuthorizedNotebook(
 ) {
 	const project = await resolveProject(deps, principal, projectRef, action);
 	const notebook = await resolveNotebook(deps, principal, project, notebookRef);
-	const detail = await loadAuthorizedNotebook(deps, project, notebook.id, principal, action);
+	const detail = await loadAuthorizedNotebookMeta(deps, project, notebook.id, principal, action);
 	return { project, notebook, detail };
 }

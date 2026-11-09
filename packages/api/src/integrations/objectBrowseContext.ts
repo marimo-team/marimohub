@@ -1,3 +1,4 @@
+import { deploymentState } from '../requestMemo';
 import { HTTPException } from 'hono/http-exception';
 import {
 	createSessionId,
@@ -37,12 +38,7 @@ function createCredentialCache(): CredentialCache {
 let credentialCaches = new WeakMap<ApiDeps, CredentialCache>();
 
 function credentialCache(deps: ApiDeps): CredentialCache {
-	let cache = credentialCaches.get(deps);
-	if (!cache) {
-		cache = createCredentialCache();
-		credentialCaches.set(deps, cache);
-	}
-	return cache;
+	return deploymentState(deps, credentialCaches, createCredentialCache);
 }
 
 export async function makeObjectBrowseContext(

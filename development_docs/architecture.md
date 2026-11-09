@@ -348,7 +348,8 @@ Lifecycle, visibility, and label masking still take precedence. See
 #### Metadata reads
 
 Project and notebook metadata reads default to `consistency: 'fresh'`.
-Session and proxy authorization can opt into `consistency: 'validated'`.
+Metadata-only notebook authorization uses validated reads without source or README reads.
+Session and proxy authorization also use `consistency: 'validated'`.
 Fresh reads use GET. Validated reads follow these rules:
 
 - A cold cache uses GET. A warm cache uses HEAD and reuses parsed metadata only
@@ -362,13 +363,52 @@ Session prefix scans reuse parsed session records when the listing's ETag
 matches the cached entry, so an unchanged record is not downloaded again.
 
 These caches are per Node process, bounded by entry count, and have no TTL.
-They reduce downloads and parsing without adding a revocation delay. Subject
-context and app-only decisions stay fresh. Preview validity, expiry, and parent
-authorization stay live checks. Detail reads, list reads, and provisioning
-rechecks use fresh reads. The Cloudflare Workers example builds its services
+They reduce downloads and parsing without adding a revocation delay.
+Subject contexts are shared only within a request and expire at `expiresAt`.
+App-only decisions, preview validity, expiry, and parent authorization remain live checks.
+Detail reads, list reads, and provisioning rechecks use fresh reads. The Cloudflare Workers example builds its services
 per request, so its caches are always cold.
 
-The Node proxy also caches a successful editor admission, including VS Code and
+#### Request and operation reads
+
+`PromiseMemo` in `core/async` shares concurrent and sequential reads within an explicit scope.
+It has no TTL. Rejected reads are evicted so later calls can retry.
+Tuple keys use JavaScript `Map` equality (SameValueZero) for each element.
+Primitives compare by value, with `NaN` equal to `NaN` and `0` equal to `-0`.
+Objects and functions compare by identity. Each key must identify one value type and loader policy.
+
+The API's `requestMemoMiddleware` creates a memo for each request, available through
+`c.get('readMemo')` and `c.get('deps').readMemo`. Authorization guards share subject
+context through this memo and enforce its `expiresAt`. Explicit MCP refreshes
+use `withRequestMemo(deps)` to start a new scope.
+Deployment-wide caches and rate limits use `deploymentState` to retain their original lifetime across request scopes.
+
+The scheduler uses separate memos for firing and admission. Checks after writes
+use fresh scopes. CAS retry loops never read through a memo.
+
+For a read followed by a write in the same operation:
+
+```ts
+const memo = c.get('readMemo');
+const key = ['notebook', pid, nid];
+const read = () => notebooks.getNotebookMeta(pid, nid, { consistency: 'validated' });
+await memo.read(key, read);
+await memo.mutate(() => notebooks.updateNotebook(pid, nid, input, actor));
+await memo.read(key, read);
+```
+
+`mutate` clears the memo before and after the write, including failures.
+Reads bypass the memo until all concurrent mutations finish. `clear()` invalidates
+all entries without cancelling existing callers. An old promise cannot repopulate the cleared memo.
+Invalidation is explicit: writes outside `mutate` must call `clear()` or start a new scope.
+
+`KnownObject` still carries the value and ETag for the first mutation attempt.
+A no-op can return that snapshot without revalidation. A write conflict requires a fresh read.
+Shared rate limits and credential caches use `unscopedDeps(deps)` to retain their deployment lifetime.
+
+#### Proxy admission cache
+
+The Node proxy caches a successful editor admission, including VS Code and
 other surface proxies, for up to five seconds per process. The entry expires
 sooner when the credential or entitlements expire. Token signature, sign-in,
 suspension, and session and subject-context authorization deadlines are still

@@ -1,3 +1,4 @@
+import { deploymentState } from '../requestMemo';
 import {
 	LazyMap,
 	NotFoundError,
@@ -329,12 +330,7 @@ function createIntegrationBrowseState(): IntegrationBrowseState {
 let integrationBrowseStates = new WeakMap<ApiDeps, IntegrationBrowseState>();
 
 function integrationBrowseState(deps: ApiDeps): IntegrationBrowseState {
-	let state = integrationBrowseStates.get(deps);
-	if (!state) {
-		state = createIntegrationBrowseState();
-		integrationBrowseStates.set(deps, state);
-	}
-	return state;
+	return deploymentState(deps, integrationBrowseStates, createIntegrationBrowseState);
 }
 
 export function assertIntegrationBudget(

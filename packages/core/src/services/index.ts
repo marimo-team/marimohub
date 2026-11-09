@@ -43,6 +43,7 @@ export { HostRetryStore } from './runtime/HostRetryStore';
 export type { HostRetryClaim, HostRetryReply } from './runtime/HostRetryStore';
 export { DeepLinkService } from './content/DeepLinkService';
 export { CatalogService } from './catalog/CatalogService';
+export type { KnownObject } from './catalog/cas';
 export type { CatalogRecoverySource, CatalogRecoveryReport } from './catalog/recovery';
 export { EventService, MAX_EVENT_RANGE_DAYS } from './catalog/EventService';
 export { IdempotencyService } from './catalog/IdempotencyService';

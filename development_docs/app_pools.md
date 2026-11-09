@@ -28,16 +28,18 @@ The visit ID remains stored during reconnect grace. Generation tokens reject sta
 
 ## Storage cost
 
-| Operation                                         | Reads                                                            | Writes                                                 |
-| ------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------ |
-| Heartbeat                                         | One pool snapshot                                                | At most once per minute per visit with default timers. |
-| Admission to an established pool                  | Three pool snapshots, source head, one session record per member | Immediate CAS.                                         |
-| New assignment, reservation, or replacement retry | One additional source-head check after admission CAS             | Compensation on failed checks.                         |
-| Healthy maintenance pass                          | Two pool snapshots, one session record per member                | None unless state changes.                             |
-| Departure                                         | Pool snapshot                                                    | Immediate CAS.                                         |
-| Proxy HTTP request or WebSocket upgrade           | Fresh pool snapshot                                              | None.                                                  |
+| Operation                                         | Reads                                                         | Writes                                                 |
+| ------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------ |
+| Heartbeat                                         | One pool snapshot                                             | At most once per minute per visit with default timers. |
+| Admission to an established pool                  | One pool snapshot, source head, one session record per member | Immediate CAS.                                         |
+| New assignment, reservation, or replacement retry | One additional source-head check after admission CAS          | Compensation on failed checks.                         |
+| Healthy maintenance pass                          | One pool snapshot, one session record per member              | None unless state changes.                             |
+| Departure                                         | Pool snapshot                                                 | Immediate CAS.                                         |
+| Proxy HTTP request or WebSocket upgrade           | Fresh pool snapshot                                           | None.                                                  |
 
-Expired visits can require earlier cleanup writes. CAS conflicts add retries.
+Admission and maintenance reuse member observations across CAS retries.
+Admission persists retirement changes separately, then rereads the pool before routing.
+CAS conflicts reread the pool. Each admission retry also checks the source head.
 No acknowledged lease renewal depends on an in-memory buffer surviving a server restart.
 Proxy checks neither renew presence nor cache authorization across requests.
 
@@ -50,14 +52,16 @@ Operation-count tests cover these budgets, not remote bucket latency.
 
 Project authorization and the initial session read overlap. Project failures take precedence without waiting for session storage.
 The session promise handles rejection immediately, including after a project denial.
-Notebook and preview checks still precede attach authorization. Pool and session renewal retain their CAS checks, including the session reread.
-Response grants use the updated session.
+Notebook and preview checks precede attach authorization.
+Session renewal reuses the initial session and ETag. A write conflict rereads the session before retry.
+A coalesced heartbeat rereads the session to detect a concurrent stop or deletion without writing.
+Response grants use the returned session.
 
-An unlabeled API heartbeat uses five metadata reads: a project read, notebook
-GET, pool GET, and two session GETs. It does not HEAD the catalog. A warm
-project read is a validated HEAD that reuses the cached record when the ETag
-matches. `appPerformance.test.ts` asserts this budget.
-A due heartbeat adds two conditional writes without conflicts. Identity I/O and policy calls are additional.
+A fresh unlabeled API heartbeat uses five metadata reads: project, notebook, pool, and two session reads.
+Writable regular apps also read the source and editor claim to return `head_version_id` and `edit_active`.
+It does not HEAD the catalog. Warm project and notebook reads use HEAD and reuse cached records when their ETags match.
+`appPerformance.test.ts` asserts this seven-read budget.
+A due heartbeat saves one session read and uses two conditional writes without conflicts. Identity I/O and policy calls are additional.
 Denied projects incur one extra speculative session GET and no renewal writes.
 
 ### Measurements

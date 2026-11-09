@@ -461,3 +461,93 @@ describe('releaseSingletonClaim', () => {
 		expect(await holderAt(bucket)).toBe('C');
 	});
 });
+
+describe('known mutation snapshots', () => {
+	it.each([false, true])('reuses a known ETag and retries conflicts (stale: %s)', async (stale) => {
+		const bucket = new MemoryBucket();
+		const original = await bucket.put('counter', '1');
+		if (stale) await bucket.put('counter', '5');
+		const get = vi.spyOn(bucket, 'get');
+		const put = vi.spyOn(bucket, 'put');
+		const result = await mutateObjectWithOutcome(bucket, 'counter', Number, (n) => n + 1, {
+			known: { value: 1, etag: original.etag },
+			backoffMs: () => 0,
+		});
+		expect(result).toEqual({ value: stale ? 6 : 2, written: true });
+		expect(get).toHaveBeenCalledTimes(stale ? 1 : 0);
+		expect(put).toHaveBeenCalledTimes(stale ? 2 : 1);
+		expect(put.mock.calls[0][2]).toEqual({ onlyIfEtagMatches: original.etag });
+	});
+
+	it('does not recreate an object deleted after the known snapshot', async () => {
+		const bucket = new MemoryBucket();
+		const original = await bucket.put('counter', '1');
+		await bucket.delete('counter');
+		const put = vi.spyOn(bucket, 'put');
+		await expect(
+			mutateObjectWithOutcome(bucket, 'counter', Number, (n) => n + 1, {
+				known: { value: 1, etag: original.etag },
+				backoffMs: () => 0,
+			}),
+		).rejects.toBeInstanceOf(NotFoundError);
+		expect(put).toHaveBeenCalledTimes(1);
+		expect(await bucket.get('counter')).toBeNull();
+	});
+
+	it('stops retrying when a fresh value makes the mutation unnecessary', async () => {
+		const bucket = new MemoryBucket();
+		const original = await bucket.put('counter', '1');
+		await bucket.put('counter', '5');
+		const put = vi.spyOn(bucket, 'put');
+		await expect(
+			mutateObjectWithOutcome(bucket, 'counter', Number, (n) => (n >= 5 ? null : n + 1), {
+				known: { value: 1, etag: original.etag },
+				backoffMs: () => 0,
+			}),
+		).resolves.toEqual({ value: 5, written: false });
+		expect(put).toHaveBeenCalledTimes(1);
+	});
+
+	it('propagates a storage failure on the known write without retrying', async () => {
+		const bucket = new MemoryBucket();
+		const failure = new Error('storage unavailable');
+		const get = vi.spyOn(bucket, 'get');
+		const put = vi.spyOn(bucket, 'put').mockRejectedValue(failure);
+		await expect(
+			mutateObjectWithOutcome(bucket, 'counter', Number, (n) => n + 1, {
+				known: { value: 1, etag: 'known' },
+			}),
+		).rejects.toBe(failure);
+		expect(put).toHaveBeenCalledTimes(1);
+		expect(get).not.toHaveBeenCalled();
+	});
+
+	it('exhausts the retry budget after a known snapshot keeps losing CAS', async () => {
+		const bucket = new MemoryBucket();
+		const original = await bucket.put('counter', '1');
+		const put = vi.spyOn(bucket, 'put').mockRejectedValue(new PreconditionFailedError('conflict'));
+		const get = vi.spyOn(bucket, 'get');
+		await expect(
+			mutateObjectWithOutcome(bucket, 'counter', Number, (n) => n + 1, {
+				known: { value: 1, etag: original.etag },
+				retries: 3,
+				backoffMs: () => 0,
+			}),
+		).rejects.toBeInstanceOf(ConflictError);
+		expect(put).toHaveBeenCalledTimes(3);
+		expect(get).toHaveBeenCalledTimes(2);
+	});
+
+	it('does no I/O when the known value needs no change', async () => {
+		const bucket = new MemoryBucket();
+		const get = vi.spyOn(bucket, 'get');
+		const put = vi.spyOn(bucket, 'put');
+		expect(
+			await mutateObjectWithOutcome(bucket, 'counter', Number, () => null, {
+				known: { value: 1, etag: 'known' },
+			}),
+		).toEqual({ value: 1, written: false });
+		expect(get).not.toHaveBeenCalled();
+		expect(put).not.toHaveBeenCalled();
+	});
+});

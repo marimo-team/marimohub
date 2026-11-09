@@ -25,7 +25,7 @@ import {
 	IdempotencyKeyHeader,
 	jsonBody,
 	jsonContent,
-	loadAuthorizedNotebook,
+	loadAuthorizedNotebookMeta,
 	loadSessionProject,
 	NotebookIdParam,
 	resolvePublicBaseUrl,
@@ -216,7 +216,7 @@ async function visible(
 	user: Parameters<typeof loadSessionProject>[2],
 ) {
 	const project = await loadSessionProject(deps.services.projects, pid, user, deps);
-	const notebook = await loadAuthorizedNotebook(
+	const notebook = await loadAuthorizedNotebookMeta(
 		deps,
 		project,
 		nid,
@@ -238,7 +238,7 @@ async function manageable(
 		'preview.manage',
 		deps,
 	);
-	const notebook = await loadAuthorizedNotebook(deps, project, nid, user, 'preview.manage');
+	const notebook = await loadAuthorizedNotebookMeta(deps, project, nid, user, 'preview.manage');
 	return { project, notebook };
 }
 function present(
@@ -281,7 +281,7 @@ async function grants(
 	const manage = await authorizationService(deps).authorize(user, 'preview.manage', {
 		kind: 'project',
 		project,
-		notebookLabels: notebook.meta.security_labels,
+		notebookLabels: notebook.security_labels,
 	});
 	const [app, edit] = await Promise.all(
 		['app', 'edit'].map((mode) =>
@@ -289,7 +289,7 @@ async function grants(
 				kind: 'session-start',
 				project,
 				mode: mode as 'app' | 'edit',
-				notebookLabels: notebook.meta.security_labels,
+				notebookLabels: notebook.security_labels,
 			}),
 		),
 	);
@@ -361,7 +361,7 @@ app.openapi(requestPreparation, async (c) => {
 		user,
 		can.app ? 'app' : 'edit',
 		deps,
-		access.notebook.meta.security_labels ?? null,
+		access.notebook.security_labels ?? null,
 	);
 	const record = await deps.services.previews.requestPreparation(
 		await deps.services.previews.get(pid, nid, prid),
@@ -426,7 +426,7 @@ app.openapi(launch, async (c) => {
 		user,
 		c.req.valid('json').mode,
 		deps,
-		notebook.meta.security_labels ?? null,
+		notebook.security_labels ?? null,
 	);
 	const record = await deps.services.previews.get(pid, nid, prid);
 	if (!previewAvailable(record)) throw new NotFoundError('Preview not found');

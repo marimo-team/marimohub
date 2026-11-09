@@ -2,6 +2,7 @@ import {
 	NotebookId,
 	ProjectId,
 	createProjectId,
+	createPreviewId,
 	createServices,
 	ForbiddenError,
 	NotFoundError,
@@ -20,6 +21,8 @@ import {
 	createApp,
 	initializeForSubject,
 	loadVisibleProject,
+	loadAuthorizedNotebook,
+	loadAuthorizedNotebookMeta,
 	ErrorResponseSchema,
 	extensibleResponseEnum,
 	jsonBody,
@@ -504,4 +507,53 @@ describe('retireLiveApps lifecycle filter', () => {
 			'terminated',
 		);
 	});
+});
+
+describe('notebook metadata authorization', () => {
+	it.each(['allowed', 'labels', 'deleted', 'preview'] as const)(
+		'matches the full gate for %s notebooks without reading source or README',
+		async (state) => {
+			const bucket = new MemoryBucket();
+			const services = createServices(bucket);
+			await services.catalog.initialize(ACTOR);
+			const project = await services.projects.createProject({ name: 'P', description: '' }, ACTOR);
+			const notebook = await services.notebooks.createNotebook(
+				project.id,
+				{ title: 'N', description: '', code: 'x = 1' },
+				ACTOR,
+			);
+			const detail = await services.notebooks.getNotebook(project.id, notebook.id);
+			if (state === 'labels')
+				detail.meta.security_labels = { classification: 'SECRET', compartments: [] };
+			if (state === 'deleted') detail.meta.status = 'deleted';
+			if (state === 'preview')
+				detail.meta.preview = { notebook_id: notebook.id, preview_id: createPreviewId() };
+			const nb = paths.project(project.id).notebook(notebook.id);
+			if (state === 'preview') {
+				await bucket.delete(nb.meta);
+				await bucket.put(nb.previewMeta, JSON.stringify(detail.meta));
+			} else {
+				await bucket.put(nb.meta, JSON.stringify(detail.meta));
+			}
+			const full = vi.spyOn(services.notebooks, 'getNotebook');
+			const meta = vi.spyOn(services.notebooks, 'getNotebookMeta');
+			const get = vi.spyOn(bucket, 'get');
+			const head = vi.spyOn(bucket, 'head');
+			const deps = { services, policy: {} };
+			const user = { id: ACTOR, email: 'actor@example.com' };
+			for (const gate of [loadAuthorizedNotebook, loadAuthorizedNotebookMeta]) {
+				get.mockClear();
+				head.mockClear();
+				const result = gate(deps, project, notebook.id, user, 'notebook.write');
+				if (state === 'allowed') await expect(result).resolves.toBeDefined();
+				else await expect(result).rejects.toBeInstanceOf(NotFoundError);
+			}
+			expect(full).toHaveBeenCalledTimes(1);
+			expect(meta).toHaveBeenCalledWith(project.id, notebook.id, { consistency: 'validated' });
+			const keys = [...get.mock.calls, ...head.mock.calls].map(([key]) => key);
+			expect(keys).toContain(nb.meta);
+			expect(keys).not.toContain(nb.source);
+			expect(keys).not.toContain(nb.readme);
+		},
+	);
 });

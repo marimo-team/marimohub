@@ -286,7 +286,8 @@ export function createMcpServer(
 							'project.read',
 						);
 						const { code, jobs } = await all({
-							code: async () => deps.services.notebooks.getNotebookContent(project.id, notebook.id),
+							code: async () =>
+								deps.services.notebooks.getNotebookContent(project.id, notebook.id, detail.source),
 							jobs: async () =>
 								deps.jobs
 									? (await deps.services.jobs.listJobs(project.id, notebook.id)).map(
@@ -353,7 +354,7 @@ export function createMcpServer(
 					notebook.id,
 					input,
 					principal.id,
-					expected_updated_at ?? detail.meta.updated_at,
+					expected_updated_at ?? detail.updated_at,
 				);
 
 				return result({

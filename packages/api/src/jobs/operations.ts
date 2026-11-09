@@ -21,7 +21,7 @@ import type { ApiDeps, JobsConfig } from '../context';
 import { idempotentOperation } from '../idempotency';
 import { appendAudit } from '../log';
 import { decodeCursor, DEFAULT_PAGE_SIZE, encodeCursor, MAX_PAGE_SIZE } from '../pagination';
-import { assertProjectRole, loadAuthorizedNotebook, loadVisibleProject } from '../shared';
+import { assertProjectRole, loadAuthorizedNotebookMeta, loadVisibleProject } from '../shared';
 import type { CreateJobBody, TriggerRunBody, UpdateJobBody } from './schemas';
 
 export function requireJobs(deps: ApiDeps): JobsConfig {
@@ -49,7 +49,7 @@ export async function authorizeJobNotebook(
 		action === 'notebook.write'
 			? await assertProjectRole(deps.services.projects, pid, user, action, deps)
 			: await loadVisibleProject(deps.services.projects, pid, user, deps);
-	const notebook = await loadAuthorizedNotebook(deps, project, nid, user, action);
+	const notebook = await loadAuthorizedNotebookMeta(deps, project, nid, user, action);
 	return { project, notebook, user };
 }
 
@@ -84,7 +84,7 @@ export function createNotebookJob(
 ) {
 	return deps.services.jobs.createJob(
 		target.project.id,
-		target.notebook.meta.id,
+		target.notebook.id,
 		body,
 		target.user.id,
 		jobLimits(deps),
@@ -105,7 +105,7 @@ export function updateNotebookJob(
 		signal?.throwIfAborted();
 		return deps.services.jobs.updateJob(
 			target.project.id,
-			target.notebook.meta.id,
+			target.notebook.id,
 			job.id,
 			body,
 			target.user.id,
@@ -130,7 +130,7 @@ export async function triggerJobRun(
 			throw new NotFoundError(`Job ${job.id} not found`);
 		signal?.throwIfAborted();
 		const enqueue = async () => {
-			const current = await deps.services.jobs.getJob(project.id, notebook.meta.id, job.id);
+			const current = await deps.services.jobs.getJob(project.id, notebook.id, job.id);
 			const queued = (await deps.services.jobRuns.listActive()).filter(
 				({ marker, run }) => marker.job_id === job.id && run?.status === 'queued',
 			);
@@ -150,7 +150,9 @@ export async function triggerJobRun(
 				trigger: 'manual',
 				triggeredBy: user.id,
 				parameters: body?.parameters ?? current.parameters,
-				sourceVersionId: notebook.source.current_version_id ?? undefined,
+				sourceVersionId:
+					(await deps.services.notebooks.getNotebookSource(project.id, notebook.id))
+						.current_version_id ?? undefined,
 				timeoutSeconds: Math.floor(Math.min(requestedMs, config.maxTimeoutMs) / 1000),
 			});
 			await appendAudit(deps, { ...request, userId: user.id }, 'job.run.trigger', () =>
@@ -158,7 +160,7 @@ export async function triggerJobRun(
 					event: 'job.run.trigger',
 					actor: user.id,
 					project_id: project.id,
-					notebook_id: notebook.meta.id,
+					notebook_id: notebook.id,
 					job_id: job.id,
 					run_id: run.run_id,
 				}),

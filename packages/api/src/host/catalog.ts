@@ -20,6 +20,7 @@ import type {
 import { OPERATIONS, RUNTIME_OPERATIONS } from '@marimo-hub/host-protocol';
 import type { HostCatalogSnapshot, HostEvent, HostNotebookRecord } from '@marimo-hub/host-protocol';
 import type { ApiDeps } from '../context';
+import { withRequestMemo } from '../requestMemo';
 import { authorizeMcpSession } from '../mcp/sessionActivity';
 import { authorizationService, loadAuthorizedNotebook, loadVisibleProject } from '../shared';
 
@@ -179,10 +180,12 @@ export interface HostCatalog extends HostCatalogSnapshot {
 }
 
 export async function catalogEvents(
-	deps: ApiDeps,
+	rawDeps: ApiDeps,
 	principal: AuthenticatedPrincipal,
 	signal?: AbortSignal,
 ): Promise<HostCatalog> {
+	// SSE can refresh the catalog repeatedly after the caller's access changes.
+	const deps = withRequestMemo(rawDeps);
 	const events: HostEvent[] = [{ event: 'host', data: { host: { operations: OPERATIONS } } }];
 	const sessionsByProject = new Map<ProjectId, Session[]>();
 	const projects = await deps.services.projects.listProjects({

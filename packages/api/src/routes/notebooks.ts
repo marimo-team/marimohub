@@ -46,6 +46,7 @@ import {
 	jsonBody,
 	jsonContent,
 	loadAuthorizedNotebook,
+	loadAuthorizedNotebookMeta,
 	loadVisibleProject,
 	GitSourceResponseSchema,
 	NotebookDetailResponseSchema,
@@ -926,7 +927,7 @@ async function workspaceState(
 			: loadVisibleProject(projects, pid, user, deps),
 		editSessionActive(sessions, pid, nid),
 	]);
-	const notebook = await loadAuthorizedNotebook(
+	const notebook = await loadAuthorizedNotebookMeta(
 		deps,
 		project,
 		nid,
@@ -936,7 +937,7 @@ async function workspaceState(
 	const writeDecision = await authorizationService(deps).authorize(user, 'notebook.write', {
 		kind: 'project',
 		project,
-		notebookLabels: notebook.meta.security_labels ?? null,
+		notebookLabels: notebook.security_labels ?? null,
 	});
 	const sourceAccess = await notebooks.workspace.access(pid, nid);
 	const readOnlyReason = !sourceAccess.writable
@@ -1008,7 +1009,7 @@ app.openapi(listWorkspaceEntries, async (c) => {
 	const { pid, nid } = c.req.valid('param');
 	{
 		const project = await loadVisibleProject(deps.services.projects, pid, user, deps);
-		await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
+		await loadAuthorizedNotebookMeta(deps, project, nid, user, 'project.read');
 	}
 	const query = c.req.valid('query');
 	const result = await deps.services.notebooks.workspace.list(
@@ -1036,7 +1037,7 @@ app.openapi(searchWorkspace, async (c) => {
 	const { pid, nid } = c.req.valid('param');
 	{
 		const project = await loadVisibleProject(deps.services.projects, pid, user, deps);
-		await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
+		await loadAuthorizedNotebookMeta(deps, project, nid, user, 'project.read');
 	}
 	const query = c.req.valid('query');
 	const items = await deps.services.notebooks.workspace.search(pid, nid, query.query, query.path);
@@ -1094,7 +1095,7 @@ async function authorizeWorkspaceUpload(c: Context<HonoEnv>, pid: ProjectId, nid
 		'notebook.write',
 		deps,
 	);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'notebook.write');
 	return { workspace: deps.services.notebooks.workspace, user };
 }
 app.openapi(
@@ -1236,7 +1237,7 @@ app.get('/projects/:pid/notebooks/:nid/workspace/files', async (c) => {
 	const { pid, nid, path } = parseWorkspaceRawRequest(c);
 	{
 		const project = await loadVisibleProject(deps.services.projects, pid, user, deps);
-		await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
+		await loadAuthorizedNotebookMeta(deps, project, nid, user, 'project.read');
 	}
 	const file = await deps.services.notebooks.workspace.read(pid, nid, path);
 	return new Response(new Uint8Array(file.bytes), {
@@ -1469,7 +1470,7 @@ app.openapi(rotateSyncToken, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await assertProjectRole(projects, pid, user, 'notebook.manage', deps);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.manage');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'notebook.manage');
 	const { sync_token } = await notebooks.synced.rotateToken(pid, nid);
 	return c.json({ success: true, data: { sync_url: syncUrl(c, pid, nid), sync_token } }, 200);
 });
@@ -1512,7 +1513,7 @@ app.openapi(syncSourceNow, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'notebook.write');
 	const outcome = await syncSourceManually(
 		deps,
 		project,
@@ -1546,8 +1547,8 @@ app.openapi(getNotebookContent, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await loadVisibleProject(projects, pid, user, deps);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
-	const code = await notebooks.getNotebookContent(pid, nid);
+	const detail = await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
+	const code = await notebooks.getNotebookContent(pid, nid, detail.source);
 	return c.json({ success: true, data: { code } }, 200);
 });
 
@@ -1611,7 +1612,7 @@ app.openapi(updateNotebook, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'notebook.write');
 	const body = c.req.valid('json');
 	const base_image = checkBaseImage(deps.sandbox.images, body.base_image);
 	const compute_profile = checkComputeProfile(deps.sandbox, body.compute_profile);
@@ -1637,7 +1638,7 @@ app.openapi(deleteNotebook, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'notebook.write');
 	await deleteNotebookAndRetire(deps, project, nid, user, ifMatchToken(c));
 
 	return c.json({ success: true }, 200);
@@ -1649,7 +1650,7 @@ app.openapi(listVersions, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await loadVisibleProject(projects, pid, user, deps);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'project.read');
 	const all = await notebooks.listVersions(pid, nid);
 	const page = paginate(all, c.req.valid('query'), {
 		key: (v) => v.saved_at,
@@ -1665,7 +1666,7 @@ app.openapi(getVersion, async (c) => {
 	const user = c.get('user');
 	const { pid, nid, vid } = c.req.valid('param');
 	const project = await loadVisibleProject(projects, pid, user, deps);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'project.read');
 	const { version, code } = await notebooks.getVersion(pid, nid, vid);
 	return c.json({ success: true, data: { version: toPublicVersion(version), code } }, 200);
 });
@@ -1700,7 +1701,7 @@ app.openapi(getNotebookHtml, async (c) => {
 	const { pid, nid } = c.req.valid('param');
 	// Read-only, gated like reading the notebook's code (viewer visibility).
 	const project = await loadVisibleProject(projects, pid, user, deps);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'project.read');
 	const snapshot = await notebooks.getLatestHtmlSnapshot(pid, nid);
 	return serveHtmlSnapshot(c, snapshot);
 });
@@ -1711,7 +1712,7 @@ app.openapi(getVersionHtml, async (c) => {
 	const user = c.get('user');
 	const { pid, nid, vid } = c.req.valid('param');
 	const project = await loadVisibleProject(projects, pid, user, deps);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'project.read');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'project.read');
 	const snapshot = await notebooks.getVersionHtmlSnapshot(pid, nid, vid);
 	return serveHtmlSnapshot(c, snapshot);
 });
@@ -1722,7 +1723,7 @@ app.openapi(restoreVersion, async (c) => {
 	const user = c.get('user');
 	const { pid, nid, vid } = c.req.valid('param');
 	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'notebook.write');
 	const meta = await notebooks.restoreVersion(pid, nid, vid, user.id);
 	return c.json({ success: true, data: toPublicNotebookMeta(meta) }, 201);
 });
@@ -1733,7 +1734,7 @@ app.openapi(duplicateNotebook, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'notebook.write');
 	const body = c.req.valid('json');
 	const data = await idempotentCreate(
 		c,
@@ -1768,7 +1769,7 @@ app.get('/projects/:pid/notebooks/:nid/workspace.zip', async (c) => {
 	}
 	{
 		const project = await loadVisibleProject(projects, pidRaw, user, deps);
-		await loadAuthorizedNotebook(deps, project, nidRaw, user, 'project.read');
+		await loadAuthorizedNotebookMeta(deps, project, nidRaw, user, 'project.read');
 	}
 
 	const files = await notebooks.listWorkspaceFiles(pidRaw, nidRaw);
