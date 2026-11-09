@@ -4,7 +4,7 @@ import { ProjectNamespaces } from './ProjectNamespaces';
 import { FolderPlus, Plus } from 'lucide-react';
 import { Button, EmptyState, ListFilters, ListResults, Page } from '@/components/ui';
 import { CreateProjectDialog } from './CreateProjectDialog';
-import { useProjectsQuery } from '@/api/hooks';
+import { useProjectsQuery, useProjectRoster } from '@/api/hooks';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { useListFilters } from '@/hooks/useListFilters';
 import { useAuth } from '@/context/AuthContext';
@@ -34,10 +34,8 @@ export function ProjectList() {
 	});
 
 	const { data: projects = [], isPending, isFetching } = useProjectsQuery(filters);
-	// Read namespaces from the unfiltered roster so the toggle does not flicker as filters
-	// narrow the results; with no filters this shares the query above. The roster omits
-	// deleted projects, so the displayed results count too.
-	const { data: roster = [] } = useProjectsQuery({}, { throwOnError: false });
+	// Include filtered results because the active roster omits deleted projects.
+	const { data: roster = [] } = useProjectRoster({ throwOnError: false });
 	const hasNamespaces = [...roster, ...projects].some((project) => project.tags.some(isPathTag));
 
 	return (

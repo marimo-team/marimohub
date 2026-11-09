@@ -1,33 +1,75 @@
 import { useSearchAccess } from '@/hooks/useSearchAccess';
 import { SEARCH_ROUTE, PROJECT_SEARCH_ROUTE } from '@/lib/workspaceSearch';
 import { useWorkspaceSearchShortcut } from '@/hooks/useWorkspaceSearchShortcut';
-import { PreviewsPage } from '@/components/Previews/PreviewsPage';
-import { PreviewPage } from '@/components/Previews/PreviewPage';
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryErrorResetBoundary } from '@tanstack/react-query';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
-import { WorkspaceLayout } from '@/components/Workspace/WorkspaceLayout';
-import { WorkspaceHome } from '@/components/Workspace/WorkspaceHome';
-import { ProjectAlertsPage } from '@/components/Workspace/ProjectAlertsPage';
-import { ProjectJobsPage } from '@/components/Workspace/ProjectJobsPage';
-import { ProjectSettingsPage } from '@/components/Workspace/ProjectSettingsPage';
 import { ProjectSourceGate } from '@/components/Workspace/ProjectSourceGate';
-import { ProjectList } from '@/components/ProjectList/ProjectList';
-import { AppsPage } from '@/components/Apps/AppsPage';
-import { Project } from '@/components/Project/Project';
 import { AppEntryPage } from '@/components/Apps/AppEntryPage';
 import { AppLinkPage } from '@/components/NotebookPage/AppLinkPage';
-import { SnapshotPage } from '@/components/NotebookPage/SnapshotPage';
-import { JobsPage } from '@/components/Jobs/JobsPage';
 import { SignIn } from '@/components/SignIn/SignIn';
-import { ErrorBoundary, Button } from '@/components/ui';
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
+import { Button } from '@/components/ui/Button';
 import { Toaster } from '@/components/ui/sonner';
 import { ApiRequestError } from '@/api/client';
-import { AdminLayout } from '@/components/Admin/AdminLayout';
 import { appBasePath, withBasePath } from '@/lib/basePath';
 
+const WorkspaceLayout = lazy(() =>
+	import('@/components/Workspace/WorkspaceLayout').then((module) => ({
+		default: module.WorkspaceLayout,
+	})),
+);
+
+const PreviewsPage = lazy(() =>
+	import('@/components/Previews/PreviewsPage').then((module) => ({ default: module.PreviewsPage })),
+);
+const PreviewPage = lazy(() =>
+	import('@/components/Previews/PreviewPage').then((module) => ({ default: module.PreviewPage })),
+);
+const WorkspaceHome = lazy(() =>
+	import('@/components/Workspace/WorkspaceHome').then((module) => ({
+		default: module.WorkspaceHome,
+	})),
+);
+const ProjectAlertsPage = lazy(() =>
+	import('@/components/Workspace/ProjectAlertsPage').then((module) => ({
+		default: module.ProjectAlertsPage,
+	})),
+);
+const ProjectJobsPage = lazy(() =>
+	import('@/components/Workspace/ProjectJobsPage').then((module) => ({
+		default: module.ProjectJobsPage,
+	})),
+);
+const ProjectSettingsPage = lazy(() =>
+	import('@/components/Workspace/ProjectSettingsPage').then((module) => ({
+		default: module.ProjectSettingsPage,
+	})),
+);
+const ProjectList = lazy(() =>
+	import('@/components/ProjectList/ProjectList').then((module) => ({
+		default: module.ProjectList,
+	})),
+);
+const AppsPage = lazy(() =>
+	import('@/components/Apps/AppsPage').then((module) => ({ default: module.AppsPage })),
+);
+const Project = lazy(() =>
+	import('@/components/Project/Project').then((module) => ({ default: module.Project })),
+);
+const SnapshotPage = lazy(() =>
+	import('@/components/NotebookPage/SnapshotPage').then((module) => ({
+		default: module.SnapshotPage,
+	})),
+);
+const JobsPage = lazy(() =>
+	import('@/components/Jobs/JobsPage').then((module) => ({ default: module.JobsPage })),
+);
+const AdminLayout = lazy(() =>
+	import('@/components/Admin/AdminLayout').then((module) => ({ default: module.AdminLayout })),
+);
 const SearchPage = lazy(() => import('@/components/Search/SearchPage'));
 const ChatPage = lazy(() => import('@/components/Chat/ChatPage'));
 const AuditLogPage = lazy(() => import('@/components/AuditLog/AuditLogPage'));

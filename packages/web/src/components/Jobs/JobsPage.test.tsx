@@ -50,6 +50,7 @@ interface World {
 	jobs?: Job[];
 	runs?: JobRun[];
 	olderRuns?: JobRun[];
+	olderRunFailures?: number;
 	html?: string | null;
 	logs?: string | null;
 	htmlFailures?: number;
@@ -67,6 +68,7 @@ function makeFetch(world: World = {}) {
 	const jobs = world.jobs ?? [job()];
 	const runs = world.runs ?? [run()];
 	const olderRuns = world.olderRuns ?? [];
+	let olderRunFailures = world.olderRunFailures ?? 0;
 	let htmlFailures = world.htmlFailures ?? 0;
 	let logsFailures = world.logsFailures ?? 0;
 	const calls: { url: string; method: string; body?: unknown; ifMatch?: string }[] = [];
@@ -185,6 +187,8 @@ function makeFetch(world: World = {}) {
 		}
 		if (/\/jobs\/[^/]+\/runs(\?.*)?$/.test(url)) {
 			const cursor = new URL(url, 'http://local').searchParams.get('cursor');
+			if (cursor && olderRunFailures-- > 0)
+				return jsonError('UNAVAILABLE', 'History unavailable', 503);
 			return cursor
 				? jsonOk({ items: olderRuns, next_cursor: null })
 				: jsonOk({ items: runs, next_cursor: olderRuns.length > 0 ? 'older' : null });
@@ -618,4 +622,18 @@ describe('JobsPage', () => {
 		expect(await screen.findByText('Compute large')).toBeInTheDocument();
 		expect(screen.getByTitle('ghcr.io/org/gpu:1')).toHaveTextContent('Image ghcr.io/org/gpu:1');
 	});
+});
+
+it('keeps loaded runs visible when older history fails and allows a retry', async () => {
+	const world = makeFetch({ olderRuns: [run({ run_id: 'older' })], olderRunFailures: 1 });
+	const user = userEvent.setup();
+	renderPage();
+	await screen.findByTestId('run-row');
+	await user.click(screen.getByRole('button', { name: 'Load more runs' }));
+	expect(await screen.findByText('Failed to load runs.')).toBeVisible();
+	expect(screen.getAllByTestId('run-row')).toHaveLength(1);
+	await user.click(screen.getByRole('button', { name: 'Load more runs' }));
+	await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(2));
+	expect(screen.queryByText('Failed to load runs.')).not.toBeInTheDocument();
+	expect(world.calls.filter((call) => call.url.includes('cursor=older'))).toHaveLength(2);
 });

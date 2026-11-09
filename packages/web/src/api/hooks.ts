@@ -2,14 +2,17 @@ import type { MemberSelector } from '@marimo-hub/core/identity-match';
 import { MAX_RESOLVED_USERS } from '@marimo-hub/core/constants';
 import {
 	useInfiniteQuery,
+	useQueryClient,
 	useQuery,
 	useSuspenseQuery,
-	useSuspenseQueries,
+	infiniteQueryOptions,
+	usePrefetchQuery,
+	useSuspenseInfiniteQuery,
 	useMutation,
 	queryOptions,
 	keepPreviousData,
 } from '@tanstack/react-query';
-import type { QueryClient } from '@tanstack/react-query';
+import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { apiClient, apiData, apiDataWithResponse, apiErrorFromResponse } from './client';
 import { useApiMutation, useInvalidate } from './mutation';
@@ -35,9 +38,11 @@ import type {
 	AssignableProjectRole,
 	AdminUser,
 	IntegrationEntry,
+	JobRun,
 	JobCreateBody,
 	JobUpdateBody,
 	NotebookDetail,
+	NotebookEntry,
 	ResolvedUser,
 	ProjectFederation,
 	ProjectDefaultRole,
@@ -55,6 +60,7 @@ const SESSIONS_POLL_INTERVAL_MS = 30_000;
 /** Refresh cadence for job history and active run details. */
 const RUNS_POLL_INTERVAL_MS = 5_000;
 const IDLE_RUNS_POLL_INTERVAL_MS = 60_000;
+const HISTORICAL_RUN_REFRESH_LIMIT = 4;
 
 /**
  * Deployment-scoped facts (identity, version, capabilities): fixed for the life
@@ -424,7 +430,8 @@ export function useProjectsQuery(
 	options: { enabled?: boolean; throwOnError?: boolean } = {},
 ) {
 	return useQuery({
-		queryKey: projectKeys.filteredList(filters),
+		queryKey: projectKeys.filteredList({ ...filters, status: filters.status ?? 'active' }),
+		staleTime: 60_000,
 		queryFn: () =>
 			listAllCursorPages(
 				(cursor) =>
@@ -439,6 +446,10 @@ export function useProjectsQuery(
 		enabled: options.enabled,
 		throwOnError: options.throwOnError ?? true,
 	});
+}
+
+export function useProjectRoster(options: Parameters<typeof useProjectsQuery>[1] = {}) {
+	return useProjectsQuery({ status: 'active' }, options);
 }
 
 export function projectQueryOptions(projectId: string) {
@@ -1452,23 +1463,36 @@ export function objectContentUrl(input: {
 // Notebooks
 
 function notebooksQueryOptions(projectId: string, filters: NotebookListFilters) {
-	return queryOptions({
+	return infiniteQueryOptions({
 		queryKey: notebookKeys.filteredList(projectId, filters),
-		queryFn: async () =>
-			(
-				await apiData(
-					apiClient.GET('/api/v1/projects/{pid}/notebooks', {
-						params: { path: { pid: projectId }, query: filters },
-					}),
-				)
-			).items,
+		initialPageParam: null as string | null,
+		queryFn: ({ pageParam, signal }) =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/notebooks', {
+					params: {
+						path: { pid: projectId },
+						query: { ...filters, limit: 100, ...(pageParam ? { cursor: pageParam } : {}) },
+					},
+					signal,
+				}),
+			),
+		getNextPageParam: (page) => page.next_cursor,
+		select: (data) => {
+			const notebooks = new Map<string, NotebookEntry>();
+			for (const page of data.pages) {
+				for (const item of page.items) notebooks.set(item.id, item);
+			}
+			return [...notebooks.values()];
+		},
 	});
 }
 
 export function useProjectContentQueries(projectId: string, filters: NotebookListFilters) {
-	return useSuspenseQueries({
-		queries: [projectQueryOptions(projectId), notebooksQueryOptions(projectId, filters)],
-	});
+	const projectOptions = projectQueryOptions(projectId);
+	usePrefetchQuery(projectOptions);
+	const notebooks = useSuspenseInfiniteQuery(notebooksQueryOptions(projectId, filters));
+	const project = useSuspenseQuery(projectOptions);
+	return [project, notebooks] as const;
 }
 
 /**
@@ -1944,28 +1968,131 @@ export function useTriggerJobRun(projectId: string, notebookId: string) {
 	);
 }
 
-/** Poll even an empty history: scheduled and externally triggered runs can arrive at any time. */
-export function useJobRunsQuery(projectId: string, notebookId: string, jobId: string | null) {
-	return useInfiniteQuery({
-		queryKey: jobKeys.runs(projectId, notebookId, jobId ?? ''),
-		queryFn: ({ pageParam }) =>
+function mergeJobRuns(...groups: JobRun[][]): JobRun[] {
+	const runs = new Map<string, JobRun>();
+	for (const group of groups) {
+		for (const run of group) {
+			const current = runs.get(run.run_id);
+			// A stale page must not undo a terminal result from a detail request.
+			if (!current || (!isTerminalRun(current) && isTerminalRun(run))) runs.set(run.run_id, run);
+		}
+	}
+	return [...runs.values()];
+}
+
+function jobRunQueryOptions(projectId: string, notebookId: string, jobId: string, runId: string) {
+	return queryOptions({
+		queryKey: jobKeys.run(projectId, notebookId, jobId, runId),
+		queryFn: ({ signal }) =>
 			apiData(
-				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs', {
-					params: {
-						path: { pid: projectId, nid: notebookId, jid: jobId ?? '' },
-						query: { limit: 100, ...(pageParam ? { cursor: pageParam } : {}) },
-					},
+				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}', {
+					params: { path: { pid: projectId, nid: notebookId, jid: jobId, rid: runId } },
+					signal,
 				}),
 			),
-		initialPageParam: null as string | null,
-		getNextPageParam: (lastPage) => lastPage.next_cursor,
-		select: (data) => data.pages.flatMap((page) => page.items),
+		staleTime: RUNS_POLL_INTERVAL_MS,
+	});
+}
+
+/** Poll even an empty history: scheduled and externally triggered runs can arrive at any time. */
+export function useJobRunsQuery(projectId: string, notebookId: string, jobId: string | null) {
+	const client = useQueryClient();
+	const runKey = jobKeys.runs(projectId, notebookId, jobId ?? '');
+	const latestKey = [...runKey, 'latest'];
+	const historyKey = [...runKey, 'history'];
+	const fetchPage = (cursor: string | null, signal: AbortSignal) =>
+		apiData(
+			apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs', {
+				params: {
+					path: { pid: projectId, nid: notebookId, jid: jobId ?? '' },
+					query: { limit: 100, ...(cursor ? { cursor } : {}) },
+				},
+				signal,
+			}),
+		);
+	type RunPage = Awaited<ReturnType<typeof fetchPage>>;
+	type RunPoll = RunPage & { observed: JobRun[]; refreshQueue: string[] };
+	const historyRuns = () =>
+		client
+			.getQueryData<InfiniteData<RunPage, string | null>>(historyKey)
+			?.pages.map((page) => page.items) ?? [];
+	const latest = useQuery({
+		queryKey: latestKey,
+		queryFn: async ({ signal }): Promise<RunPoll> => {
+			const page = await fetchPage(null, signal);
+			signal.throwIfAborted();
+			const previous = client.getQueryData<RunPoll>(latestKey);
+			const observed = mergeJobRuns(page.items, previous?.observed ?? [], ...historyRuns()).map(
+				(run) => {
+					const detail = client.getQueryData<JobRun>(
+						jobKeys.run(projectId, notebookId, jobId ?? '', run.run_id),
+					);
+					return detail && isTerminalRun(detail) ? detail : run;
+				},
+			);
+			const headIds = new Set(page.items.map((run) => run.run_id));
+			const activeIds = new Set<string>();
+			for (const run of observed) {
+				if (!headIds.has(run.run_id) && !isTerminalRun(run)) activeIds.add(run.run_id);
+			}
+			// Rotate a bounded batch so large histories cannot create request fan-out.
+			const queue = [...new Set([...(previous?.refreshQueue ?? []), ...activeIds])].filter((id) =>
+				activeIds.has(id),
+			);
+			const batch = queue.slice(0, HISTORICAL_RUN_REFRESH_LIMIT);
+			const results = await Promise.allSettled(
+				batch.map((runId) =>
+					client.fetchQuery({
+						...jobRunQueryOptions(projectId, notebookId, jobId ?? '', runId),
+						retry: false,
+					}),
+				),
+			);
+			signal.throwIfAborted();
+			const updates = new Map<string, JobRun>();
+			for (const result of results) {
+				if (result.status === 'fulfilled') updates.set(result.value.run_id, result.value);
+			}
+			return {
+				...page,
+				observed: observed.map((run) => updates.get(run.run_id) ?? run),
+				refreshQueue: [...queue.slice(batch.length), ...batch],
+			};
+		},
 		enabled: !!jobId,
 		refetchInterval: (query) =>
-			query.state.data?.pages.some((page) => page.items.some((run) => !isTerminalRun(run)))
+			mergeJobRuns(query.state.data?.observed ?? [], ...historyRuns()).some(
+				(run) => !isTerminalRun(run),
+			)
 				? RUNS_POLL_INTERVAL_MS
 				: IDLE_RUNS_POLL_INTERVAL_MS,
 	});
+	const history = useInfiniteQuery({
+		queryKey: historyKey,
+		queryFn: ({ pageParam, signal }) => fetchPage(pageParam, signal),
+		initialPageParam: null as string | null,
+		getNextPageParam: (page) => page.next_cursor,
+		enabled: false,
+		staleTime: Infinity,
+	});
+	return {
+		...latest,
+		data:
+			latest.data &&
+			mergeJobRuns(latest.data.observed, ...(history.data?.pages.map((page) => page.items) ?? [])),
+		latestRuns: latest.data?.items,
+		isError: latest.isError || history.isError,
+		hasNextPage: history.data ? history.hasNextPage : !!latest.data?.next_cursor,
+		isFetchingNextPage: history.isFetching,
+		fetchNextPage: () => {
+			if (!jobId || (!latest.data?.next_cursor && !history.hasNextPage)) return Promise.resolve();
+			if (!history.data && latest.data) {
+				const { items, next_cursor } = latest.data;
+				client.setQueryData(historyKey, { pages: [{ items, next_cursor }], pageParams: [null] });
+			}
+			return history.fetchNextPage();
+		},
+	};
 }
 
 export function useJobRunQuery(
@@ -1976,20 +2103,7 @@ export function useJobRunQuery(
 	enabled: boolean,
 ) {
 	return useQuery({
-		queryKey: jobKeys.run(projectId, notebookId, jobId ?? '', runId ?? ''),
-		queryFn: () =>
-			apiData(
-				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}', {
-					params: {
-						path: {
-							pid: projectId,
-							nid: notebookId,
-							jid: jobId ?? '',
-							rid: runId ?? '',
-						},
-					},
-				}),
-			),
+		...jobRunQueryOptions(projectId, notebookId, jobId ?? '', runId ?? ''),
 		enabled: enabled && !!jobId && !!runId,
 		refetchInterval: (query) =>
 			query.state.data && !isTerminalRun(query.state.data) ? RUNS_POLL_INTERVAL_MS : false,
@@ -2065,14 +2179,8 @@ export function useJobRunLogsQuery(
 
 // Sessions
 
-/**
- * Poll a project's active sessions (`starting`/`running`/`idle`) to drive the
- * per-notebook runtime-status indicators in the notebook table. Plain `useQuery`
- * (not suspense) so a background poll never suspends the table; TanStack pauses
- * interval refetch while the tab is unfocused, so this stays cheap.
- */
-export function useProjectSessionsQuery(projectId: string, enabled = true) {
-	return useQuery({
+export function projectSessionsQueryOptions(projectId: string) {
+	return queryOptions({
 		queryKey: sessionKeys.listByProject(projectId),
 		queryFn: async () =>
 			(
@@ -2084,8 +2192,12 @@ export function useProjectSessionsQuery(projectId: string, enabled = true) {
 			).items,
 		refetchInterval: SESSIONS_POLL_INTERVAL_MS,
 		staleTime: SESSIONS_POLL_INTERVAL_MS,
-		enabled,
 	});
+}
+
+// Background polls must not suspend the notebook table.
+export function useProjectSessionsQuery(projectId: string, enabled = true) {
+	return useQuery({ ...projectSessionsQueryOptions(projectId), enabled });
 }
 
 /**
@@ -2156,7 +2268,7 @@ function useStartSessionRequest(
 				editIntent,
 				visitId ?? undefined,
 			),
-		() => [sessionKeys.listByProject(projectId)],
+		() => (mode === 'app' ? [] : [sessionKeys.listByProject(projectId)]),
 		{ suppressErrorToast: true },
 	);
 }

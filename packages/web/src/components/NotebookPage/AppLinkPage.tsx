@@ -1,7 +1,7 @@
 import { useParams } from 'react-router-dom';
 import { useDeepLinkQuery } from '@/api/deepLinks';
 import { isNotFoundError } from '@/api/request';
-import { Button } from '@/components/ui';
+import { Button } from '@/components/ui/Button';
 import { AppEntryPage } from '@/components/Apps/AppEntryPage';
 
 export function AppLinkPage() {

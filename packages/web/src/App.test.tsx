@@ -30,7 +30,7 @@ describe('App routes', () => {
 						groups: [],
 						can_create_projects: !appOnly,
 					});
-				if (url.startsWith('/api/v1/apps') || url === '/api/v1/projects')
+				if (url.startsWith('/api/v1/apps') || url.split('?')[0] === '/api/v1/projects')
 					return jsonOk({ items: [], next_cursor: null });
 				if (url === '/api/v1/version') return jsonOk({ version: 'test' });
 				throw new Error(`unexpected fetch: ${url}`);
@@ -40,7 +40,7 @@ describe('App routes', () => {
 		expect(
 			await screen.findByRole('heading', { name: appOnly ? 'Apps' : 'Projects' }),
 		).toBeVisible();
-		expect(window.location.pathname).toBe(appOnly ? '/apps' : '/');
+		expect(window.location.pathname).toBe(appOnly ? '/apps' : '/projects');
 		if (appOnly) expect(requests).not.toContain('/api/v1/projects');
 		else expect(screen.getByRole('link', { name: 'Apps' })).toHaveAttribute('href', '/apps');
 	});
@@ -69,7 +69,8 @@ describe('App routes', () => {
 						groups: [],
 					});
 				}
-				if (url === '/api/v1/projects') return jsonOk({ items: [], next_cursor: null });
+				if (url.split('?')[0] === '/api/v1/projects')
+					return jsonOk({ items: [], next_cursor: null });
 				if (url === '/api/v1/version') return jsonOk({ version: 'test' });
 				throw new Error(`unexpected fetch: ${url}`);
 			}),
@@ -79,7 +80,7 @@ describe('App routes', () => {
 		renderWithClient(<App />, { toaster: false });
 
 		expect(await screen.findByRole('heading', { name: 'Projects' })).toBeInTheDocument();
-		expect(window.location.pathname).toBe('/');
+		expect(window.location.pathname).toBe('/projects');
 		expect(requests.some((url) => url.startsWith('/api/v1/events?'))).toBe(false);
 		expect(requests.some((url) => url.startsWith('/api/v1/admin/'))).toBe(false);
 	});

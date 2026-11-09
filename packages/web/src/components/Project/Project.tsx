@@ -8,7 +8,7 @@ import { Thumbnail } from '@/components/Notebook/Thumbnail';
 import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
 import { lazy, Suspense, useMemo, useState, useTransition } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
+import { usePrefetchQuery, useQueryClient } from '@tanstack/react-query';
 import { FileTrigger } from 'react-aria-components';
 import { toast } from 'sonner';
 import { z } from 'zod';
@@ -63,6 +63,7 @@ import {
 } from '@/components/form';
 import {
 	useProjectContentQueries,
+	projectSessionsQueryOptions,
 	useCreateNotebook,
 	useDuplicateNotebook,
 	useDeleteNotebook,
@@ -226,12 +227,22 @@ function useProjectContent() {
 	const editProjectModal = useDisclosure();
 	const deleteProjectModal = useDisclosure();
 
-	const [{ data: project }, { data: notebooks, isFetching }] = useProjectContentQueries(
-		pid!,
-		filters,
-	);
-	const notebooksFetching = filtersPending || isFetching;
+	usePrefetchQuery(projectSessionsQueryOptions(pid!));
 	const { data: sessions, isLoading: sessionsLoading } = useProjectSessionsQuery(pid!);
+	const [
+		{ data: project },
+		{
+			data: notebooks,
+			isFetching,
+			isPending,
+			hasNextPage,
+			fetchNextPage,
+			isFetchingNextPage,
+			isError,
+			error,
+		},
+	] = useProjectContentQueries(pid!, filters);
+	const notebooksFetching = filtersPending || isFetching;
 	const createNotebook = useCreateNotebook(pid!);
 	const duplicateNotebook = useDuplicateNotebook(pid!);
 	const deleteNotebook = useDeleteNotebook(pid!);
@@ -739,7 +750,7 @@ function useProjectContent() {
 				statuses={NOTEBOOK_STATUS_FILTERS}
 				resultCount={notebooks.length}
 				resultsId="notebook-results"
-				isLoading={false}
+				isLoading={isPending}
 				isFetching={notebooksFetching}
 				onChange={setFilters}
 				actions={
@@ -795,7 +806,7 @@ function useProjectContent() {
 				}
 				isFetching={notebooksFetching}
 				isFiltered={filtersActive}
-				isLoading={false}
+				isLoading={isPending}
 				itemName="notebook"
 				onReset={() => setFilters({})}
 				resultsId="notebook-results"
@@ -928,6 +939,16 @@ function useProjectContent() {
 					})}
 				/>
 			</ListResults>
+			{isError && (
+				<p role="alert" className="text-sm text-destructive">
+					{error?.message}
+				</p>
+			)}
+			{hasNextPage && (
+				<Button isDisabled={isFetchingNextPage} onPress={() => void fetchNextPage()}>
+					{isFetchingNextPage ? 'Loading…' : 'Load more notebooks'}
+				</Button>
+			)}
 
 			{importModal.isOpen && (
 				<Suspense fallback={null}>

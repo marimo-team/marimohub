@@ -51,6 +51,7 @@ function setup(
 				<Route path="integrations" element={<ProjectSettingsPage section="integrations" />} />
 			</Route>
 			<Route path="/apps" element={<p>Apps destination</p>} />
+			<Route path="/projects" element={<p>Projects destination</p>} />
 		</Routes>,
 		{ route: `/projects/alpha/${section}`, errorBoundary: true },
 	);
@@ -121,7 +122,7 @@ describe('Project settings pages', () => {
 		async (section) => {
 			vi.spyOn(console, 'error').mockImplementation(() => {});
 			const requests = setup(section, null, true);
-			await screen.findByText('Request failed');
+			await screen.findByText('Projects destination');
 			expect(
 				requests.some((path) => /\/(members|integrations|alert-destinations)(\?|$)/.test(path)),
 			).toBe(false);

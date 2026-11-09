@@ -18,7 +18,7 @@ import { Button, ConfirmDialog, EmptyState, IconLink, Page, Skeleton } from '@/c
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { toastError } from '@/lib/errors';
-import { describeSchedule } from '@/lib/jobs';
+import { describeSchedule, isTerminalRun } from '@/lib/jobs';
 import { formatElapsed } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import type { Job, JobRun } from '@/types';
@@ -55,14 +55,16 @@ function useJobsPageModel() {
 	const runs = useJobRunsQuery(projectId, notebookId, selectedJob?.id ?? null);
 	const selectedRunId = searchParams.get('run');
 	const pagedRun = runs.data?.find((run) => run.run_id === selectedRunId) ?? null;
+	const isRecentRun = runs.latestRuns?.some((run) => run.run_id === selectedRunId);
+	const needsRunDetail = !pagedRun || (!isRecentRun && !isTerminalRun(pagedRun));
 	const selectedRunQuery = useJobRunQuery(
 		projectId,
 		notebookId,
 		selectedJobId,
 		selectedRunId,
-		!!selectedRunId && !runs.isPending && !pagedRun,
+		!!selectedRunId && !runs.isPending && needsRunDetail,
 	);
-	const selectedRun = pagedRun ?? selectedRunQuery.data ?? null;
+	const selectedRun = needsRunDetail ? (selectedRunQuery.data ?? pagedRun) : pagedRun;
 
 	const select = (next: { job?: string | null; run?: string | null }) => {
 		setSearchParams(
@@ -309,14 +311,17 @@ export function JobsPage() {
 									<h2 className="text-xs font-medium text-muted-foreground">Runs</h2>
 									{m.runs.isPending ? (
 										<Skeleton className="h-16 w-full" />
-									) : m.runs.isError ? (
-										<p className="text-xs text-destructive">Failed to load runs.</p>
-									) : (
+									) : m.runs.data ? (
 										<RunTable
 											runs={m.runs.data}
 											selectedRunId={selectedRun?.run_id ?? null}
 											onSelect={(run) => m.select({ job: selectedJob.id, run: run.run_id })}
 										/>
+									) : null}
+									{m.runs.isError && (
+										<p role="alert" className="text-xs text-destructive">
+											Failed to load runs.
+										</p>
 									)}
 									{m.runs.hasNextPage && (
 										<Button

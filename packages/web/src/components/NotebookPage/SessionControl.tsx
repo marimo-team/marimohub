@@ -1,6 +1,8 @@
 import { ChevronDown, Cpu, RefreshCw, Square, Users, UserRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Button, Popover, StatusDot } from '@/components/ui';
+import { Button } from '@/components/ui/Button';
+import { Popover } from '@/components/ui/Popover';
+import { StatusDot } from '@/components/ui/StatusDot';
 import { sessionStatusPresentation } from '@/components/ui/sessionStatus';
 import { SessionDetails } from '@/components/ui/SessionDetails';
 import { ComputeProfileIndicator } from '@/components/Notebook/ComputeProfileIndicator';

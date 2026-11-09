@@ -5,6 +5,7 @@ import {
 	useSuspenseInfiniteQuery,
 } from '@tanstack/react-query';
 import { apiClient, apiData } from './client';
+import { isNotFoundError } from './request';
 import { appKeys } from './queryKeys';
 
 function appsQueryOptions(projectId?: string, search = '') {
@@ -27,13 +28,26 @@ export function useAppsQuery(projectId?: string, search = '') {
 }
 
 export function useProjectAppsQuery(projectId: string) {
-	return useSuspenseInfiniteQuery(appsQueryOptions(projectId));
+	const options = appsQueryOptions(projectId);
+	return useSuspenseInfiniteQuery({
+		...options,
+		queryFn: async (context) => {
+			try {
+				return { ...(await options.queryFn!(context)), missing: false };
+			} catch (error) {
+				if (!isNotFoundError(error)) throw error;
+				return { items: [], next_cursor: null, missing: true, project: undefined };
+			}
+		},
+	});
 }
 
 export function useAppQuery(
 	pid: string,
 	nid: string,
-	options: { refetchIntervalMs?: (error: Error | null) => number | undefined } = {},
+	options: {
+		refetchIntervalMs?: (error: Error | null) => number | undefined;
+	} = {},
 ) {
 	const { refetchIntervalMs } = options;
 	return useQuery({

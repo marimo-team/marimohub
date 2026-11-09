@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
 import { Route, Routes, useLocation } from 'react-router-dom';
 import { stubApi } from '@/test/apiStub';
-import { renderWithClient } from '@/test/render';
+import { jsonError, renderWithClient } from '@/test/render';
 import type { ProjectRole } from '@/types';
 import { ProjectSourceGate } from './ProjectSourceGate';
 
@@ -51,4 +51,19 @@ describe('ProjectSourceGate', () => {
 		setup(route, 'viewer');
 		expect(await screen.findByText(page)).toBeVisible();
 	});
+});
+
+it('returns a missing remembered project to the project index', async () => {
+	stubApi({ '/api/v1/apps': jsonError('NOT_FOUND', 'Project not found', 404) });
+	renderWithClient(
+		<Routes>
+			<Route path="/projects/:pid" element={<ProjectSourceGate />}>
+				<Route index element={<p>Project source</p>} />
+			</Route>
+			<Route path="*" element={<Destination />} />
+		</Routes>,
+		{ route: '/projects/missing', toaster: false },
+	);
+	expect(await screen.findByRole('status', { name: 'Destination' })).toHaveTextContent('/projects');
+	expect(screen.queryByText('Project source')).not.toBeInTheDocument();
 });

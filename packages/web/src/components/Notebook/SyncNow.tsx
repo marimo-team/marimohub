@@ -1,7 +1,7 @@
 import { toast } from 'sonner';
 import { useCapabilitiesQuery, useSourceDriftQuery, useSyncNotebookNow } from '@/api/hooks';
 import { isApiErrorCode } from '@/api/request';
-import { Button } from '@/components/ui';
+import { Button } from '@/components/ui/Button';
 import { shortCommit } from '@/lib/git';
 import { cn } from '@/lib/utils';
 

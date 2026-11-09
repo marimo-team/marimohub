@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { useNotebookQuery } from '@/api/hooks';
 import { ServerSyncRow } from '@/components/Notebook/SyncNow';
-import { Popover } from '@/components/ui';
+import { Popover } from '@/components/ui/Popover';
 import { formatRelative } from '@/lib/time';
 import {
 	gitBranchUrl,

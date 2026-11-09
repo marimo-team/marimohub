@@ -397,3 +397,59 @@ describe('due heartbeat races', () => {
 		},
 	);
 });
+
+describe('app heartbeat freshness', () => {
+	it.each(['source', 'editor'] as const)(
+		'recovers after the %s freshness read fails without listing sessions',
+		async (record) => {
+			const f = await fixture();
+			const failure =
+				record === 'source'
+					? vi
+							.spyOn(f.client.deps.services.notebooks, 'getNotebookSource')
+							.mockRejectedValueOnce(new UnavailableError('Source unavailable'))
+					: vi
+							.spyOn(f.client.deps.services.sessions, 'getEditorClaim')
+							.mockRejectedValueOnce(new UnavailableError('Editor unavailable'));
+			const list = vi.spyOn(f.bucket, 'list');
+			await expectError(await f.heartbeat(), 503, 'SERVICE_UNAVAILABLE');
+			failure.mockRestore();
+			expect(await expectOk(await f.heartbeat())).toMatchObject({
+				status: 'running',
+				edit_active: false,
+			});
+			expect(list).not.toHaveBeenCalled();
+		},
+	);
+
+	it('omits freshness metadata and reads after termination', async () => {
+		const f = await fixture();
+		await f.services.sessions.terminate(f.project.id, f.session.session_id);
+		const source = vi.spyOn(f.client.deps.services.notebooks, 'getNotebookSource');
+		const editor = vi.spyOn(f.client.deps.services.sessions, 'getEditorClaim');
+		const response = await expectOk(await f.heartbeat());
+		expect(response.status).toBe('terminated');
+		expect(response).not.toHaveProperty('head_version_id');
+		expect(response).not.toHaveProperty('edit_active');
+		expect(source).not.toHaveBeenCalled();
+		expect(editor).not.toHaveBeenCalled();
+	});
+
+	it('returns the head and persistent editor claim without listing project sessions', async () => {
+		const f = await fixture();
+		const source = await f.services.notebooks.getNotebookSource(f.project.id, f.notebook.id);
+		const list = vi.spyOn(f.bucket, 'list');
+		expect(await expectOk(await f.heartbeat())).toMatchObject({
+			head_version_id: source.current_version_id,
+			edit_active: false,
+		});
+		expect(list).not.toHaveBeenCalled();
+		await expectOk(
+			await f.client.request(
+				'POST',
+				`/projects/${f.project.id}/notebooks/${f.notebook.id}/sessions`,
+			),
+		);
+		expect(await expectOk(await f.heartbeat())).toMatchObject({ edit_active: true });
+	});
+});

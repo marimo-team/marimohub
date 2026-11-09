@@ -26,7 +26,7 @@ const AppProjectSchema = z.object({
 	your_role: z.enum(ROLES).nullable(),
 });
 
-const AppSummarySchema = z
+export const AppSummarySchema = z
 	.object({
 		project_id: z.string(),
 		project_name: z.string(),
@@ -38,7 +38,7 @@ const AppSummarySchema = z
 	})
 	.openapi('NotebookApp');
 
-async function summary(
+export async function appSummary(
 	deps: ApiDeps,
 	user: AuthUser,
 	project: Project,
@@ -149,7 +149,7 @@ app.openapi(
 			BUCKET_SCAN_CONCURRENCY,
 			async ({ project, notebook }) => {
 				try {
-					return await summary(
+					return await appSummary(
 						deps,
 						user,
 						project,
@@ -213,7 +213,7 @@ app.openapi(
 		return c.json(
 			{
 				success: true as const,
-				data: await summary(deps, user, project, meta, meta.security_labels ?? null),
+				data: await appSummary(deps, user, project, meta, meta.security_labels ?? null),
 			},
 			200,
 		);

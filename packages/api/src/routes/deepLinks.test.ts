@@ -1,4 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
+import { readFileSync } from 'node:fs';
+import { parse } from 'yaml';
 import { createServices, paths } from '@marimo-hub/core';
 import type { DeepLink, DeepLinkTarget, ProjectAction } from '@marimo-hub/core';
 import { ACTOR, uid, localResourceSecurity, makeSubjectContext } from '@marimo-hub/core/testing';
@@ -28,6 +31,30 @@ async function createLink() {
 }
 
 describe('App link routes', () => {
+	it('validates resolved links against the published OpenAPI response schema', async () => {
+		await createLink();
+		const doc = parse(
+			readFileSync(new URL('../../openapi.yaml', import.meta.url), 'utf8'),
+		) as Record<string, unknown>;
+		const validate = new AjvJsonSchemaValidator().getValidator({
+			...doc,
+			$ref: '#/paths/~1api~1v1~1deep-links~1{slug}/get/responses/200/content/application~1json/schema',
+		});
+		const data = await expectOk<DeepLink & { app?: unknown }>(
+			await api.request('GET', '/deep-links/sales'),
+		);
+		const body = { success: true, data };
+		expect(body.data.app).toBeDefined();
+		const result = validate(body);
+		expect(result.valid, result.errorMessage).toBe(true);
+		const withoutApp = structuredClone(body);
+		delete withoutApp.data.app;
+		expect(validate(withoutApp)).toMatchObject({ valid: true });
+		expect(validate({ ...body, data: { ...body.data, unexpected: true } })).toMatchObject({
+			valid: false,
+		});
+	});
+
 	it.each([
 		['team/overview', 'team%2Foverview'],
 		['team/overview', 'team/overview'],
@@ -40,8 +67,8 @@ describe('App link routes', () => {
 		expect(await expectOk(await api.request('GET', base))).toEqual([parent, link]);
 		const response = await api.request('GET', `/deep-links/${requestSlug}`);
 		expect(response.headers.get('cache-control')).toBe('no-store');
-		expect(await expectOk(response)).toEqual(link);
-		expect(await expectOk(await api.request('GET', `/deep-links/${slug}`))).toEqual(link);
+		expect(await expectOk(response)).toMatchObject(link);
+		expect(await expectOk(await api.request('GET', `/deep-links/${slug}`))).toMatchObject(link);
 		await expectError(await api.request('GET', `/deep-links/${slug}/missing`), 404);
 		const anonymous = createTestApi({
 			bucket: api.bucket,
@@ -69,12 +96,12 @@ describe('App link routes', () => {
 			await api.request('DELETE', `${base}/${requestSlug}?registration_id=${link.registration_id}`),
 		);
 		await expectError(await api.request('GET', `/deep-links/${requestSlug}`), 404);
-		expect(await expectOk(await api.request('GET', '/deep-links/team'))).toEqual(parent);
+		expect(await expectOk(await api.request('GET', '/deep-links/team'))).toMatchObject(parent);
 		const replacement = await expectOk<DeepLink>(await api.request('POST', base, { slug }));
 		await expectOk(
 			await api.request('DELETE', `${base}/${requestSlug}?registration_id=${link.registration_id}`),
 		);
-		expect(await expectOk(await api.request('GET', `/deep-links/${requestSlug}`))).toEqual(
+		expect(await expectOk(await api.request('GET', `/deep-links/${requestSlug}`))).toMatchObject(
 			replacement,
 		);
 	});
@@ -151,8 +178,10 @@ describe('App link routes', () => {
 				await api.request('DELETE', `${base}/${path}?registration_id=${child.registration_id}`),
 				422,
 			);
-			expect(await expectOk(await api.request('GET', '/deep-links/team'))).toEqual(parent);
-			expect(await expectOk(await api.request('GET', '/deep-links/team/overview'))).toEqual(child);
+			expect(await expectOk(await api.request('GET', '/deep-links/team'))).toMatchObject(parent);
+			expect(await expectOk(await api.request('GET', '/deep-links/team/overview'))).toMatchObject(
+				child,
+			);
 		},
 	);
 
@@ -170,7 +199,7 @@ describe('App link routes', () => {
 		};
 		expect(
 			await expectOk(await proxyRequest('GET', '/marimohub/api/v1/deep-links/team%2Foverview')),
-		).toEqual(link);
+		).toMatchObject(link);
 		await expectOk(
 			await proxyRequest(
 				'DELETE',
@@ -196,7 +225,10 @@ describe('App link routes', () => {
 		const response = await api.request('GET', '/deep-links/sales');
 		expect(response.headers.get('cache-control')).toBe('no-store');
 		expect(response.headers.get('etag')).toBeNull();
-		expect(await expectOk(response)).toEqual(link);
+		expect(await expectOk(response)).toMatchObject({
+			...link,
+			app: { project_id: target.project_id, notebook_id: target.notebook_id, can: { run: true } },
+		});
 		expect(list).not.toHaveBeenCalled();
 		await expectOk(
 			await api.request('DELETE', `${base}/sales?registration_id=${link.registration_id}`),
@@ -240,7 +272,7 @@ describe('App link routes', () => {
 			});
 			expect(response.headers.get('cache-control')).toBe('no-store');
 			expect(response.headers.get('etag')).toBeNull();
-			expect(await expectOk(response)).toEqual(path === base ? [link] : link);
+			expect(await expectOk(response)).toMatchObject(path === base ? [link] : link);
 		}
 
 		await expectOk(
@@ -451,7 +483,7 @@ describe('App link routes', () => {
 		await expectOk(
 			await other.request('DELETE', `${otherBase}/sales?registration_id=${link.registration_id}`),
 		);
-		expect(await expectOk(await api.request('GET', '/deep-links/sales'))).toEqual(link);
+		expect(await expectOk(await api.request('GET', '/deep-links/sales'))).toMatchObject(link);
 	});
 
 	it('accepts the existing registration-id alphabet for stale removals', async () => {
@@ -459,7 +491,7 @@ describe('App link routes', () => {
 		await expectOk(
 			await api.request('DELETE', `${base}/sales?registration_id=Z1ARZ3NDEKTSV4RRFFQ69G5FAV`),
 		);
-		expect(await expectOk(await api.request('GET', '/deep-links/sales'))).toEqual(current);
+		expect(await expectOk(await api.request('GET', '/deep-links/sales'))).toMatchObject(current);
 	});
 
 	it('ignores an old removal after a slug is released and registered again', async () => {
@@ -472,7 +504,7 @@ describe('App link routes', () => {
 		await expectOk(
 			await api.request('DELETE', `${base}/sales?registration_id=${old.registration_id}`),
 		);
-		expect(await expectOk(await api.request('GET', '/deep-links/sales'))).toEqual(current);
+		expect(await expectOk(await api.request('GET', '/deep-links/sales'))).toMatchObject(current);
 	});
 
 	it('checks access again after project membership is revoked', async () => {
@@ -493,7 +525,7 @@ describe('App link routes', () => {
 			await member.request('DELETE', `${base}/sales?registration_id=${link.registration_id}`),
 			403,
 		);
-		expect(await expectOk(await api.request('GET', '/deep-links/sales'))).toEqual(link);
+		expect(await expectOk(await api.request('GET', '/deep-links/sales'))).toMatchObject(link);
 	});
 
 	it('returns an uncached error without storage details when resolution fails', async () => {
@@ -521,6 +553,6 @@ describe('App link routes', () => {
 			500,
 			'INTERNAL_ERROR',
 		);
-		expect(await expectOk(await api.request('GET', '/deep-links/sales'))).toEqual(link);
+		expect(await expectOk(await api.request('GET', '/deep-links/sales'))).toMatchObject(link);
 	});
 });

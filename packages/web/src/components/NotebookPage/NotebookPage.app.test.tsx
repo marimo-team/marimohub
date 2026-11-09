@@ -1,12 +1,18 @@
-import { describe, expect, it } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Session } from '@/types';
 import { makeFetch, renderPage, runningSession, sessionPosts } from './NotebookPage.testWorld';
 
 describe('NotebookPage app variant', () => {
 	const appSession = (overrides: Partial<Session> = {}) =>
-		runningSession({ mode: 'app', source_version_id: 'ver-2', ...overrides });
+		runningSession({
+			mode: 'app',
+			source_version_id: 'ver-2',
+			head_version_id: 'ver-2',
+			edit_active: false,
+			...overrides,
+		});
 
 	it('starts a run session, shows app chrome, and hides edit-only affordances', async () => {
 		const impl = makeFetch({ role: 'editor', session: appSession() });
@@ -82,7 +88,7 @@ describe('NotebookPage app variant', () => {
 	it('suppresses the staleness banner while the notebook is being edited', async () => {
 		makeFetch({
 			role: 'editor',
-			session: appSession({ source_version_id: 'ver-1' }),
+			session: appSession({ source_version_id: 'ver-1', edit_active: true }),
 			headVersion: 'ver-2',
 			projectSessions: [runningSession({ session_id: 'sess-edit', mode: 'edit' })],
 		});
@@ -313,5 +319,35 @@ describe('NotebookPage app variant', () => {
 		const retryBody = sessionPosts(impl)[1][1]?.body;
 		expect(JSON.parse(String(retryBody))).toEqual({ compute_profile: 'default' });
 		expect(screen.queryByRole('button', { name: 'Retry with Default' })).toBeNull();
+	});
+});
+
+describe('app polling', () => {
+	it('uses heartbeat freshness without polling notebook details or project sessions', async () => {
+		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+		try {
+			const session = runningSession({ mode: 'app', source_version_id: 'ver-1' });
+			const fetch = makeFetch({ role: 'editor', session, headVersion: 'ver-2' });
+			const { container, unmount } = renderPage('app');
+			await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+			expect(screen.queryByText(/serves an older version/)).not.toBeInTheDocument();
+			Object.assign(session, { head_version_id: 'ver-2', edit_active: false });
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(30_000);
+			});
+			await screen.findByText(/serves an older version/);
+			expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/heartbeat'))).toHaveLength(
+				1,
+			);
+			expect(
+				fetch.mock.calls.filter(([url]) => String(url).endsWith('/projects/proj-x/sessions')),
+			).toHaveLength(0);
+			expect(
+				fetch.mock.calls.filter(([url]) => String(url).endsWith('/notebooks/nb-1')),
+			).toHaveLength(1);
+			unmount();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

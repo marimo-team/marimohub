@@ -3069,6 +3069,45 @@ components:
         - root_path
         - entry_notebook
         - commit
+    NotebookApp:
+      type: object
+      properties:
+        project_id:
+          type: string
+        project_name:
+          type: string
+        notebook_id:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+        your_role:
+          type:
+            - string
+            - 'null'
+          enum:
+            - admin
+            - manager
+            - editor
+            - viewer
+            - app-user
+            - null
+        can:
+          type: object
+          properties:
+            run:
+              type: boolean
+          required:
+            - run
+      required:
+        - project_id
+        - project_name
+        - notebook_id
+        - title
+        - url
+        - your_role
+        - can
     DeepLink:
       type: object
       properties:
@@ -3601,6 +3640,15 @@ components:
             - app
         source_version_id:
           type: string
+        head_version_id:
+          type:
+            - string
+            - 'null'
+          description: Current notebook head, included in ordinary app heartbeats.
+        edit_active:
+          type: boolean
+          description: A persistent editor claim is active, included in ordinary app
+            heartbeats.
         can:
           type: object
           properties:
@@ -3673,45 +3721,6 @@ components:
         - started_at
         - last_heartbeat
         - mode
-        - can
-    NotebookApp:
-      type: object
-      properties:
-        project_id:
-          type: string
-        project_name:
-          type: string
-        notebook_id:
-          type: string
-        title:
-          type: string
-        url:
-          type: string
-        your_role:
-          type:
-            - string
-            - 'null'
-          enum:
-            - admin
-            - manager
-            - editor
-            - viewer
-            - app-user
-            - null
-        can:
-          type: object
-          properties:
-            run:
-              type: boolean
-          required:
-            - run
-      required:
-        - project_id
-        - project_name
-        - notebook_id
-        - title
-        - url
-        - your_role
         - can
     NotebookAppPage:
       type: object
@@ -14597,7 +14606,62 @@ paths:
                     enum:
                       - true
                   data:
-                    $ref: '#/components/schemas/DeepLink'
+                    type: object
+                    properties:
+                      schema_version:
+                        type: number
+                        enum:
+                          - 1
+                      registration_id:
+                        type: string
+                        format: ulid
+                      slug:
+                        type: string
+                        minLength: 1
+                        maxLength: 63
+                        pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?![\s\S])
+                      target:
+                        type: object
+                        properties:
+                          kind:
+                            type: string
+                            enum:
+                              - app
+                          project_id:
+                            type: string
+                          notebook_id:
+                            type: string
+                        required:
+                          - kind
+                          - project_id
+                          - notebook_id
+                        additionalProperties: false
+                      access:
+                        type: object
+                        properties:
+                          mode:
+                            type: string
+                            enum:
+                              - inherit
+                        required:
+                          - mode
+                        additionalProperties: false
+                      created_by:
+                        type: string
+                      created_at:
+                        type: string
+                        format: date-time
+                      app:
+                        $ref: '#/components/schemas/NotebookApp'
+                    required:
+                      - schema_version
+                      - registration_id
+                      - slug
+                      - target
+                      - access
+                      - created_by
+                      - created_at
+                    additionalProperties: false
                 required:
                   - success
                   - data

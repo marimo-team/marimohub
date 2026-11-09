@@ -1,7 +1,7 @@
 import { Suspense } from 'react';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { ThemeProvider } from '@/context/ThemeContext';
@@ -72,7 +72,18 @@ function linkFetch(
 						? { success: false, error: { code: 'NOT_FOUND', message: 'App link not found' } }
 						: {
 								success: true,
-								data: { target: { kind: 'app', project_id: PID, notebook_id: NID } },
+								data: {
+									target: { kind: 'app', project_id: PID, notebook_id: NID },
+									app: {
+										project_id: PID,
+										project_name: 'Sales',
+										notebook_id: NID,
+										title: 'Forecast',
+										url: `/projects/${PID}/notebooks/${NID}/app`,
+										your_role: 'viewer',
+										can: { run: true },
+									},
+								},
 							},
 				),
 				{ status: options.missing ? 404 : 200, headers: { 'content-type': 'application/json' } },
@@ -85,6 +96,15 @@ function linkFetch(
 }
 
 describe('AppLinkPage', () => {
+	it('starts from the resolved summary without requesting app details', async () => {
+		const { fetch, existing } = linkFetch();
+		renderLink();
+		await waitFor(() => expect(sessionPosts(existing)).toHaveLength(1), { timeout: 5_000 });
+		expect(
+			fetch.mock.calls.some(([input]) => String(input).endsWith(`/notebooks/${NID}/app`)),
+		).toBe(false);
+	});
+
 	it('does not start a session when a nested alias is missing', async () => {
 		const { existing, fetch } = linkFetch({ missing: true });
 		renderLink('/app/team/missing');

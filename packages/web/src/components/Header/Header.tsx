@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { HelpMenu } from './HelpMenu';
 import { shellLinkTarget, useShellLinks } from '@/components/Shell/useShellLinks';
 import type { ReactNode } from 'react';
@@ -19,13 +20,25 @@ import {
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
-import { Brand, UserAvatar } from '@/components/ui';
+import { Brand } from '@/components/ui/Brand';
+import { UserAvatar } from '@/components/ui/UserAvatar';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { useCapabilitiesQuery } from '@/api/hooks';
-import { McpDialog } from '@/components/Account/McpDialog';
-import { ApiTokensDialog } from '@/components/Account/ApiTokensDialog';
-import { OrgIntegrationsDialog } from '@/components/Project/ProjectIntegrationsDialog';
+
+const McpDialog = lazy(() =>
+	import('@/components/Account/McpDialog').then((module) => ({ default: module.McpDialog })),
+);
+const ApiTokensDialog = lazy(() =>
+	import('@/components/Account/ApiTokensDialog').then((module) => ({
+		default: module.ApiTokensDialog,
+	})),
+);
+const OrgIntegrationsDialog = lazy(() =>
+	import('@/components/Project/ProjectIntegrationsDialog').then((module) => ({
+		default: module.OrgIntegrationsDialog,
+	})),
+);
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
 	cn(
@@ -191,12 +204,24 @@ export function Header({ navigationTrigger }: { navigationTrigger?: ReactNode })
 				) : null}
 			</div>
 
-			<ApiTokensDialog isOpen={tokensDialog.isOpen} onClose={tokensDialog.close} />
-			<McpDialog isOpen={mcpDialog.isOpen} onClose={mcpDialog.close} />
-			<OrgIntegrationsDialog
-				isOpen={orgIntegrationsDialog.isOpen}
-				onClose={orgIntegrationsDialog.close}
-			/>
+			{tokensDialog.isOpen && (
+				<Suspense fallback={null}>
+					<ApiTokensDialog isOpen={tokensDialog.isOpen} onClose={tokensDialog.close} />
+				</Suspense>
+			)}
+			{mcpDialog.isOpen && (
+				<Suspense fallback={null}>
+					<McpDialog isOpen={mcpDialog.isOpen} onClose={mcpDialog.close} />
+				</Suspense>
+			)}
+			{orgIntegrationsDialog.isOpen && (
+				<Suspense fallback={null}>
+					<OrgIntegrationsDialog
+						isOpen={orgIntegrationsDialog.isOpen}
+						onClose={orgIntegrationsDialog.close}
+					/>
+				</Suspense>
+			)}
 		</header>
 	);
 }

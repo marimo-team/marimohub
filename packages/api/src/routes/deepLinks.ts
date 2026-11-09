@@ -14,6 +14,7 @@ import {
 	loadSessionProject,
 	NotebookIdParam,
 } from '../shared';
+import { AppSummarySchema, appSummary } from './apps';
 
 const SlugParam = z.object({ slug: DeepLinkSlugSchema });
 const LinkSchema = z.strictObject(DeepLinkSchema.shape).openapi('DeepLink');
@@ -27,7 +28,16 @@ const resolve = createRoute({
 	tags: ['App links'],
 	summary: 'Resolve an app link using notebook permissions',
 	request: { params: SlugParam },
-	responses: { 200: jsonContent(LinkResponse, 'Authorized app link'), ...errors },
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: z.strictObject({ ...LinkSchema.shape, app: AppSummarySchema.optional() }),
+			}),
+			'Authorized app link',
+		),
+		...errors,
+	},
 });
 const list = createRoute({
 	method: 'get',
@@ -100,14 +110,23 @@ app.openapi({ ...resolve, path: '/deep-links/:slug{[\\s\\S]+}', hide: true }, as
 		user,
 		deps,
 	);
-	await loadAuthorizedNotebook(
+	const { meta } = await loadAuthorizedNotebook(
 		deps,
 		project,
 		link.target.notebook_id,
 		user,
 		authorizationService(deps).appReadAction(user, project),
 	);
-	return c.json({ success: true as const, data: link }, 200);
+	return c.json(
+		{
+			success: true as const,
+			data: {
+				...link,
+				app: await appSummary(deps, user, project, meta, meta.security_labels ?? null),
+			},
+		},
+		200,
+	);
 });
 app.openapi(list, async (c) => {
 	const deps = c.get('deps');

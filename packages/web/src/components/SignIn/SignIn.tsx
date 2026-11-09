@@ -4,7 +4,8 @@ import { PageTitle } from '@/components/ui/PageTitle';
 import { LogIn, AlertCircle } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
-import { Brand, Button } from '@/components/ui';
+import { Brand } from '@/components/ui/Brand';
+import { Button } from '@/components/ui/Button';
 
 /**
  * Human-readable messages for the `auth_error` codes the OIDC callback bounces

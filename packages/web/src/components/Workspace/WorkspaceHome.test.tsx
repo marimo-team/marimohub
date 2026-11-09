@@ -58,16 +58,17 @@ afterEach(() => {
 describe('Workspace home', () => {
 	it('restores the previous accessible project', async () => {
 		localStorage.setItem(lastProjectKey('u'), 'beta');
-		setup();
+		const requests = setup({ projects: () => new Promise(() => {}) });
 		expect(await screen.findByRole('status', { name: 'Destination' })).toHaveTextContent(
 			'/projects/beta',
 		);
+		expect(requests.some((url) => url.startsWith('/api/v1/projects'))).toBe(false);
 	});
-	it('falls back to an accessible project when the remembered one is gone', async () => {
+	it('lets the project route validate a remembered project', async () => {
 		localStorage.setItem(lastProjectKey('u'), 'deleted');
 		setup();
 		expect(await screen.findByRole('status', { name: 'Destination' })).toHaveTextContent(
-			'/projects/alpha',
+			'/projects/deleted',
 		);
 	});
 	it('does not reuse another account’s preference', async () => {
@@ -98,17 +99,13 @@ describe('Workspace home', () => {
 		);
 		expect(requests.some((url) => url.startsWith('/api/v1/projects'))).toBe(false);
 	});
-	it('shows the project index when there are no projects', async () => {
-		localStorage.setItem(lastProjectKey('u'), 'beta');
-		setup({ projects: { items: [], next_cursor: null } });
-		expect(await screen.findByText('No projects yet')).toBeVisible();
-		expect(screen.queryByRole('status', { name: 'Destination' })).not.toBeInTheDocument();
-	});
-	it('does not redirect when the project list fails', async () => {
-		vi.spyOn(console, 'error').mockImplementation(() => {});
-		localStorage.setItem(lastProjectKey('u'), 'beta');
-		setup({ projects: jsonError('UNAVAILABLE', 'Unavailable', 503) });
-		expect(await screen.findByText('Request failed')).toBeVisible();
-		expect(screen.queryByRole('status', { name: 'Destination' })).not.toBeInTheDocument();
-	});
+	it.each([{ items: [], next_cursor: null }, jsonError('UNAVAILABLE', 'Unavailable', 503)])(
+		'opens the project index when the first-visit roster is empty or unavailable',
+		async (projects) => {
+			setup({ projects });
+			expect(await screen.findByRole('status', { name: 'Destination' })).toHaveTextContent(
+				'/projects',
+			);
+		},
+	);
 });

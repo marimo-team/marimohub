@@ -1,3 +1,4 @@
+import { useSandboxPreconnect } from './useSandboxPreconnect';
 import { leaveAppVisit } from '@/api/sessionVisits';
 import { MAX_TIMER_DELAY_MS } from '@marimo-hub/core/async';
 import { APP_HEARTBEAT_INTERVAL_MS } from '@marimo-hub/core/constants';
@@ -102,6 +103,7 @@ export function useNotebookSession(
 	const restartApp = useRestartApp(projectId, notebookId, { suppressErrorToast: true });
 
 	const [session, setSession] = useState<Session | null>(null);
+	useSandboxPreconnect(session?.sandbox_url);
 	const [diagnosticSession, setDiagnosticSession] = useState<Session | null>(null);
 	const [error, setError] = useState<SessionError | null>(null);
 	const [ended, setEnded] = useState<SessionEnded | null>(null);
