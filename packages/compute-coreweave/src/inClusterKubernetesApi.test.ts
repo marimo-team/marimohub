@@ -1,12 +1,16 @@
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { request } from 'node:https';
+import type * as https from 'node:https';
 import type { IncomingMessage } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { inClusterKubernetesApi } from './kernelIngress';
 
 vi.mock('node:fs/promises', () => ({ readFile: vi.fn() }));
-vi.mock('node:https', () => ({ request: vi.fn() }));
+vi.mock('node:https', async (importOriginal) => ({
+	...(await importOriginal<typeof https>()),
+	request: vi.fn(),
+}));
 
 afterEach(() => {
 	vi.resetAllMocks();
@@ -63,5 +67,9 @@ describe('inClusterKubernetesApi', () => {
 			expect.any(Function),
 		);
 		expect(readFile).toHaveBeenCalledTimes(3);
+		const firstOptions = vi.mocked(request).mock.calls[0][0] as unknown as https.RequestOptions;
+		const secondOptions = vi.mocked(request).mock.calls[1][0] as unknown as https.RequestOptions;
+		expect(firstOptions.agent).toMatchObject({ keepAlive: true });
+		expect(secondOptions.agent).toBe(firstOptions.agent);
 	});
 });

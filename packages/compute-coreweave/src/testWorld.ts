@@ -99,7 +99,7 @@ export interface FakeSandbox {
 	serviceUrls: ServiceUrl[];
 	runCalls: string[][];
 	startCalls: string[][];
-	stdinWrites: string[];
+	stdinWrites: (string | Uint8Array)[];
 	/** One entry per `files.write(files)` call — the set sent in that call. */
 	batchWrites: { path: string; content: unknown }[][];
 	reads: Record<string, string>;
@@ -144,6 +144,7 @@ function recordWrite(fake: FakeSandbox, writeImpl?: WriteImpl) {
 export function makeWorld(opts?: {
 	runImpl?: (cmd: readonly string[]) => Promise<ProcessResult>;
 	startImpl?: (cmd: readonly string[]) => Promise<CommandProcess>;
+	inputImpl?: (cmd: readonly string[], input: string | Uint8Array) => Promise<void>;
 	/** Runs inside each `getStatus()` poll; use it to simulate a slow or failing Get. */
 	pollImpl?: () => Promise<void>;
 	/** Status of newly created sandboxes. Default `running`. */
@@ -207,8 +208,9 @@ export function makeWorld(opts?: {
 						return {
 							...fakeProcess({ exitCode: 0 }),
 							stdin: {
-								write: async (content: string) => {
+								write: async (content: string | Uint8Array) => {
 									fake.stdinWrites.push(content);
+									await opts?.inputImpl?.(command, content);
 								},
 								close: async () => {},
 							},
@@ -296,8 +298,9 @@ export function makeWorld(opts?: {
 						return {
 							...fakeProcess({ exitCode: 0 }),
 							stdin: {
-								write: async (content: string) => {
+								write: async (content: string | Uint8Array) => {
 									entry.fake.stdinWrites.push(content);
+									await opts?.inputImpl?.(command, content);
 								},
 								close: async () => {},
 							},

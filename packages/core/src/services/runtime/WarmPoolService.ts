@@ -1,3 +1,6 @@
+import type { NotebookBridgeRuntime } from '../../ports/notebookBridge';
+import { notebookBridgePaths } from './notebookBridgePaths';
+import { shellQuote } from './shell';
 import { withDeadline } from '../../async';
 import { mapWithConcurrency } from '../../concurrency';
 import { ConflictError, NotFoundError } from '../../errors';
@@ -83,6 +86,7 @@ export class WarmPoolService {
 		private readonly metrics: Metrics = noopMetrics,
 		private readonly now: () => number = Date.now,
 		private readonly appPools?: Pick<AppPoolStore, 'read'>,
+		private readonly notebookBridge?: NotebookBridgeRuntime,
 	) {}
 
 	async claim(request: ClaimRequest): Promise<WarmPoolClaim | undefined> {
@@ -350,6 +354,38 @@ export class WarmPoolService {
 				try {
 					await instance.ready?.();
 					await this.probeCommand(instance);
+					if (this.notebookBridge) {
+						const { directory, launcher } = notebookBridgePaths(
+							member.sandbox_id,
+							this.notebookBridge.launcher,
+						);
+						try {
+							await withDeadline(
+								instance.writeFiles(
+									this.notebookBridge.files.map(({ name, content }) => ({
+										path: `${directory}/${name}`,
+										content,
+									})),
+								),
+								{
+									timeoutMs: 10_000,
+									timeoutError: () => new Error('Bridge preparation timed out'),
+								},
+							);
+							const processLauncher = instance.resolveProcessPath?.(launcher) ?? launcher;
+							const result = await instance.exec(
+								`python ${shellQuote(processLauncher)} --install-only`,
+								{
+									timeout: 10_000,
+									maxOutputBytes: 4096,
+								},
+							);
+							if (!result.success) throw new Error('Notebook bridge preinstallation failed');
+						} catch (error) {
+							// The kernel launcher retries optional bridge installation.
+							this.report('bridge_install_failed', error, { sandbox_id: member.sandbox_id });
+						}
+					}
 				} finally {
 					// A provider create may finish after our local deadline; reclaim its late result.
 					if (abandoned)

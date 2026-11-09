@@ -196,6 +196,8 @@ export async function loadWorkspaceOverlay(
 }
 
 export interface WorkspaceRestoreOptions {
+	/** Receives ordinary file batches after readiness, with retries owned by restoreWorkspace. */
+	writeFiles?: SandboxInstance['writeFiles'];
 	limits?: WorkspaceLimits;
 	/** Replaces matching workspace files in the first write batch. */
 	overlay?: WorkspaceOverlay;
@@ -223,6 +225,7 @@ export async function restoreWorkspace(
 	// before `bucket.get()` buffers its body — the size check must never use the
 	// fetched object.
 	const limits = validateWorkspaceLimits(options.limits ?? WORKSPACE_LIMITS);
+	const writeFiles = options.writeFiles ?? sandbox.writeFiles.bind(sandbox);
 	const objects = await listAllObjects(bucket, sourcePrefix);
 	let wanted: { key: string; dest: string; size: number }[] = [];
 	const directories: string[] = [];
@@ -376,7 +379,7 @@ export async function restoreWorkspace(
 			}
 			await settleRestoreWork([
 				createSandboxDirectories(sandbox, directories.splice(0)),
-				files.length > 0 ? withRetry(() => sandbox.writeFiles(files)) : Promise.resolve(),
+				files.length > 0 ? withRetry(() => writeFiles(files)) : Promise.resolve(),
 			]);
 			objectCount += files.length;
 			for (const f of files) bytes += f.content.byteLength;

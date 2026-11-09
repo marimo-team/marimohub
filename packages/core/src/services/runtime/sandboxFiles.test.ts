@@ -15,6 +15,7 @@ import {
 	RecordingBucket,
 } from '../../testing';
 import { execResult, listFilesFailure, readFileFailure } from '../../ports/sandbox';
+import type { SandboxInstance } from '../../ports/sandbox';
 import {
 	WORKSPACE_DIRECTORY_MARKER,
 	WORKSPACE_FILE_BYTES_CEILING,
@@ -2600,4 +2601,49 @@ describe('configured workspace round-trip limits', () => {
 		);
 		expect(await (await bucket.get(nb.workspaceFile('data')))!.text()).toBe('12345');
 	});
+});
+
+it('routes ordinary workspace files and overlays through a retryable sink after readiness', async () => {
+	const { nb } = nbCtx();
+	const bucket = new MemoryBucket();
+	await bucket.put(nb.workspaceFile('data.txt'), 'workspace');
+	await bucket.put(nb.workspaceFile('.marimohub-packed-restore/user-file'), 'ordinary file');
+	await bucket.put('source/notebook.py', 'overlay');
+	const { instance, calls } = makeFakeSandbox();
+	const ready = Promise.withResolvers<void>();
+	const waiting = Promise.withResolvers<void>();
+	const writeFiles = vi
+		.fn<SandboxInstance['writeFiles']>()
+		.mockRejectedValueOnce(new Error('retry transfer'))
+		.mockResolvedValue(undefined);
+	const restore = restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
+		writeFiles,
+		overlay: [{ path: 'notebook.py', key: 'source/notebook.py' }],
+		waitUntilReady: () => {
+			waiting.resolve();
+			return ready.promise;
+		},
+	});
+	try {
+		await waiting.promise;
+		expect(writeFiles).not.toHaveBeenCalled();
+	} finally {
+		ready.resolve();
+	}
+	await expect(restore).resolves.toEqual({ objectCount: 3, bytes: 9 + 13 + 7 });
+	expect(writeFiles).toHaveBeenCalledTimes(2);
+	expect(writeFiles.mock.calls[0]).toEqual(writeFiles.mock.calls[1]);
+	expect(
+		writeFiles.mock.calls[0][0].map(({ path, content }) => ({
+			path,
+			content: typeof content === 'string' ? content : decode(content),
+		})),
+	).toEqual(
+		expect.arrayContaining([
+			{ path: `${MOUNT}/data.txt`, content: 'workspace' },
+			{ path: `${MOUNT}/.marimohub-packed-restore/user-file`, content: 'ordinary file' },
+			{ path: `${MOUNT}/notebook.py`, content: 'overlay' },
+		]),
+	);
+	expect(calls.writeFiles).toEqual([]);
 });

@@ -95,6 +95,8 @@ export type SandboxLaunchResult =
 	| {
 			success: true;
 			process: SandboxProcess;
+			/** Required when supportsLaunchSetupOutput is true and setup was supplied. */
+			setupOutput?: { stdout: string; stderr: string };
 			timings: SandboxLaunchTimings;
 	  }
 	| {
@@ -210,6 +212,8 @@ export interface SandboxInstance {
 	 */
 	ready?(): Promise<void>;
 	exec(cmd: string, options?: ExecOptions): Promise<ExecResult>;
+	/** Internal commands with stdin, without session environment injection. */
+	execInput?(cmd: string, input: Uint8Array, options?: ExecOptions): Promise<ExecResult>;
 	execStream(cmd: string, options?: ExecStreamOptions): Promise<ReadableStream>;
 	readFile(path: string): Promise<ReadFileResult>;
 	/** Reject symlinks/nonregular files; cap transport bytes and cancel on deadline/overflow. */
@@ -241,10 +245,20 @@ export interface SandboxInstance {
 	unmountBucket(mountPath: string): Promise<void>;
 	startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess>;
 	/**
+	 * Opt into opportunistic workspace/session/bridge writes and setup inside launchProcess.
+	 * Requires binary-safe writeFiles,
+	 * python3 on PATH for the command transport, and launchProcess results with
+	 * separate setup stdout/stderr on success and failure. Headless prepare()
+	 * still completes setup before it returns.
+	 */
+	readonly supportsLaunchSetupOutput?: boolean;
+	/**
 	 * Start a checked setup + long-running process and wait for readiness as one
 	 * adapter-owned operation. Optional for compatibility with external adapters.
 	 */
 	launchProcess?(cmd: string, options: LaunchProcessOptions): Promise<SandboxLaunchResult>;
+	/** Publish routing before the kernel opens its port; exposePort awaits the same work. */
+	prepareExposure?(port: number, options: ExposePortOptions): Promise<void>;
 	exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult>;
 	destroy(): Promise<void>;
 	/**

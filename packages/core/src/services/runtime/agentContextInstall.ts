@@ -148,11 +148,8 @@ def install(payload):
 
 payload_path = None
 try:
-    if sys.argv[1] == '--inline':
-        payload = json.loads(sys.argv[2])
-        if payload.get('files') != []:
-            raise Invalid('unsafe_path')
-        install(payload)
+    if sys.argv[1] == '-':
+        install(json.loads(sys.stdin.buffer.read().decode('utf-8')))
     else:
         payload_path = sys.argv[1]
         payload_fd = os.open(payload_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)

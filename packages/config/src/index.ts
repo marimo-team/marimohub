@@ -776,6 +776,7 @@ export function createFromEnv(
 					metrics,
 					undefined,
 					new AppPoolStore(bucket),
+					notebookBridgeRuntime(),
 				)
 			: undefined,
 		theme,

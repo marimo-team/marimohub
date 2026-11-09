@@ -97,6 +97,54 @@ describe('instrumentCoreWeaveClient', () => {
 		expect(attributes).not.toContain('run-marimo-secret');
 	});
 
+	it.each([false, true])(
+		'spans streaming file writes and records failures (rejects: %s)',
+		async (rejects) => {
+			const failure = new Error('stream reset');
+			const writeStream = vi.fn(async () => {
+				if (rejects) throw failure;
+			});
+			const raw = fakeSandbox();
+			raw.files.writeStream = writeStream;
+			const client = instrumentCoreWeaveClient(fakeClient(raw), 'https://gateway.example:8443/api');
+			const sandbox = await client.create({});
+			exporter.reset();
+			const content = new TextEncoder().encode('private-content');
+			const writing = sandbox.files.writeStream!('/workspace/private.txt', content, {
+				timeoutMs: 123,
+			});
+			if (rejects) await expect(writing).rejects.toBe(failure);
+			else await expect(writing).resolves.toBeUndefined();
+			expect(writeStream).toHaveBeenCalledExactlyOnceWith('/workspace/private.txt', content, {
+				timeoutMs: 123,
+			});
+			const spans = exporter.getFinishedSpans();
+			expect(spans).toHaveLength(1);
+			const span = spans[0];
+			expect(span.name).toBe(`${SANDBOX}/writeFileStream`);
+			expect(span.kind).toBe(SpanKind.CLIENT);
+			expect(span.attributes).toMatchObject({
+				'server.address': 'gateway.example',
+				'server.port': 8443,
+				'coreweave.sandbox_id': SANDBOX_ID,
+			});
+			expect(JSON.stringify(span.attributes)).not.toMatch(/private\.txt|private-content/);
+			if (rejects) {
+				expect(span.status.code).toBe(SpanStatusCode.ERROR);
+				expect(span.attributes['error.type']).toBe('Error');
+				expect(span.events).toContainEqual(
+					expect.objectContaining({
+						name: 'exception',
+						attributes: expect.objectContaining({ 'exception.message': failure.message }),
+					}),
+				);
+			} else {
+				expect(span.status.code).toBe(SpanStatusCode.UNSET);
+				expect(span.events).toEqual([]);
+			}
+		},
+	);
+
 	it('preserves handle metadata (sandboxId, serviceUrls) through the wrapper', async () => {
 		const urls = [{ name: 'kernel', port: 2718, url: 'http://166.19.118.62:2718' }];
 		const client = instrumentCoreWeaveClient(

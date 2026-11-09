@@ -5,7 +5,7 @@ import { prepareMarimoPresentation } from '../marimoConfig';
 export type { SessionEnv } from './sandboxEnvironment';
 import type { WorkspaceLimits, WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
 import { allSettled } from 'better-all';
-import { prepareAgentHomeFiles } from './agentContextFiles';
+import { agentContextInstallFailureMessage, prepareAgentHomeFiles } from './agentContextFiles';
 import type { Attributes, Span as OtelSpan } from '@opentelemetry/api';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { withDeadline } from '../../async';
@@ -31,6 +31,7 @@ import type {
 	ComputeResources,
 	ExecResult,
 	SandboxLaunchResult,
+	SandboxFileWrite,
 	SandboxUserHome,
 	SandboxInstance,
 	SandboxProcess,
@@ -165,6 +166,8 @@ function pythonEnvironmentSetupFailure(
 	result: ExecResult,
 	failedStep?: string,
 ): PythonEnvironmentSetupError {
+	if (failedStep === 'agent_context')
+		return new PythonEnvironmentSetupError(agentContextInstallFailureMessage(result.stdout));
 	const startupScript = /^startup_script_(\d+)$/.exec(failedStep ?? '');
 	if (startupScript) {
 		return new PythonEnvironmentSetupError(
@@ -221,7 +224,10 @@ export interface BootedSandbox {
 }
 
 export interface WorkspacePrefetch {
-	consume(waitUntilReady: () => Promise<void>): Promise<WorkspaceLoadResult>;
+	consume(
+		waitUntilReady: () => Promise<void>,
+		writeFiles?: SandboxInstance['writeFiles'],
+	): Promise<WorkspaceLoadResult>;
 	cancel(): Promise<void>;
 }
 
@@ -368,6 +374,7 @@ export interface ProvisionResult {
 }
 
 interface MarimoStartup {
+	onSetup?: (output: { stdout: string; stderr: string }, elapsed: number) => void;
 	plan: MarimoLaunchPlan;
 	deadline: {
 		startedAt: number;
@@ -440,12 +447,15 @@ function provisionFailure(step: string, err: unknown): UnavailableError {
 function supervisedLaunchFailure(result: SandboxLaunchFailure, timeoutMs: number): Error {
 	if (result.reason === 'setup_timeout') return pythonEnvironmentSetupTimeout(timeoutMs);
 	if (result.reason === 'setup_exit') {
-		return pythonEnvironmentSetupFailure({
-			success: false,
-			stdout: result.stdout,
-			stderr: result.stderr,
-			error: { code: 'COMMAND_FAILED' },
-		});
+		return pythonEnvironmentSetupFailure(
+			{
+				success: false,
+				stdout: result.stdout,
+				stderr: result.stderr,
+				error: { code: 'COMMAND_FAILED' },
+			},
+			setupDiagnostics(result.stdout, result.stderr).failedStep,
+		);
 	}
 	const step =
 		result.reason === 'readiness_timeout'
@@ -546,6 +556,7 @@ async function withSandboxSpan<T>(
 }
 
 export interface WorkspaceLoadContext {
+	writeFiles?: SandboxInstance['writeFiles'];
 	workspaceLimits?: WorkspaceLimits;
 	overlay?: WorkspaceOverlay;
 	sandbox: SandboxInstance;
@@ -595,6 +606,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		prefetchBudget,
 		overlay,
 		workspaceLimits,
+		writeFiles,
 	}: WorkspaceLoadContext): Promise<WorkspaceLoadResult> {
 		if (!bucketHandle) {
 			throw provisionFailure(
@@ -605,6 +617,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		try {
 			const stats = await restoreWorkspace(sandbox, bucketHandle, workspacePrefix, mountPath, {
 				limits: workspaceLimits,
+				writeFiles,
 				// Capture treats absent files as deletions, so a session must restore every file.
 				requireComplete: true,
 				overlay,
@@ -694,7 +707,7 @@ function normalizeAbsoluteSandboxPath(value: string): string {
 }
 
 async function writeSessionFiles(
-	sandbox: SandboxInstance,
+	writeFiles: SandboxInstance['writeFiles'],
 	files: NonNullable<SessionEnv['files']>,
 	kernelAuthToken?: string,
 ): Promise<void> {
@@ -708,7 +721,7 @@ async function writeSessionFiles(
 	const batch = [...files];
 	if (kernelAuthToken !== undefined)
 		batch.push({ path: KERNEL_AUTH_TOKEN_FILE, content: kernelAuthToken });
-	if (batch.length > 0) await sandbox.writeFiles(batch);
+	if (batch.length > 0) await writeFiles(batch);
 }
 
 /**
@@ -741,14 +754,23 @@ export class SandboxProvisioner {
 	}
 
 	prefetchWorkspace(sandbox: SandboxInstance, options: ProvisionOptions): WorkspacePrefetch {
-		const gate = Promise.withResolvers<void>();
+		const gate = Promise.withResolvers<SandboxInstance['writeFiles']>();
 		gate.promise.catch(() => {});
 		const { layout, prefix } = workspaceLocation(options);
-		const loaded = this.loadWorkspace(sandbox, options, layout, prefix, () => gate.promise);
+		const loaded = this.loadWorkspace(
+			sandbox,
+			options,
+			layout,
+			prefix,
+			async () => {
+				await gate.promise;
+			},
+			async (files) => (await gate.promise)(files),
+		);
 		loaded.catch(() => {});
 		return {
-			consume(waitUntilReady) {
-				gate.resolve(waitUntilReady());
+			consume(waitUntilReady, writeFiles = sandbox.writeFiles.bind(sandbox)) {
+				gate.resolve(waitUntilReady().then(() => writeFiles));
 				return loaded;
 			},
 			async cancel() {
@@ -801,6 +823,7 @@ export class SandboxProvisioner {
 			const { load, startup, sw, mountPath } = await this.prepareInto(sandbox, options);
 			const counters = loadCounters(load);
 			Object.assign(counters, sandbox.drainCounters?.() ?? {});
+			Object.assign(sw.timings, sandbox.drainTimings?.() ?? {});
 			sw.timings.handle = createMs;
 			sw.timings.total = Date.now() - prepareStart;
 			return {
@@ -851,13 +874,14 @@ export class SandboxProvisioner {
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
 	): Promise<ProvisionResult> {
-		const { load, startup, sw, mountPath } = await this.prepareInto(sandbox, options);
+		const { load, startup, sw, mountPath } = await this.prepareInto(sandbox, options, true);
 		await this.launchKernel(sandbox, mountPath, sw, startup);
 		const expose = await this.exposeKernel(sandbox, options, sw);
 
 		const counters = loadCounters(load);
 		// Last: the adapter's command count is only final once every phase has run.
 		Object.assign(counters, sandbox.drainCounters?.() ?? {});
+		Object.assign(sw.timings, sandbox.drainTimings?.() ?? {});
 
 		return { sandbox, url: expose, usedFallback: load.usedFallback, timings: sw.timings, counters };
 	}
@@ -865,6 +889,7 @@ export class SandboxProvisioner {
 	private async prepareInto(
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
+		launch = false,
 	): Promise<{
 		load: WorkspaceLoadResult;
 		startup: MarimoStartup;
@@ -876,6 +901,74 @@ export class SandboxProvisioner {
 		const { layout, prefix } = workspaceLocation(options);
 		const mountPath = layout.workdir;
 		const sw = new Stopwatch();
+		const combineWrites = Boolean(sandbox.supportsLaunchSetupOutput);
+		const deferSetup =
+			launch && Boolean(sandbox.launchProcess && sandbox.supportsLaunchSetupOutput);
+		const extraFiles: SandboxFileWrite[] = [];
+		const bridgeFiles: SandboxFileWrite[] = [];
+		let bridgeUnavailable = false;
+		const setupPrefix: MarimoLaunchPlan['setup'] = [];
+		const installers: (() => Promise<void>)[] = [];
+		let extrasReady = false;
+		const writeFiles = sandbox.writeFiles.bind(sandbox);
+		const stageFiles: SandboxInstance['writeFiles'] = combineWrites
+			? async (files) => {
+					extraFiles.push(...files);
+				}
+			: writeFiles;
+		const stageBridge: SandboxInstance['writeFiles'] = combineWrites
+			? async (files) => {
+					bridgeFiles.push(...files);
+				}
+			: writeFiles;
+		let sharedWrite: Promise<void> | undefined;
+		const flush = async (files: readonly SandboxFileWrite[]) => {
+			// Slow credential resolution must not hold up an otherwise-ready workspace transfer.
+			if (!extrasReady) {
+				if (files.length > 0) await writeFiles(files);
+				return;
+			}
+			if (sharedWrite) {
+				await sharedWrite;
+				if (files.length > 0) await sandbox.writeFiles(files);
+				return;
+			}
+			const batch = [
+				...new Map([...files, ...extraFiles].map((file) => [file.path, file])).values(),
+			];
+			sharedWrite = (async () => {
+				if (batch.length === 0 && bridgeFiles.length === 0) return;
+				try {
+					await sandbox.writeFiles([...batch, ...bridgeFiles]);
+				} catch (error) {
+					if (bridgeFiles.length === 0) throw error;
+					if (batch.length > 0) await writeFiles(batch);
+					bridgeUnavailable = true;
+					logEvent(
+						{
+							level: 'warn',
+							event: 'notebook_bridge_unavailable',
+							reason: 'prepare_failed',
+							sandbox_id: options.sandboxId,
+						},
+						{ channel: 'warn' },
+					);
+				}
+			})();
+			const started = Date.now();
+			try {
+				await sharedWrite;
+			} catch (error) {
+				sharedWrite = undefined;
+				throw error;
+			}
+			extraFiles.length = 0;
+			bridgeFiles.length = 0;
+			// Credential and bridge timings overlap; files overlaps only when this flush includes workspace files.
+			sw.timings.inject_files = Date.now() - started;
+			if (options.notebookBridge) sw.timings.bridge_prepare = sw.timings.inject_files;
+		};
+		const workspaceWriter = combineWrites && !options.gitPrefix ? flush : undefined;
 
 		const ensureReachable = async () => {
 			if (options.bootedSandbox) {
@@ -889,8 +982,11 @@ export class SandboxProvisioner {
 		const loadWorkspace = (waitUntilReady: () => Promise<void>) =>
 			withSandboxSpan(sw, 'files', async (time, span) => {
 				const loaded = await time(async () => {
-					const loaded = await (options.workspacePrefetch?.consume(waitUntilReady) ??
-						this.loadWorkspace(sandbox, options, layout, prefix, waitUntilReady));
+					const loaded = await (options.workspacePrefetch?.consume(
+						waitUntilReady,
+						workspaceWriter,
+					) ??
+						this.loadWorkspace(sandbox, options, layout, prefix, waitUntilReady, workspaceWriter));
 					if (!loaded.overlayApplied) {
 						await this.applyWorkspaceOverlay(sandbox, options, mountPath);
 					}
@@ -911,7 +1007,13 @@ export class SandboxProvisioner {
 			});
 		const injectSessionEnv = () =>
 			withSandboxSpan(sw, 'inject', async (time, span) => {
-				await this.injectSessionEnv(sandbox, options, time, mountPath, sw);
+				await this.injectSessionEnv(sandbox, options, time, mountPath, sw, {
+					writeFiles: stageFiles,
+					deferInstall: combineWrites,
+					setupPrefix,
+					installers,
+					deferSetup,
+				});
 				span.setAttributes({
 					files_ms: sw.timings.inject_files ?? 0,
 					environment_ms: sw.timings.inject_env ?? 0,
@@ -920,12 +1022,14 @@ export class SandboxProvisioner {
 		let pythonPath: Promise<string> | undefined;
 		const setupEnvironment = async (bridgeLauncher: string | undefined) =>
 			this.setupEnvironment(sandbox, options, mountPath, sw, await launchStrategy, {
-				bridgeLauncher,
+				bridgeLauncher: bridgeUnavailable ? undefined : bridgeLauncher,
 				pythonPath,
+				deferSetup,
+				setupPrefix,
 			});
 		const uploadBridge = () =>
 			launchStrategy.then(
-				(strategy) => this.uploadNotebookBridge(sandbox, options, sw, strategy),
+				(strategy) => this.uploadNotebookBridge(sandbox, options, sw, strategy, stageBridge),
 				// Setup reports strategy failures after workspace loading and injection finish.
 				(): undefined => {},
 			);
@@ -936,6 +1040,8 @@ export class SandboxProvisioner {
 			load: () => Promise<WorkspaceLoadResult>;
 			inject: () => Promise<void>;
 			bridge: () => Promise<string | undefined>;
+			upload: () => Promise<void>;
+			exposure: () => Promise<void>;
 			setup: () => Promise<MarimoStartup>;
 		}>({
 			async reachable(): Promise<void> {
@@ -971,9 +1077,24 @@ export class SandboxProvisioner {
 				await this.$.reachable;
 				return uploadBridge();
 			},
-			async setup(): Promise<MarimoStartup> {
-				await this.$.load;
+			async exposure(): Promise<void> {
+				await this.$.reachable;
+				if (launch)
+					await sandbox.prepareExposure?.(MARIMO_PORT, {
+						hostname: options.hostname,
+						token: options.sandboxId,
+					});
+			},
+			async upload(): Promise<void> {
 				await this.$.inject;
+				await this.$.bridge;
+				extrasReady = true;
+				await this.$.load;
+				if (combineWrites) await flush([]);
+				for (const install of installers) await install();
+			},
+			async setup(): Promise<MarimoStartup> {
+				await this.$.upload;
 				// Waiting for the bridge upload lets setup write the final environment file, which
 				// the launch command then reuses instead of rewriting it.
 				return setupEnvironment(await this.$.bridge);
@@ -983,6 +1104,10 @@ export class SandboxProvisioner {
 		if (prepared.load.status === 'rejected') throw prepared.load.reason;
 		if (prepared.inject.status === 'rejected') throw prepared.inject.reason;
 		if (prepared.bridge.status === 'rejected') throw prepared.bridge.reason;
+		if (prepared.upload.status === 'rejected')
+			throw provisionFailure('injecting session credentials', prepared.upload.reason);
+		if (prepared.exposure.status === 'rejected')
+			throw provisionFailure('exposing the kernel port', prepared.exposure.reason);
 		if (prepared.setup.status === 'rejected') throw prepared.setup.reason;
 		return { load: prepared.load.value, startup: prepared.setup.value, sw, mountPath };
 	}
@@ -992,6 +1117,7 @@ export class SandboxProvisioner {
 		options: ProvisionOptions,
 		sw: Stopwatch,
 		launchStrategy: MarimoLaunchStrategyName,
+		writeFiles = sandbox.writeFiles.bind(sandbox),
 	): Promise<string | undefined> {
 		const payload = options.notebookBridge;
 		if (
@@ -1006,7 +1132,7 @@ export class SandboxProvisioner {
 			await withSandboxSpan(sw, 'bridge_prepare', (time) =>
 				time(() =>
 					withDeadline(
-						sandbox.writeFiles(
+						writeFiles(
 							payload.files.map(({ name, content }) => ({ path: `${directory}/${name}`, content })),
 						),
 						{
@@ -1115,6 +1241,7 @@ export class SandboxProvisioner {
 		layout: SandboxWorkspaceLayout,
 		workspacePrefix: string,
 		waitUntilReady: () => Promise<void>,
+		writeFiles?: SandboxInstance['writeFiles'],
 	): Promise<WorkspaceLoadResult> {
 		// Only a possible mount needs the integration result. Copy prefetch still overlaps resolution.
 		let workspaceOptions = options;
@@ -1139,11 +1266,9 @@ export class SandboxProvisioner {
 			layout,
 			workspacePrefix,
 			waitUntilReady,
+			writeFiles,
 		);
 		await waitUntilReady();
-		if (options.gitPrefix) {
-			await this.configureGitWorkdir(sandbox, options, layout);
-		}
 		return loaded;
 	}
 
@@ -1153,6 +1278,7 @@ export class SandboxProvisioner {
 		layout: SandboxWorkspaceLayout,
 		workspacePrefix: string,
 		waitUntilReady: () => Promise<void>,
+		writeFiles?: SandboxInstance['writeFiles'],
 	): Promise<WorkspaceLoadResult> {
 		if (
 			options.workspaceLoadMode === 'copy-only' &&
@@ -1196,20 +1322,24 @@ export class SandboxProvisioner {
 				layout,
 				workspacePrefix,
 				waitUntilReady,
+				writeFiles,
 			);
 			return {
 				...fallback,
 				archiveStatus: packed.status === 'missing' ? 'missing' : 'failed',
 			};
 		}
-		return this.loadWorkspaceObjects(sandbox, options, layout, workspacePrefix, waitUntilReady);
+		return this.loadWorkspaceObjects(
+			sandbox,
+			options,
+			layout,
+			workspacePrefix,
+			waitUntilReady,
+			writeFiles,
+		);
 	}
 
-	private async configureGitWorkdir(
-		sandbox: SandboxInstance,
-		options: ProvisionOptions,
-		layout: SandboxWorkspaceLayout,
-	): Promise<void> {
+	private gitWorkdirCommand(layout: SandboxWorkspaceLayout): string {
 		// Restored `.git` may have a different owner; sparse checkout keeps subtree status clean.
 		const commands = [
 			'if command -v git >/dev/null 2>&1; then',
@@ -1221,7 +1351,15 @@ export class SandboxProvisioner {
 			);
 		}
 		commands.push('fi');
-		const result = await sandbox.exec(commands.join('\n'), {
+		return commands.join('\n');
+	}
+
+	private async configureGitWorkdir(
+		sandbox: SandboxInstance,
+		options: ProvisionOptions,
+		layout: SandboxWorkspaceLayout,
+	): Promise<void> {
+		const result = await sandbox.exec(this.gitWorkdirCommand(layout), {
 			timeout: GIT_SPARSE_CHECKOUT_TIMEOUT_MS,
 		});
 		if (result.success || !layout.rootPath) return;
@@ -1244,6 +1382,7 @@ export class SandboxProvisioner {
 		layout: SandboxWorkspaceLayout,
 		workspacePrefix: string,
 		waitUntilReady: () => Promise<void>,
+		writeFiles?: SandboxInstance['writeFiles'],
 	): Promise<WorkspaceLoadResult> {
 		const mountPath = layout.workdir;
 		const strategy =
@@ -1252,6 +1391,7 @@ export class SandboxProvisioner {
 				: this.workspaceLoadStrategies.mountOrCopy;
 		if (!strategy.supportsPrefetch) await waitUntilReady();
 		const load = strategy.load({
+			writeFiles,
 			overlay: options.workspaceOverlay,
 			workspaceLimits: options.workspaceLimits,
 			sandbox,
@@ -1333,6 +1473,13 @@ export class SandboxProvisioner {
 		time: TimeSandboxPhase,
 		workdir: string,
 		sw: Stopwatch,
+		batch: {
+			writeFiles: SandboxInstance['writeFiles'];
+			deferInstall: boolean;
+			setupPrefix: MarimoLaunchPlan['setup'];
+			installers: (() => Promise<void>)[];
+			deferSetup: boolean;
+		},
 	): Promise<void> {
 		const resolvedEnv = await options.sessionEnv;
 		const kernelAuthToken = options.kernelAuthToken;
@@ -1378,15 +1525,26 @@ export class SandboxProvisioner {
 						normalizeAbsoluteSandboxPath(workdir) !== '/' &&
 						!files.some((file) => file.relativeTo === 'home')
 					)
-						return writeSessionFiles(sandbox, files, kernelAuthToken);
+						return writeSessionFiles(batch.writeFiles, files, kernelAuthToken);
 					const prepared = await prepareAgentHomeFiles(
 						sandbox,
 						files,
 						normalizeAbsoluteSandboxPath(workdir),
 						options.restoreFilesystemSnapshotId !== undefined,
 					);
-					await writeSessionFiles(sandbox, prepared.files, kernelAuthToken);
-					await prepared.install?.();
+					if (batch.deferSetup && prepared.input && prepared.command) {
+						const path =
+							prepared.payloadPath ?? `/tmp/.marimohub-agent-context-${crypto.randomUUID()}.json`;
+						if (!prepared.payloadPath) await batch.writeFiles([{ path, content: prepared.input }]);
+						const processPath = shellQuote(sandbox.resolveProcessPath?.(path) ?? path);
+						batch.setupPrefix.push({
+							name: 'agent_context',
+							command: `(${prepared.command} < ${processPath}; status=$?; rm -f ${processPath}; exit "$status")`,
+						});
+					} else if (prepared.install && batch.deferInstall)
+						batch.installers.push(prepared.install);
+					await writeSessionFiles(batch.writeFiles, prepared.files, kernelAuthToken);
+					if (!batch.deferInstall) await prepared.install?.();
 				};
 				await Promise.all([
 					sw.time('inject_files', writeFiles),
@@ -1434,7 +1592,12 @@ export class SandboxProvisioner {
 		mountPath: string,
 		sw: Stopwatch,
 		launchStrategy: MarimoLaunchStrategyName,
-		prepared: { bridgeLauncher?: string; pythonPath?: Promise<string> },
+		prepared: {
+			bridgeLauncher?: string;
+			pythonPath?: Promise<string>;
+			deferSetup?: boolean;
+			setupPrefix?: MarimoLaunchPlan['setup'];
+		},
 	): Promise<MarimoStartup> {
 		const sessionEnv = await options.sessionEnv;
 		const loggingPath = sessionEnv?.logging?.length ? LOGGING_DIR : undefined;
@@ -1473,6 +1636,25 @@ export class SandboxProvisioner {
 			await withSandboxSpan(sw, 'pythonpath', (time) =>
 				time(() => this.configureWorkspacePythonPath(sandbox, pythonPath, startup)),
 			);
+		}
+		if (options.gitPrefix) {
+			const { layout } = workspaceLocation(options);
+			if (prepared.deferSetup)
+				startup.plan.setup.unshift({
+					name: 'git_config',
+					command: `(${this.gitWorkdirCommand(layout)}) || true`,
+				});
+			else await this.configureGitWorkdir(sandbox, options, layout);
+		}
+		startup.plan.setup.unshift(...(prepared.setupPrefix ?? []));
+		if (prepared.deferSetup) {
+			startup.onSetup = (output, elapsed) => {
+				const diagnostics = setupDiagnostics(output.stdout, output.stderr);
+				for (const [step, ms] of Object.entries(diagnostics.timings))
+					sw.timings[`setup_${step}`] = ms;
+				logSlowSetup(options, launchStrategy, elapsed, diagnostics);
+			};
+			return startup;
 		}
 		if (startup.plan.setup.length === 0) return startup;
 
@@ -1533,12 +1715,24 @@ export class SandboxProvisioner {
 		try {
 			result = await launchProcess(startup.plan.start, {
 				cwd: mountPath,
+				...(startup.onSetup ? { setup: instrumentSetup(startup.plan.setup) } : {}),
 				port: MARIMO_PORT,
 				waitForPort: { mode: 'tcp' },
 				startupTimeout: timeoutMs,
 			});
 		} catch (error) {
 			throw provisionFailure('starting the marimo kernel', error);
+		}
+		if (startup.onSetup) {
+			const output = result.success ? result.setupOutput : result;
+			if (output === undefined) {
+				throw provisionFailure(
+					'collecting setup output',
+					new Error('Adapter with supportsLaunchSetupOutput omitted setupOutput'),
+				);
+			}
+			sw.timings.setup = result.timings.setup;
+			startup.onSetup(output, result.timings.setup);
 		}
 		sw.timings.start = result.timings.start;
 		sw.timings.waitport = result.timings.waitport;

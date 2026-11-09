@@ -51,11 +51,14 @@ def install():
 
 
 def main():
+    install_only = sys.argv[1:] == ["--install-only"]
     try:
         install()
     except Exception:
         os.environ.pop("MARIMOHUB_BRIDGE_PARENT_ORIGIN", None)
         print('{"event":"notebook_bridge_unavailable","reason":"install_failed"}', file=sys.stderr)
+    if install_only:
+        return
     entry = next(
         entry for entry in importlib.metadata.distribution("marimo").entry_points
         if entry.group == "console_scripts" and entry.name == "marimo"

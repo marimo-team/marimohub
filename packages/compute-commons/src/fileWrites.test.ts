@@ -3,10 +3,13 @@ import { spawnSync } from 'node:child_process';
 import {
 	chmodSync,
 	existsSync,
+	lstatSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
 	statSync,
+	symlinkSync,
 	writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -48,6 +51,24 @@ describe('batchFileWrites', () => {
 		}
 	});
 
+	it.each(['ascii\0', 'é', '你好', '🌍', '\ud800', '\udc00', '\ud800🌍\udc00'])(
+		'matches UTF-8 framing for %j',
+		(content) => {
+			const file = { path: '/unicode', content };
+			const encoded = encodeFileWriteBatch([file]);
+			const newline = encoded.indexOf(10);
+			expect(JSON.parse(new TextDecoder().decode(encoded.subarray(0, newline)))).toEqual({
+				path: file.path,
+				size: Buffer.byteLength(content),
+			});
+			const repeated = {
+				...file,
+				content: content.repeat(Math.ceil(MAX_WRITE_BATCH_BYTES / Buffer.byteLength(content))),
+			};
+			expect(batchFileWrites([repeated, file])).toEqual([[repeated], [file]]);
+		},
+	);
+
 	it('isolates oversized writes so they can stream without copying into a batch', () => {
 		const small = { path: '/small', content: 'one' };
 		const large = { path: '/large', content: new Uint8Array(MAX_WRITE_BATCH_BYTES + 1) };
@@ -75,7 +96,7 @@ describe.skipIf(spawnSync('sh', ['-c', 'python3 -V']).status !== 0)('file batch 
 		rmSync(directory, { recursive: true, force: true });
 	});
 	function receive(input: Uint8Array, env?: NodeJS.ProcessEnv) {
-		return spawnSync('sh', ['-c', WRITE_BATCH_COMMAND], {
+		return spawnSync('sh', ['-c', `umask 000; ${WRITE_BATCH_COMMAND}`], {
 			cwd: directory,
 			input,
 			encoding: 'utf8',
@@ -120,15 +141,43 @@ describe.skipIf(spawnSync('sh', ['-c', 'python3 -V']).status !== 0)('file batch 
 		expect(existsSync(join(directory, 'injected'))).toBe(false);
 	});
 
-	it('truncates existing files while preserving their permissions', () => {
-		const path = join(directory, 'existing');
-		writeFileSync(path, 'a longer old value');
-		chmodSync(path, 0o600);
-		const result = receive(encodeFileWriteBatch([{ path, content: 'new' }]));
+	it('creates owner-only files even with a permissive umask', () => {
+		const path = join(directory, 'credentials');
+		const result = receive(encodeFileWriteBatch([{ path, content: 'private' }]));
 		expect(result.status).toBe(0);
-		expect(readFileSync(path, 'utf8')).toBe('new');
 		expect(statSync(path).mode & 0o777).toBe(0o600);
 	});
+
+	it('writes through an adapter-managed user-home directory symlink', () => {
+		const mount = join(directory, 'mount');
+		const home = join(directory, 'home');
+		mkdirSync(mount);
+		symlinkSync(mount, home);
+		const result = receive(
+			encodeFileWriteBatch([
+				{ path: join(home, 'nested/config'), content: 'personal configuration' },
+				{ path: join(home, 'data.bin'), content: new Uint8Array([0, 255]) },
+			]),
+		);
+		expect(result.stderr).toBe('');
+		expect(result.status).toBe(0);
+		expect(lstatSync(home).isSymbolicLink()).toBe(true);
+		expect(readFileSync(join(mount, 'nested/config'), 'utf8')).toBe('personal configuration');
+		expect(readFileSync(join(mount, 'data.bin'))).toEqual(Buffer.from([0, 255]));
+	});
+
+	it.each([0o600, 0o644, 0o755])(
+		'removes group and other permissions from existing files (%i)',
+		(mode) => {
+			const path = join(directory, 'existing');
+			writeFileSync(path, 'a longer old value');
+			chmodSync(path, mode);
+			const result = receive(encodeFileWriteBatch([{ path, content: 'new' }]));
+			expect(result.status).toBe(0);
+			expect(readFileSync(path, 'utf8')).toBe('new');
+			expect(statSync(path).mode & 0o777).toBe(mode & 0o700);
+		},
+	);
 
 	it('writes only the selected bytes of a buffer view', () => {
 		const bytes = new Uint8Array([99, 0, 255, 10, 88]);

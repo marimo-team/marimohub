@@ -275,3 +275,50 @@ describe('SandboxProvisioner tracing', () => {
 		}
 	});
 });
+
+it('drains data-plane timings and counters after combined preparation finishes', async () => {
+	const { instance } = makeFakeSandbox();
+	Object.assign(instance, { supportsLaunchSetupOutput: true });
+	instance.ready = async () => {};
+	let transferred = false;
+	const writeFiles = instance.writeFiles.bind(instance);
+	instance.writeFiles = async (files) => {
+		await writeFiles(files);
+		transferred = true;
+	};
+	instance.drainTimings = (): Record<string, number> =>
+		transferred ? { first_dataplane: 14 } : {};
+	instance.drainCounters = () => ({
+		execs: 0,
+		file_writes: 1,
+		file_write_waves: 1,
+		env_writes: 1,
+		stream_execs: 2,
+		status_polls: 1,
+	});
+	instance.launchProcess = async (command, options) => ({
+		success: true,
+		process: await instance.startProcess(command, options),
+		setupOutput: { stdout: '', stderr: '' },
+		timings: { setup: 5, start: 2, waitport: 1 },
+	});
+	const result = await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+		sandboxId,
+		projectId,
+		notebookId,
+		hostname: 'localhost',
+		bucket,
+		sessionEnv: {
+			files: [{ path: '/tmp/config', content: 'value' }],
+			vars: { CONFIG: '/tmp/config' },
+		},
+	});
+	expect(result.timings).toMatchObject({ first_dataplane: 14, setup: 5, start: 2, waitport: 1 });
+	expect(result.counters).toMatchObject({
+		file_writes: 1,
+		file_write_waves: 1,
+		env_writes: 1,
+		stream_execs: 2,
+		status_polls: 1,
+	});
+});

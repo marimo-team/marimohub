@@ -86,6 +86,9 @@ import {
 } from '@coreweave/cwsandbox/node';
 import type { KernelIngressPublisher } from './kernelIngress';
 import {
+	batchFileWrites,
+	encodeFileWriteBatch,
+	WRITE_BATCH_COMMAND,
 	readBoundedFile,
 	collectBoundedOutput,
 	LAUNCH_MARKER_GRACE_MS,
@@ -105,6 +108,7 @@ import {
 	removeUndefined,
 	shellQuote,
 	transportFailureResult,
+	LaunchSetupOutput,
 	ShellEnvironment,
 	privateEnvironmentWriteCommand,
 } from '@marimo-hub/compute-commons';
@@ -183,6 +187,7 @@ function fileWriteLimit(mode: DataPlaneMode | undefined): number {
 const FILE_WRITE_TIMEOUT_MS = 60_000;
 
 interface FileWriteBatchState {
+	dispatched: number;
 	failed: boolean;
 	retryCount: number;
 	backoffMs: number;
@@ -477,13 +482,23 @@ export interface CoreWeaveSandbox {
 			command: readonly string[],
 			options?: { cwd?: string; timeoutMs?: number; bufferedMaxKiB?: number; stdin?: boolean },
 		): Promise<
-			CommandProcess & { stdin?: { write(data: string): Promise<void>; close(): Promise<void> } }
+			CommandProcess & {
+				stdin?: {
+					write(data: string | Uint8Array, options?: { timeoutMs?: number }): Promise<void>;
+					close(options?: { timeoutMs?: number }): Promise<void>;
+				};
+			}
 		>;
 	};
 	readonly files: {
 		readText(path: string): Promise<string>;
 		/** Multi-file form only — `writeFiles` is the port's single write path. */
 		write(files: FileWrites, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<void>;
+		writeStream?(
+			path: string,
+			source: Uint8Array,
+			options?: { timeoutMs?: number; signal?: AbortSignal },
+		): Promise<void>;
 	};
 	delete(): Promise<void>;
 }
@@ -512,7 +527,10 @@ function readinessTimeout(sandboxId: string): CWSandboxTimeoutError {
  * Poll until the sandbox leaves its boot states, with the SDK `wait()`'s deadline, transient
  * retry, and terminal-status errors. Returns the status that ended the wait.
  */
-async function waitUntilRunning(sandbox: CoreWeaveSandbox): Promise<SandboxStatus> {
+async function waitUntilRunning(
+	sandbox: CoreWeaveSandbox,
+	onPoll: () => void,
+): Promise<SandboxStatus> {
 	const { sandboxId } = sandbox;
 	const deadline = Date.now() + READY_TIMEOUT_MS;
 	let retryUntil: number | undefined;
@@ -522,6 +540,7 @@ async function waitUntilRunning(sandbox: CoreWeaveSandbox): Promise<SandboxStatu
 		if (remaining <= 0) throw readinessTimeout(sandboxId);
 		let status: SandboxStatus | undefined;
 		try {
+			onPoll();
 			status = await sandbox.getStatus({
 				timeoutMs: Math.min(READY_POLL_RPC_TIMEOUT_MS, remaining),
 			});
@@ -592,6 +611,7 @@ function reconnectSandboxId(reference: string, hubId: SandboxId): string | undef
 
 class CoreWeaveSandboxInstance implements SandboxInstance {
 	readonly supportsBucketMount = false;
+	readonly supportsLaunchSetupOutput = true;
 	private readonly idTag: string;
 	private readonly kernelPort: number;
 	private sandbox?: CoreWeaveSandbox;
@@ -600,8 +620,30 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	private lastEnsureTimings?: Timings;
 	/** Shell snippet to splice onto the next command; see `takeBootstrap`. */
 	private pendingBootstrap?: string;
+	private packedWritesAvailable = true;
 	/** Blocking commands sent to this sandbox — one wide-event field per provision. */
 	private execCount = 0;
+	private counters = {
+		file_writes: 0,
+		file_write_waves: 0,
+		env_writes: 0,
+		stream_execs: 0,
+		status_polls: 0,
+	};
+	private firstDataplaneStarted = false;
+	private dataplaneTimings: Timings = {};
+	private readonly exposures = new Map<string, Promise<void>>();
+
+	private async dataplane<T>(call: () => Promise<T>): Promise<T> {
+		if (this.firstDataplaneStarted) return call();
+		this.firstDataplaneStarted = true;
+		const started = Date.now();
+		try {
+			return await call();
+		} finally {
+			this.dataplaneTimings.first_dataplane = Date.now() - started;
+		}
+	}
 
 	constructor(
 		private readonly id: SandboxId,
@@ -680,7 +722,10 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		// `wait()` semantics treat a `completed` sandbox as a satisfied running-wait.
 		// For us the keep-alive exiting during boot is a failed provision — surface it
 		// here with the real cause rather than as NOT_FOUND on the first command.
-		if (fresh && (await waitUntilRunning(sandbox)) === 'completed') {
+		if (
+			fresh &&
+			(await waitUntilRunning(sandbox, () => this.counters.status_polls++)) === 'completed'
+		) {
 			throw new Error(
 				`CoreWeave sandbox ${sandbox.sandboxId} completed before running (main process exited during boot)`,
 			);
@@ -745,13 +790,16 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	}
 
 	drainTimings(): Timings {
-		const t = this.lastEnsureTimings ?? {};
+		const t = { ...this.lastEnsureTimings, ...this.dataplaneTimings };
+		this.dataplaneTimings = {};
 		this.lastEnsureTimings = undefined;
 		return t;
 	}
 
 	drainCounters(): Record<string, number> {
-		const counters = { execs: this.execCount };
+		const counters = { execs: this.execCount, ...this.counters };
+		for (const key of Object.keys(this.counters) as (keyof typeof this.counters)[])
+			this.counters[key] = 0;
 		this.execCount = 0;
 		return counters;
 	}
@@ -900,21 +948,63 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		return `${bootstrap} ${cmd}`;
 	}
 
-	private readonly environment = new ShellEnvironment(async (path, content) => {
+	private async runRaw(
+		cmd: string,
+		input: string | Uint8Array,
+		options?: ExecOptions,
+	): Promise<{ result: ExecResult; exitCode: number | undefined }> {
 		const sandbox = await this.ensure();
-		const process = await sandbox.commands.start(
-			['sh', '-c', privateEnvironmentWriteCommand(path)],
-			{ stdin: true, timeoutMs: 10_000, bufferedMaxKiB: 64 },
+		this.counters.stream_execs++;
+		const process = await this.dataplane(() =>
+			sandbox.commands.start(['sh', '-c', cmd], {
+				stdin: true,
+				timeoutMs: options?.timeout ?? 10_000,
+				bufferedMaxKiB: 0,
+			}),
 		);
 		try {
 			if (!process.stdin) throw new Error('Sandbox command does not support stdin');
-			await process.stdin.write(content);
-			await process.stdin.close();
-			const result = await process.wait();
-			if (result.exitCode !== 0) throw new Error('Could not prepare sandbox environment');
+			const output = collectBoundedOutput(
+				{
+					stdout: iterableToStream(process.stdout),
+					stderr: iterableToStream(process.stderr),
+					wait: (signal) => process.wait({ signal }),
+				},
+				{ maxOutputBytes: options?.maxOutputBytes ?? 4096, timeout: options?.timeout ?? 10_000 },
+			);
+			output.catch(() => {});
+			const stdin = process.stdin;
+			const sending = (async () => {
+				await stdin.write(input, { timeoutMs: options?.timeout ?? 10_000 });
+				await stdin.close({ timeoutMs: options?.timeout ?? 10_000 });
+			})();
+			const [, { stdout, stderr, result }] = await Promise.all([
+				sending.catch((error) => {
+					// A missing receiver can exit before the SDK accepts stdin.
+					if (process.poll() !== 127) throw error;
+				}),
+				output,
+			]);
+			return {
+				result: execResult(result.exitCode === 0, stdout, stderr),
+				exitCode: result.exitCode,
+			};
 		} finally {
-			void cancelLaunchProcess(process);
+			await cancelLaunchProcess(process);
 		}
+	}
+
+	async execInput(cmd: string, input: Uint8Array, options?: ExecOptions): Promise<ExecResult> {
+		await this.ensure();
+		this.execCount++;
+		const { result } = await this.runRaw(this.takeBootstrap(cmd), input, options);
+		return result;
+	}
+
+	private readonly environment = new ShellEnvironment(async (path, content) => {
+		this.counters.env_writes++;
+		const { result } = await this.runRaw(privateEnvironmentWriteCommand(path), content);
+		if (!result.success) throw new Error('Could not prepare sandbox environment');
 	});
 
 	private async withEnv(cmd: string, extra: Record<string, string> = {}): Promise<string> {
@@ -925,10 +1015,14 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		const sandbox = await this.ensure();
 		this.execCount++;
 		if (options?.maxOutputBytes !== undefined) {
-			const proc = await sandbox.commands.start(['sh', '-lc', await this.withEnv(cmd)], {
-				timeoutMs: options.timeout,
-				bufferedMaxKiB: 0,
-			});
+			const command = await this.withEnv(cmd);
+			this.counters.stream_execs++;
+			const proc = await this.dataplane(() =>
+				sandbox.commands.start(['sh', '-lc', command], {
+					timeoutMs: options.timeout,
+					bufferedMaxKiB: 0,
+				}),
+			);
 			try {
 				const { stdout, stderr, result } = await collectBoundedOutput(
 					{
@@ -943,15 +1037,20 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				void cancelLaunchProcess(proc);
 			}
 		}
-		const res = await sandbox.commands.run(['sh', '-lc', await this.withEnv(cmd)], {
-			timeoutMs: options?.timeout,
-		});
+		const command = await this.withEnv(cmd);
+		const res = await this.dataplane(() =>
+			sandbox.commands.run(['sh', '-lc', command], {
+				timeoutMs: options?.timeout,
+			}),
+		);
 		return execResult(res.exitCode === 0, res.stdout, res.stderr);
 	}
 
 	async execStream(cmd: string, _options?: ExecStreamOptions): Promise<ReadableStream> {
 		const sandbox = await this.ensure();
-		const proc = await sandbox.commands.start(['sh', '-lc', await this.withEnv(cmd)]);
+		const command = await this.withEnv(cmd);
+		this.counters.stream_execs++;
+		const proc = await this.dataplane(() => sandbox.commands.start(['sh', '-lc', command]));
 		return iterableToStream(proc.stdout);
 	}
 
@@ -962,7 +1061,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	async readFile(path: string): Promise<ReadFileResult> {
 		try {
 			const sandbox = await this.ensure();
-			const content = await sandbox.files.readText(path);
+			const content = await this.dataplane(() => sandbox.files.readText(path));
 			return { success: true, content, encoding: 'utf-8' };
 		} catch {
 			return readFileFailure('READ_FAILED');
@@ -981,6 +1080,63 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			paths.add(file.path);
 		}
 		const sandbox = await this.ensure();
+		if (batch.length > 8 && this.packedWritesAvailable) {
+			// Serial batches fence later writes and keep the bootstrap ahead of every home write.
+			let bootstrap = this.pendingBootstrap;
+			let command = this.takeBootstrap(WRITE_BATCH_COMMAND);
+			let written = 0;
+			try {
+				for (const packed of batchFileWrites(batch)) {
+					let missingReceiver = false;
+					for (let attempt = 0; ; attempt++) {
+						try {
+							const { result, exitCode } = await this.fileWriteSlots.run(
+								sandbox.sandboxId,
+								async () => {
+									this.counters.file_write_waves++;
+									return this.runRaw(command, encodeFileWriteBatch(packed), {
+										timeout: FILE_WRITE_TIMEOUT_MS,
+									});
+								},
+							);
+							missingReceiver = exitCode === 127;
+							if (!result.success && !missingReceiver)
+								throw new Error('Could not write sandbox file batch');
+							break;
+						} catch (error) {
+							if (
+								!(error instanceof CWSandboxUnavailableError) ||
+								attempt >= WRITE_RETRY_DELAYS_MS.length
+							)
+								throw error;
+							await new Promise<void>((resolve) => {
+								setTimeout(resolve, WRITE_RETRY_DELAYS_MS[attempt]);
+							});
+						}
+					}
+					if (missingReceiver) {
+						this.packedWritesAvailable = false;
+						this.pendingBootstrap ??= bootstrap;
+						await this.writeUnaryFiles(sandbox, batch.slice(written));
+						return;
+					}
+					bootstrap = undefined;
+					command = WRITE_BATCH_COMMAND;
+					written += packed.length;
+				}
+			} catch (error) {
+				this.pendingBootstrap ??= bootstrap;
+				throw error;
+			}
+			return;
+		}
+		await this.writeUnaryFiles(sandbox, batch);
+	}
+
+	private async writeUnaryFiles(
+		sandbox: CoreWeaveSandbox,
+		batch: readonly SandboxFileWrite[],
+	): Promise<void> {
 		// AddFile creates parent directories itself. The bootstrap links the user
 		// home into place, so a write beneath it must not race ahead of that.
 		if (this.pendingBootstrap && this.writesUnderUserHome(batch)) {
@@ -989,6 +1145,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		// The SDK's array form serializes files in two-wide waves. Own concurrency
 		// here, draining started uploads before a caller can retry or destroy the pod.
 		const batchState: FileWriteBatchState = {
+			dispatched: 0,
 			failed: false,
 			retryCount: 0,
 			backoffMs: 0,
@@ -1047,13 +1204,30 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 						throw fileWriteTimeout(sandbox.sandboxId, file.path);
 					}
 					if (attempt > 0) batchState.retryCount++;
+					if (
+						attempt === 0 &&
+						batchState.dispatched++ % fileWriteLimit(this.config.dataPlaneMode) === 0
+					)
+						this.counters.file_write_waves++;
+					this.counters.file_writes++;
+					const content =
+						typeof file.content === 'string'
+							? new TextEncoder().encode(file.content)
+							: file.content;
 					try {
 						await withDeadline(
 							(signal) =>
-								sandbox.files.write([{ path: file.path, content: file.content }], {
-									timeoutMs: remaining,
-									signal,
-								}),
+								this.dataplane(() =>
+									sandbox.files.writeStream && content.byteLength >= 4 * 1024 * 1024
+										? sandbox.files.writeStream(file.path, content, {
+												timeoutMs: remaining,
+												signal,
+											})
+										: sandbox.files.write([{ path: file.path, content: file.content }], {
+												timeoutMs: remaining,
+												signal,
+											}),
+								),
 							{
 								timeoutMs: remaining,
 								timeoutError: () => fileWriteTimeout(sandbox.sandboxId, file.path),
@@ -1150,9 +1324,13 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		let proc: CommandProcess;
 		try {
 			const sandbox = await this.ensure();
-			proc = await sandbox.commands.start(['sh', '-lc', await this.withEnv(built.command)], {
-				cwd: options.cwd,
-			});
+			const command = await this.withEnv(built.command);
+			this.counters.stream_execs++;
+			proc = await this.dataplane(() =>
+				sandbox.commands.start(['sh', '-lc', command], {
+					cwd: options.cwd,
+				}),
+			);
 		} catch (error) {
 			return transportFailureResult(error, {
 				setup: 0,
@@ -1176,10 +1354,13 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		// Fed raw chunks so a marker evicted from the capped tails (e.g. by a huge
 		// trailing burst in the same chunk) still classifies the launch.
 		const tracker = new LaunchProtocolTracker(built.nonce);
+		const setupOutput = new LaunchSetupOutput(built.nonce);
 		const inspect = () => {
 			if (settled) return;
 			const terminal = tracker.outcome;
-			if (terminal) {
+			const needsSetupOutput =
+				terminal && ['ready', 'setup_exit', 'setup_timeout'].includes(terminal.kind);
+			if (terminal && (!needsSetupOutput || !options.setup || setupOutput.complete)) {
 				settled = true;
 				resolveOutcome(terminal);
 			}
@@ -1191,10 +1372,13 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		) => {
 			try {
 				for await (const chunk of stream) {
+					setupOutput.feed(name, chunk);
 					tracker.feed(name, chunk);
 					sink.append(chunk);
 					inspect();
 				}
+				setupOutput.finish(name);
+				inspect();
 			} catch (error) {
 				if (!settled) {
 					settled = true;
@@ -1259,12 +1443,20 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			if (timer !== undefined) clearTimeout(timer);
 		}
 		if (terminal.kind !== 'ready') {
-			return launchOutcomeResult(terminal.kind, terminal, logs(), start);
+			return launchOutcomeResult(
+				terminal.kind,
+				terminal,
+				terminal.kind === 'setup_exit' || terminal.kind === 'setup_timeout'
+					? setupOutput.output
+					: logs(),
+				start,
+			);
 		}
 
 		const exec = this.exec.bind(this);
 		return {
 			success: true,
+			setupOutput: setupOutput.output,
 			timings: { setup: terminal.setupMs, start, waitport: terminal.waitportMs },
 			process: {
 				id: `cw-proc-${++PROC_SEQ}`,
@@ -1288,11 +1480,10 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 
 	async startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess> {
 		const sandbox = await this.ensure();
-		const proc = await sandbox.commands.start(
-			['sh', '-lc', await this.withEnv(cmd, removeUndefined(options?.env ?? {}))],
-			{
-				cwd: options?.cwd,
-			},
+		const command = await this.withEnv(cmd, removeUndefined(options?.env ?? {}));
+		this.counters.stream_execs++;
+		const proc = await this.dataplane(() =>
+			sandbox.commands.start(['sh', '-lc', command], { cwd: options?.cwd }),
 		);
 
 		// marimo runs as a streamed command (not the sandbox main process), so drain
@@ -1359,6 +1550,11 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		};
 	}
 
+	async prepareExposure(port: number, options: ExposePortOptions): Promise<void> {
+		if (!this.config.kernelIngress || this.config.resolveExposedUrl) return;
+		await this.exposePort(port, options);
+	}
+
 	async exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult> {
 		const sandbox = await this.ensure();
 		// Without a resolver, construct the public URL from a template (the kernel
@@ -1381,11 +1577,22 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			);
 		}
 		if (!this.config.resolveExposedUrl && this.config.kernelIngress) {
-			await this.config.kernelIngress.publish({
-				sandboxId: sandbox.sandboxId,
-				host: new URL(url).hostname,
-				port,
-			});
+			const key = `${port}:${new URL(url).hostname}`;
+			let publishing = this.exposures.get(key);
+			if (!publishing) {
+				publishing = this.config.kernelIngress
+					.publish({
+						sandboxId: sandbox.sandboxId,
+						host: new URL(url).hostname,
+						port,
+					})
+					.catch((error) => {
+						if (this.exposures.get(key) === publishing) this.exposures.delete(key);
+						throw error;
+					});
+				this.exposures.set(key, publishing);
+			}
+			await publishing;
 		}
 		return { url };
 	}

@@ -1,3 +1,4 @@
+export * from './fileWrites';
 import { shellQuote } from './shell';
 export { shellQuote, withEnvPrefix } from './shell';
 export { ShellEnvironment, privateEnvironmentWriteCommand } from './shellEnvironment';
@@ -229,7 +230,10 @@ def elapsed(since):
     return max(0, round((time.monotonic() - since) * 1000))
 
 def emit(event, **values):
-    print(prefix + json.dumps({"event": event, **values}, separators=(",", ":")), file=sys.stderr, flush=True)
+    line = prefix + json.dumps({"event": event, **values}, separators=(",", ":"))
+    if event in ("setup_complete", "setup_exit", "setup_timeout"):
+        print(line, file=sys.stdout, flush=True)
+    print(line, file=sys.stderr, flush=True)
 
 def remaining():
     return None if deadline is None else max(0, deadline - time.monotonic())
@@ -565,6 +569,58 @@ export class OutputTail {
 
 	get text(): string {
 		return this.value;
+	}
+}
+
+/** Each stream needs its own boundary: stdout and stderr can arrive out of order. */
+export class LaunchSetupOutput {
+	private readonly tails = { stdout: new OutputTail(), stderr: new OutputTail() };
+	private readonly pending = { stdout: '', stderr: '' };
+	private readonly completed = { stdout: false, stderr: false };
+	private readonly markers: string[];
+	private readonly carryLength: number;
+
+	constructor(private readonly nonce: string) {
+		this.markers = ['setup_complete', 'setup_exit', 'setup_timeout'].map(
+			(event) => `__MARIMOHUB_LAUNCH_${nonce}__{"event":"${event}"`,
+		);
+		this.carryLength = Math.max(...this.markers.map((marker) => marker.length)) - 1;
+	}
+
+	feed(stream: 'stdout' | 'stderr', chunk: string): void {
+		if (this.completed[stream]) return;
+		const text = this.pending[stream] + chunk;
+		const boundaries = this.markers
+			.map((marker) => text.indexOf(marker))
+			.filter((index) => index >= 0);
+		const end = boundaries.length > 0 ? Math.min(...boundaries) : -1;
+		if (end !== -1) {
+			this.tails[stream].append(text.slice(0, end));
+			this.pending[stream] = '';
+			this.completed[stream] = true;
+			return;
+		}
+		const retained = Math.min(text.length, this.carryLength);
+		this.tails[stream].append(text.slice(0, text.length - retained));
+		this.pending[stream] = text.slice(text.length - retained);
+	}
+
+	finish(stream: 'stdout' | 'stderr'): void {
+		this.completed[stream] = true;
+	}
+
+	get complete(): boolean {
+		return this.completed.stdout && this.completed.stderr;
+	}
+
+	get output(): { stdout: string; stderr: string } {
+		return parseLaunchOutput(
+			{
+				stdout: this.tails.stdout.text + this.pending.stdout,
+				stderr: this.tails.stderr.text + this.pending.stderr,
+			},
+			this.nonce,
+		);
 	}
 }
 

@@ -7,7 +7,16 @@ Part of [marimohub](../../README.md). See [docs/compute.md](../../docs/compute.m
 
 ## File uploads
 
-Upload concurrency is limited per batch and per sandbox:
+Transfers of up to eight files use concurrent SDK writes.
+Larger transfers use sequential binary stdin batches of up to 128 files or 4 MiB.
+Oversized files occupy their own batch.
+Destinations must be unique absolute paths, and payloads never enter command arguments.
+Packed writes create mode `0600` files and remove group and other permissions from existing files.
+
+Packed batches have a 60 s deadline per attempt and retry `UNAVAILABLE` up to three times.
+Retries release the upload slot during backoff. A failed packed batch stops later batches.
+
+For SDK writes, upload concurrency is limited per batch and per sandbox:
 
 - `direct` and `auto` (default): two active writes.
 - `gateway` and W&B: eight active writes.
@@ -31,6 +40,39 @@ The event omits file paths, contents, and server messages.
 
 Destinations must be unique absolute paths. The adapter checks and copies them before sandbox readiness.
 The SDK handles parent directories, file-size limits, streaming fallback, and transport routing.
+
+The packed receiver uses `python3` on PATH for `sh -c`, as provided by `images/marimo-sandbox/Dockerfile`.
+If the receiver exits 127, the adapter uses unary writes for the remaining files and subsequent transfers.
+User-home bootstrap precedes the receiver in the same command, without session environment injection.
+For SDK writes, files of at least 4 MiB use `writeStream` when available.
+
+CoreWeave combines workspace files, credentials, bridge files, and agent requests when they are ready together.
+Slow credential resolution does not delay workspace uploads. Remaining files transfer before setup.
+Ordinary workspaces use bounded file batches. Existing synced archives, snapshot restores, and mounted workspaces keep their existing paths.
+
+## Provision telemetry
+
+`drainCounters()` returns and clears these counters:
+
+| Counter            | Meaning                                                                         |
+| ------------------ | ------------------------------------------------------------------------------- |
+| `execs`            | Blocking `exec` and `execInput` calls                                           |
+| `file_writes`      | SDK file writes, including retries                                              |
+| `file_write_waves` | Unary waves or packed batches, including packed retries                         |
+| `env_writes`       | Private environment-file writes                                                 |
+| `stream_execs`     | All command streams, including environment writes, packed transfers, and launch |
+| `status_polls`     | Readiness status requests                                                       |
+
+`drainTimings()` reports the first data-plane call duration once per instance as `first_dataplane`.
+The session event uses `provision_first_dataplane_ms`.
+Kubernetes reports applicable counters but omits `file_writes` because it uses exec for file transfers.
+
+When files share a transfer, `files`, `inject_files`, and `bridge_prepare` durations overlap.
+One packed transfer, one environment write, and one launch count as three command streams.
+
+`prepareExposure` publishes the kernel Ingress while files load. `exposePort` awaits the same publication.
+The Kubernetes client reuses HTTPS connections and rereads service-account tokens.
+The Service owner reference provides Ingress garbage collection.
 
 ## Data-plane mode
 
