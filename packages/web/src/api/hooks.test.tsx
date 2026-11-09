@@ -3,6 +3,7 @@ import {
 	useDeleteNotebook,
 	useDeleteProject,
 	useProjectsQuery,
+	useProjectRoster,
 	refreshBrowseQueries,
 	resetBrowseRefreshBudgetForTests,
 	useBrowseCapabilityQuery,
@@ -11,6 +12,7 @@ import {
 	useCapabilitiesQuery,
 	useDownloadWorkspace,
 	useEditorSessionQuery,
+	useCancelJobRun,
 	useJobRunQuery,
 	useJobRunsQuery,
 	useJobsQuery,
@@ -35,6 +37,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import { toast } from 'sonner';
 import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
+import { deferred } from '@/test/deferred';
 import { browseKeys, jobKeys, notebookKeys, projectKeys, sessionKeys } from './queryKeys';
 
 const PID = 'proj-1';
@@ -551,9 +554,10 @@ describe('useStartSession', () => {
 	it('creates an app session with a JSON mode body', async () => {
 		const fetchMock = stubFetch(async () => jsonOk({ session_id: 'sess-1', mode: 'app' }));
 
-		const { result } = renderHookWithClient(() => useStartSession(PID, NID, 'app'), {
+		const { result, client } = renderHookWithClient(() => useStartSession(PID, NID, 'app'), {
 			toaster: false,
 		});
+		const invalidations = vi.spyOn(client, 'invalidateQueries');
 		await act(async () => {
 			await result.current.mutateAsync();
 		});
@@ -563,6 +567,7 @@ describe('useStartSession', () => {
 		expect(request.method).toBe('POST');
 		expect(await request.clone().text()).toBe('{"mode":"app"}');
 		expect(request.headers.get('content-type')).toBe('application/json');
+		expect(invalidatedKeys(invalidations)).toEqual([]);
 	});
 });
 
@@ -1162,5 +1167,339 @@ describe('delete mutations and the apps gallery cache', () => {
 				false,
 			);
 		}
+	});
+});
+
+describe('job history polling', () => {
+	it('does not start historical refreshes after an abandoned head request resolves', async () => {
+		const pending = deferred<Response>();
+		let polling = false;
+		const fetch = stubFetch(async (input) => {
+			const url = new URL(String(input), 'http://localhost');
+			if (url.searchParams.has('cursor'))
+				return jsonOk({ items: [{ run_id: 'old', status: 'running' }], next_cursor: null });
+			if (polling) return pending.promise;
+			return jsonOk({ items: [{ run_id: 'new', status: 'succeeded' }], next_cursor: 'older' });
+		});
+		const { result, unmount } = renderHookWithClient(() => useJobRunsQuery(PID, NID, 'job'), {
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.data).toHaveLength(1));
+		await act(async () => {
+			await result.current.fetchNextPage();
+		});
+		await waitFor(() => expect(result.current.data).toHaveLength(2));
+		polling = true;
+		let refresh!: Promise<unknown>;
+		act(() => {
+			refresh = result.current.refetch();
+		});
+		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+		unmount();
+		await act(async () => {
+			pending.resolve(jsonOk({ items: [], next_cursor: null }));
+			await refresh;
+		});
+		expect(fetch).toHaveBeenCalledTimes(3);
+	});
+
+	it('retains every observed run across successive head pages after history is exhausted', async () => {
+		const runs = (newest: number, oldest: number) =>
+			Array.from({ length: newest - oldest + 1 }, (_, i) => ({
+				run_id: `run-${newest - i}`,
+				status: 'succeeded',
+			}));
+		let head = runs(200, 101);
+		const fetch = stubFetch(async (input) =>
+			jsonOk(
+				new URL(String(input), 'http://localhost').searchParams.has('cursor')
+					? { items: runs(100, 1), next_cursor: null }
+					: { items: head, next_cursor: 'older' },
+			),
+		);
+		const { result } = renderHookWithClient(() => useJobRunsQuery(PID, NID, 'job'), {
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.data).toHaveLength(100));
+		await act(async () => {
+			await result.current.fetchNextPage();
+		});
+		await waitFor(() => expect(result.current.data).toHaveLength(200));
+		for (const [newest, oldest] of [
+			[250, 151],
+			[301, 202],
+		]) {
+			head = runs(newest, oldest);
+			await act(async () => {
+				await result.current.refetch();
+			});
+			await waitFor(() => expect(result.current.data).toHaveLength(newest));
+		}
+		expect(result.current.data?.map((run) => run.run_id)).toEqual(
+			runs(301, 1).map((run) => run.run_id),
+		);
+		expect(result.current.hasNextPage).toBe(false);
+		expect(urlsOf(fetch).filter((url) => url.includes('cursor='))).toHaveLength(1);
+	});
+
+	it('refreshes unfinished history in bounded batches and stops after terminal results, including retries', async () => {
+		vi.useFakeTimers();
+		try {
+			const historical = Array.from({ length: 9 }, (_, i) => ({
+				run_id: `old-${i}`,
+				status: i % 2 ? 'queued' : 'running',
+			}));
+			let failed = false;
+			const details: string[] = [];
+			const fetch = stubFetch(async (input) => {
+				const url = new URL(String(input), 'http://localhost');
+				const id = url.pathname.split('/').at(-1)!;
+				if (id !== 'runs') {
+					details.push(id);
+					if (id === 'old-0' && !failed) {
+						failed = true;
+						return jsonError('UNAVAILABLE', 'Try again', 503);
+					}
+					return jsonOk({ run_id: id, status: 'succeeded' });
+				}
+				return jsonOk(
+					url.searchParams.has('cursor')
+						? { items: [...historical, { run_id: 'done', status: 'succeeded' }], next_cursor: null }
+						: { items: [{ run_id: 'new', status: 'succeeded' }], next_cursor: 'older' },
+				);
+			});
+			const { result, unmount } = renderHookWithClient(() => useJobRunsQuery(PID, NID, 'job'), {
+				toaster: false,
+			});
+			await vi.waitFor(() => expect(result.current.data).toHaveLength(1));
+			await act(async () => {
+				await result.current.fetchNextPage();
+			});
+			await vi.waitFor(() => expect(result.current.data).toHaveLength(11));
+			for (let tick = 0; tick < 3; tick++) {
+				const before = details.length;
+				await act(async () => {
+					await vi.advanceTimersByTimeAsync(5_000);
+				});
+				expect(details.length - before).toBeGreaterThan(0);
+				expect(details.length - before).toBeLessThanOrEqual(4);
+			}
+			await vi.waitFor(() =>
+				expect(result.current.data?.every((run) => run.status === 'succeeded')).toBe(true),
+			);
+			expect(details.filter((id) => id === 'old-0')).toHaveLength(2);
+			expect(details).not.toContain('done');
+			expect(details).not.toContain('new');
+			const completed = details.length;
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(60_000);
+			});
+			expect(details).toHaveLength(completed);
+			expect(urlsOf(fetch).filter((url) => url.includes('cursor='))).toHaveLength(1);
+			unmount();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('updates an unselected historical run after cancellation invalidates the list', async () => {
+		let cancelled = false;
+		const fetch = stubFetch(async (input, init) => {
+			const url = new URL(String(input), 'http://localhost');
+			if (init?.method === 'POST') {
+				cancelled = true;
+				return jsonOk({ run_id: 'old', status: 'cancelled' });
+			}
+			if (url.pathname.endsWith('/runs/old'))
+				return jsonOk({ run_id: 'old', status: cancelled ? 'cancelled' : 'running' });
+			return jsonOk(
+				url.searchParams.has('cursor')
+					? { items: [{ run_id: 'old', status: 'running' }], next_cursor: null }
+					: { items: [{ run_id: 'new', status: 'succeeded' }], next_cursor: 'older' },
+			);
+		});
+		const { result } = renderHookWithClient(
+			() => ({ runs: useJobRunsQuery(PID, NID, 'job'), cancel: useCancelJobRun(PID, NID) }),
+			{ toaster: false },
+		);
+		await waitFor(() => expect(result.current.runs.data).toHaveLength(1));
+		await act(async () => {
+			await result.current.runs.fetchNextPage();
+		});
+		await waitFor(() => expect(result.current.runs.data).toHaveLength(2));
+		await act(async () => {
+			await result.current.cancel.mutateAsync({ jobId: 'job', runId: 'old' });
+		});
+		await waitFor(() =>
+			expect(result.current.runs.data?.find((run) => run.run_id === 'old')?.status).toBe(
+				'cancelled',
+			),
+		);
+		expect(urlsOf(fetch).filter((url) => url.includes('cursor='))).toHaveLength(1);
+	});
+
+	it('keeps observed runs and fresh statuses when a history page arrives after a head poll', async () => {
+		const older = deferred<Response>();
+		let head = [{ run_id: 'first', status: 'running' }];
+		stubFetch(async (input) =>
+			new URL(String(input), 'http://localhost').searchParams.has('cursor')
+				? older.promise
+				: jsonOk({ items: head, next_cursor: 'older' }),
+		);
+		const { result } = renderHookWithClient(() => useJobRunsQuery(PID, NID, 'job'), {
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.data).toHaveLength(1));
+		let pending!: Promise<unknown>;
+		act(() => {
+			pending = result.current.fetchNextPage();
+		});
+		head = [
+			{ run_id: 'new', status: 'succeeded' },
+			{ run_id: 'first', status: 'succeeded' },
+		];
+		await act(async () => {
+			await result.current.refetch();
+		});
+		await act(async () => {
+			older.resolve(
+				jsonOk({
+					items: [
+						{ run_id: 'first', status: 'running' },
+						{ run_id: 'older', status: 'succeeded' },
+					],
+					next_cursor: null,
+				}),
+			);
+			await pending;
+		});
+		await waitFor(() => expect(result.current.data).toHaveLength(3));
+		expect(result.current.data?.find((run) => run.run_id === 'first')?.status).toBe('succeeded');
+	});
+
+	it('does not fetch runs or history without a selected job', async () => {
+		const fetch = stubFetch(async () => {
+			throw new Error('Unexpected request');
+		});
+		const { result } = renderHookWithClient(() => useJobRunsQuery(PID, NID, null), {
+			toaster: false,
+		});
+		await act(async () => {
+			await result.current.fetchNextPage();
+		});
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it('retains runs through history and head failures, then retries without refetching history', async () => {
+		let failHistory = true;
+		let failHead = false;
+		const fetch = stubFetch(async (input) => {
+			const cursor = new URL(String(input), 'http://localhost').searchParams.get('cursor');
+			if (cursor ? failHistory : failHead) return jsonError('UNAVAILABLE', 'Runs unavailable', 503);
+			return jsonOk({
+				items: [{ run_id: cursor ? 'older' : 'newest', status: 'succeeded' }],
+				next_cursor: cursor ? null : 'history',
+			});
+		});
+		const { result } = renderHookWithClient(() => useJobRunsQuery(PID, NID, 'job'), {
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.data).toHaveLength(1));
+		await act(async () => {
+			await result.current.fetchNextPage();
+		});
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		expect(result.current.data?.map((run) => run.run_id)).toEqual(['newest']);
+		expect(result.current.hasNextPage).toBe(true);
+		failHistory = false;
+		await act(async () => {
+			await result.current.fetchNextPage();
+		});
+		await waitFor(() => expect(result.current.data).toHaveLength(2));
+		failHead = true;
+		await act(async () => {
+			await result.current.refetch();
+		});
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		expect(result.current.data?.map((run) => run.run_id)).toEqual(['newest', 'older']);
+		failHead = false;
+		await act(async () => {
+			await result.current.refetch();
+		});
+		await waitFor(() => expect(result.current.isError).toBe(false));
+		expect(urlsOf(fetch).filter((url) => url.includes('cursor='))).toHaveLength(2);
+	});
+
+	it('retains loaded history without polling it, and deduplicates a shifting head', async () => {
+		vi.useFakeTimers();
+		try {
+			let items = [
+				{ run_id: 'first', status: 'running' },
+				{ run_id: 'second', status: 'succeeded' },
+			];
+			const fetch = stubFetch(async (input) => {
+				const cursor = new URL(String(input), 'http://localhost').searchParams.get('cursor');
+				return jsonOk(
+					cursor
+						? { items: [{ run_id: 'third', status: 'succeeded' }], next_cursor: null }
+						: { items, next_cursor: 'history' },
+				);
+			});
+			const { result, unmount } = renderHookWithClient(() => useJobRunsQuery(PID, NID, 'job'), {
+				toaster: false,
+			});
+			await vi.waitFor(() => expect(result.current.data).toHaveLength(2));
+			await act(async () => {
+				await result.current.fetchNextPage();
+			});
+			await vi.waitFor(() => expect(result.current.data).toHaveLength(3));
+			items = [
+				{ run_id: 'new', status: 'running' },
+				{ run_id: 'first', status: 'succeeded' },
+			];
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(5_000);
+			});
+			await vi.waitFor(() =>
+				expect(result.current.data?.map((run) => run.run_id)).toEqual([
+					'new',
+					'first',
+					'second',
+					'third',
+				]),
+			);
+			expect(result.current.data?.find((run) => run.run_id === 'first')?.status).toBe('succeeded');
+			items = [{ run_id: 'new', status: 'succeeded' }];
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(5_000);
+			});
+			await vi.waitFor(() =>
+				expect(result.current.data?.find((run) => run.run_id === 'first')?.status).toBe(
+					'succeeded',
+				),
+			);
+			expect(urlsOf(fetch).filter((url) => url.includes('cursor='))).toHaveLength(1);
+			unmount();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+describe('project roster cache', () => {
+	it('shares the default active list and retains it across a remount', async () => {
+		const fetch = stubFetch(async () => jsonOk({ items: [], next_cursor: null }));
+		const first = renderHookWithClient(() => [useProjectRoster(), useProjectsQuery({})], {
+			toaster: false,
+		});
+		await waitFor(() => expect(first.result.current.every((query) => query.isSuccess)).toBe(true));
+		expect(fetch).toHaveBeenCalledTimes(1);
+		first.unmount();
+		const second = renderHookWithClient(() => useProjectRoster(), {
+			toaster: false,
+			client: first.client,
+		});
+		expect(second.result.current.isSuccess).toBe(true);
+		expect(fetch).toHaveBeenCalledTimes(1);
 	});
 });

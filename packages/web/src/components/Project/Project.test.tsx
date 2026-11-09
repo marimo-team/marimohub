@@ -170,7 +170,12 @@ describe('notebook filters', () => {
 			.reverse()
 			.find((call) => call.method === 'GET' && call.url.includes(`/projects/${PID}/notebooks?`));
 		const params = new URL(request?.url ?? '', 'http://localhost').searchParams;
-		expect(Object.fromEntries(params)).toEqual({ q: 'annual', tag: 'finance', status: 'archived' });
+		expect(Object.fromEntries(params)).toEqual({
+			q: 'annual',
+			tag: 'finance',
+			status: 'archived',
+			limit: '100',
+		});
 	});
 
 	it('loads draft notebooks through the status picker', async () => {

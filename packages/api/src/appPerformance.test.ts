@@ -89,6 +89,17 @@ describe('app operation budgets', () => {
 		await expectOk(await f.heartbeat());
 		expect(counts(f.bucket.operations)).toMatchObject({ putAttempts: 0, deletes: 0 });
 		const heartbeatReads = counts(f.bucket.operations).metadataReads;
+		expect(
+			f.bucket.operations.filter(
+				(op) =>
+					op.key === paths.project(f.project.id).notebook(f.notebook.id).source ||
+					op.key === paths.editorClaim(f.project.id, f.notebook.id),
+			),
+		).toEqual([
+			{ method: 'get', key: paths.project(f.project.id).notebook(f.notebook.id).source },
+			{ method: 'get', key: paths.editorClaim(f.project.id, f.notebook.id) },
+		]);
+		expect(f.bucket.operations.some((op) => op.method === 'list')).toBe(false);
 		expect(f.bucket.operations).not.toContainEqual({ method: 'head', key: paths.catalog });
 		const renew = vi.spyOn(f.client.deps.services.sessions, 'heartbeat');
 		f.bucket.operations = [];
@@ -101,7 +112,7 @@ describe('app operation budgets', () => {
 			putAttempts: 0,
 			deletes: 0,
 		});
-		expect(heartbeatReads).toBe(5);
+		expect(heartbeatReads).toBe(7);
 	});
 
 	it('reads changed notebook constraints on the next proxy request', async () => {

@@ -1,56 +1,99 @@
 import { useSearchAccess } from '@/hooks/useSearchAccess';
 import { SEARCH_ROUTE, PROJECT_SEARCH_ROUTE } from '@/lib/workspaceSearch';
 import { useWorkspaceSearchShortcut } from '@/hooks/useWorkspaceSearchShortcut';
-import { PreviewsPage } from '@/components/Previews/PreviewsPage';
-import { PreviewPage } from '@/components/Previews/PreviewPage';
-import { lazy, Suspense } from 'react';
+import { Suspense } from 'react';
+import { lazyRoute } from '@/lib/lazyRoute';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryErrorResetBoundary } from '@tanstack/react-query';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
-import { WorkspaceLayout } from '@/components/Workspace/WorkspaceLayout';
-import { WorkspaceHome } from '@/components/Workspace/WorkspaceHome';
-import { ProjectAlertsPage } from '@/components/Workspace/ProjectAlertsPage';
-import { ProjectJobsPage } from '@/components/Workspace/ProjectJobsPage';
-import { ProjectSettingsPage } from '@/components/Workspace/ProjectSettingsPage';
 import { ProjectSourceGate } from '@/components/Workspace/ProjectSourceGate';
-import { ProjectList } from '@/components/ProjectList/ProjectList';
-import { AppsPage } from '@/components/Apps/AppsPage';
-import { Project } from '@/components/Project/Project';
 import { AppEntryPage } from '@/components/Apps/AppEntryPage';
 import { AppLinkPage } from '@/components/NotebookPage/AppLinkPage';
-import { SnapshotPage } from '@/components/NotebookPage/SnapshotPage';
-import { JobsPage } from '@/components/Jobs/JobsPage';
 import { SignIn } from '@/components/SignIn/SignIn';
-import { ErrorBoundary, Button } from '@/components/ui';
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
+import { Button } from '@/components/ui/Button';
 import { Toaster } from '@/components/ui/sonner';
 import { ApiRequestError } from '@/api/client';
-import { AdminLayout } from '@/components/Admin/AdminLayout';
 import { appBasePath, withBasePath } from '@/lib/basePath';
 
-const SearchPage = lazy(() => import('@/components/Search/SearchPage'));
-const ChatPage = lazy(() => import('@/components/Chat/ChatPage'));
-const AuditLogPage = lazy(() => import('@/components/AuditLog/AuditLogPage'));
-const DataBrowserPage = lazy(() => import('@/components/DataBrowser/DataBrowserPage'));
-const AdminUsersPage = lazy(() => import('@/components/Admin/AdminUsersPage'));
-const AdminSettingsPage = lazy(() => import('@/components/Admin/AdminSettingsPage'));
-const AdminColorsPage = lazy(() => import('@/components/Admin/AdminColorsPage'));
-const AdminRuntimePage = lazy(() => import('@/components/Admin/AdminRuntimePage'));
-const AdminDebugPage = lazy(() => import('@/components/Admin/AdminDebugPage'));
-const AdminPolicyAnalyzerPage = lazy(() => import('@/components/Admin/AdminPolicyAnalyzerPage'));
-const CliLoginPage = lazy(() =>
-	import('@/components/Account/CliLoginPage').then((module) => ({ default: module.CliLoginPage })),
+const WorkspaceLayout = lazyRoute(async () => {
+	const module = await import('@/components/Workspace/WorkspaceLayout');
+	return { default: module.WorkspaceLayout };
+});
+
+const PreviewsPage = lazyRoute(async () => {
+	const module = await import('@/components/Previews/PreviewsPage');
+	return { default: module.PreviewsPage };
+});
+const PreviewPage = lazyRoute(async () => {
+	const module = await import('@/components/Previews/PreviewPage');
+	return { default: module.PreviewPage };
+});
+const WorkspaceHome = lazyRoute(async () => {
+	const module = await import('@/components/Workspace/WorkspaceHome');
+	return { default: module.WorkspaceHome };
+});
+const ProjectAlertsPage = lazyRoute(async () => {
+	const module = await import('@/components/Workspace/ProjectAlertsPage');
+	return { default: module.ProjectAlertsPage };
+});
+const ProjectJobsPage = lazyRoute(async () => {
+	const module = await import('@/components/Workspace/ProjectJobsPage');
+	return { default: module.ProjectJobsPage };
+});
+const ProjectSettingsPage = lazyRoute(async () => {
+	const module = await import('@/components/Workspace/ProjectSettingsPage');
+	return { default: module.ProjectSettingsPage };
+});
+const ProjectList = lazyRoute(async () => {
+	const module = await import('@/components/ProjectList/ProjectList');
+	return { default: module.ProjectList };
+});
+const AppsPage = lazyRoute(async () => {
+	const module = await import('@/components/Apps/AppsPage');
+	return { default: module.AppsPage };
+});
+const Project = lazyRoute(async () => {
+	const module = await import('@/components/Project/Project');
+	return { default: module.Project };
+});
+const SnapshotPage = lazyRoute(async () => {
+	const module = await import('@/components/NotebookPage/SnapshotPage');
+	return { default: module.SnapshotPage };
+});
+const JobsPage = lazyRoute(async () => {
+	const module = await import('@/components/Jobs/JobsPage');
+	return { default: module.JobsPage };
+});
+const AdminLayout = lazyRoute(async () => {
+	const module = await import('@/components/Admin/AdminLayout');
+	return { default: module.AdminLayout };
+});
+const SearchPage = lazyRoute(() => import('@/components/Search/SearchPage'));
+const ChatPage = lazyRoute(() => import('@/components/Chat/ChatPage'));
+const AuditLogPage = lazyRoute(() => import('@/components/AuditLog/AuditLogPage'));
+const DataBrowserPage = lazyRoute(() => import('@/components/DataBrowser/DataBrowserPage'));
+const AdminUsersPage = lazyRoute(() => import('@/components/Admin/AdminUsersPage'));
+const AdminSettingsPage = lazyRoute(() => import('@/components/Admin/AdminSettingsPage'));
+const AdminColorsPage = lazyRoute(() => import('@/components/Admin/AdminColorsPage'));
+const AdminRuntimePage = lazyRoute(() => import('@/components/Admin/AdminRuntimePage'));
+const AdminDebugPage = lazyRoute(() => import('@/components/Admin/AdminDebugPage'));
+const AdminPolicyAnalyzerPage = lazyRoute(
+	() => import('@/components/Admin/AdminPolicyAnalyzerPage'),
 );
-const CliDeviceLoginPage = lazy(() =>
-	import('@/components/Account/CliDeviceLoginPage').then((module) => ({
-		default: module.CliDeviceLoginPage,
-	})),
-);
-const OAuthConsentPage = lazy(() =>
-	import('@/components/Account/OAuthConsentPage').then((module) => ({
-		default: module.OAuthConsentPage,
-	})),
-);
+const CliLoginPage = lazyRoute(async () => {
+	const module = await import('@/components/Account/CliLoginPage');
+	return { default: module.CliLoginPage };
+});
+const CliDeviceLoginPage = lazyRoute(async () => {
+	const module = await import('@/components/Account/CliDeviceLoginPage');
+	return { default: module.CliDeviceLoginPage };
+});
+const OAuthConsentPage = lazyRoute(async () => {
+	const module = await import('@/components/Account/OAuthConsentPage');
+	return { default: module.OAuthConsentPage };
+});
 
 function AppErrorBoundary({ children }: { children: React.ReactNode }) {
 	return (

@@ -3,8 +3,11 @@ import { CalendarClock, GitBranch, Image, Pencil } from 'lucide-react';
 import { useHref, useNavigate } from 'react-router-dom';
 import { RouterProvider } from 'react-aria-components';
 import { GitSourceDetails } from '@/components/Notebook/GitSourcePopover';
-import { Button, DialogModal, DropdownMenu, Tooltip } from '@/components/ui';
-import type { DropdownMenuOption } from '@/components/ui';
+import { Button } from '@/components/ui/Button';
+import { DialogModal } from '@/components/ui/Dialog';
+import { DropdownMenu } from '@/components/ui/DropdownMenu';
+import { Tooltip } from '@/components/ui/Tooltip';
+import type { DropdownMenuOption } from '@/components/ui/DropdownMenu';
 import { useDisclosure } from '@/hooks/useDisclosure';
 
 // `useHref` applies the router basename to rendered anchors, so modifier-click,

@@ -202,8 +202,16 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 			'terminating_at',
 			'takeover_capture_completed_at',
 		];
-		// Grants and configured links are resolved per request, never stored on the session.
-		const responseOnlyFields = ['app_assignment', 'app_pool', 'can', 'links', 'resource_path'];
+		// These fields are resolved per request, never stored on the session.
+		const responseOnlyFields = [
+			'app_assignment',
+			'app_pool',
+			'can',
+			'links',
+			'resource_path',
+			'head_version_id',
+			'edit_active',
+		];
 		const coreKeys = shapeKeys(CoreSessionSchema);
 		const apiKeys = shapeKeys(SessionResponseSchema);
 		expect(coreKeys.filter((k) => !internalSessionFields.includes(k))).toEqual(

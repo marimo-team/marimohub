@@ -1,6 +1,6 @@
 import { Lock, LockOpen, Users } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { Tooltip } from '@/components/ui';
+import { Tooltip } from '@/components/ui/Tooltip';
 import { defaultAccessSummary, roleLabel } from '@/lib/roles';
 import type { Capabilities, ProjectDetail, User } from '@/types';
 

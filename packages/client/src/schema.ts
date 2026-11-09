@@ -4014,6 +4014,18 @@ export interface components {
 			 */
 			commit: string;
 		};
+		NotebookApp: {
+			project_id: string;
+			project_name: string;
+			notebook_id: string;
+			title: string;
+			url: string;
+			/** @enum {string|null} */
+			your_role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user' | null;
+			can: {
+				run: boolean;
+			};
+		};
 		DeepLink: {
 			/** @enum {number} */
 			schema_version: 1;
@@ -4237,6 +4249,10 @@ export interface components {
 			/** @enum {string} */
 			mode: 'edit' | 'app';
 			source_version_id?: string;
+			/** @description Current notebook head, included in ordinary app heartbeats. */
+			head_version_id?: string | null;
+			/** @description A persistent editor claim is active, included in ordinary app heartbeats. */
+			edit_active?: boolean;
 			can: {
 				attach: boolean;
 				stop: boolean;
@@ -4266,18 +4282,6 @@ export interface components {
 			error?: {
 				code: string;
 				message: string;
-			};
-		};
-		NotebookApp: {
-			project_id: string;
-			project_name: string;
-			notebook_id: string;
-			title: string;
-			url: string;
-			/** @enum {string|null} */
-			your_role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user' | null;
-			can: {
-				run: boolean;
 			};
 		};
 		NotebookAppPage: {
@@ -13566,7 +13570,27 @@ export interface operations {
 					'application/json': {
 						/** @enum {boolean} */
 						success: true;
-						data: components['schemas']['DeepLink'];
+						data: {
+							/** @enum {number} */
+							schema_version: 1;
+							/** Format: ulid */
+							registration_id: string;
+							slug: string;
+							target: {
+								/** @enum {string} */
+								kind: 'app';
+								project_id: string;
+								notebook_id: string;
+							};
+							access: {
+								/** @enum {string} */
+								mode: 'inherit';
+							};
+							created_by: string;
+							/** Format: date-time */
+							created_at: string;
+							app: components['schemas']['NotebookApp'];
+						};
 					};
 				};
 			};

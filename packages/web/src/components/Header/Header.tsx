@@ -1,3 +1,4 @@
+import { lazyDialog } from '@/components/ui/lazyDialog';
 import { HelpMenu } from './HelpMenu';
 import { shellLinkTarget, useShellLinks } from '@/components/Shell/useShellLinks';
 import type { ReactNode } from 'react';
@@ -19,13 +20,24 @@ import {
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
-import { Brand, UserAvatar } from '@/components/ui';
+import { Brand } from '@/components/ui/Brand';
+import { UserAvatar } from '@/components/ui/UserAvatar';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { useCapabilitiesQuery } from '@/api/hooks';
-import { McpDialog } from '@/components/Account/McpDialog';
-import { ApiTokensDialog } from '@/components/Account/ApiTokensDialog';
-import { OrgIntegrationsDialog } from '@/components/Project/ProjectIntegrationsDialog';
+
+const McpDialog = lazyDialog(async () => {
+	const module = await import('@/components/Account/McpDialog');
+	return { default: module.McpDialog };
+});
+const ApiTokensDialog = lazyDialog(async () => {
+	const module = await import('@/components/Account/ApiTokensDialog');
+	return { default: module.ApiTokensDialog };
+});
+const OrgIntegrationsDialog = lazyDialog(async () => {
+	const module = await import('@/components/Project/ProjectIntegrationsDialog');
+	return { default: module.OrgIntegrationsDialog };
+});
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
 	cn(

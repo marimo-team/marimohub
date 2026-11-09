@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { screen } from '@testing-library/react';
-import { Route, Routes, useLocation } from 'react-router-dom';
-import { stubApi } from '@/test/apiStub';
-import { renderWithClient } from '@/test/render';
+import { fireEvent, screen } from '@testing-library/react';
+import { Link, Route, Routes, useLocation } from 'react-router-dom';
+import { makeUser, stubApi } from '@/test/apiStub';
+import { createTestQueryClient, jsonError, renderWithClient } from '@/test/render';
 import type { ProjectRole } from '@/types';
+import { userKeys } from '@/api/queryKeys';
+import { lastProjectKey } from './lastProject';
 import { ProjectSourceGate } from './ProjectSourceGate';
 
 function Destination() {
@@ -31,7 +33,11 @@ function setup(route: string, role: ProjectRole) {
 	);
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
+	localStorage.clear();
+});
 
 describe('ProjectSourceGate', () => {
 	it.each(['/projects/p/data', '/projects/p/notebooks/n/jobs'])(
@@ -52,3 +58,71 @@ describe('ProjectSourceGate', () => {
 		expect(await screen.findByText(page)).toBeVisible();
 	});
 });
+
+it.each([
+	{ remembered: 'missing', blocked: false },
+	{ remembered: 'newer', blocked: false },
+	{ remembered: 'missing', blocked: true },
+])(
+	'clears only the failed remembered project ($remembered, blocked=$blocked)',
+	async ({ remembered, blocked }) => {
+		const client = createTestQueryClient();
+		client.setQueryData(userKeys.me(), makeUser());
+		localStorage.setItem(lastProjectKey('u'), remembered);
+		localStorage.setItem(lastProjectKey('other'), 'missing');
+		if (blocked)
+			vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+				throw new Error('Blocked');
+			});
+		stubApi({ '/api/v1/apps': jsonError('NOT_FOUND', 'Project not found', 404) });
+		renderWithClient(
+			<Routes>
+				<Route path="/projects/:pid" element={<ProjectSourceGate />}>
+					<Route index element={<p>Project source</p>} />
+				</Route>
+				<Route path="*" element={<Destination />} />
+			</Routes>,
+			{ route: '/projects/missing', toaster: false, client },
+		);
+		expect(await screen.findByRole('status', { name: 'Destination' })).toHaveTextContent(
+			/^\/projects$/,
+		);
+		expect(localStorage.getItem(lastProjectKey('u'))).toBe(
+			!blocked && remembered === 'missing' ? null : remembered,
+		);
+		expect(localStorage.getItem(lastProjectKey('other'))).toBe('missing');
+		expect(screen.queryByText('Project source')).not.toBeInTheDocument();
+	},
+);
+
+it.each([false, true])(
+	'rechecks access after returning to a formerly missing project (StrictMode=%s)',
+	async (reactStrictMode) => {
+		let missing = true;
+		const { requests } = stubApi({
+			'/api/v1/apps': () =>
+				missing
+					? jsonError('NOT_FOUND', 'Not found', 404)
+					: {
+							items: [],
+							next_cursor: null,
+							project: { id: 'p', name: 'Project', your_role: 'editor' },
+						},
+		});
+		renderWithClient(
+			<Routes>
+				<Route path="/projects/:pid" element={<ProjectSourceGate />}>
+					<Route index element={<p>Project source</p>} />
+				</Route>
+				<Route path="/projects" element={<Link to="/projects/p">Open project</Link>} />
+			</Routes>,
+			{ route: '/projects/p', toaster: false, reactStrictMode },
+		);
+		const reopen = await screen.findByRole('link', { name: 'Open project' });
+		expect(requests).toHaveLength(1);
+		missing = false;
+		fireEvent.click(reopen);
+		expect(await screen.findByText('Project source')).toBeVisible();
+		expect(requests).toHaveLength(2);
+	},
+);

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient, apiData } from './client';
+import { appKeys } from './queryKeys';
 
 export const deepLinkKeys = {
 	resolve: (slug: string) => ['deep-links', 'resolve', slug] as const,
@@ -7,10 +8,20 @@ export const deepLinkKeys = {
 };
 
 export function useDeepLinkQuery(slug: string) {
+	const client = useQueryClient();
 	return useQuery({
 		queryKey: deepLinkKeys.resolve(slug),
-		queryFn: ({ signal }) =>
-			apiData(apiClient.GET('/api/v1/deep-links/{slug}', { params: { path: { slug } }, signal })),
+		queryFn: async ({ signal }) => {
+			const link = await apiData(
+				apiClient.GET('/api/v1/deep-links/{slug}', { params: { path: { slug } }, signal }),
+			);
+			if (link.app && !signal.aborted)
+				client.setQueryData(
+					appKeys.detail(link.target.project_id, link.target.notebook_id),
+					link.app,
+				);
+			return link;
+		},
 		staleTime: 0,
 		gcTime: 0,
 	});

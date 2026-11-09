@@ -5,7 +5,7 @@ import { Dialog, Heading, Modal, ModalOverlay } from 'react-aria-components';
 import { Menu, X } from 'lucide-react';
 import { Header } from '@/components/Header/Header';
 import { AnnouncementBanner } from '@/components/Shell/AnnouncementBanner';
-import { IconButton } from '@/components/ui';
+import { IconButton } from '@/components/ui/IconButton';
 import { useAuth } from '@/context/AuthContext';
 import { useIsMobile } from '@/hooks/useMediaQuery';
 import { useQuery } from '@tanstack/react-query';

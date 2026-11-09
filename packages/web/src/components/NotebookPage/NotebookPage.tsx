@@ -3,19 +3,22 @@ import { HelpMenu } from '@/components/Header/HelpMenu';
 import { AnnouncementBanner } from '@/components/Shell/AnnouncementBanner';
 import { hasNotebookPreviews } from '@/api/previews';
 import { PageTitle } from '@/components/ui/PageTitle';
-import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
-import { useMemo, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { NOTEBOOK_IFRAME_SANDBOX } from '@marimo-hub/notebook-bridge/host';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { AlertTriangle, AppWindow, ArrowLeft, Bot, Code2, Eye, FileCode2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Button, Chip, ConfirmDialog, ApplicationTabs, IconLink, UserLabel } from '@/components/ui';
-import type { ApplicationTabItem } from '@/components/ui';
+import { Button } from '@/components/ui/Button';
+import { Chip } from '@/components/ui/Chip';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { ApplicationTabs } from '@/components/ui/ApplicationTabs';
+import { IconLink } from '@/components/ui/IconLink';
+import { UserLabel } from '@/components/ui/UserLabel';
+import type { ApplicationTabItem } from '@/components/ui/ApplicationTabs';
 import {
 	useCapabilitiesQuery,
 	useNotebookQuery,
 	useProjectQuery,
-	useProjectSessionsQuery,
 	useEditorSessionQuery,
 	useTakeoverEditorSession,
 	useUserQuery,
@@ -26,7 +29,6 @@ import { useNotebookSession } from '@/hooks/useNotebookSession';
 import type { SessionEnded } from '@/hooks/useNotebookSession';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
-import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
 import {
 	effectiveComputeProfile,
 	hasSeparateAppProfiles,
@@ -35,7 +37,7 @@ import {
 } from '@/components/Notebook/computeProfiles';
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
 import { ChangeRequestActions } from '@/components/NotebookPage/ChangeRequestActions';
-import { sessionConnectionHint, isSessionStale, sessionsByNotebook } from '@/lib/sessions';
+import { sessionConnectionHint, isSessionStale } from '@/lib/sessions';
 import { useTheme } from '@/context/ThemeContext';
 import { useNotebookFrameLocation } from '@/hooks/useNotebookFrameLocation';
 import { canManageProject, canUseApps } from '@/lib/roles';
@@ -45,6 +47,18 @@ import { SessionControl } from './SessionControl';
 import type { SecondarySurfaceFrame } from './OpenMenu';
 import { ShareMenu } from './ShareMenu';
 import { NotebookFrame } from './NotebookFrame';
+
+const RenameNotebookDialog = lazy(() =>
+	import('@/components/Notebook/RenameNotebookDialog').then((module) => ({
+		default: module.RenameNotebookDialog,
+	})),
+);
+
+const ThumbnailDialog = lazy(() =>
+	import('@/components/Notebook/ThumbnailDialog').then((module) => ({
+		default: module.ThumbnailDialog,
+	})),
+);
 
 const SURFACE_TAB_ICONS = {
 	vscode: Code2,
@@ -201,14 +215,8 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		isApp,
 	);
 
-	// Notebook metadata loads independently so it never blocks the
-	// kernel from starting. The author id is resolved to a name via the directory.
-	// It also carries the head version for the staleness banners, which must track
-	// versions committed server-side (snapshotter, teardown, git push) — hence the
-	// poll; a cached-once head would never fire (or mis-fire) a banner. Edit pages
-	// poll only git-synced sources — the one head that can move mid-edit.
 	const { data: notebook } = useNotebookQuery(pid!, nid!, {
-		refetchIntervalMs: isApp ? 30_000 : (n) => (n?.source.type === 'git' ? 30_000 : undefined),
+		refetchIntervalMs: isApp ? undefined : (n) => (n?.source.type === 'git' ? 30_000 : undefined),
 	});
 	const author = notebook?.meta.author;
 	// Prefer the canonical title once detail loads, so a rename reflects immediately.
@@ -223,24 +231,13 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		? (users?.[endedByUserId]?.name ?? users?.[endedByUserId]?.email ?? endedByUserId)
 		: undefined;
 
-	// App pages watch the project's sessions to know whether the
-	// notebook is being edited: the periodic snapshotter commits a version every
-	// ~2 minutes mid-edit, so the staleness banner is suppressed until editing
-	// stops — otherwise it would flap (with a disconnect-everyone CTA) the whole
-	// time someone types.
-	// Stops once the app has ended — the banner it feeds is gone with the iframe.
-	const { data: projectSessions } = useProjectSessionsQuery(pid!, isApp && !ended);
-	const sessionByNotebook = useMemo(() => sessionsByNotebook(projectSessions), [projectSessions]);
-	const editActive = isApp && !!sessionByNotebook.get(nid!)?.persistentEdit;
+	const editActive = isApp && session?.edit_active !== false;
 	// Suppressed while a LOCAL notebook is being edited — the snapshotter keeps
 	// moving its head. A synced head moves only when a push lands, so an open
 	// editor is no reason to hide the banner there.
 	const suppressForLocalEdit = editActive && notebook?.source.type !== 'git';
 	const appStale =
-		isApp &&
-		!!session &&
-		!suppressForLocalEdit &&
-		isSessionStale(session, notebook?.source.current_version_id);
+		isApp && !!session && !suppressForLocalEdit && isSessionStale(session, session.head_version_id);
 	// No `editActive` suppression here: a synced head moves only when a push
 	// lands, never from typing in the editor.
 	const editStale =
@@ -679,12 +676,16 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 				</div>
 			</header>
 			<AnnouncementBanner />
-			<ThumbnailDialog
-				projectId={pid!}
-				notebookId={nid!}
-				isOpen={thumbnailModal.isOpen}
-				onClose={thumbnailModal.close}
-			/>
+			{thumbnailModal.isOpen && (
+				<Suspense fallback={null}>
+					<ThumbnailDialog
+						projectId={pid!}
+						notebookId={nid!}
+						isOpen={thumbnailModal.isOpen}
+						onClose={thumbnailModal.close}
+					/>
+				</Suspense>
+			)}
 
 			{staticView && (
 				<StaticNotebookView
@@ -930,13 +931,15 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 				</div>
 			)}
 
-			{!isApp && (
-				<RenameNotebookDialog
-					isOpen={renameModal.isOpen}
-					onClose={renameModal.close}
-					projectId={pid!}
-					notebook={{ id: nid!, title }}
-				/>
+			{!isApp && renameModal.isOpen && (
+				<Suspense fallback={null}>
+					<RenameNotebookDialog
+						isOpen={renameModal.isOpen}
+						onClose={renameModal.close}
+						projectId={pid!}
+						notebook={{ id: nid!, title }}
+					/>
+				</Suspense>
 			)}
 
 			{!isApp && (

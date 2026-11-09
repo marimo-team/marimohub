@@ -6,7 +6,8 @@ import {
 	useNotebookChangeRequestPublisher,
 } from '@/api/changeRequests';
 import type { PublishChangeRequestAction } from '@/api/changeRequests';
-import { Button, DropdownMenu } from '@/components/ui';
+import { Button } from '@/components/ui/Button';
+import { DropdownMenu } from '@/components/ui/DropdownMenu';
 import { changeRequestTerms } from '@/lib/git';
 
 function openChangeRequestUrl(url: string): void {

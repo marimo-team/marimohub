@@ -9,7 +9,8 @@ import type {
 	QuerySnapshot,
 } from '@marimo-hub/notebook-bridge/protocol';
 import { ExternalLink, X } from 'lucide-react';
-import { Button, IconButton, LinkButton } from '@/components/ui';
+import { Button, LinkButton } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 import { useTimeout } from '@/hooks/useTimeout';
 import { notebookHomeSearch, trustedSandboxKeys } from '@/lib/notebookUrls';
 

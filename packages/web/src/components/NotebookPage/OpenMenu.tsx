@@ -3,8 +3,8 @@ import { notebookAppUrl } from '@/lib/notebookUrls';
 import { Bot, Camera, Code2, ExternalLink, PanelsTopLeft, Play, Square } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { useSurfaceActions } from '@/api/surfaces';
-import { DropdownMenu } from '@/components/ui';
-import type { DropdownMenuOption } from '@/components/ui';
+import { DropdownMenu } from '@/components/ui/DropdownMenu';
+import type { DropdownMenuOption } from '@/components/ui/DropdownMenu';
 import { SURFACE_LABELS } from '@/lib/surfaces';
 import type { Capabilities, NotebookDetail, SecondarySurfaceId, Session } from '@/types';
 

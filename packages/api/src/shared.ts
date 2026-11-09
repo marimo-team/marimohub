@@ -1454,6 +1454,15 @@ export const SessionResponseSchema = z
 		 * restart to update".
 		 */
 		source_version_id: z.string().optional(),
+		head_version_id: z
+			.string()
+			.nullable()
+			.optional()
+			.describe('Current notebook head, included in ordinary app heartbeats.'),
+		edit_active: z
+			.boolean()
+			.optional()
+			.describe('A persistent editor claim is active, included in ordinary app heartbeats.'),
 		/**
 		 * The caller's grants on this session, evaluated server-side (the same
 		 * `sessionCan` the gates enforce): `attach` — may reach the kernel (open,

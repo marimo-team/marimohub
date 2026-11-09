@@ -554,7 +554,9 @@ describe('ProjectList', () => {
 
 		await user.click(screen.getByRole('button', { name: 'New Project' }));
 
-		expect(screen.getByRole('heading', { name: 'Create New Project' })).toBeInTheDocument();
+		expect(
+			await screen.findByRole('heading', { name: 'Create New Project' }, { timeout: 5_000 }),
+		).toBeInTheDocument();
 		expect(screen.getByLabelText('Project Name')).toBeInTheDocument();
 	});
 });

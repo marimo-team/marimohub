@@ -16,12 +16,12 @@ import {
 import { NotebookPage } from '@/components/NotebookPage/NotebookPage';
 import { NotebookFrame } from '@/components/NotebookPage/NotebookFrame';
 import { ShareUrlMenu } from '@/components/NotebookPage/ShareMenu';
-import { Button } from '@/components/ui';
+import { Button } from '@/components/ui/Button';
 import { Callout } from '@/components/ui/Callout';
 import { useTheme } from '@/context/ThemeContext';
 import { useNotebookSession } from '@/hooks/useNotebookSession';
 import { useNotebookFrameLocation } from '@/hooks/useNotebookFrameLocation';
-import { AppAccessError } from './AppsPage';
+import { AppAccessError } from './AppAccessError';
 
 export function AppEntryPage({
 	variant = 'app',

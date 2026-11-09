@@ -1,6 +1,8 @@
 export const appKeys = {
 	all: ['apps'] as const,
 	lists: () => [...appKeys.all, 'list'] as const,
+	projectAccess: (projectId: string) =>
+		[...appKeys.lists(), 'project-access', { projectId }] as const,
 	list: (projectId?: string, search = '') => [...appKeys.lists(), projectId, search] as const,
 	details: (projectId: string) => [...appKeys.all, 'detail', projectId] as const,
 	detail: (projectId: string, notebookId: string) =>

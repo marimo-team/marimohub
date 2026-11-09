@@ -48,6 +48,7 @@ function setup({
 				<Route path="jobs" element={<ProjectJobsPage />} />
 			</Route>
 			<Route path="/apps" element={<h1>Apps</h1>} />
+			<Route path="/projects" element={<p>Projects destination</p>} />
 		</Routes>,
 		{ route: '/projects/p/jobs', errorBoundary: true },
 	);
@@ -100,7 +101,7 @@ describe('Project jobs navigation', () => {
 
 	it('does not load notebooks when project access is denied', async () => {
 		const { requests } = setup({ denied: true });
-		await waitFor(() => expect(screen.getByText('Request failed')).toBeVisible());
+		await waitFor(() => expect(screen.getByText('Projects destination')).toBeVisible());
 		expect(requests.some((url) => url.includes('/notebooks'))).toBe(false);
 	});
 });

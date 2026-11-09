@@ -2661,11 +2661,23 @@ app.openapi(heartbeatSession, async (c) => {
 	}
 
 	const updated = await sessions.heartbeat(pid, sid);
-	const response = toSessionResponse(
-		updated,
-		await sessionGrantsFor(project, user, updated, deps, labels),
-		deps.theme?.session_links,
-	);
+	const grants = await sessionGrantsFor(project, user, updated, deps, labels);
+	const response: ReturnType<typeof toSessionResponse> &
+		Pick<z.infer<typeof SessionResponseSchema>, 'head_version_id' | 'edit_active'> =
+		toSessionResponse(updated, grants, deps.theme?.session_links);
+	if (
+		sessionMode(updated) === 'app' &&
+		!grants.appReadOnly &&
+		!updated.origin &&
+		(updated.status === 'running' || updated.status === 'starting')
+	) {
+		const [source, claim] = await Promise.all([
+			deps.services.notebooks.getNotebookSource(pid, nid),
+			sessions.getEditorClaim(pid, nid),
+		]);
+		response.head_version_id = source.current_version_id ?? null;
+		response.edit_active = !!claim?.session_id;
+	}
 	const terminalApp =
 		sessionMode(updated) === 'app' && updated.status !== 'running' && updated.status !== 'starting';
 	return c.json(

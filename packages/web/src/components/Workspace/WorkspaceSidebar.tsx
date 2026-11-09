@@ -11,13 +11,13 @@ import {
 	Search,
 	Shield,
 } from 'lucide-react';
-import { projectQueryOptions, useProjectsQuery } from '@/api/hooks';
+import { projectQueryOptions, useProjectRoster } from '@/api/hooks';
 import { useSearchAccess } from '@/hooks/useSearchAccess';
 import { ProjectPicker } from './ProjectPicker';
 import { ProjectSharingIndicator } from './ProjectSharingIndicator';
 import { ProjectSettingsNavigation } from './ProjectSettingsNavigation';
 import { SidebarLink } from './SidebarLink';
-import { Button } from '@/components/ui';
+import { Button } from '@/components/ui/Button';
 import { canEditProject, canReadProjectSource } from '@/lib/roles';
 import { workspaceRoute } from './navigation';
 
@@ -25,7 +25,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void }) {
 	const { user, allowed: enabled, available: searchAvailable, capabilities } = useSearchAccess();
 	const location = useLocation();
 	const { pid, section } = workspaceRoute(location.pathname);
-	const projects = useProjectsQuery({ status: 'active' }, { enabled, throwOnError: false });
+	const projects = useProjectRoster({ enabled, throwOnError: false });
 	const selectedProject = useQuery({
 		...projectQueryOptions(pid ?? ''),
 		enabled: enabled && Boolean(pid),
