@@ -947,6 +947,15 @@ describe('NotebookService', () => {
 			expect(metrics.increment).toHaveBeenCalledWith('background.failed', 1, {
 				label: 'notebook.version_prune',
 			});
+			expect(log).toHaveBeenCalled();
+			for (const [line] of log.mock.calls) {
+				expect(JSON.parse(line)).toMatchObject({
+					event: 'background_work_failed',
+					operation: 'notebook.version_prune',
+					project_id: projectId,
+					notebook_id: created.id,
+				});
+			}
 			expect(await service.getNotebookContent(projectId, created.id)).toBe(`v${MAX_VERSIONS - 1}`);
 			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(MAX_VERSIONS + 1);
 		} finally {

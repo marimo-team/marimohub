@@ -117,6 +117,7 @@ describe('deferOrAwait', () => {
 						throw new Error('secret');
 					},
 					metrics,
+					{ project_id: 'p1', notebook_id: 'n1', operation: 'overridden', label: 'overridden' },
 				),
 			).resolves.toBeUndefined();
 			for (const task of queue) await expect(task()).resolves.toBeUndefined();
@@ -124,7 +125,13 @@ describe('deferOrAwait', () => {
 				label: 'test.failure',
 			});
 			expect(log).toHaveBeenCalledOnce();
-			expect(log.mock.calls[0][0]).toContain('test.failure');
+			expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
+				event: 'background_work_failed',
+				operation: 'test.failure',
+				label: 'test.failure',
+				project_id: 'p1',
+				notebook_id: 'n1',
+			});
 			expect(log.mock.calls[0][0]).not.toContain('secret');
 		},
 	);

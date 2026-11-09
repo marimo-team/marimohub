@@ -65,7 +65,7 @@ export async function bestEffort(
 }
 
 export function appendAudit(
-	deps: Pick<ApiDeps, 'backgroundTasks'>,
+	deps: Pick<ApiDeps, 'backgroundTasks' | 'backgroundWork'>,
 	request: { requestId?: string; method: string; path: string; userId: string },
 	event: string,
 	action: () => Promise<void>,
@@ -77,15 +77,16 @@ export function appendAudit(
 		user: request.userId,
 		audit_event: event,
 	};
-	const task = bestEffort('audit_append', fields, action);
-	const scheduler = deps.backgroundTasks;
-	if (!scheduler) return task;
+	let task: Promise<void> | undefined;
+	// A scheduler can accept work and then throw; fallback must not duplicate the write.
+	const run = () => (task ??= bestEffort('audit_append', fields, action));
+	if (!deps.backgroundWork && !deps.backgroundTasks) return run();
 	return bestEffort('audit_schedule', fields, async () => {
 		try {
-			scheduler.defer(task);
+			if (deps.backgroundWork) await deps.backgroundWork.defer('audit_append', run);
+			else deps.backgroundTasks!.defer(Promise.resolve().then(run));
 		} catch (error) {
-			// The write already started; retain it in the request if the host cannot.
-			await task;
+			await run();
 			throw error;
 		}
 	});

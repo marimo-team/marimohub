@@ -448,7 +448,7 @@ business logic and depend only on interfaces:
 
 Inject `BackgroundWork` through `CreateServicesOptions` for best-effort side effects.
 Tasks must use their existing owner, tolerate repeats, and produce nothing a later request step reads.
-`deferOrAwait` awaits work without a scheduler. It logs failures and increments `background.failed{label}`.
+`deferOrAwait` awaits work without a scheduler. It logs failures and increments `background.failed` with a `label` tag.
 Node drains core and API tasks before disposing compute clients.
 Workers use `waitUntil` for short tasks and keep teardown inline with `teardownInline: true`.
 

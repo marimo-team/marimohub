@@ -1448,6 +1448,7 @@ export class NotebookService {
 				}
 			},
 			this.metrics,
+			{ project_id: projectId, notebook_id: notebookId },
 		);
 	}
 

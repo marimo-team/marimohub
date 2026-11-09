@@ -23,9 +23,14 @@ export async function deferOrAwait(
 	label: string,
 	task: () => Promise<unknown>,
 	metrics: Metrics = noopMetrics,
+	failureContext: Record<string, unknown> = {},
 ): Promise<void> {
 	const failed = (error: unknown) => {
-		logOperationalError('background_work_failed', { operation: label, label }, error);
+		logOperationalError(
+			'background_work_failed',
+			{ ...failureContext, operation: label, label },
+			error,
+		);
 		try {
 			metrics.increment('background.failed', 1, { label });
 		} catch {

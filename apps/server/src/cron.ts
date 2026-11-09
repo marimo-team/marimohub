@@ -118,7 +118,7 @@ export function startMaintenance(
 			automaticThumbnails: deps.sandbox.automaticThumbnails,
 			thumbnailDeadline: deps.sandbox.thumbnailDeadline,
 			backgroundWork: deps.backgroundWork,
-			metrics,
+			metrics: deps.metrics ?? metrics,
 		},
 	);
 	const jobs = deps.jobs ? createJobScheduler(deps, metrics, deps.jobs) : undefined;

@@ -480,7 +480,10 @@ export function createMcpServer(
 					project.id,
 					sessionId,
 				);
-				await sessionRetirer(deps).retire(session, { teardown: transitioned });
+				await sessionRetirer(deps).retire(session, {
+					teardown: transitioned,
+					thumbnail: 'skip',
+				});
 				const stopped = await deps.services.sessions.getSession(project.id, sessionId);
 				return result({
 					project_id: project.id,

@@ -173,6 +173,107 @@ describe('bestEffort', () => {
 });
 
 describe('appendAudit', () => {
+	it('hands an unstarted audit to the lazy scheduler', async () => {
+		const tasks: (() => Promise<unknown>)[] = [];
+		const action = vi.fn(async () => {});
+		const legacy = vi.fn();
+		await appendAudit(
+			{
+				backgroundWork: {
+					defer: (_label, task) => {
+						tasks.push(task);
+					},
+				},
+				backgroundTasks: { defer: legacy },
+			},
+			{ method: 'POST', path: '/test', userId: 'test' },
+			'test',
+			action,
+		);
+		expect(action).not.toHaveBeenCalled();
+		expect(legacy).not.toHaveBeenCalled();
+		expect(tasks).toHaveLength(1);
+		await tasks[0]();
+		expect(action).toHaveBeenCalledOnce();
+	});
+
+	it('registers legacy work before starting the audit', async () => {
+		const action = vi.fn(async () => {});
+		const tasks: Promise<unknown>[] = [];
+		await appendAudit(
+			{
+				backgroundTasks: {
+					defer: (task) => {
+						expect(action).not.toHaveBeenCalled();
+						tasks.push(task);
+					},
+				},
+			},
+			{ method: 'POST', path: '/test', userId: 'test' },
+			'test',
+			action,
+		);
+		await Promise.all(tasks);
+		expect(action).toHaveBeenCalledOnce();
+	});
+
+	it.each(['reject', 'queue-then-reject', 'start-then-reject'] as const)(
+		'awaits fallback exactly once when the lazy scheduler does %s',
+		async (mode) => {
+			vi.spyOn(console, 'log').mockImplementation(() => {});
+			const gate = Promise.withResolvers<void>();
+			const entered = Promise.withResolvers<void>();
+			const action = vi.fn(() => {
+				entered.resolve();
+				return gate.promise;
+			});
+			const queued: (() => Promise<unknown>)[] = [];
+			let settled = false;
+			const pending = appendAudit(
+				{
+					backgroundWork: {
+						defer: async (_label, task) => {
+							if (mode === 'queue-then-reject') queued.push(task);
+							if (mode === 'start-then-reject') void task();
+							throw new Error('scheduler closed');
+						},
+					},
+				},
+				{ method: 'POST', path: '/test', userId: 'test' },
+				'test',
+				action,
+			).then(() => {
+				settled = true;
+			});
+			await entered.promise;
+			expect(settled).toBe(false);
+			gate.resolve();
+			await pending;
+			for (const task of queued) await task();
+			expect(action).toHaveBeenCalledOnce();
+			expect(console.log).toHaveBeenCalledWith(expect.stringContaining('audit_schedule'));
+		},
+	);
+
+	it('awaits and contains audit failure without a scheduler', async () => {
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+		const gate = Promise.withResolvers<void>();
+		let settled = false;
+		const pending = appendAudit(
+			{},
+			{ method: 'POST', path: '/test', userId: 'test' },
+			'test',
+			() => gate.promise,
+		).then(() => {
+			settled = true;
+		});
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		gate.reject(new Error('storage unavailable'));
+		await expect(pending).resolves.toBeUndefined();
+		expect(console.log).toHaveBeenCalledWith(expect.stringContaining('audit_append'));
+	});
+
 	it('awaits the existing audit if its scheduler rejects, without writing twice', async () => {
 		vi.spyOn(console, 'log').mockImplementation(() => {});
 		const gate = Promise.withResolvers<void>();

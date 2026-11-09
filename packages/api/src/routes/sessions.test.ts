@@ -3615,6 +3615,53 @@ describe('Session routes', () => {
 		},
 	);
 
+	it.each([
+		{ teardownInline: false, wait: false },
+		{ teardownInline: true, wait: false },
+		{ teardownInline: true, wait: true },
+	])(
+		'isolates committed stop failures except explicit wait: %j',
+		async ({ teardownInline, wait }) => {
+			const metrics = { increment: vi.fn(), gauge: vi.fn() };
+			const defer = vi.fn();
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: makeFakeCompute(),
+				deps: { metrics, teardownInline, ...(teardownInline ? { backgroundWork: { defer } } : {}) },
+			});
+			const started = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			defer.mockClear();
+			const release = vi
+				.spyOn(api.deps.services.sessions, 'releaseEditorFor')
+				.mockRejectedValueOnce(new Error('storage unavailable'));
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			try {
+				const response = await api.request(
+					'DELETE',
+					sessionsPath(`/${started.session_id}${wait ? '?wait=true' : ''}`),
+				);
+				if (wait) expect(response.status).toBe(500);
+				else {
+					await expectOk(response);
+					expect(metrics.increment).toHaveBeenCalledWith('background.failed', 1, {
+						label: 'session.stop',
+					});
+				}
+				expect(release).toHaveBeenCalledOnce();
+				expect(defer).not.toHaveBeenCalled();
+				const session = await api.deps.services.sessions.getSession(pid, started.session_id);
+				expect(session.status).toBe('terminated');
+				expect((await api.deps.services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(
+					started.session_id,
+				);
+			} finally {
+				release.mockRestore();
+				log.mockRestore();
+			}
+		},
+	);
+
 	it('runs teardown once when two deferred stops race', async () => {
 		const tasks: (() => Promise<unknown>)[] = [];
 		const { instance } = makeFakeSandbox();

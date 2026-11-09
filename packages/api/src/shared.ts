@@ -575,8 +575,7 @@ export async function deferTeardown(
 	task: () => Promise<unknown>,
 ): Promise<void> {
 	const work = deps.teardownInline ? undefined : backgroundWorkFor(deps);
-	if (work) await deferOrAwait(work, label, task, deps.metrics);
-	else await task();
+	await deferOrAwait(work, label, task, deps.metrics);
 }
 
 /** The retire seam (save + destroy + terminal mark + claim release) over this request's deps. */
