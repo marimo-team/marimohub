@@ -382,16 +382,24 @@ describe('thumbnails', () => {
 	it.each(['notebook', 'project'] as const)(
 		'retries %s GC after the subtree was purged before the catalog update',
 		async (scope) => {
-			const { pid, nid } = await notebook();
+			const { pid, nid, thumbnails } = await notebook();
+			await thumbnails.setCustom(pid, nid, thumbnailPng());
+			const prefix =
+				scope === 'project' ? `projects/${pid}/` : `${paths.project(pid).notebook(nid).base}/`;
 			if (scope === 'project') {
 				await env.projects.deleteProject(pid, ACTOR);
-				await env.projects.hardDeleteProject(pid);
-				expect(await env.projects.sweepDeletedProjects(0)).toBe(0);
+				vi.spyOn(env.catalog, 'mutateSnapshot').mockRejectedValueOnce(
+					new Error('Catalog unavailable'),
+				);
+				await expect(env.projects.hardDeleteProject(pid)).rejects.toThrow('Catalog unavailable');
+				expect((await env.catalog.getCurrentSnapshot()).projects.map((p) => p.id)).toContain(pid);
+				expect(await env.projects.sweepDeletedProjects(0)).toBe(1);
 			} else {
 				await env.notebooks.deleteNotebook(pid, nid, ACTOR);
 				await env.notebooks.hardDeleteNotebook(pid, nid);
 				expect((await env.notebooks.sweepDeletedNotebooks(0)).purged).toBe(1);
 			}
+			expect(await listAllKeys(env.bucket, prefix)).toEqual([]);
 		},
 	);
 	it('removes an attempt marker whose first write completes after hard deletion', async () => {

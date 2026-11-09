@@ -1635,16 +1635,43 @@ describe('ProjectService', () => {
 			expect(await projects.sweepDeletedProjects(0)).toBe(0);
 		});
 
-		it('preserves catalog entries when a metadata read fails', async () => {
-			const project = await projects.createProject({ name: 'Live', description: '' }, ACTOR);
-			const get = bucket.get.bind(bucket);
-			vi.spyOn(bucket, 'get').mockImplementation((key, options) => {
-				if (key === paths.project(project.id).meta) throw new Error('storage unavailable');
-				return get(key, options);
-			});
-			await expect(projects.sweepDeletedProjects(0)).rejects.toThrow('storage unavailable');
-			expect((await catalog.getCurrentSnapshot()).projects.map((p) => p.id)).toEqual([project.id]);
-		});
+		it.each(['read', 'json', 'schema'] as const)(
+			'preserves a project with a metadata %s failure and purges other stale projects',
+			async (failure) => {
+				const project = await projects.createProject(
+					{ name: 'Unreadable', description: '' },
+					ACTOR,
+				);
+				const doomed = await projects.createProject({ name: 'Doomed', description: '' }, ACTOR);
+				await projects.deleteProject(doomed.id, ACTOR);
+				const retainedKey = `projects/${project.id}/retained.txt`;
+				await bucket.put(retainedKey, 'retained content');
+				const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+				if (failure === 'read') {
+					const get = bucket.get.bind(bucket);
+					vi.spyOn(bucket, 'get').mockImplementation((key, options) => {
+						if (key === paths.project(project.id).meta) throw new Error('storage unavailable');
+						return get(key, options);
+					});
+				} else {
+					await bucket.put(paths.project(project.id).meta, failure === 'json' ? '{invalid' : '{}');
+				}
+
+				expect(await projects.sweepDeletedProjects(0)).toBe(1);
+				expect((await catalog.getCurrentSnapshot()).projects.map((p) => p.id)).toEqual([
+					project.id,
+				]);
+				expect(await bucket.get(retainedKey)).not.toBeNull();
+				expect(await listAllKeys(bucket, `projects/${doomed.id}/`)).toEqual([]);
+				expect(log).toHaveBeenCalledOnce();
+				expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({
+					event: 'projects.cleanup_failed',
+					operation: 'readMetadata',
+					project_id: project.id,
+					level: 'error',
+				});
+			},
+		);
 
 		it('purges only soft-deleted projects past the grace period', async () => {
 			// Project to be deleted, with a notebook and an extra version.

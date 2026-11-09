@@ -985,11 +985,20 @@ export class ProjectService {
 			snapshot.projects,
 			BUCKET_SCAN_CONCURRENCY,
 			async (entry) => {
-				const project = await this.findProject(entry.id);
-				return !project ||
-					(project.status === 'deleted' && now - Date.parse(project.updated_at) >= retentionMs)
-					? entry
-					: null;
+				try {
+					const project = await this.findProject(entry.id);
+					return !project ||
+						(project.status === 'deleted' && now - Date.parse(project.updated_at) >= retentionMs)
+						? entry
+						: null;
+				} catch (error) {
+					logOperationalError(
+						'projects.cleanup_failed',
+						{ operation: 'readMetadata', project_id: entry.id },
+						error,
+					);
+					return null;
+				}
 			},
 		);
 		const stale = candidates.filter((entry) => entry !== null);
