@@ -244,13 +244,16 @@ EXCLUDED_LOGGERS = ("opentelemetry", "urllib3", "requests")
 
 
 class Handler(logging.Handler):
-    def __init__(self, level, processor):
+    def __init__(self, level, processor, logger_names=()):
         super().__init__(level)
         self.processor = processor
+        self.logger_filters = [logging.Filter(name) for name in logger_names]
         self.seen = weakref.WeakSet()
 
     def filter(self, record):
         name = record.name
+        if self.logger_filters and not any(f.filter(record) for f in self.logger_filters):
+            return False
         return not any(name == prefix or name.startswith(prefix + ".") for prefix in EXCLUDED_LOGGERS) and super().filter(record)
 
     def emit(self, record):
@@ -328,7 +331,7 @@ def _install(install_hooks=True):
     try:
         for destination in destinations:
             processor = Processor(destination)
-            prepared.append((processor, Handler(getattr(logging, destination["level"]), processor)))
+            prepared.append((processor, Handler(getattr(logging, destination["level"]), processor, destination.get("loggerNames", []))))
         for processor, _ in prepared:
             processor.worker.start()
     except Exception:

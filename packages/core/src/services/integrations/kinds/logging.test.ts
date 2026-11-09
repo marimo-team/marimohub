@@ -26,6 +26,19 @@ describe('logging integrations', () => {
 		auth: { method: 'headers', headers },
 	});
 
+	it.each([
+		{ logger_names: undefined, expected: undefined },
+		{ logger_names: [], expected: [] },
+		{
+			logger_names: [{ name: 'my_app' }, { name: 'another.worker' }],
+			expected: ['my_app', 'another.worker'],
+		},
+	])('renders logger namespaces: $logger_names', ({ logger_names, expected }) => {
+		const config = parse({ url: 'https://example.test/v1/logs', logger_names });
+		const destination = otlpLogs.render({ ...context, config }).logging![0];
+		expect(destination.loggerNames).toEqual(expected);
+	});
+
 	describe.each(methods)('auth.method %s connectivity', (method) => {
 		const config = parse(OTLP_LOGS_AUTH_SAMPLES[method]);
 		const destination = otlpLogs.render({ ...context, config }).logging![0];
@@ -139,6 +152,15 @@ describe('logging integrations', () => {
 		{ url: 'https:///example.test/v1/logs' },
 		{ url: 'https://example.test:0/v1/logs' },
 		{ level: 'TRACE' },
+		{ logger_names: 'my_app' },
+		{ logger_names: ['my_app'] },
+		{ logger_names: [{ name: '' }] },
+		{ logger_names: [{ name: 123 }] },
+		{ logger_names: [{}] },
+		{ logger_names: [null] },
+		{ logger_names: [{ name: 'my_app' }, { name: '' }] },
+		{ logger_names: [{ name: 'my_app', typo: true }] },
+		{ logger_names: null },
 		{ auth: null },
 		{ auth: { method: 'oauth2' } },
 		{ auth: { method: 'none', token: 'stray' } },
@@ -167,6 +189,40 @@ describe('logging integrations', () => {
 			otlpLogs.configSchema.safeParse({ url: 'https://example.test/v1/logs', ...overrides })
 				.success,
 		).toBe(false);
+	});
+
+	it('preserves the saved selection after an invalid update and allows clearing it', async () => {
+		const project = new ProjectIntegrationsStore({
+			bucket: new MemoryBucket(),
+			registry: defaultRegistry(),
+			codec: new AesGcmSecretCodec({ kek: 'sFjp5R6eWYvc9SGtfeYEsQQlMKB8MfP4FdFAD7JAjsw=' }),
+		});
+		const config = {
+			url: 'https://example.test/v1/logs',
+			logger_names: [{ name: 'my_app' }],
+		};
+		const entry = await project.create(
+			projectId,
+			{ kind: 'otlp_logs', name: 'logs', config },
+			actor,
+		);
+		await expect(
+			project.update(
+				projectId,
+				entry.id,
+				{
+					config: { ...config, logger_names: [{ name: '' }] },
+				},
+				actor,
+			),
+		).rejects.toThrow(/logger_names/);
+		expect((await project.resolveForSession(projectId, context))?.logging?.[0].loggerNames).toEqual(
+			['my_app'],
+		);
+		await project.update(projectId, entry.id, { config: { ...config, logger_names: [] } }, actor);
+		expect((await project.resolveForSession(projectId, context))?.logging?.[0].loggerNames).toEqual(
+			[],
+		);
 	});
 
 	it.each(['private\r\ninjected: value', 'private\0value', 'private\tvalue', 'privateé'])(

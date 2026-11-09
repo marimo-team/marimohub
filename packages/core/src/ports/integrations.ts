@@ -344,6 +344,7 @@ export interface LoggingDestination {
 	headers: Record<string, string>;
 	level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
 	serviceName: string;
+	loggerNames?: string[];
 	attributes: Record<string, string>;
 }
 

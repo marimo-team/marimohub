@@ -5503,6 +5503,20 @@ components:
             - WARNING
             - ERROR
             - CRITICAL
+        logger_names:
+          description: Export only these logger namespaces. Leave empty to export all
+            eligible loggers.
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                minLength: 1
+                description: Logger name, including its dotted descendants
+            required:
+              - name
+            additionalProperties: false
         service_name:
           default: marimohub-notebook
           description: OpenTelemetry `service.name` resource attribute
@@ -5618,6 +5632,20 @@ components:
             - WARNING
             - ERROR
             - CRITICAL
+        logger_names:
+          description: Export only these logger namespaces. Leave empty to export all
+            eligible loggers.
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                minLength: 1
+                description: Logger name, including its dotted descendants
+            required:
+              - name
+            additionalProperties: false
         service_name:
           default: marimohub-notebook
           description: OpenTelemetry `service.name` resource attribute
