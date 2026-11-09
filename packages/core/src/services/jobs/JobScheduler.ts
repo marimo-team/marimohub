@@ -308,19 +308,6 @@ export class JobScheduler {
 		return result;
 	}
 
-	private dueOccurrence(
-		job: Pick<JobDefinition, 'enabled' | 'schedule'>,
-		now: number,
-	): number | null {
-		if (!job.enabled || !job.schedule) return null;
-		return previousOccurrence(
-			parseCron(job.schedule.cron),
-			job.schedule.timezone,
-			now,
-			this.deps.config.catchupWindowMs,
-		);
-	}
-
 	private async fire(
 		projectId: ProjectId,
 		notebookId: JobRun['notebook_id'],
@@ -334,10 +321,15 @@ export class JobScheduler {
 			if (await this.deps.jobs.isDeleting(jobRef)) return 'none';
 			// An old index entry can precede a newly enabled or rescheduled job head.
 			const job = await this.loadJob(projectId, notebookId, jobId, cache);
-			if (!job) return 'none';
+			if (!job?.enabled || !job.schedule) return 'none';
 			let occurrence;
 			try {
-				occurrence = this.dueOccurrence(job, now);
+				occurrence = previousOccurrence(
+					parseCron(job.schedule.cron),
+					job.schedule.timezone,
+					now,
+					this.deps.config.catchupWindowMs,
+				);
 			} catch (err) {
 				if (!(err instanceof ValidationError)) throw err;
 				logOperationalError(

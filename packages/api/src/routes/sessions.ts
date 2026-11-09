@@ -5,6 +5,7 @@ import type { SessionLinkTemplate } from '@marimo-hub/core/session-links';
 import { createRoute, z } from '@hono/zod-openapi';
 import { all, allSettled } from 'better-all';
 import type {
+	KnownObject,
 	Millis,
 	ProvisionResult,
 	SecondarySurfaceId,
@@ -838,7 +839,7 @@ async function retireSelectedSession(
 	deps: ApiDeps,
 	selected: Session,
 	options: { wait: boolean; thumbnail: 'skip' | 'bounded' } = { wait: true, thumbnail: 'skip' },
-	known?: { value: Session; etag: string },
+	known?: KnownObject<Session>,
 ): Promise<void> {
 	const { sessions } = deps.services;
 	const { project_id: pid, notebook_id: nid, session_id: sid } = selected;
@@ -1796,7 +1797,7 @@ async function startNotebookSessionOnce(
 	const kernelAuthToken = sandbox.auth === 'on' ? createKernelAuthToken() : undefined;
 
 	let session: Session | undefined;
-	let createdSession: { value: Session; etag: string } | undefined;
+	let createdSession: KnownObject<Session> | undefined;
 	let sessionRecordAttempted = false;
 	let sandboxMayExist = false;
 	const recordSandboxCleanup = async () => {

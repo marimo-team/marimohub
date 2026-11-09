@@ -155,15 +155,11 @@ export async function observeJobRun({
 	action: 'project.read' | 'notebook.write';
 }) {
 	let authorized = target;
+	let authorizationDeps = deps;
 	const authorize = async (checkSignal: AbortSignal) => {
+		authorizationDeps = withRequestMemo(deps);
 		const current = await withAbortSignal(
-			authorizeJobNotebook(
-				withRequestMemo(deps),
-				target.user,
-				job.project_id,
-				job.notebook_id,
-				action,
-			),
+			authorizeJobNotebook(authorizationDeps, target.user, job.project_id, job.notebook_id, action),
 			checkSignal,
 		);
 		await withAbortSignal(
@@ -200,7 +196,7 @@ export async function observeJobRun({
 		run.output?.logs_bytes !== undefined &&
 		(
 			await withAbortSignal(
-				authorizationService(deps).authorize(authorized.user, 'notebook.write', {
+				authorizationService(authorizationDeps).authorize(authorized.user, 'notebook.write', {
 					kind: 'project',
 					project: authorized.project,
 					notebookLabels: authorized.notebook.security_labels ?? null,

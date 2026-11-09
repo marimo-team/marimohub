@@ -225,6 +225,11 @@ export interface KnownObject<T> {
 	etag: string;
 }
 
+export interface ObjectMutationOptions<T> extends CasRetryOptions {
+	notFound?: () => Error;
+	known?: KnownObject<T>;
+}
+
 export interface ObjectMutationOutcome<T> {
 	value: T;
 	written: boolean;
@@ -240,7 +245,7 @@ export async function mutateObjectWithOutcome<T>(
 	key: string,
 	parse: (raw: unknown) => T,
 	apply: (current: T) => T | null,
-	options: CasRetryOptions & { notFound?: () => Error; known?: KnownObject<T> } = {},
+	options: ObjectMutationOptions<T> = {},
 ): Promise<ObjectMutationOutcome<T>> {
 	let known = options.known;
 	return withCasRetry(
@@ -272,7 +277,7 @@ export async function mutateObject<T>(
 	key: string,
 	parse: (raw: unknown) => T,
 	apply: (current: T) => T | null,
-	options: CasRetryOptions & { notFound?: () => Error; known?: KnownObject<T> } = {},
+	options: ObjectMutationOptions<T> = {},
 ): Promise<T> {
 	return (await mutateObjectWithOutcome(bucket, key, parse, apply, options)).value;
 }

@@ -25,6 +25,7 @@ import {
 } from '../testing/mcp';
 import { createApi } from '../createApi';
 import { DEFAULT_JOBS_CONFIG } from '../context';
+import { withRequestMemo } from '../requestMemo';
 
 const TOOL_NAMES = ['list_jobs', 'create_job', 'schedule_job', 'run_job', 'get_job_run'];
 const publicBaseUrl = 'https://hub.example.com/hub';
@@ -669,6 +670,46 @@ describe('MCP job edge cases', () => {
 });
 
 describe('MCP waiting', () => {
+	it.each(['SECRET', 'UNCLASSIFIED'])(
+		'uses refreshed %s entitlements for log links after waiting',
+		async (classification) => {
+			const run = await enqueue();
+			const security = localResourceSecurity(['UNCLASSIFIED', 'SECRET'], makeSubjectContext());
+			const evaluate = security.constraints.evaluate.bind(security.constraints);
+			vi.spyOn(security.constraints, 'evaluate').mockImplementation(
+				async (context, action, resource, signal) =>
+					action === 'notebook.write' && context?.classification !== 'SECRET'
+						? { satisfied: false, reason: 'constraint' }
+						: evaluate(context, action, resource, signal),
+			);
+			deps.resourceSecurity = security;
+			await deps.services.notebooks.setSecurityLabels(
+				pid,
+				nid,
+				{ classification: 'UNCLASSIFIED', compartments: [] },
+				USER.id,
+			);
+			client = await connectMcpClient(withRequestMemo(deps), USER, requestContext);
+			const resolve = vi.spyOn(security.subjectContext!, 'resolve');
+			vi.useFakeTimers();
+			const pending = call('get_job_run', { run_id: run.run_id, wait: true });
+			await vi.advanceTimersByTimeAsync(1);
+			const initialReads = resolve.mock.calls.length;
+			expect(initialReads).toBeGreaterThan(0);
+			resolve.mockResolvedValue(makeSubjectContext({ classification }));
+			await finish(run);
+			await vi.advanceTimersByTimeAsync(2000);
+			const response = await pending;
+			expect(response.isError).not.toBe(true);
+			expect(response.structuredContent).toMatchObject({ completed: true });
+			expect(response.structuredContent?.links).toHaveProperty('html');
+			if (classification === 'SECRET')
+				expect(response.structuredContent?.links).toHaveProperty('logs');
+			else expect(response.structuredContent?.links).not.toHaveProperty('logs');
+			expect(resolve).toHaveBeenCalledTimes(initialReads + 1);
+		},
+	);
+
 	it('expires the wait without cancelling, then resumes observation', async () => {
 		const run = await enqueue();
 		vi.useFakeTimers();

@@ -626,7 +626,6 @@ export class SessionService {
 		id: SessionId,
 		known?: KnownObject<Session>,
 	): Promise<Session> {
-		let skippedKnown = false;
 		const result = await this.mutate(
 			projectId,
 			id,
@@ -637,15 +636,14 @@ export class SessionService {
 					isPastAuthorizationDeadline(session, now) ||
 					now - Date.parse(session.last_heartbeat) < HEARTBEAT_PERSIST_INTERVAL_MS
 				) {
-					skippedKnown = session === known?.value;
 					return null;
 				}
 				return { ...session, last_heartbeat: new Date(now).toISOString() };
 			},
 			known,
 		);
-		// A coalesced heartbeat has no CAS to detect termination or deletion since the caller's read.
-		return skippedKnown ? this.getSession(projectId, id) : result;
+		// A no-op returns the known object itself, without a CAS to detect termination or deletion.
+		return result === known?.value ? this.getSession(projectId, id) : result;
 	}
 
 	/**

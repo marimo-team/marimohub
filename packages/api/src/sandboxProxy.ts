@@ -1,4 +1,4 @@
-import { unscopedDeps, withRequestMemo } from './requestMemo';
+import { deploymentState, withRequestMemo } from './requestMemo';
 /**
  * HTTP and WebSocket proxies share admission checks. Each request keeps its own
  * path and query. The Node relay closes sockets at the returned authorization deadline.
@@ -69,17 +69,17 @@ class AdmissionRejectedError extends Error {
 }
 
 function admissionCache(deps: ApiDeps): AdmissionCache {
-	let cache = ADMISSION_CACHES.get(unscopedDeps(deps));
-	if (!cache) {
-		cache = new LazyMap(
-			async () => {
-				throw new Error('An admission load function is required.');
-			},
-			{ maxSize: 10_000 },
-		);
-		ADMISSION_CACHES.set(unscopedDeps(deps), cache);
-	}
-	return cache;
+	return deploymentState(
+		deps,
+		ADMISSION_CACHES,
+		() =>
+			new LazyMap(
+				async () => {
+					throw new Error('An admission load function is required.');
+				},
+				{ maxSize: 10_000 },
+			),
+	);
 }
 
 function getFreshAdmission(

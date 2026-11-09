@@ -381,6 +381,7 @@ The API's `requestMemoMiddleware` creates a memo for each request, available thr
 `c.get('readMemo')` and `c.get('deps').readMemo`. Authorization guards share subject
 context through this memo and enforce its `expiresAt`. Explicit MCP refreshes
 use `withRequestMemo(deps)` to start a new scope.
+Deployment-wide caches and rate limits use `deploymentState` to retain their original lifetime across request scopes.
 
 The scheduler uses separate memos for firing and admission. Checks after writes
 use fresh scopes. CAS retry loops never read through a memo.

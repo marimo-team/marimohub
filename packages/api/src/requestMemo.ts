@@ -5,8 +5,22 @@ import type { ApiDeps, HonoEnv } from './context';
 const owners = new WeakMap<ApiDeps, ApiDeps>();
 
 /** Shared budgets and caches retain the dependency bundle's original lifetime. */
-export function unscopedDeps(deps: ApiDeps): ApiDeps {
+function unscopedDeps(deps: ApiDeps): ApiDeps {
 	return owners.get(deps) ?? deps;
+}
+
+export function deploymentState<T extends object>(
+	deps: ApiDeps,
+	states: WeakMap<ApiDeps, T>,
+	create: () => T,
+): T {
+	const owner = unscopedDeps(deps);
+	let state = states.get(owner);
+	if (!state) {
+		state = create();
+		states.set(owner, state);
+	}
+	return state;
 }
 
 export function withRequestMemo(deps: ApiDeps): ApiDeps & { readMemo: PromiseMemo } {

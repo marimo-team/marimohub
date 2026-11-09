@@ -2,7 +2,7 @@ import { consumeIntegrationBudget } from './integrations/browse';
 import { Hono } from 'hono';
 import { describe, expect, it, vi } from 'vitest';
 import type { HonoEnv } from './context';
-import { requestMemoMiddleware, unscopedDeps, withRequestMemo } from './requestMemo';
+import { requestMemoMiddleware, withRequestMemo } from './requestMemo';
 import { makeTestDeps } from './testing';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 
@@ -45,7 +45,6 @@ describe('request memo middleware', () => {
 		const deps = makeTestDeps(new MemoryBucket());
 		for (let i = 0; i < 5; i++) {
 			const scoped = withRequestMemo(withRequestMemo(deps));
-			expect(unscopedDeps(scoped)).toBe(deps);
 			expect(consumeIntegrationBudget(scoped, 'objectSearch', 'user')).toBe(true);
 		}
 		expect(consumeIntegrationBudget(withRequestMemo(deps), 'objectSearch', 'user')).toBe(false);
