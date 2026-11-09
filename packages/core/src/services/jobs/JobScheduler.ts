@@ -195,11 +195,6 @@ export class JobScheduler {
 			4,
 			async ({ projectId, notebookId, entry }) => {
 				try {
-					// Recent or undated entries need a job.json read because the index can lag.
-					const recent =
-						entry.updated_at === undefined ||
-						Date.parse(entry.updated_at) >= now - this.deps.config.catchupWindowMs;
-					if (!recent && this.dueOccurrence(entry, now) === null) return;
 					const jobKey = `${projectId}:${entry.id}`;
 					const fired = await this.fire(
 						projectId,
@@ -337,6 +332,7 @@ export class JobScheduler {
 		const jobRef = { project_id: projectId, notebook_id: notebookId, id: jobId };
 		return this.deps.runs.withJobMutation(jobRef, async () => {
 			if (await this.deps.jobs.isDeleting(jobRef)) return 'none';
+			// An old index entry can precede a newly enabled or rescheduled job head.
 			const job = await this.loadJob(projectId, notebookId, jobId, cache);
 			if (!job) return 'none';
 			let occurrence;

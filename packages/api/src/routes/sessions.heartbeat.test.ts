@@ -317,7 +317,7 @@ describe('heartbeat dependency failures', () => {
 
 describe('fresh heartbeat races', () => {
 	it.each(['terminate', 'delete'] as const)(
-		'does not overwrite a concurrent %s on a fresh heartbeat; the next poll observes it',
+		'observes a concurrent %s on a fresh heartbeat',
 		async (race) => {
 			const f = await fixture();
 			const entered = Promise.withResolvers<void>();
@@ -341,10 +341,9 @@ describe('fresh heartbeat races', () => {
 			} finally {
 				release.resolve();
 			}
-			expect((await expectOk(await pending)).status).toBe('running');
-			if (race === 'delete') await expectError(await f.heartbeat(), 404, 'NOT_FOUND');
+			if (race === 'delete') await expectError(await pending, 404, 'NOT_FOUND');
 			else {
-				const response = await expectOk(await f.heartbeat());
+				const response = await expectOk(await pending);
 				expect(response.status).toBe('terminated');
 				expect(response.sandbox_url).toBeUndefined();
 				expect(response.can.attach).toBe(false);

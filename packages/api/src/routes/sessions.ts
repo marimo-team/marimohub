@@ -2612,7 +2612,12 @@ app.openapi(deleteSession, async (c) => {
 	await assertSessionControl(project, existing, user, deps, labels);
 
 	const wait = c.req.valid('query').wait === 'true';
-	await retireSelectedSession(deps, existing, { wait, thumbnail: wait ? 'skip' : 'bounded' }, known);
+	await retireSelectedSession(
+		deps,
+		existing,
+		{ wait, thumbnail: wait ? 'skip' : 'bounded' },
+		known,
+	);
 
 	return c.json({ success: true }, 200);
 });

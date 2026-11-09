@@ -54,13 +54,14 @@ Project authorization and the initial session read overlap. Project failures tak
 The session promise handles rejection immediately, including after a project denial.
 Notebook and preview checks precede attach authorization.
 Session renewal reuses the initial session and ETag. A write conflict rereads the session before retry.
-A fresh heartbeat returns the initial snapshot without another read or write.
-A concurrent stop or deletion can therefore appear on the next poll. Response grants use the returned session.
+A coalesced heartbeat rereads the session to detect a concurrent stop or deletion without writing.
+Response grants use the returned session.
 
-An unlabeled API heartbeat uses four metadata reads: project, notebook, pool, and session.
+A fresh unlabeled API heartbeat uses five metadata reads: project, notebook, pool, and two session reads.
+Writable regular apps also read the source and editor claim to return `head_version_id` and `edit_active`.
 It does not HEAD the catalog. Warm project and notebook reads use HEAD and reuse cached records when their ETags match.
-`appPerformance.test.ts` asserts this budget.
-A due heartbeat adds two conditional writes without conflicts. Identity I/O and policy calls are additional.
+`appPerformance.test.ts` asserts this seven-read budget.
+A due heartbeat saves one session read and uses two conditional writes without conflicts. Identity I/O and policy calls are additional.
 Denied projects incur one extra speculative session GET and no renewal writes.
 
 ### Measurements

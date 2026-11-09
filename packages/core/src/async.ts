@@ -152,7 +152,7 @@ interface MemoNode {
 	entry?: MemoEntry;
 }
 
-/** One request or operation owns a memo. Keys compare by identity, not serialization. */
+/** One request or operation owns a memo. Key elements use Map equality (SameValueZero). */
 export class PromiseMemo {
 	private root: MemoNode = { children: new Map() };
 	private mutations = 0;

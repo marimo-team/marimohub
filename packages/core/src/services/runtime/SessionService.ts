@@ -621,23 +621,31 @@ export class SessionService {
 		}));
 	}
 
-	/** A no-op returns the supplied snapshot without revalidation. Renewal writes require its ETag. */
 	async heartbeat(
 		projectId: ProjectId,
 		id: SessionId,
 		known?: KnownObject<Session>,
 	): Promise<Session> {
-		return this.mutate(
+		let skippedKnown = false;
+		const result = await this.mutate(
 			projectId,
 			id,
 			(session) => {
 				const now = Date.now();
-				if (session.status !== 'running' || isPastAuthorizationDeadline(session, now)) return null;
-				if (now - Date.parse(session.last_heartbeat) < HEARTBEAT_PERSIST_INTERVAL_MS) return null;
+				if (
+					session.status !== 'running' ||
+					isPastAuthorizationDeadline(session, now) ||
+					now - Date.parse(session.last_heartbeat) < HEARTBEAT_PERSIST_INTERVAL_MS
+				) {
+					skippedKnown = session === known?.value;
+					return null;
+				}
 				return { ...session, last_heartbeat: new Date(now).toISOString() };
 			},
 			known,
 		);
+		// A coalesced heartbeat has no CAS to detect termination or deletion since the caller's read.
+		return skippedKnown ? this.getSession(projectId, id) : result;
 	}
 
 	/**

@@ -14518,6 +14518,13 @@ paths:
           required: true
           name: nid
           in: path
+        - schema:
+            type: string
+            description: Current thumbnail revision for private caching
+          required: false
+          description: Current thumbnail revision for private caching
+          name: r
+          in: query
       responses:
         '200':
           description: PNG thumbnail

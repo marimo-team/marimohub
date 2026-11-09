@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMcpSession, mcpPrincipal as principal } from '../testing/mcp';
 import { localResourceSecurity, makeSubjectContext } from '@marimo-hub/core/testing';
 import { withMcpSessionActivity } from './sessionActivity';
+import { withRequestMemo } from '../requestMemo';
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -132,7 +133,7 @@ describe('MCP session activity', () => {
 		);
 		const expiresAt = new Date(Date.now() + 100).toISOString();
 		const pending = withMcpSessionActivity(
-			deps,
+			withRequestMemo(deps),
 			principal,
 			project,
 			session,

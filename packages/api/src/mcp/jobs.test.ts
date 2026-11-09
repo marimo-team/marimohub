@@ -7,7 +7,7 @@ import type {
 	NotebookId,
 	ProjectId,
 } from '@marimo-hub/core';
-import { localResourceSecurity } from '@marimo-hub/core/testing';
+import { localResourceSecurity, makeSubjectContext } from '@marimo-hub/core/testing';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { externalTokenGrant } from '@marimo-hub/core/token-grants';
 import {
@@ -744,6 +744,39 @@ describe('MCP waiting', () => {
 		await vi.advanceTimersByTimeAsync(4000);
 		expect(read).toHaveBeenCalledTimes(2);
 	});
+
+	it.each([1, 3, 10])(
+		'refreshes subject context before a %s-second wait returns data',
+		async (waitSeconds) => {
+			const run = await enqueue();
+			const security = localResourceSecurity(['UNCLASSIFIED', 'SECRET'], makeSubjectContext());
+			deps.resourceSecurity = security;
+			await deps.services.notebooks.setSecurityLabels(
+				pid,
+				nid,
+				{ classification: 'SECRET', compartments: [] },
+				USER.id,
+			);
+			client = await connectMcpClient(deps, VIEWER, requestContext);
+			const resolve = vi.spyOn(security.subjectContext!, 'resolve');
+			vi.useFakeTimers();
+			const pending = call('get_job_run', {
+				run_id: run.run_id,
+				wait: true,
+				wait_seconds: waitSeconds,
+			});
+			// Populate a polling scope before changing the provider, except when expiry precedes polling.
+			await vi.advanceTimersByTimeAsync(waitSeconds === 1 ? 1 : 2001);
+			expect(resolve).toHaveBeenCalled();
+			resolve.mockResolvedValue(makeSubjectContext({ classification: 'UNCLASSIFIED' }));
+			if (waitSeconds === 10) await finish(run);
+			await vi.advanceTimersByTimeAsync(2000);
+			const response = await pending;
+			expect(response).toMatchObject({ isError: true, structuredContent: { code: 'NOT_FOUND' } });
+			expect(response.structuredContent).not.toHaveProperty('run');
+			expect(response.structuredContent).not.toHaveProperty('links');
+		},
+	);
 
 	it.each(['membership', 'notebook-labels', 'notebook-deletion'])(
 		'stops returning run data after %s changes during a wait',

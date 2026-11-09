@@ -4543,6 +4543,15 @@
 					"required": true,
 					"value_type": "string",
 					"repeatable": false
+				},
+				{
+					"name": "r",
+					"cli_name": "r",
+					"in": "query",
+					"required": false,
+					"description": "Current thumbnail revision for private caching",
+					"value_type": "string",
+					"repeatable": false
 				}
 			],
 			"destructive": false,

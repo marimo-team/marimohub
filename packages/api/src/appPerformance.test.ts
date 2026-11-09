@@ -121,7 +121,7 @@ describe('app operation budgets', () => {
 		expect(f.bucket.operations.some((op) => op.method === 'list')).toBe(false);
 		expect(
 			f.bucket.operations.filter((op) => op.method === 'get' && op.key === f.sessionKey),
-		).toHaveLength(1);
+		).toHaveLength(2);
 		expect(f.bucket.operations).not.toContainEqual({ method: 'head', key: paths.catalog });
 		const renew = vi.spyOn(f.client.deps.services.sessions, 'heartbeat');
 		f.bucket.operations = [];
@@ -134,7 +134,7 @@ describe('app operation budgets', () => {
 			putAttempts: 0,
 			deletes: 0,
 		});
-		expect(heartbeatReads).toBe(6);
+		expect(heartbeatReads).toBe(7);
 	});
 
 	it('reads changed notebook constraints on the next proxy request', async () => {

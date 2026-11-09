@@ -13457,7 +13457,10 @@ export interface operations {
 	};
 	'notebooks.thumbnail.image': {
 		parameters: {
-			query?: never;
+			query?: {
+				/** @description Current thumbnail revision for private caching */
+				r?: string;
+			};
 			header?: never;
 			path: {
 				pid: string;

@@ -126,7 +126,12 @@ app.openapi(
 		operationId: 'notebooks.thumbnail.image',
 		tags: ['Notebooks'],
 		summary: 'Read the selected thumbnail',
-		request: { params: NotebookIdParam },
+		request: {
+			params: NotebookIdParam,
+			query: z.object({
+				r: z.string().optional().describe('Current thumbnail revision for private caching'),
+			}),
+		},
 		responses: {
 			200: {
 				description: 'PNG thumbnail',
@@ -145,7 +150,7 @@ app.openapi(
 		const etag = etagFor(image.etag);
 		c.header(
 			'Cache-Control',
-			c.req.query('r') === revision ? 'private, max-age=86400' : 'private, no-cache',
+			c.req.valid('query').r === revision ? 'private, max-age=86400' : 'private, no-cache',
 		);
 		c.header('ETag', etag);
 		c.header('X-Content-Type-Options', 'nosniff');

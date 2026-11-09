@@ -528,19 +528,32 @@ describe('notebook metadata authorization', () => {
 			if (state === 'deleted') detail.meta.status = 'deleted';
 			if (state === 'preview')
 				detail.meta.preview = { notebook_id: notebook.id, preview_id: createPreviewId() };
-			const full = vi.spyOn(services.notebooks, 'getNotebook').mockResolvedValue(detail);
-			const meta = vi.spyOn(services.notebooks, 'getNotebookMeta').mockResolvedValue(detail.meta);
+			const nb = paths.project(project.id).notebook(notebook.id);
+			if (state === 'preview') {
+				await bucket.delete(nb.meta);
+				await bucket.put(nb.previewMeta, JSON.stringify(detail.meta));
+			} else {
+				await bucket.put(nb.meta, JSON.stringify(detail.meta));
+			}
+			const full = vi.spyOn(services.notebooks, 'getNotebook');
+			const meta = vi.spyOn(services.notebooks, 'getNotebookMeta');
 			const get = vi.spyOn(bucket, 'get');
+			const head = vi.spyOn(bucket, 'head');
 			const deps = { services, policy: {} };
 			const user = { id: ACTOR, email: 'actor@example.com' };
 			for (const gate of [loadAuthorizedNotebook, loadAuthorizedNotebookMeta]) {
+				get.mockClear();
+				head.mockClear();
 				const result = gate(deps, project, notebook.id, user, 'notebook.write');
 				if (state === 'allowed') await expect(result).resolves.toBeDefined();
 				else await expect(result).rejects.toBeInstanceOf(NotFoundError);
 			}
 			expect(full).toHaveBeenCalledTimes(1);
 			expect(meta).toHaveBeenCalledWith(project.id, notebook.id, { consistency: 'validated' });
-			expect(get).not.toHaveBeenCalled();
+			const keys = [...get.mock.calls, ...head.mock.calls].map(([key]) => key);
+			expect(keys).toContain(nb.meta);
+			expect(keys).not.toContain(nb.source);
+			expect(keys).not.toContain(nb.readme);
 		},
 	);
 });

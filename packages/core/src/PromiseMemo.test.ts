@@ -33,6 +33,22 @@ describe('PromiseMemo', () => {
 		}
 	});
 
+	it('uses Map value equality for primitive key elements', async () => {
+		const memo = new PromiseMemo();
+		const load = vi.fn(() => 42);
+		for (const [first, second] of [
+			[Number.NaN, Number.NaN],
+			[0, -0],
+			['key', 'key'],
+		]) {
+			const initial = memo.read([first], load);
+			expect(memo.read([second], load)).toBe(initial);
+			await initial;
+		}
+		expect(load).toHaveBeenCalledTimes(3);
+		await expect(memo.read(['0'], () => 99)).resolves.toBe(99);
+	});
+
 	it.each([undefined, null, false, 0, ''])('retains the fulfilled value %s', async (value) => {
 		const memo = new PromiseMemo();
 		const load = vi.fn(() => value);

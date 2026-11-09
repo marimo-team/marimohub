@@ -124,14 +124,13 @@ export async function authorizeProxyRequest(
 	request: Request,
 	rawDeps: ApiDeps,
 ): Promise<ProxyDecision> {
-	const deps = withRequestMemo(rawDeps);
 	const url = new URL(request.url);
 	const kernelMatch = PROXY_PREFIX.exec(url.pathname);
 	const surfaceMatch = SURFACE_PROXY_PREFIX.exec(url.pathname);
 	if (!kernelMatch && !surfaceMatch) return { kind: 'pass' };
 
 	// The proxy signing secret travels with the ProxyExposure (subdomain mode has none).
-	const exposure = deps.sandbox.exposure;
+	const exposure = rawDeps.sandbox.exposure;
 	const secret = exposure instanceof ProxyExposure ? exposure.signingSecret : undefined;
 	if (!secret) {
 		// Proxy mode isn't configured (e.g. subdomain deployment) — a `/proxy/*` URL
@@ -139,6 +138,7 @@ export async function authorizeProxyRequest(
 		return { kind: 'pass' };
 	}
 
+	const deps = withRequestMemo(rawDeps);
 	const token = (kernelMatch ?? surfaceMatch)![1];
 	const verified = await verifyProxyToken(token, secret);
 	if (!verified) {

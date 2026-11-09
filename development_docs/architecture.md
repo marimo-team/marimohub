@@ -373,7 +373,9 @@ per request, so its caches are always cold.
 
 `PromiseMemo` in `core/async` shares concurrent and sequential reads within an explicit scope.
 It has no TTL. Rejected reads are evicted so later calls can retry.
-Tuple keys compare each element by identity. Each key must identify one value type and loader policy.
+Tuple keys use JavaScript `Map` equality (SameValueZero) for each element.
+Primitives compare by value, with `NaN` equal to `NaN` and `0` equal to `-0`.
+Objects and functions compare by identity. Each key must identify one value type and loader policy.
 
 The API's `requestMemoMiddleware` creates a memo for each request, available through
 `c.get('readMemo')` and `c.get('deps').readMemo`. Authorization guards share subject

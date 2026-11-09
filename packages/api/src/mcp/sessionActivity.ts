@@ -58,7 +58,7 @@ export async function authorizeMcpSession(
 	principal: AuthenticatedPrincipal,
 	session: Session,
 ) {
-	const deps = withRequestMemo(rawDeps);
+	const deps = rawDeps.readMemo ? rawDeps : withRequestMemo(rawDeps);
 	const project = await loadVisibleProject(
 		deps.services.projects,
 		session.project_id,
@@ -105,7 +105,8 @@ export async function withMcpSessionActivity<T>(
 		if (finished) return deadline;
 		deadline = Math.min(deadline, activeDeadline(current, principal));
 		armExpiry();
-		const decision = await authorizeMcpSession(deps, principal, current);
+		// Long-running work must observe revocation even before the cached context expires.
+		const decision = await authorizeMcpSession(withRequestMemo(deps), principal, current);
 		if (finished) return deadline;
 		deadline = Math.min(
 			deadline,

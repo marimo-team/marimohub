@@ -803,7 +803,7 @@ export class AuthorizationService {
 						[this.resolveSubjectContext, this.security, subject],
 						() => this.resolveSubjectContext(subject),
 						{
-							isValid: (context) => context !== null && Date.parse(context.expiresAt) > Date.now(),
+							isValid: (context) => validateSubjectSecurityContext(context) !== null,
 						},
 					)
 				: this.resolveSubjectContext(subject));
