@@ -399,6 +399,45 @@ describe('due heartbeat races', () => {
 });
 
 describe('app heartbeat freshness', () => {
+	it.each([false, true])(
+		'gates freshness metadata on credential project.read=%s',
+		async (projectRead) => {
+			const f = await fixture();
+			vi.spyOn(f.client.deps.authenticator, 'authenticate').mockResolvedValue({
+				id: ACTOR,
+				email: `${ACTOR}@example.com`,
+				credential: {
+					kind: 'personal-access-token',
+					grant: {
+						projects: [f.project.id],
+						actions: [
+							'app.read',
+							'session.attach',
+							...(projectRead ? ['project.read' as const] : []),
+						],
+					},
+				},
+			});
+			const source = vi.spyOn(f.client.deps.services.notebooks, 'getNotebookSource');
+			const editor = vi.spyOn(f.client.deps.services.sessions, 'getEditorClaim');
+			const response = await expectOk(await f.heartbeat());
+			expect(response.can.attach).toBe(true);
+			if (projectRead) {
+				expect(response).toHaveProperty('source_version_id');
+				expect(response).toHaveProperty('head_version_id');
+				expect(response).toHaveProperty('edit_active', false);
+				expect(source).toHaveBeenCalledOnce();
+				expect(editor).toHaveBeenCalledOnce();
+			} else {
+				expect(response).not.toHaveProperty('source_version_id');
+				expect(response).not.toHaveProperty('head_version_id');
+				expect(response).not.toHaveProperty('edit_active');
+				expect(source).not.toHaveBeenCalled();
+				expect(editor).not.toHaveBeenCalled();
+			}
+		},
+	);
+
 	it.each(['source', 'editor'] as const)(
 		'recovers after the %s freshness read fails without listing sessions',
 		async (record) => {

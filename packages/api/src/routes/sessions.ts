@@ -2588,16 +2588,13 @@ app.openapi(heartbeatSession, async (c) => {
 	}
 
 	const updated = await sessions.heartbeat(pid, sid);
+	const grants = await sessionGrantsFor(project, user, updated, deps, labels);
 	const response: ReturnType<typeof toSessionResponse> &
 		Pick<z.infer<typeof SessionResponseSchema>, 'head_version_id' | 'edit_active'> =
-		toSessionResponse(
-			updated,
-			await sessionGrantsFor(project, user, updated, deps, labels),
-			deps.theme?.session_links,
-		);
+		toSessionResponse(updated, grants, deps.theme?.session_links);
 	if (
 		sessionMode(updated) === 'app' &&
-		authorizationService(deps).role(user, project) !== 'app-user' &&
+		!grants.appReadOnly &&
 		!updated.origin &&
 		(updated.status === 'running' || updated.status === 'starting')
 	) {

@@ -49,7 +49,7 @@ describe('App link routes', () => {
 		expect(result.valid, result.errorMessage).toBe(true);
 		const withoutApp = structuredClone(body);
 		delete withoutApp.data.app;
-		expect(validate(withoutApp)).toMatchObject({ valid: true });
+		expect(validate(withoutApp)).toMatchObject({ valid: false });
 		expect(validate({ ...body, data: { ...body.data, unexpected: true } })).toMatchObject({
 			valid: false,
 		});

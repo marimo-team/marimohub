@@ -915,6 +915,8 @@ describe('app session credential boundaries', () => {
 				for (const field of [
 					'user_id',
 					'source_version_id',
+					'head_version_id',
+					'edit_active',
 					'compute_profile',
 					'compute_resources',
 					'compute_from_snapshot',

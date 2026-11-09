@@ -32,7 +32,7 @@ const resolve = createRoute({
 		200: jsonContent(
 			z.object({
 				success: z.literal(true),
-				data: z.strictObject({ ...LinkSchema.shape, app: AppSummarySchema.optional() }),
+				data: z.strictObject({ ...LinkSchema.shape, app: AppSummarySchema }),
 			}),
 			'Authorized app link',
 		),

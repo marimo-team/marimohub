@@ -13589,7 +13589,7 @@ export interface operations {
 							created_by: string;
 							/** Format: date-time */
 							created_at: string;
-							app?: components['schemas']['NotebookApp'];
+							app: components['schemas']['NotebookApp'];
 						};
 					};
 				};

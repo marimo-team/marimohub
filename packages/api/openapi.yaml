@@ -14661,6 +14661,7 @@ paths:
                       - access
                       - created_by
                       - created_at
+                      - app
                     additionalProperties: false
                 required:
                   - success
