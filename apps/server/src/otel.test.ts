@@ -1,10 +1,11 @@
 import { httpInstrumentationMiddleware } from '@hono/otel';
-import { metrics as metricsApi } from '@opentelemetry/api';
+import { metrics as metricsApi, ROOT_CONTEXT, SpanStatusCode, trace } from '@opentelemetry/api';
 import { logs as logsApi } from '@opentelemetry/api-logs';
 import { ExportResultCode } from '@opentelemetry/core';
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
 import { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import {
 	AggregationTemporality,
 	InMemoryMetricExporter,
@@ -254,6 +255,40 @@ describe('startOtel', () => {
 		expect(started).toMatchObject({ event: 'otel_started', 'service.version': 'dev' });
 		expect(attributes['service.version']).toBe('dev');
 		await handle?.shutdown();
+	});
+
+	it('filters routine background spans before export and flushes errors on shutdown', async () => {
+		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
+		vi.stubEnv('OTEL_TRACES_EXPORTER', 'otlp');
+		vi.stubEnv('OTEL_LOGS_EXPORTER', 'none');
+		vi.stubEnv('OTEL_METRICS_EXPORTER', 'none');
+		const register = vi
+			.spyOn(NodeTracerProvider.prototype, 'register')
+			.mockImplementation(() => {});
+		const exported: ReadableSpan[] = [];
+		vi.spyOn(OTLPTraceExporter.prototype, 'export').mockImplementation((spans, callback) => {
+			exported.push(...spans);
+			callback({ code: ExportResultCode.SUCCESS });
+		});
+
+		const handle = startOtel('1.2.3');
+		const provider = register.mock.instances[0] as NodeTracerProvider;
+		const tracer = provider.getTracer('test');
+		const loop = tracer.startSpan('loop.warm_pool');
+		const parent = trace.setSpan(ROOT_CONTEXT, loop);
+		tracer.startSpan('Bucket.get', {}, parent).end();
+		const failed = tracer.startSpan('SessionService.getSession', {}, parent);
+		failed.setStatus({ code: SpanStatusCode.ERROR });
+		failed.end();
+		loop.end();
+		tracer.startSpan('Bucket.get').end();
+		await handle?.shutdown();
+
+		expect(exported.map((span) => span.name)).toEqual([
+			'SessionService.getSession',
+			'loop.warm_pool',
+			'Bucket.get',
+		]);
 	});
 
 	it('exports the build version on metrics when tracing and log export are disabled', async () => {
