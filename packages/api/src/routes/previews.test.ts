@@ -1906,6 +1906,134 @@ describe('asynchronous preview preparation', () => {
 });
 
 describe('preview worker recovery', () => {
+	it('skips live preparation leases without claiming work or starving another preview', async () => {
+		const service = api.deps.services.previews;
+		const busy = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+		const pending = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+		await api.bucket.put(
+			paths.preview(pid, nid, busy.id),
+			JSON.stringify({
+				...busy,
+				preparation: 'preparing',
+				lease: { token: 'other-worker', expires_at: Date.now() + 120_000 },
+			}),
+		);
+		const claim = vi.spyOn(service.store, 'claim');
+		await service.prepare(busy, api.deps.sourceControl);
+		expect(claim).not.toHaveBeenCalled();
+		await service.preparePending(api.deps.sourceControl!);
+		expect(claim).toHaveBeenCalledExactlyOnceWith(pid, pending.id);
+		expect((await service.get(pid, nid, pending.id)).preparation).toBe('ready');
+	});
+
+	it('recovers an abandoned attempt after its retry delay', async () => {
+		vi.useFakeTimers();
+		const service = api.deps.services.previews;
+		const pending = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+		await api.bucket.put(
+			paths.preview(pid, nid, pending.id),
+			JSON.stringify({
+				...pending,
+				preparation: 'preparing',
+				lease: { token: 'abandoned', expires_at: Date.now() - 1 },
+			}),
+		);
+		await service.preparePending(api.deps.sourceControl!);
+		const failed = await service.get(pid, nid, pending.id);
+		expect(failed).toMatchObject({ preparation: 'failed', preparation_failures: 1 });
+		const writes = vi.spyOn(api.bucket, 'put');
+		await service.preparePending(api.deps.sourceControl!);
+		expect(writes).not.toHaveBeenCalled();
+		expect(reader.fetchWorkspace).not.toHaveBeenCalled();
+		vi.setSystemTime(failed.next_attempt_at! + 1);
+		await service.preparePending(api.deps.sourceControl!);
+		expect(await service.get(pid, nid, pending.id)).toMatchObject({
+			preparation: 'ready',
+			preparation_failures: 0,
+			current: { commit: SHA },
+		});
+	});
+
+	it('stops retrying after repeated lease expiry and reports exhaustion once', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		const service = api.deps.services.previews;
+		const pending = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+		await api.bucket.put(
+			paths.preview(pid, nid, pending.id),
+			JSON.stringify({
+				...pending,
+				preparation: 'preparing',
+				preparation_failures: 4,
+				lease: { token: 'abandoned', expires_at: Date.now() - 1 },
+			}),
+		);
+		const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+		await Promise.all([
+			service.preparePending(api.deps.sourceControl!),
+			service.preparePending(api.deps.sourceControl!),
+		]);
+		const failed = await service.get(pid, nid, pending.id);
+		expect(failed).toMatchObject({ preparation: 'failed', preparation_failures: 5 });
+		expect(failed.lease).toBeUndefined();
+		expect(failed.next_attempt_at).toBeGreaterThan(Date.now());
+		expect(reader.getBranchHead).not.toHaveBeenCalled();
+		const writes = vi.spyOn(api.bucket, 'put');
+		vi.setSystemTime(Date.now() + 3_600_000);
+		await service.preparePending(api.deps.sourceControl!);
+		expect(writes).not.toHaveBeenCalled();
+		expect(errors).toHaveBeenCalledTimes(1);
+		expect(JSON.parse(errors.mock.calls[0][0])).toMatchObject({
+			event: 'preview_preparation_exhausted',
+			preview_id: pending.id,
+			preparation_failures: 5,
+		});
+	});
+
+	it.each([true, false])(
+		'bounds repeated failures and allows an explicit retry: eager=%s',
+		async (eager) => {
+			vi.useFakeTimers();
+			const service = api.deps.services.previews;
+			let preview = await service.create(
+				pid,
+				nid,
+				{ ...body, eager },
+				ACTOR,
+				api.deps.sourceControl,
+			);
+			if (!eager) preview = await service.requestPreparation(preview);
+			vi.mocked(reader.fetchWorkspace).mockRejectedValue(new Error('unavailable'));
+			const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+			for (let failures = 1; failures <= 5; failures++) {
+				await service.preparePending(api.deps.sourceControl!);
+				preview = await service.get(pid, nid, preview.id);
+				expect(preview.preparation_failures).toBe(failures);
+				expect(preview.next_attempt_at).toBeGreaterThan(Date.now());
+				await service.preparePending(api.deps.sourceControl!);
+				expect(reader.fetchWorkspace).toHaveBeenCalledTimes(failures);
+				vi.setSystemTime(preview.next_attempt_at! + 1);
+			}
+			const writes = vi.spyOn(api.bucket, 'put');
+			await service.preparePending(api.deps.sourceControl!);
+			await service.prepare(preview, api.deps.sourceControl);
+			expect(writes).not.toHaveBeenCalled();
+			expect(reader.fetchWorkspace).toHaveBeenCalledTimes(5);
+			expect(errors).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(901_000);
+			await sweepPreviews(api.deps);
+			vi.mocked(reader.fetchWorkspace).mockResolvedValue([
+				{ path: 'notebook.py', bytes: new TextEncoder().encode('import marimo') },
+			]);
+			await expectOk(await api.request('POST', `${base}/${preview.id}/prepare`), 202);
+			await service.preparePending(api.deps.sourceControl!);
+			expect(await service.get(pid, nid, preview.id)).toMatchObject({
+				preparation: 'ready',
+				preparation_failures: 0,
+				current: { commit: SHA },
+			});
+		},
+	);
+
 	it('rotates due previews within a project and skips pinned revisions after preparation', async () => {
 		const service = api.deps.services.previews;
 		const branch = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);

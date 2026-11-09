@@ -21,7 +21,7 @@ import { paths } from '../../paths';
 import { sha256Hex } from '../../internal/sha256';
 import { parseStored, readStored } from '../../schema';
 import type { GitSource } from '../../schema';
-import { mutateObject } from '../catalog/cas';
+import { mutateObject, mutateObjectWithOutcome } from '../catalog/cas';
 import { deleteByPrefix } from '../catalog/storage';
 import { AppPoolStore } from '../runtime/AppPoolStore';
 import type { NotebookService } from './NotebookService';
@@ -43,6 +43,18 @@ import type { NotebookPreview, PreviewCreate, PreviewIntent } from './notebookPr
 import type { PreviewAutomationGroup, PreviewReconcile } from './previewAutomation';
 
 type RetireRuntime = (pid: ProjectId, nid: NotebookId) => Promise<boolean>;
+const MAX_PREPARATION_FAILURES = 5;
+
+function preparationDue(record: NotebookPreview, force = false): boolean {
+	if (record.state !== 'active') return false;
+	if (record.lease) return record.lease.expires_at <= Date.now();
+	return (
+		force ||
+		(record.preparation_failures < MAX_PREPARATION_FAILURES &&
+			(record.next_attempt_at ?? 0) <= Date.now() &&
+			!(record.source.type === 'commit' && record.current && !record.pull_request))
+	);
+}
 
 // A successful PR check is persisted at most this often, so polling does not rewrite the project head.
 const AUTOMATION_CHECK_STAMP_MS = 3_600_000;
@@ -88,6 +100,8 @@ function applyAutomationIntent(
 					lease: undefined,
 					next_attempt_at: 0,
 					preparation: intent.eager === false ? ('deferred' as const) : ('pending' as const),
+					preparation_failures: 0,
+					error: undefined,
 				}
 			: {}),
 	};
@@ -276,6 +290,55 @@ export class NotebookPreviewService {
 		);
 	}
 
+	private async failPreparation(
+		record: NotebookPreview,
+		token: string,
+		error: unknown,
+		expired = false,
+	): Promise<NotebookPreview> {
+		const key = previewKey(record.project_id, record.notebook_id, record.id);
+		const result = await mutateObjectWithOutcome<NotebookPreview>(
+			this.bucket,
+			key,
+			(raw) => parseStored(PreviewRecordSchema, raw, key),
+			(current) => {
+				const leaseExpired = (current.lease?.expires_at ?? 0) <= Date.now();
+				if (
+					current.state !== 'active' ||
+					current.lease?.token !== token ||
+					leaseExpired !== expired
+				)
+					return null;
+				return {
+					...current,
+					preparation: 'failed',
+					error: 'Unable to prepare the preview. Check the source and GitHub App access.',
+					lease: undefined,
+					checked_at: new Date().toISOString(),
+					preparation_failures: current.preparation_failures + 1,
+					next_attempt_at:
+						Date.now() +
+						Math.min(3_600_000, PREVIEW_POLL_MS * 2 ** Math.min(current.preparation_failures, 6)) *
+							(0.75 + Math.random() * 0.5),
+				};
+			},
+			{ notFound: () => new NotFoundError('Preview not found') },
+		);
+		if (result.written && result.value.preparation_failures >= MAX_PREPARATION_FAILURES) {
+			logOperationalError(
+				'preview_preparation_exhausted',
+				{
+					project_id: record.project_id,
+					notebook_id: record.notebook_id,
+					preview_id: record.id,
+					preparation_failures: result.value.preparation_failures,
+				},
+				error,
+			);
+		}
+		return result.value;
+	}
+
 	async create(
 		pid: ProjectId,
 		nid: NotebookId,
@@ -392,10 +455,23 @@ export class NotebookPreviewService {
 			const applied = applyAutomationIntent(persisted, record);
 			const current = applied ?? persisted;
 			if (!previewAvailable(current)) throw new NotFoundError('Preview not found');
-			if (current.eager !== false) return applied;
 			// Page views request preparation on mount, so they must not skip the failure backoff.
 			const backoff =
 				current.preparation === 'failed' && (current.next_attempt_at ?? 0) > Date.now();
+			if (current.preparation === 'failed' && !backoff) {
+				return {
+					...current,
+					preparation: 'pending',
+					preparation_failures: 0,
+					error: undefined,
+					next_attempt_at: 0,
+					requested_generation: previewGeneration(current),
+					demand: current.automation ? undefined : current.eager === false,
+					requested_commit: undefined,
+					observed_commit: undefined,
+				};
+			}
+			if (current.eager !== false) return applied;
 			const nextAttemptAt = backoff ? current.next_attempt_at : 0;
 			if (current.automation) {
 				const generation = previewGeneration(current)!;
@@ -520,15 +596,19 @@ export class NotebookPreviewService {
 	): Promise<NotebookPreview> {
 		externalSignal?.throwIfAborted();
 		if (initial.state !== 'active') return initial;
-		const record = await this.get(initial.project_id, initial.notebook_id, initial.id);
+		let record = await this.get(initial.project_id, initial.notebook_id, initial.id);
 		if (record.state !== 'active') return record;
 		if (previewExpired(record)) return this.retireExpired(record);
-		if (
-			!force &&
-			((record.next_attempt_at ?? 0) > Date.now() ||
-				(record.source.type === 'commit' && record.current && !record.pull_request))
-		)
-			return record;
+		if (!preparationDue(record, force)) return record;
+		if (record.lease) {
+			record = await this.failPreparation(
+				record,
+				record.lease.token,
+				new Error('Preview preparation lease expired'),
+				true,
+			);
+			if (!force || record.lease || record.state !== 'active') return record;
+		}
 		const claim = await this.store.claim(record.project_id, record.id);
 		if (!claim) return record;
 		const token = claim.token;
@@ -542,7 +622,7 @@ export class NotebookPreviewService {
 			Math.max(0, claim.expires_at - Date.now() - 1000),
 		);
 		try {
-			return await this.prepareClaimed(record, registry, claim, signal, externalSignal);
+			return await this.prepareClaimed(record, registry, claim, signal, force, externalSignal);
 		} finally {
 			clearTimeout(timeout);
 			await this.store.release(token);
@@ -554,6 +634,7 @@ export class NotebookPreviewService {
 		registry: SourceControlRegistry | undefined,
 		claim: { token: string; expires_at: number },
 		signal: AbortSignal,
+		force: boolean,
 		externalSignal?: AbortSignal,
 	): Promise<NotebookPreview> {
 		const token = claim.token;
@@ -570,11 +651,7 @@ export class NotebookPreviewService {
 		};
 		const claimed = await this.mutate(initial, (current) => {
 			const effective = applyAutomationIntent(current, initial) ?? current;
-			if (
-				effective.state !== 'active' ||
-				(effective.lease && effective.lease.expires_at > Date.now())
-			)
-				return null;
+			if (!preparationDue(effective, force) || effective.lease) return null;
 			return {
 				...effective,
 				preparation: 'preparing',
@@ -634,6 +711,7 @@ export class NotebookPreviewService {
 						return {
 							...current,
 							preparation: 'deferred',
+							preparation_failures: 0,
 							lease: undefined,
 							error: undefined,
 							next_attempt_at: Date.now() + PREVIEW_POLL_MS,
@@ -656,6 +734,7 @@ export class NotebookPreviewService {
 					return {
 						...current,
 						preparation: 'deferred',
+						preparation_failures: 0,
 						observed_commit: commit,
 						requested_commit: undefined,
 						lease: undefined,
@@ -817,18 +896,7 @@ export class NotebookPreviewService {
 					});
 				if (!parent || parent.status === 'deleted') return this.retire(record);
 			}
-			return this.mutateLeased(record, token, (current) => ({
-				...current,
-				preparation: 'failed',
-				error: 'Unable to prepare the preview. Check the source and GitHub App access.',
-				lease: undefined,
-				checked_at: new Date().toISOString(),
-				preparation_failures: current.preparation_failures + 1,
-				next_attempt_at:
-					Date.now() +
-					Math.min(3_600_000, PREVIEW_POLL_MS * 2 ** Math.min(current.preparation_failures, 6)) *
-						(0.75 + Math.random() * 0.5),
-			}));
+			return this.failPreparation(record, token, error);
 		}
 	}
 
@@ -1042,11 +1110,8 @@ export class NotebookPreviewService {
 							registry,
 							signal,
 						);
-						const records = (await this.projectRecords(pid, undefined, project)).filter(
-							(record) =>
-								record.state === 'active' &&
-								(record.next_attempt_at ?? 0) <= Date.now() &&
-								!(record.source.type === 'commit' && record.current && !record.pull_request),
+						const records = (await this.projectRecords(pid, undefined, project)).filter((record) =>
+							preparationDue(record),
 						);
 						records.sort(
 							(a, b) =>

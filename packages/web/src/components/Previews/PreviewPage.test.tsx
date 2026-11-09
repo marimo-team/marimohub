@@ -219,17 +219,20 @@ describe('PreviewPage', () => {
 		expect(calls.filter((call) => call.url === `${endpoint}/prepare`)).toHaveLength(1);
 	});
 
-	it('offers preparation retry after a background failure without reloading', async () => {
-		const user = userEvent.setup();
-		const { calls, failPreparation } = setup({ lazy: true, pending: true, queueOnPrepare: true });
-		await screen.findByText('Preparation queued');
-		await failPreparation();
-		await user.click(await screen.findByRole('button', { name: 'Prepare latest' }));
-		await screen.findByText('Preparation queued');
-		expect(screen.queryByRole('button', { name: 'Prepare latest' })).not.toBeInTheDocument();
-		expect(calls.filter((call) => call.url === `${endpoint}/prepare`)).toHaveLength(2);
-		expect(calls.filter((call) => call.url === `${endpoint}/sessions`)).toHaveLength(0);
-	});
+	it.each([true, false])(
+		'offers preparation retry after a background failure: lazy=%s',
+		async (lazy) => {
+			const user = userEvent.setup();
+			const { calls, failPreparation } = setup({ lazy, pending: true, queueOnPrepare: true });
+			await screen.findByText('Preparation queued');
+			await failPreparation();
+			await user.click(await screen.findByRole('button', { name: 'Prepare latest' }));
+			await screen.findByText('Preparation queued');
+			expect(screen.queryByRole('button', { name: 'Prepare latest' })).not.toBeInTheDocument();
+			expect(calls.filter((call) => call.url === `${endpoint}/prepare`)).toHaveLength(lazy ? 2 : 1);
+			expect(calls.filter((call) => call.url === `${endpoint}/sessions`)).toHaveLength(0);
+		},
+	);
 
 	it('retries a failed preparation request without starting compute', async () => {
 		const user = userEvent.setup();
