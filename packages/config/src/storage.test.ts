@@ -17,6 +17,15 @@ import { ConfigError } from './errors';
 import { CONFIG_SPEC } from './spec';
 
 describe('makeStorage backend selection', () => {
+	it.each(['0', '-1', '1.5', 'no', '9007199254740992'])(
+		'rejects an invalid S3 socket limit: %s',
+		(value) => {
+			expect(() =>
+				makeStorage({ MARIMOHUB_STORAGE_S3_BUCKET: 'b', MARIMOHUB_STORAGE_S3_MAX_SOCKETS: value }),
+			).toThrow(/MARIMOHUB_STORAGE_S3_MAX_SOCKETS/);
+		},
+	);
+
 	it('defaults to s3 and requires the bucket name', () => {
 		expect(() => makeStorage({})).toThrow(/MARIMOHUB_STORAGE_S3_BUCKET/);
 	});

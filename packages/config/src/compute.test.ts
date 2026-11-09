@@ -1144,6 +1144,38 @@ describe('makeCompute local port range', () => {
 
 describe('optional compute configuration', () => {
 	describe('makeCompute coreweave', () => {
+		const env = {
+			MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+		};
+		it('accepts kernel annotations with an ingress namespace', () => {
+			expect(() =>
+				makeCompute({
+					...env,
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: 'sandboxes',
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS:
+						'{"traefik.ingress.kubernetes.io/router.middlewares":"sandboxes-compress@kubernetescrd"}',
+				}),
+			).not.toThrow();
+		});
+		it.each(['not-json', '[]', '{"a":1}', '{"bad/key/name":"x"}'])(
+			'rejects malformed kernel annotations: %s',
+			(annotations) => {
+				expect(() =>
+					makeCompute({
+						...env,
+						MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: 'sandboxes',
+						MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: annotations,
+					}),
+				).toThrow(/MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS/);
+			},
+		);
+		it('rejects annotations without a namespace', () => {
+			expect(() =>
+				makeCompute({ ...env, MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: '{"a":"b"}' }),
+			).toThrow(/requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE/);
+		});
+
 		it('treats an empty MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION as unset', () => {
 			expect(() =>
 				makeCompute({

@@ -1,0 +1,14 @@
+{{- if .Values.sandboxIngress.compression.enabled }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "marimohub.fullname" . }}-kernel-compress
+  namespace: {{ required "sandboxIngress.namespace is required for kernel compression" .Values.sandboxIngress.namespace }}
+  labels:
+    {{- include "marimohub.labels" . | nindent 4 }}
+spec:
+  compress:
+    encodings: [zstd, br, gzip]
+    excludedContentTypes: [text/event-stream]
+    minResponseBodyBytes: 1024
+{{- end }}

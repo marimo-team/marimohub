@@ -6,7 +6,7 @@ import { WORKSPACE_LIMITS } from '@marimo-hub/core/remote-workspace';
 import { MAX_FOLDER_IMPORT_ARCHIVE_BYTES } from '@marimo-hub/core/workspace-ignore';
 import type { MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { etag } from 'hono/etag';
+import { conditionalJsonEtag } from './etag';
 import { HTTPException } from 'hono/http-exception';
 import { requestId } from 'hono/request-id';
 import { routePath } from 'hono/route';
@@ -567,12 +567,7 @@ export function createApi(rawDeps: ApiDeps) {
 		await next();
 	});
 
-	// Conditional GET: a weak ETag + 304 on a matching `If-None-Match` (hono/etag),
-	// paired with `Cache-Control: no-cache` so browsers revalidate each poll and
-	// serve the cached body on a 304 — turning the session-status poll loop into
-	// tiny 304s. `etag` is registered first so the Cache-Control hook's header lands
-	// before `etag` builds the 304 (which retains cache-control).
-	const conditionalGet = etag({ weak: true });
+	const conditionalGet = conditionalJsonEtag();
 	app.use(`${API_PREFIX}/*`, (c, next) =>
 		c.req.path.endsWith('/browse/objects/content') ||
 		isDeepLinkPath(c.req.path) ||

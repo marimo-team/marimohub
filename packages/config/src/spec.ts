@@ -326,6 +326,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						secret: true,
 					},
 					{
+						id: 'MARIMOHUB_STORAGE_S3_MAX_SOCKETS',
+						name: 'S3 maximum sockets',
+						description:
+							'Maximum HTTP and HTTPS connections per origin. Must be a positive safe integer.',
+						default: '256',
+					},
+					{
 						id: 'MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE',
 						name: 'Force path-style addressing',
 						description: 'Use path-style bucket addressing (required by MinIO/Ceph).',
@@ -547,7 +554,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_ASSET_URL',
 						name: 'Frontend asset URL',
 						description:
-							'Base URL for marimo frontend assets (e.g. a CDN). Omit to use the bundled assets.',
+							'Versioned base URL for shared marimo frontend assets. Use {version} to match the installed marimo version. Recommended for connected deployments after worker, WASM, and CSP staging checks. Omit to use bundled sandbox assets.',
 						example: 'https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist',
 					},
 					{
@@ -686,8 +693,17 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE',
 						name: 'CoreWeave kernel Ingress namespace',
 						description:
-							"Namespace the sandbox runner creates kernel pods and Services in. Set it on a CKS runner without HTTPS endpoint routes: the kernel service is then declared with `custom` visibility (the sandbox template must declare `network.ingress` sources) and the hub creates a per-kernel Ingress there (hostname from `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` + the hostname template), owner-referenced to the runner's Service. Needs the chart's `sandboxIngress.namespace` RBAC. The Ingress carries no `tls` block or annotations, so Traefik must serve it from its default TLSStore (a wildcard certificate for the sandbox hostname). Omit on runners that publish `public` kernel services themselves.",
+							"Namespace the sandbox runner creates kernel pods and Services in. Set it on a CKS runner without HTTPS endpoint routes: the kernel service is then declared with `custom` visibility (the sandbox template must declare `network.ingress` sources) and the hub creates a per-kernel Ingress there (hostname from `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` + the hostname template), owner-referenced to the runner's Service. Needs the chart's `sandboxIngress.namespace` RBAC. The Ingress carries no `tls` block, so Traefik must serve it from its default TLSStore (a wildcard certificate for the sandbox hostname). Omit on runners that publish `public` kernel services themselves.",
 						example: 'org-ns-ab12cd',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS',
+						name: 'CoreWeave kernel Ingress annotations',
+						description:
+							'JSON object of string annotations for hub-published kernel Ingresses. Requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE. Keys and total size must satisfy Kubernetes annotation limits.',
+						example:
+							'{"traefik.ingress.kubernetes.io/router.middlewares":"sandbox-kernel-compress@kubernetescrd"}',
 						optIn: true,
 					},
 					{

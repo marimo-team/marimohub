@@ -3,6 +3,8 @@
  * (`index.ts`) and the production client (`client.ts`). Kept in its own module so
  * the two can depend on it without forming an import cycle.
  */
+import { ANNOTATION_NAME, validateAnnotationKey } from '@marimo-hub/compute-commons';
+export { validateIngressAnnotations, parseIngressAnnotations } from '@marimo-hub/compute-commons';
 import type { Millis } from '@marimo-hub/core/duration';
 import type { SandboxExposureMode } from '@marimo-hub/core/ports/sandbox-exposure';
 import type { SandboxId } from '@marimo-hub/core/ids';
@@ -22,45 +24,6 @@ export type ImagePullPolicy = 'Always' | 'IfNotPresent' | 'Never';
 export type IngressTlsMode = 'disabled' | 'default' | 'controller-default' | 'secret';
 export type ResolvedIngressTlsMode = Exclude<IngressTlsMode, 'default'>;
 
-const ANNOTATION_NAME = /^[A-Za-z0-9](?:[-_.A-Za-z0-9]*[A-Za-z0-9])?$/;
-const DNS_LABEL = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/;
-const MAX_ANNOTATIONS_SIZE_BYTES = 256 * 1024;
-
-function validateAnnotationKey(key: string): void {
-	const parts = key.split('/');
-	if (parts.length > 2) throw new Error(`invalid annotation key "${key}"`);
-	const name = parts.at(-1) ?? '';
-	if (name.length > 63 || !ANNOTATION_NAME.test(name)) {
-		throw new Error(`invalid annotation name in "${key}"`);
-	}
-	const prefix = parts.length === 2 ? parts[0] : undefined;
-	if (
-		prefix !== undefined &&
-		(prefix.length > 253 ||
-			prefix.split('.').some((label) => label.length > 63 || !DNS_LABEL.test(label)))
-	) {
-		throw new Error(`invalid DNS prefix in annotation key "${key}"`);
-	}
-}
-
-export function validateIngressAnnotations(value: unknown): Record<string, string> | undefined {
-	if (value === undefined) return undefined;
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-		throw new Error('expected an object with string values');
-	}
-	const entries = Object.entries(value);
-	let size = 0;
-	for (const [key, annotationValue] of entries) {
-		if (typeof annotationValue !== 'string') throw new Error('annotation values must be strings');
-		validateAnnotationKey(key);
-		size += Buffer.byteLength(key) + Buffer.byteLength(annotationValue);
-	}
-	if (size > MAX_ANNOTATIONS_SIZE_BYTES) {
-		throw new Error('annotations exceed the Kubernetes 256 KiB limit');
-	}
-	return entries.length === 0 ? undefined : Object.fromEntries(entries);
-}
-
 // Label values share the annotation name grammar (63 chars max) but may be empty.
 export function validateLabels(labels: Record<string, string>): void {
 	for (const [key, value] of Object.entries(labels)) {
@@ -74,19 +37,6 @@ export function validateLabels(labels: Record<string, string>): void {
 			throw new Error(`invalid label value "${value}" for key "${key}"`);
 		}
 	}
-}
-
-export function parseIngressAnnotations(
-	raw: string | undefined,
-): Record<string, string> | undefined {
-	if (raw === undefined || raw.trim() === '') return undefined;
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch {
-		throw new Error('expected valid JSON');
-	}
-	return validateIngressAnnotations(parsed);
 }
 
 export function resolveIngressTlsMode(

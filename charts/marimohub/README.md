@@ -235,3 +235,12 @@ sandboxImagePrepuller:
 Use the same immutable image references as your compute configuration.
 For private images, set `sandboxImagePrepuller.imagePullSecrets` with secrets in the release namespace.
 For mutable tags, set `pullPolicy: Always` and change `revision` when the image changes.
+
+## Kernel compression and hub capacity
+
+`sandboxIngress.compression.enabled` defaults to `false`. Enabling it requires
+Traefik's `Middleware` CRD and `sandboxIngress.namespace`.
+See the [CKS recipe](../../docs/deploying/cks.md#kernel-response-compression) to attach it to kernel Ingresses.
+
+Hub pods request 250m CPU and 512Mi memory, with limits of 2 CPUs and 1Gi memory.
+See [hub capacity](../../docs/deploying/kubernetes.md#hub-resource-capacity) to adjust these limits.

@@ -156,3 +156,5 @@ For Blob authorization failures, check the container role assignment and the run
 ## See also
 
 [Storage](../storage.md) · [Compute](../compute.md) · [Auth](../auth.md) · [Configuration](../configuration.md)
+
+See [asset caching](./asset-caching.md) to reuse marimo frontend assets across sessions.

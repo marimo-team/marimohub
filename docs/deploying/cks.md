@@ -4,6 +4,8 @@ description: Deploy marimohub on CoreWeave Kubernetes Service with Sandboxes, CA
 
 # Deploying on CoreWeave (CKS)
 
+See [asset caching](./asset-caching.md) to reuse marimo frontend assets across sessions.
+
 marimohub on CoreWeave: a CKS cluster runs the hub, CoreWeave Sandboxes run
 notebook kernels, CAIOS (CoreWeave's S3-compatible object store) holds all
 state, and your OIDC provider signs users in. When you're done:
@@ -856,3 +858,32 @@ More in [Troubleshooting](../troubleshooting.md).
 - [Storage](../storage.md), [Compute](../compute.md), [Auth](../auth.md).
 - [Configuration](../configuration.md) — every `MARIMOHUB_*` variable.
 - [Security](../security.md) — the origin-isolation model for kernels.
+
+## Kernel response compression
+
+If Traefik's `Middleware` CRD is installed, enable kernel compression in the
+namespace where the runner creates sandbox Services:
+
+```yaml
+sandboxIngress:
+  namespace: sandboxes
+  compression:
+    enabled: true
+config:
+  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: sandboxes
+  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: '{"traefik.ingress.kubernetes.io/router.middlewares":"sandboxes-marimohub-kernel-compress@kubernetescrd"}'
+```
+
+Replace `sandboxes` and `marimohub` with your namespace and chart fullname.
+The annotation format is
+`<namespace>-<chart-fullname>-kernel-compress@kubernetescrd`.
+
+The chart creates the middleware. The annotation attaches it to new kernel
+Ingresses. Replace existing sandboxes to apply it to their Ingresses.
+Compression uses zstd, Brotli, or gzip and skips bodies smaller than 1 KiB and
+`text/event-stream` responses.
+
+Before rollout, check compressed HTML and JSON responses through Traefik.
+Check that kernel events arrive without compression or buffering.
+See [Traefik compression](https://doc.traefik.io/traefik/v3.3/middlewares/http/compress/)
+for supported versions and encoding behavior.

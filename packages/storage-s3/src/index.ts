@@ -9,6 +9,8 @@
  * in-memory adapters honor. Verify support on a target store with
  * `verifyConditionalWrites()` (run at boot by apps/server).
  */
+import { Agent as HttpAgent } from 'node:http';
+import { Agent as HttpsAgent } from 'node:https';
 import {
 	CreateMultipartUploadCommand,
 	UploadPartCommand,
@@ -53,6 +55,8 @@ export interface S3StorageConfig {
 	forcePathStyle?: boolean;
 	/** Total budget per request, including retries and body reads; defaults to 60 seconds. */
 	requestTimeoutMs?: number;
+	/** Maximum connections per origin; defaults to 256. */
+	maxSockets?: number;
 }
 
 /** S3 returns ETags wrapped in double quotes; the `Bucket` port stores them bare. */
@@ -98,12 +102,18 @@ export class S3Storage implements Bucket {
 		this.requestTimeoutMs = config.requestTimeoutMs ?? 60_000;
 		assertTimerDelay(this.requestTimeoutMs);
 		if (this.requestTimeoutMs === 0) throw new RangeError('requestTimeoutMs must be positive');
+		const maxSockets = config.maxSockets ?? 256;
+		if (!Number.isSafeInteger(maxSockets) || maxSockets < 1) {
+			throw new RangeError('maxSockets must be a positive safe integer');
+		}
 		this.client = new S3Client({
 			region: config.region ?? 'auto',
 			endpoint: config.endpoint || undefined,
 			credentials: config.credentials,
 			forcePathStyle: config.forcePathStyle ?? false,
 			requestHandler: {
+				httpAgent: new HttpAgent({ keepAlive: true, maxSockets }),
+				httpsAgent: new HttpsAgent({ keepAlive: true, maxSockets }),
 				connectionTimeout: Math.min(5_000, this.requestTimeoutMs),
 				requestTimeout: this.requestTimeoutMs,
 				throwOnRequestTimeout: true,
