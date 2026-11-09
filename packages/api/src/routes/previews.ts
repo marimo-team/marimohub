@@ -90,7 +90,7 @@ const create = createRoute({
 const ReconcileResponse = z.object({
 	success: z.literal(true),
 	data: z.object({
-		state: z.enum(['active', 'closed', 'expired']),
+		state: extensibleResponseEnum(['active', 'closed', 'expired'], 'active'),
 		pending: z.boolean(),
 		items: z.array(PublicPreview),
 	}),
@@ -99,6 +99,7 @@ const reconcile = createRoute({
 	method: 'post',
 	path: `${base}/reconcile`,
 	operationId: 'notebooks.previews.reconcile',
+	'x-cli-hidden': true,
 	tags: ['Previews'],
 	summary: 'Reconcile previews for a GitHub pull request',
 	description:

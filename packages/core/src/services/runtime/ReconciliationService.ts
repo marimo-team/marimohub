@@ -22,10 +22,9 @@ import { listAllKeys } from '../catalog/storage';
 import type { SessionService } from './SessionService';
 
 /**
- * Default age below which a recordless sandbox is left alone. Provisioning
- * writes the session record BEFORE creating the sandbox, so a live sandbox
- * always has a record unless that record was already reaped — but this window
- * is a belt-and-suspenders guard against reaping an in-flight provision.
+ * Default age below which a recordless sandbox is left alone. A cold boot starts
+ * before the session record is published, so an in-flight start has a live
+ * sandbox and no record yet. This window must cover the boot plus publication.
  */
 const DEFAULT_ORPHAN_GRACE_MS = Millis.minutes(15);
 
@@ -266,9 +265,10 @@ export class ReconciliationService {
 					// kernel URL is dead; mark the record failed (it didn't stop cleanly) so it
 					// stops being served and gets reaped on schedule.
 
-					// A fresh `starting` record legitimately has no live sandbox yet: the saga
-					// writes the record (with sandbox_id) BEFORE creating the sandbox, and a
-					// cold provision can take minutes. Failing it here would strand the caller
+					// A fresh `starting` record legitimately has no live sandbox yet: the record
+					// is published while the cold boot is still in flight (a warm-claim fallback
+					// even writes its replacement sandbox_id before booting it), and a cold
+					// provision can take minutes. Failing it here would strand the caller
 					// on a terminal record (setRunning no-ops) with a live sandbox behind it,
 					// and release the app claim mid-provision. Aged `starting` records still
 					// fall through: a provision that died must eventually be marked failed.

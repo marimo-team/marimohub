@@ -21,6 +21,9 @@ describe('preview workflow', () => {
 			queue: 'max',
 			'cancel-in-progress': false,
 		});
+		expect(workflow.jobs.preview.if).toBe(
+			"github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'",
+		);
 		expect(workflow.jobs.preview.steps).toHaveLength(1);
 		expect(PREVIEW_ACTION_REF).toMatch(/^[a-f0-9]{40}$/);
 		expect(workflow.jobs.preview.steps[0].uses).toBe(

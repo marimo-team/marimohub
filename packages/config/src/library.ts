@@ -7,6 +7,7 @@ import {
 	missingSandboxInstanceMethods,
 	missingSandboxProviderMethods,
 	PreconditionFailedError,
+	SANDBOX_INSTANCE_CAPABILITY_FLAGS,
 	SANDBOX_INSTANCE_OPTIONAL_METHODS,
 	SUBJECT_CONTEXT_ADAPTER_API_VERSION,
 } from '@marimo-hub/core';
@@ -316,14 +317,13 @@ function validateSandboxInstance(
 			`Sandbox instance from compute adapter "${specifier}" has non-callable optional method(s): ${invalidOptional.join(', ')}`,
 		);
 	}
-	if (
-		sandbox.supportsBucketMount !== undefined &&
-		typeof sandbox.supportsBucketMount !== 'boolean'
-	) {
-		throw adapterConfigError(
-			'compute',
-			`Sandbox instance from compute adapter "${specifier}" has non-boolean supportsBucketMount`,
-		);
+	for (const flag of SANDBOX_INSTANCE_CAPABILITY_FLAGS) {
+		if (sandbox[flag] !== undefined && typeof sandbox[flag] !== 'boolean') {
+			throw adapterConfigError(
+				'compute',
+				`Sandbox instance from compute adapter "${specifier}" has non-boolean ${flag}`,
+			);
+		}
 	}
 }
 

@@ -243,3 +243,21 @@ file-IO errors.
 - [Compute](../compute.md), [Storage](../storage.md), [Auth](../auth.md)
 - `examples/kubernetes` — RBAC + Deployment manifests.
 - [Configuration](../configuration.md) for every variable.
+
+## Hub resource capacity
+
+The chart requests 250m CPU and 512Mi memory for each API pod. Its default limits
+are 2 CPUs and 1Gi memory. These settings do not change sandbox resources.
+
+For deployments with more than a few hundred notebooks, remove the CPU limit
+to avoid throttling concurrent catalog parsing. Monitor memory and adjust its
+limit for the workload. In a Helm values override, use `null` to remove the
+default CPU limit:
+
+```yaml
+resources:
+  requests: { cpu: 250m, memory: 512Mi }
+  limits: { cpu: null, memory: 1Gi }
+```
+
+See [asset caching](./asset-caching.md) to reuse marimo frontend assets across sessions.

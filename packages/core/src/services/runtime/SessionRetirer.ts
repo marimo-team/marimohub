@@ -4,7 +4,7 @@ import { kernelActiveConnections } from './kernelActiveConnections';
 import type { ConnectionProbe } from './kernelActiveConnections';
 import { localKernelBasePath } from './sandboxExposure';
 import { sessionResourceNotebookId } from '../../sessionOrigin';
-import { captureThumbnail } from './captureThumbnail';
+import { captureThumbnail, THUMBNAIL_MAINTENANCE_BUDGET_MS } from './captureThumbnail';
 import type { Bucket } from '../../ports/bucket';
 import type { SandboxProvider } from '../../ports/sandbox';
 import { sessionOwner } from './sessionOwner';
@@ -127,10 +127,13 @@ export function reclaimBlockedReason(
 
 type ThumbnailPolicy = 'skip' | 'bounded' | 'full';
 
-function thumbnailDeadline(policy: ThumbnailPolicy = 'full'): number {
-	if (policy === 'skip') return 0;
-	if (policy === 'bounded') return Date.now() + 3_000;
-	return Infinity;
+/** A deadline of 0 means "capture no thumbnail". */
+const SKIP_THUMBNAIL = 0;
+
+function thumbnailDeadline(policy: ThumbnailPolicy = 'full', at = Infinity): number {
+	if (policy === 'skip') return SKIP_THUMBNAIL;
+	if (policy === 'bounded') return Math.min(at, Date.now() + THUMBNAIL_MAINTENANCE_BUDGET_MS);
+	return at;
 }
 
 const DEFAULT_WORKDIR = '/workspace';
@@ -203,7 +206,7 @@ export class SessionRetirer {
 						await this.teardownSandbox(
 							session,
 							opts.captureBeforeDestroy ?? true,
-							Math.min(opts.thumbnailDeadlineAt ?? Infinity, thumbnailDeadline(opts.thumbnail)),
+							thumbnailDeadline(opts.thumbnail, opts.thumbnailDeadlineAt),
 						)
 					).destroyed;
 		if (opts.markTerminated !== false) {
@@ -468,7 +471,7 @@ export class SessionRetirer {
 				? await this.teardownSandbox(
 						session,
 						true,
-						Math.min(thumbnailDeadlineAt ?? Infinity, thumbnailDeadline(thumbnail)),
+						thumbnailDeadline(thumbnail, thumbnailDeadlineAt),
 						existing,
 					)
 				: { destroyed: await this.destroySandbox(session, existing), saved: false };
@@ -596,7 +599,7 @@ export class SessionRetirer {
 		thumbnailDeadlineAt?: number,
 	): Promise<void> {
 		if (
-			thumbnailDeadlineAt !== 0 &&
+			thumbnailDeadlineAt !== SKIP_THUMBNAIL &&
 			this.deps.automaticThumbnails !== false &&
 			session.sandbox_id
 		) {

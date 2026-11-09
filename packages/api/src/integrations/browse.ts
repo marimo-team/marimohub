@@ -214,12 +214,7 @@ export async function requireAuthorizedObjectAccess(
 type BrowseCache = LazyMap<string, { expiresAt: number; value: unknown }>;
 
 function createBrowseCache(): BrowseCache {
-	return new LazyMap(
-		async () => {
-			throw new Error('A browse cache load function is required.');
-		},
-		{ maxSize: BROWSE_CACHE_MAX_ENTRIES },
-	);
+	return new LazyMap({ maxSize: BROWSE_CACHE_MAX_ENTRIES });
 }
 
 async function cachedBrowse<T>(

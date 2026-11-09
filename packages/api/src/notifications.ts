@@ -1,6 +1,7 @@
 import { deploymentState } from './requestMemo';
 import {
 	createSlidingWindowBudget,
+	deferOrAwait,
 	noopNotifier,
 	reduceNotificationDeliveryResults,
 	ResourceExhaustedError,
@@ -81,31 +82,32 @@ function scheduleDelivery(
 	events: { partial: string; failed: string },
 	deliver: (notifications: readonly Notification[]) => Promise<NotificationDeliveryOutcome>,
 ): void {
-	const delivery = Promise.resolve()
-		.then(makeNotification)
-		.then((rendered) =>
-			deliver((Array.isArray(rendered) ? rendered : [rendered]) as readonly Notification[]),
-		)
-		.then((outcome) => {
-			if (outcome === 'partial') {
+	const delivery = () =>
+		Promise.resolve()
+			.then(makeNotification)
+			.then((rendered) =>
+				deliver((Array.isArray(rendered) ? rendered : [rendered]) as readonly Notification[]),
+			)
+			.then((outcome) => {
+				if (outcome === 'partial') {
+					logEvent({
+						...fields,
+						level: 'warn',
+						event: events.partial,
+						notification_kind: kind,
+					});
+				}
+			})
+			.catch((error: unknown) => {
 				logEvent({
 					...fields,
-					level: 'warn',
-					event: events.partial,
+					level: 'error',
+					event: events.failed,
 					notification_kind: kind,
+					error: errorMetadata(error),
 				});
-			}
-		})
-		.catch((error: unknown) => {
-			logEvent({
-				...fields,
-				level: 'error',
-				event: events.failed,
-				notification_kind: kind,
-				error: errorMetadata(error),
 			});
-		});
-	deps.backgroundTasks?.defer(delivery);
+	void deferOrAwait(deps.backgroundWork, 'notification.delivery', delivery, deps.metrics, fields);
 }
 
 export function scheduleNotification(

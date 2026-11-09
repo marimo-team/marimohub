@@ -559,9 +559,9 @@ describe('session warm sandbox assignment', () => {
 		handoff.reject(new WarmPoolClaimExpiredError());
 		const response = await expectOk<Session>(await request);
 		const session = await w.services.sessions.getSession(w.project.id, response.session_id);
-		expect(prepare).toHaveBeenCalledTimes(2);
 		expect(session.sandbox_id).not.toBe(oldId);
 		expect(prepare.mock.calls[1][0].sandboxId).toBe(session.sandbox_id);
+		expect(cold.calls.startProcess).toHaveLength(1);
 		expect(cold.calls.destroy).toBe(0);
 	});
 

@@ -115,6 +115,126 @@ describe('BackgroundLoops', () => {
 		]);
 	});
 
+	it.each(['ECONNRESET', 'EPIPE'])(
+		'reports %s as a connection failure even when named TimeoutError',
+		async (code) => {
+			const error = Object.assign(new Error(`read ${code}`), { name: 'TimeoutError', code });
+			const pending = Promise.withResolvers<void>();
+			start(() => pending.promise);
+			await vi.advanceTimersByTimeAsync(69);
+			pending.reject(error);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(events()).toEqual([
+				expect.objectContaining({
+					event: 'test_failed',
+					error: `read ${code}`,
+					name: code,
+					code,
+					original_name: 'TimeoutError',
+					duration_ms: 69,
+				}),
+			]);
+			expect(loops.health().loops.test).toMatchObject({ status: 'failing', timeouts: 0 });
+			expect(error.name).toBe('TimeoutError');
+		},
+	);
+
+	it('preserves the name and code of a wrapped connection failure', async () => {
+		const cause = Object.assign(new Error('read ECONNRESET'), {
+			name: 'SocketError',
+			code: 'ECONNRESET',
+		});
+		const error = Object.assign(new Error('request failed', { cause }), { name: 'TimeoutError' });
+		start(async () => {
+			throw error;
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(events()).toEqual([
+			expect.objectContaining({
+				error: 'request failed',
+				name: 'ECONNRESET',
+				code: 'ECONNRESET',
+				original_name: 'TimeoutError',
+				cause_name: 'SocketError',
+				cause_code: 'ECONNRESET',
+			}),
+		]);
+	});
+
+	it('omits the legacy numeric code from a genuine DOM timeout', async () => {
+		start(async () => {
+			throw new DOMException('request timed out', 'TimeoutError');
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(events()[0]).toMatchObject({ event: 'test_failed', name: 'TimeoutError' });
+		expect(events()[0]).not.toHaveProperty('code');
+		expect(events()[0]).not.toHaveProperty('original_name');
+	});
+
+	it.each(['ECONNRESET', 'EPIPE'])(
+		'uses the %s cause instead of a DOM timeout code',
+		async (code) => {
+			const cause = Object.assign(new Error('connection failed'), { code });
+			start(async () => {
+				throw Object.assign(new DOMException('request failed', 'TimeoutError'), { cause });
+			});
+			await vi.advanceTimersByTimeAsync(0);
+			expect(events()[0]).toMatchObject({
+				name: code,
+				code,
+				original_name: 'TimeoutError',
+				cause_name: 'Error',
+				cause_code: code,
+			});
+		},
+	);
+
+	it.each(['ECONNRESET', 'EPIPE'])('preserves %s from a plain error-shaped cause', async (code) => {
+		start(async () => {
+			throw Object.assign(new Error('request failed', { cause: { code } }), {
+				name: 'TimeoutError',
+			});
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(events()[0]).toMatchObject({
+			name: code,
+			code,
+			original_name: 'TimeoutError',
+			cause_code: code,
+		});
+	});
+
+	it.each([64, 65])('bounds direct and cause codes of length %s', async (length) => {
+		const code = 'x'.repeat(length);
+		start(async () => {
+			throw Object.assign(new Error('request failed', { cause: { code } }), { code });
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		if (length === 64) {
+			expect(events()[0]).toMatchObject({ code, cause_code: code });
+		} else {
+			expect(events()[0]).not.toHaveProperty('code');
+			expect(events()[0]).not.toHaveProperty('cause_code');
+			expect(JSON.stringify(events())).not.toContain(code);
+		}
+	});
+
+	it.each([
+		{ name: 'Error', code: 'ECONNRESET' },
+		{ name: 'TimeoutError', code: 'ETIMEDOUT' },
+		{ name: 'TimeoutError', code: undefined },
+		{ name: 'StorageError', code: 503 },
+	])('preserves $name with code $code', async ({ name, code }) => {
+		start(async () => {
+			throw Object.assign(new Error('unavailable'), { name, code });
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(events()[0]).toMatchObject({ event: 'test_failed', name });
+		expect(events()[0].code).toBe(code);
+		expect(events()[0]).not.toHaveProperty('original_name');
+		expect(loops.health().loops.test.timeouts).toBe(0);
+	});
+
 	it.each(['resolve', 'reject'] as const)(
 		'holds the in-flight guard for hung work and ignores its late %s',
 		async (outcome) => {
@@ -129,7 +249,12 @@ describe('BackgroundLoops', () => {
 				loops: { test: { status: 'stalled', timeouts: 1, consecutive_failures: 1 } },
 			});
 			expect(events()).toContainEqual(
-				expect.objectContaining({ level: 'error', event: 'test_stalled', deadline_ms: 250 }),
+				expect.objectContaining({
+					level: 'error',
+					event: 'test_stalled',
+					name: 'LoopDeadlineError',
+					deadline_ms: 250,
+				}),
 			);
 			await vi.advanceTimersByTimeAsync(200);
 			expect(run).toHaveBeenCalledOnce();

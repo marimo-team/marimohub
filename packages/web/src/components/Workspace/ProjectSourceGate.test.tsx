@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { Link, Route, Routes, useLocation } from 'react-router-dom';
 import { makeUser, stubApi } from '@/test/apiStub';
 import { createTestQueryClient, jsonError, renderWithClient } from '@/test/render';
@@ -7,6 +7,11 @@ import type { ProjectRole } from '@/types';
 import { userKeys } from '@/api/queryKeys';
 import { lastProjectKey } from './lastProject';
 import { ProjectSourceGate } from './ProjectSourceGate';
+
+const projectPreloads = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@/components/Project/projectRoute', () => ({
+	ProjectRoute: { preload: () => projectPreloads.count++ },
+}));
 
 function Destination() {
 	const location = useLocation();
@@ -57,6 +62,30 @@ describe('ProjectSourceGate', () => {
 		setup(route, 'viewer');
 		expect(await screen.findByText(page)).toBeVisible();
 	});
+
+	it.each([
+		['/projects/p', true],
+		['/projects/p/data', false],
+	])(
+		'preloads the index page chunk before access resolves only on the index (%s)',
+		async (route, preloads) => {
+			const fetch = vi.fn(() => new Promise<Response>(() => {}));
+			vi.stubGlobal('fetch', fetch);
+			projectPreloads.count = 0;
+			renderWithClient(
+				<Routes>
+					<Route path="/projects/:pid" element={<ProjectSourceGate />}>
+						<Route index element={<p>Project page</p>} />
+						<Route path="data" element={<p>Data page</p>} />
+					</Route>
+				</Routes>,
+				{ route, toaster: false },
+			);
+			await waitFor(() => expect(fetch).toHaveBeenCalled());
+			expect(projectPreloads.count > 0).toBe(preloads);
+			expect(screen.queryByText(/page$/)).not.toBeInTheDocument();
+		},
+	);
 });
 
 it.each([

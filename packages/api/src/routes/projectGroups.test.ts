@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServices, paths, ProjectId } from '@marimo-hub/core';
 import type { ProjectAlertDispatcher } from '@marimo-hub/core';
-import { ACTOR, MemoryNotifier, uid } from '@marimo-hub/core/testing';
+import { ACTOR, MemoryNotifier, queuedBackgroundWork, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import {
 	createInitializedBucket,
@@ -38,17 +38,13 @@ describe('project group member routes', () => {
 	function withAlerts() {
 		const notifier = new MemoryNotifier();
 		const deliver = vi.fn<ProjectAlertDispatcher['deliver']>(async () => 'delivered');
-		const tasks: Promise<unknown>[] = [];
+		const host = queuedBackgroundWork();
 		const api = createTestApi({
 			bucket,
 			deps: {
 				notifier,
 				policy: { groupsCarried: true },
-				backgroundTasks: {
-					defer: (task) => {
-						tasks.push(task);
-					},
-				},
+				backgroundWork: host.work,
 				projectAlerts: {
 					store: {} as never,
 					dispatcher: { deliver, test: vi.fn() },
@@ -56,7 +52,7 @@ describe('project group member routes', () => {
 				},
 			},
 		});
-		return { ...api, notifier, deliver, drain: () => Promise.all(tasks) };
+		return { ...api, notifier, deliver, drain: host.runAll };
 	}
 	it.each(['sso', 'external-access-token'] as const)(
 		'grants project, list and directory access to %s groups and revokes it when groups change',

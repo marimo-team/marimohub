@@ -1,5 +1,6 @@
 import { serveStatic } from '@hono/node-server/serve-static';
 import type { ServeStaticOptions } from '@hono/node-server/serve-static';
+import { appendVary } from '@marimo-hub/api';
 import { baseHrefFromUrl } from '@marimo-hub/core/url';
 import type { MiddlewareHandler } from 'hono';
 
@@ -41,10 +42,13 @@ export function cacheControlForStaticPath(filePath: string): string {
 }
 
 export function serveStaticWithCache(options: ServeStaticOptions): MiddlewareHandler {
-	const handler = serveStatic(options);
+	const handler = serveStatic({ precompressed: true, ...options });
 	return async (context, next) => {
 		const response = await handler(context, next);
 		if (response instanceof Response) {
+			if (options.precompressed !== false) {
+				appendVary(response.headers, 'Accept-Encoding');
+			}
 			const requestPath = options.path ?? context.req.path;
 			const isCacheableResponse =
 				(response.status >= 200 && response.status < 300) || response.status === 304;
@@ -60,7 +64,7 @@ export function serveStaticWithCache(options: ServeStaticOptions): MiddlewareHan
 }
 
 export function serveSpaFallback(staticRoot: string, appBaseUrl?: string): MiddlewareHandler {
-	const handler = serveStaticWithCache({ path: `${staticRoot}/index.html` });
+	const handler = serveStaticWithCache({ path: `${staticRoot}/index.html`, precompressed: false });
 	const baseHref = appBaseUrl?.trim() ? baseHrefFromUrl(appBaseUrl) : '/';
 	return async (context, next) => {
 		if (isAssetPath(context.req.path)) return next();

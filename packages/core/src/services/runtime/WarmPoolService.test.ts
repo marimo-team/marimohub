@@ -18,7 +18,9 @@ import { AppPoolStore } from './AppPoolStore';
 import { WarmPoolStore } from './WarmPoolStore';
 import { WarmPoolService, WARM_POOL_MAX_IDLE_MS } from './WarmPoolService';
 import type { WarmPoolConfig } from './WarmPoolService';
+import { claimWarm } from '../../testing/warmPool';
 
+/** Session start's sequence: a failed probe retires the member and falls back to a cold boot. */
 function setup(overrides: Partial<WarmPoolConfig> = {}, referenceFor?: (id: SandboxId) => string) {
 	const bucket = new MemoryBucket();
 	const sessions = new SessionService(bucket);
@@ -131,7 +133,7 @@ describe('warm sandbox pools', () => {
 		expect(member.reconnect_reference).toBe(`provider-reference:${member.sandbox_id}`);
 		const connect = vi.spyOn(w.compute, 'connectExisting');
 		const request = { ...w.request(), reconnectReference: 'untrusted-request-reference' };
-		const claim = await w.replica().claim(request);
+		const claim = await claimWarm(w.replica(), request);
 		expect(claim?.member.sandbox_id).toBe(member.sandbox_id);
 		expect(connect).toHaveBeenCalledWith(member.sandbox_id, {
 			...w.config.profiles[0],
@@ -158,7 +160,7 @@ describe('warm sandbox pools', () => {
 			counters = { execs: 0 };
 			return result;
 		});
-		const claim = await w.service.claim(w.request());
+		const claim = await claimWarm(w.service, w.request());
 		expect(claim?.sandbox).toBe(sandbox);
 		expect(sandbox.drainTimings).toHaveBeenCalledTimes(1);
 		expect(sandbox.drainCounters).toHaveBeenCalledTimes(1);
@@ -175,7 +177,7 @@ describe('warm sandbox pools', () => {
 			throw new Error('secret-provider-request');
 		});
 		sandbox.drainCounters = vi.fn(() => ({}));
-		expect((await w.service.claim(w.request()))?.sandbox).toBe(sandbox);
+		expect((await claimWarm(w.service, w.request()))?.sandbox).toBe(sandbox);
 		expect(sandbox.drainCounters).toHaveBeenCalledTimes(1);
 		expect((await w.members())[0].state).toBe('claimed');
 		expect(log.mock.calls.flat().join('')).toContain('warm_pool_diagnostics_failed');
@@ -209,7 +211,7 @@ describe('warm sandbox pools', () => {
 		await w.service.sweep();
 		const connect = vi.spyOn(w.compute, 'connectExisting');
 		const request = { ...w.request(), reconnectReference: 'untrusted-reference' };
-		const claim = await w.replica().claim(request);
+		const claim = await claimWarm(w.replica(), request);
 		expect(claim).toBeDefined();
 		expect(connect).toHaveBeenCalledExactlyOnceWith(claim!.member.sandbox_id, w.config.profiles[0]);
 		expect(claim!.member.reconnect_reference).toBeUndefined();
@@ -231,7 +233,7 @@ describe('warm sandbox pools', () => {
 		w.advance(30_001);
 		const sweep = w.service.sweep();
 		await vi.waitFor(() => expect(finishHealth).toBeDefined());
-		const claim = (await w.replica().claim(w.request()))!;
+		const claim = (await claimWarm(w.replica(), w.request()))!;
 		finishHealth();
 		await sweep;
 		const current = (await w.members()).find((item) => item.sandbox_id === member.sandbox_id)!;
@@ -244,7 +246,7 @@ describe('warm sandbox pools', () => {
 		const w = setup({}, () => 'saved-reference');
 		await w.service.sweep();
 		w.live.clear();
-		expect(await w.service.claim(w.request())).toBeUndefined();
+		expect(await claimWarm(w.service, w.request())).toBeUndefined();
 		expect((await w.members())[0].state).toBe('retiring');
 		expect(w.created).toHaveLength(1);
 	});
@@ -299,7 +301,7 @@ describe('warm sandbox pools', () => {
 		const current = (await w.members()).find((item) => item.sandbox_id === member.sandbox_id)!;
 		expect(current).toMatchObject({ state: 'retiring', checked_at: member.checked_at });
 		expect(current.reconnect_reference).toBeUndefined();
-		const claim = await w.service.claim(w.request());
+		const claim = await claimWarm(w.service, w.request());
 		expect(claim).toBeDefined();
 		expect(claim!.member.sandbox_id).not.toBe(member.sandbox_id);
 	});
@@ -329,7 +331,7 @@ describe('warm sandbox pools', () => {
 		await w.service.sweep();
 		const pools = (await w.service.store.read()).pools;
 		const appSandbox = pools.find((p) => p.key === 'app')?.members[0]?.sandbox_id;
-		const claim = await w.service.claim({
+		const claim = await claimWarm(w.service, {
 			...w.request(),
 			profile: 'small',
 			resources: { cpu: 1 },
@@ -337,7 +339,7 @@ describe('warm sandbox pools', () => {
 		expect(appSandbox).toBeDefined();
 		expect(claim?.member.sandbox_id).toBe(appSandbox);
 		expect(
-			await w.service.claim({ ...w.request(), profile: 'small', resources: { cpu: 3 } }),
+			await claimWarm(w.service, { ...w.request(), profile: 'small', resources: { cpu: 3 } }),
 		).toBeUndefined();
 	});
 
@@ -375,7 +377,7 @@ describe('warm sandbox pools', () => {
 	it('does no provider or claim work when disabled', async () => {
 		const w = setup({ enabled: false });
 		const get = vi.spyOn(w.bucket, 'get');
-		expect(await w.service.claim(w.request())).toBeUndefined();
+		expect(await claimWarm(w.service, w.request())).toBeUndefined();
 		expect(get).not.toHaveBeenCalled();
 		await w.service.sweep();
 		expect(w.created).toEqual([]);
@@ -453,8 +455,8 @@ describe('warm sandbox pools', () => {
 		const w = setup();
 		await w.service.sweep();
 		const claims = await Promise.all([
-			w.service.claim(w.request()),
-			w.replica().claim(w.request()),
+			claimWarm(w.service, w.request()),
+			claimWarm(w.replica(), w.request()),
 		]);
 		expect(claims.filter(Boolean)).toHaveLength(1);
 		expect(claims.find(Boolean)?.member.sandbox_id).toBe(w.created[0]);
@@ -508,7 +510,7 @@ describe('warm sandbox pools', () => {
 	])('bypasses incompatible launches: %j', async (extra) => {
 		const w = setup();
 		await w.service.sweep();
-		expect(await w.service.claim({ ...w.request(), ...extra })).toBeUndefined();
+		expect(await claimWarm(w.service, { ...w.request(), ...extra })).toBeUndefined();
 		expect((await w.members())[0].state).toBe('ready');
 	});
 
@@ -518,12 +520,12 @@ describe('warm sandbox pools', () => {
 			const w = setup({}, reference === undefined ? undefined : () => reference);
 			await w.service.sweep();
 			w.live.clear();
-			expect(await w.service.claim(w.request())).toBeUndefined();
+			expect(await claimWarm(w.service, w.request())).toBeUndefined();
 			await w.service.sweep();
 			vi.spyOn(w.live.values().next().value!, 'exec').mockResolvedValue(
 				execResult(false, '', 'failed'),
 			);
-			expect(await w.service.claim(w.request())).toBeUndefined();
+			expect(await claimWarm(w.service, w.request())).toBeUndefined();
 			expect((await w.members())[0].state).toBe('retiring');
 		},
 	);
@@ -531,7 +533,7 @@ describe('warm sandbox pools', () => {
 	it('falls back on unavailable pool storage', async () => {
 		const w = setup();
 		vi.spyOn(w.bucket, 'get').mockRejectedValue(new Error('unavailable'));
-		expect(await w.service.claim(w.request())).toBeUndefined();
+		expect(await claimWarm(w.service, w.request())).toBeUndefined();
 		expect(w.created).toHaveLength(0);
 	});
 
@@ -539,7 +541,7 @@ describe('warm sandbox pools', () => {
 		const w = setup();
 		await w.service.sweep();
 		const request = w.request();
-		const claim = (await w.service.claim(request))!;
+		const claim = (await claimWarm(w.service, request))!;
 		await w.sessions.createSession({
 			...request.destination,
 			user_id: ACTOR,
@@ -555,7 +557,7 @@ describe('warm sandbox pools', () => {
 		const w = setup();
 		await w.service.sweep();
 		const request = w.request();
-		const claim = (await w.service.claim(request))!;
+		const claim = (await claimWarm(w.service, request))!;
 		await w.sessions.createSession({
 			...request.destination,
 			user_id: ACTOR,
@@ -581,7 +583,7 @@ describe('warm sandbox pools', () => {
 			const w = setup();
 			await w.service.sweep();
 			const request = w.request();
-			const claim = (await w.service.claim(request))!;
+			const claim = (await claimWarm(w.service, request))!;
 			const session = await w.sessions.createSession({
 				...request.destination,
 				user_id: ACTOR,
@@ -613,7 +615,7 @@ describe('warm sandbox pools', () => {
 		const w = setup();
 		await w.service.sweep();
 		const request = w.request();
-		const claim = (await w.service.claim(request))!;
+		const claim = (await claimWarm(w.service, request))!;
 		await w.sessions.createSession({
 			...request.destination,
 			user_id: ACTOR,
@@ -631,7 +633,7 @@ describe('warm sandbox pools', () => {
 		const w = setup();
 		await w.service.sweep();
 		const request = w.request();
-		const claim = (await w.service.claim(request))!;
+		const claim = (await claimWarm(w.service, request))!;
 		w.advance(61_000);
 		await w.replica({ enabled: false }).sweep();
 		expect(w.destroyed).toContain(claim.member.sandbox_id);
@@ -648,7 +650,7 @@ describe('warm sandbox pools', () => {
 		const w = setup();
 		await w.service.sweep();
 		const request = w.request();
-		const claim = (await w.service.claim(request))!;
+		const claim = (await claimWarm(w.service, request))!;
 		await new AppPoolStore(w.bucket).mutate(
 			request.destination.project_id,
 			request.destination.notebook_id,
@@ -677,7 +679,7 @@ describe('warm sandbox pools', () => {
 	it('does not reclaim a transfer if session ownership cannot be read', async () => {
 		const w = setup();
 		await w.service.sweep();
-		const claim = (await w.service.claim(w.request()))!;
+		const claim = (await claimWarm(w.service, w.request()))!;
 		w.advance(61_000);
 		vi.spyOn(w.sessions, 'getSession').mockRejectedValue(new Error('storage unavailable'));
 		await w.replica({ enabled: false }).sweep();
@@ -687,7 +689,7 @@ describe('warm sandbox pools', () => {
 	it('retains failed destruction for retry and never returns claims to ready', async () => {
 		const w = setup();
 		await w.service.sweep();
-		const claim = (await w.service.claim(w.request()))!;
+		const claim = (await claimWarm(w.service, w.request()))!;
 		const create = w.compute.create.bind(w.compute);
 		const spy = vi.spyOn(w.compute, 'create').mockImplementation((id, options) => ({
 			...create(id, options),
@@ -707,7 +709,7 @@ describe('warm sandbox pools', () => {
 		const w = setup();
 		await w.service.sweep();
 		const request = w.request();
-		const claim = (await w.service.claim(request))!;
+		const claim = (await claimWarm(w.service, request))!;
 		await w.sessions.createSession({
 			...request.destination,
 			user_id: ACTOR,
@@ -734,7 +736,7 @@ describe('warm sandbox pools', () => {
 		const w = setup();
 		await w.service.sweep();
 		const request = w.request();
-		const claim = (await w.service.claim(request))!;
+		const claim = (await claimWarm(w.service, request))!;
 		await w.sessions.createSession({
 			...request.destination,
 			user_id: ACTOR,
@@ -763,7 +765,7 @@ describe('warm sandbox pools', () => {
 		);
 		const sweep = w.service.sweep();
 		await vi.waitFor(() => expect(reject).toBeDefined());
-		const claim = (await w.replica().claim(w.request()))!;
+		const claim = (await claimWarm(w.replica(), w.request()))!;
 		reject(new Error('late probe failure'));
 		await sweep;
 		expect(w.destroyed).not.toContain(claim.member.sandbox_id);
@@ -793,7 +795,7 @@ describe('warm sandbox pools', () => {
 		await w.service.sweep();
 		const original = w.created[0];
 		w.advance(age);
-		expect(await w.service.claim(w.request())).toBeUndefined();
+		expect(await claimWarm(w.service, w.request())).toBeUndefined();
 		await w.service.sweep();
 		expect(w.destroyed).toContain(original);
 		expect(w.created).toHaveLength(2);
@@ -811,7 +813,7 @@ describe('warm pool recovery races', () => {
 		const w = setup();
 		await w.service.sweep();
 		const request = w.request();
-		const claim = (await w.service.claim(request))!;
+		const claim = (await claimWarm(w.service, request))!;
 		let finish!: () => void;
 		const gate = new Promise<void>((resolve) => {
 			finish = resolve;
@@ -918,7 +920,7 @@ describe('warm pool failure boundaries', () => {
 				w.advance(elapsed);
 				return execResult(true, '', '');
 			});
-			expect(await w.service.claim(w.request())).toBeUndefined();
+			expect(await claimWarm(w.service, w.request())).toBeUndefined();
 			expect((await w.members())[0].state).toBe('retiring');
 			await w.replica({ enabled: false }).sweep();
 			expect(w.destroyed).toEqual([id]);
@@ -939,7 +941,7 @@ describe('warm pool failure boundaries', () => {
 		expect(w.created).toHaveLength(6);
 		const pools = (await w.service.store.read()).pools;
 		for (const pool of pools) expect(pool.members).toHaveLength(2);
-		const claim = (await w.service.claim({ ...w.request(), profile: 'large' }))!;
+		const claim = (await claimWarm(w.service, { ...w.request(), profile: 'large' }))!;
 		expect(
 			pools.find((pool) => pool.key === 'large')!.members.map((member) => member.sandbox_id),
 		).toContain(claim.member.sandbox_id);
@@ -982,8 +984,8 @@ describe('warm pool failure boundaries', () => {
 			await put(...args);
 			throw new Error('response lost');
 		});
-		expect(await w.service.claim(w.request())).toBeUndefined();
-		expect(await w.replica().claim(w.request())).toBeUndefined();
+		expect(await claimWarm(w.service, w.request())).toBeUndefined();
+		expect(await claimWarm(w.replica(), w.request())).toBeUndefined();
 		expect((await w.members())[0].state).toBe('claimed');
 		w.advance(60_000);
 		await w.replica({ enabled: false }).sweep();
@@ -1013,7 +1015,7 @@ describe('warm pool failure boundaries', () => {
 								setTimeout(() => resolve(execResult(true, '', '')), commandMs),
 							),
 					);
-				const claim = w.service.claim(w.request());
+				const claim = claimWarm(w.service, w.request());
 				await vi.advanceTimersByTimeAsync(reconnectMs - 1);
 				expect(exec).not.toHaveBeenCalled();
 				await vi.advanceTimersByTimeAsync(commandMs + 1);
@@ -1063,7 +1065,7 @@ describe('warm pool failure boundaries', () => {
 					});
 				const exec = vi.spyOn(sandbox, 'exec');
 				const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-				const claim = w.service.claim(w.request());
+				const claim = claimWarm(w.service, w.request());
 				await vi.advanceTimersByTimeAsync(4_999);
 				expect((await w.members())[0].state).toBe('claimed');
 				expect(log).not.toHaveBeenCalled();
@@ -1071,7 +1073,7 @@ describe('warm pool failure boundaries', () => {
 				await vi.advanceTimersByTimeAsync(1);
 				expect(await claim).toBeUndefined();
 				expect((await w.members())[0].state).toBe('retiring');
-				expect(await w.replica().claim(w.request())).toBeUndefined();
+				expect(await claimWarm(w.replica(), w.request())).toBeUndefined();
 				const failure = log.mock.calls
 					.map(([line]) => JSON.parse(line))
 					.find(
@@ -1108,9 +1110,9 @@ describe('warm pool failure boundaries', () => {
 			await w.service.sweep();
 			const sandbox = w.live.values().next().value!;
 			sandbox.ready = async () => w.advance(elapsed);
-			expect(await w.service.claim(w.request())).toBeUndefined();
+			expect(await claimWarm(w.service, w.request())).toBeUndefined();
 			expect((await w.members())[0].state).toBe('retiring');
-			expect(await w.replica().claim(w.request())).toBeUndefined();
+			expect(await claimWarm(w.replica(), w.request())).toBeUndefined();
 			await w.replica({ enabled: false }).sweep();
 			expect(w.live.size).toBe(0);
 		},
@@ -1173,7 +1175,7 @@ describe('warm pool failure boundaries', () => {
 			const sweep = w.service.sweep();
 			await vi.advanceTimersByTimeAsync(0);
 			expect(sandbox.ready).toHaveBeenCalledTimes(1);
-			const claim = (await w.replica().claim(w.request()))!;
+			const claim = (await claimWarm(w.replica(), w.request()))!;
 			await vi.advanceTimersByTimeAsync(5_000);
 			await sweep;
 			expect(w.destroyed).not.toContain(claim.member.sandbox_id);
@@ -1234,7 +1236,7 @@ describe('warm pool failure boundaries', () => {
 				vi.spyOn(sandbox, 'exec').mockResolvedValue(execResult(false, secret, secret));
 			}
 			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-			expect(await w.service.claim(w.request())).toBeUndefined();
+			expect(await claimWarm(w.service, w.request())).toBeUndefined();
 			expect((await w.members())[0].state).toBe('retiring');
 			expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
 				event: 'warm_pool_claim_failed',
@@ -1266,7 +1268,7 @@ describe('warm pool failure boundaries', () => {
 				};
 			else vi.spyOn(sandbox, 'exec').mockRejectedValue(cause);
 			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-			expect(await w.service.claim(w.request())).toBeUndefined();
+			expect(await claimWarm(w.service, w.request())).toBeUndefined();
 			expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
 				readiness_reason: phase === 'reconnect' ? 'reconnect_failed' : 'command_transport_failed',
 				error: { name: 'Error', code: 'UNAVAILABLE', status: 503 },
@@ -1293,7 +1295,7 @@ describe('warm pool failure boundaries', () => {
 						}),
 				);
 				const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-				const claim = w.service.claim(w.request());
+				const claim = claimWarm(w.service, w.request());
 				await vi.advanceTimersByTimeAsync(2_000);
 				expect(await claim).toBeUndefined();
 				expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
@@ -1301,7 +1303,7 @@ describe('warm pool failure boundaries', () => {
 					error: { name: 'WarmPoolReadinessError', reason: 'command_timeout' },
 				});
 				expect((await w.members())[0].state).toBe('retiring');
-				expect(await w.replica().claim(w.request())).toBeUndefined();
+				expect(await claimWarm(w.replica(), w.request())).toBeUndefined();
 				finish();
 				await vi.advanceTimersByTimeAsync(0);
 				expect((await w.members())[0].state).toBe('retiring');
@@ -1319,7 +1321,7 @@ describe('warm pool failure boundaries', () => {
 		const sandbox = w.live.values().next().value!;
 		delete sandbox.ready;
 		const exec = vi.spyOn(sandbox, 'exec').mockResolvedValue(execResult(false, '', 'unhealthy'));
-		expect(await w.service.claim(w.request())).toBeUndefined();
+		expect(await claimWarm(w.service, w.request())).toBeUndefined();
 		expect(exec).toHaveBeenCalledWith('true', { timeout: 2_000 });
 		expect((await w.members())[0].state).toBe('retiring');
 	});
@@ -1340,7 +1342,7 @@ describe('warm pool failure boundaries', () => {
 		expect(w.created).toHaveLength(1);
 		expect(w.destroyed).toEqual(w.created);
 		expect(await w.members()).toEqual([]);
-		expect(await w.service.claim(w.request())).toBeUndefined();
+		expect(await claimWarm(w.service, w.request())).toBeUndefined();
 	});
 
 	it('caps repeated creation backoff and resets it after a successful boot', async () => {
@@ -1429,7 +1431,7 @@ describe('warm pool failure boundaries', () => {
 	it('leaves the warm claim unassigned when the session read fails', async () => {
 		const w = setup();
 		await w.service.sweep();
-		const claim = (await w.service.claim(w.request()))!;
+		const claim = (await claimWarm(w.service, w.request()))!;
 		vi.spyOn(w.sessions, 'getSession').mockRejectedValue(new Error('storage unavailable'));
 		await expect(w.service.handoff(claim)).rejects.toThrow('storage unavailable');
 		expect((await w.members())[0]).toMatchObject({ state: 'claimed', assigned: false });
@@ -1441,7 +1443,7 @@ describe('warm pool failure boundaries', () => {
 			const w = setup({ providerLifetimeMs: reason === 'expired lifetime' ? 90_000 : undefined });
 			await w.service.sweep();
 			const request = w.request();
-			const claim = (await w.service.claim(request))!;
+			const claim = (await claimWarm(w.service, request))!;
 			await w.sessions.createSession({
 				...request.destination,
 				user_id: ACTOR,
@@ -1465,7 +1467,7 @@ describe('warm pool failure boundaries', () => {
 	it('does not destroy the current claim when an old token tries to abandon it', async () => {
 		const w = setup();
 		await w.service.sweep();
-		const claim = (await w.service.claim(w.request()))!;
+		const claim = (await claimWarm(w.service, w.request()))!;
 		await w.service.abandon({ ...claim, member: { ...claim.member, token: 'stale' } });
 		expect(w.destroyed).toEqual([]);
 		expect((await w.members())[0]).toMatchObject({ state: 'claimed', token: claim.member.token });
@@ -1474,7 +1476,7 @@ describe('warm pool failure boundaries', () => {
 	it('retries cleanup when provider deletion succeeded but its bucket update failed', async () => {
 		const w = setup();
 		await w.service.sweep();
-		const claim = (await w.service.claim(w.request()))!;
+		const claim = (await claimWarm(w.service, w.request()))!;
 		const put = w.bucket.put.bind(w.bucket);
 		vi.spyOn(w.bucket, 'put')
 			.mockImplementationOnce(put)

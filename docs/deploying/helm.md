@@ -126,3 +126,5 @@ See [Troubleshooting](../troubleshooting.md) and
 - [`charts/marimohub/README.md`](https://github.com/marimo-team/marimohub/blob/main/charts/marimohub/README.md)
   — full values reference.
 - [Configuration](../configuration.md) for every variable.
+
+See [asset caching](./asset-caching.md) to reuse marimo frontend assets across sessions.

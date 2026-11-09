@@ -83,7 +83,8 @@ Updater](https://argocd-image-updater.readthedocs.io/) or
 | `ingress.tls.*` | enabled, `marimohub-tls` | |
 | `metrics.enabled` / `.port` | `false` / `9464` | Prometheus scrape mode; port exposed on the Service, never the ingress |
 | `metrics.serviceMonitor.*` | disabled, `30s`, `{}` labels | Prometheus Operator ServiceMonitor |
-| `resources` | 100m/256Mi → 500m/512Mi | API container |
+| `resources` | 250m/512Mi → 2/1Gi | API container requests → limits |
+| `maintenance.resources` | 50m/128Mi → 250m/256Mi | Maintenance container requests → limits |
 | `nodeSelector` / `tolerations` / `affinity` | empty | Set per cluster |
 | `secretResolvers.kubernetes.enabled` | `false` | Resolve integration fields from Kubernetes Secrets |
 | `secretResolvers.kubernetes.cacheTtlSeconds` | `0` | Cross-operation Secret cache TTL |
@@ -99,10 +100,10 @@ pod is pinned to one replica with the `Recreate` strategy — don't scale it.
 
 ### Shutdown
 
-API pods allow 30 seconds to drain background work and 50 seconds before termination.
-Maintenance uses `maintenance.shutdownTimeoutSeconds` (default 120), plus 20 seconds for cleanup and exit.
+API pods use a 30-second drain budget and a 50-second termination grace period.
+`maintenance.shutdownTimeoutSeconds` sets the maintenance drain budget. The default is 120 seconds.
+The maintenance grace period adds 20 seconds for cleanup and exit.
 
-Set the maintenance budget through that chart value.
 The chart rejects `MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` in `extraEnv`, `config`, and `secrets.data`, even with maintenance disabled.
 See [shutdown budgets](../../docs/operations.md#shutdown-budgets).
 
@@ -235,3 +236,12 @@ sandboxImagePrepuller:
 Use the same immutable image references as your compute configuration.
 For private images, set `sandboxImagePrepuller.imagePullSecrets` with secrets in the release namespace.
 For mutable tags, set `pullPolicy: Always` and change `revision` when the image changes.
+
+## Kernel compression and hub capacity
+
+`sandboxIngress.compression.enabled` defaults to `false`. Enabling it requires
+Traefik's `Middleware` CRD and `sandboxIngress.namespace`.
+See the [CKS recipe](../../docs/deploying/cks.md#kernel-response-compression) to attach it to kernel Ingresses.
+
+API pods request 250m CPU and 512Mi memory, with limits of 2 CPUs and 1Gi memory.
+See [hub capacity](../../docs/deploying/kubernetes.md#hub-resource-capacity) to adjust these limits.

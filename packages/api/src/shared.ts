@@ -70,9 +70,7 @@ import type {
 } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { describeError, logEvent } from './log';
-import { backgroundWorkFor, withInlineFallback } from './backgroundWork';
-
-export { backgroundWorkFor } from './backgroundWork';
+import { withInlineFallback } from './backgroundWork';
 
 // Re-export the injected-context types for route modules that import from './shared'.
 export type { ApiDeps, HonoEnv } from './context';
@@ -590,14 +588,14 @@ export async function deferTeardown(
 	task: () => Promise<unknown>,
 	context: { project_id: ProjectId; notebook_id?: NotebookId; session_id?: SessionId },
 ): Promise<void> {
-	const work = deps.teardownInline ? undefined : backgroundWorkFor(deps);
+	const work = deps.teardownInline ? undefined : deps.backgroundWork;
 	await deferOrAwait(withInlineFallback(work), label, task, deps.metrics, context);
 }
 
 /** The retire seam (save + destroy + terminal mark + claim release) over this request's deps. */
 export function sessionRetirer(deps: ApiDeps): SessionRetirer {
 	return new SessionRetirer({
-		backgroundWork: backgroundWorkFor(deps),
+		backgroundWork: deps.backgroundWork,
 		metrics: deps.metrics,
 		sessions: deps.services.sessions,
 		notebooks: deps.services.notebooks,
@@ -1482,11 +1480,15 @@ export const SessionResponseSchema = z
 			.string()
 			.nullable()
 			.optional()
-			.describe('Current notebook head, included in ordinary app heartbeats.'),
+			.describe(
+				'Current head version of the notebook source. Sent only in heartbeat responses for running or starting app sessions. Omitted for app users, credentials without project.read, preview runtimes, and edit sessions. Start, get, and list responses never include it.',
+			),
 		edit_active: z
 			.boolean()
 			.optional()
-			.describe('A persistent editor claim is active, included in ordinary app heartbeats.'),
+			.describe(
+				'True when a persistent editor holds the notebook editor claim. Sent and omitted under the same rules as head_version_id.',
+			),
 		/**
 		 * The caller's grants on this session, evaluated server-side (the same
 		 * `sessionCan` the gates enforce): `attach` — may reach the kernel (open,

@@ -18,6 +18,11 @@ import { makeWorkspaceService } from '@marimo-hub/core/testing/workspace-fixture
 import { bucketContract } from '@marimo-hub/core/testing/contract';
 import { FsStorage } from './index';
 
+vi.mock('node:fs/promises', async (importOriginal) => {
+	const actual = await importOriginal<typeof fsp>();
+	return { ...actual, utimes: vi.fn(actual.utimes) };
+});
+
 const tmpRoots: string[] = [];
 afterAll(() => {
 	for (const root of tmpRoots) rmSync(root, { recursive: true, force: true });
@@ -260,6 +265,103 @@ describe('FsStorage', () => {
 			await expect(
 				b.put('proj/n.json', '{"v":3}', { onlyIfEtagMatches: put.etag }),
 			).rejects.toBeInstanceOf(PreconditionFailedError);
+		});
+
+		it.each(['plain', 'conditional'] as const)(
+			'advances mtime past the replaced version so %s same-size writes never repeat an etag',
+			async (mode) => {
+				const root = makeRoot();
+				const bucket = new FsStorage({ root });
+				const file = path.join(root, 'catalog.json');
+				await bucket.put('catalog.json', '{"v":1}');
+				// Pin the previous mtime ahead of the wall clock; later writes must still exceed it.
+				const tick = Math.floor(Date.now() / 1000) + 3600;
+				await fsp.utimes(file, tick, tick);
+				const first = (await bucket.head('catalog.json'))!.etag;
+				const mtimes = [(await fsp.stat(file, { bigint: true })).mtimeNs];
+				const etags = [first];
+				for (const value of ['{"v":2}', '{"v":3}']) {
+					const written = await bucket.put(
+						'catalog.json',
+						value,
+						mode === 'conditional' ? { onlyIfEtagMatches: etags.at(-1) } : undefined,
+					);
+					etags.push(written.etag);
+					expect((await bucket.head('catalog.json'))!.etag).toBe(written.etag);
+					mtimes.push((await fsp.stat(file, { bigint: true })).mtimeNs);
+				}
+				expect(new Set(etags).size).toBe(3);
+				expect(mtimes[1]).toBeGreaterThan(mtimes[0]);
+				expect(mtimes[2]).toBeGreaterThan(mtimes[1]);
+				await expect(
+					bucket.put('catalog.json', '{"v":4}', { onlyIfEtagMatches: first }),
+				).rejects.toBeInstanceOf(PreconditionFailedError);
+				expect(await (await bucket.get('catalog.json'))!.text()).toBe('{"v":3}');
+			},
+		);
+
+		it('stamps a recreated key past the deleted version so its old etag cannot match', async () => {
+			const root = makeRoot();
+			const bucket = new FsStorage({ root });
+			const file = path.join(root, 'catalog.json');
+			const ahead = Date.now() + 3_600_000;
+			const now = vi.spyOn(performance, 'now').mockReturnValue(ahead - performance.timeOrigin);
+			try {
+				const original = await bucket.put('catalog.json', '{"v":1}');
+				const originalMtime = (await fsp.stat(file, { bigint: true })).mtimeNs;
+				// Explicit stamp even with no previous version: the kernel clock is an hour behind.
+				expect(originalMtime).toBeGreaterThanOrEqual(BigInt(ahead - 1) * 1_000_000n);
+				await bucket.delete('catalog.json');
+				const recreated = await bucket.put('catalog.json', '{"v":1}');
+				expect((await fsp.stat(file, { bigint: true })).mtimeNs).toBeGreaterThan(originalMtime);
+				expect(recreated.etag).not.toBe(original.etag);
+				await expect(
+					bucket.put('catalog.json', '{"v":2}', { onlyIfEtagMatches: original.etag }),
+				).rejects.toBeInstanceOf(PreconditionFailedError);
+				await bucket.delete('catalog.json');
+				const created = await bucket.put('catalog.json', '{"v":1}', { onlyIfNotExists: true });
+				expect(created.etag).not.toBe(recreated.etag);
+			} finally {
+				now.mockRestore();
+			}
+		});
+
+		it('retries when utimes leaves the staged mtime behind the replaced version', async () => {
+			const root = makeRoot();
+			const bucket = new FsStorage({ root });
+			const file = path.join(root, 'catalog.json');
+			await bucket.put('catalog.json', '{"v":1}');
+			const tick = Math.floor(Date.now() / 1000) + 7200;
+			await fsp.utimes(file, tick, tick);
+			const previous = await bucket.head('catalog.json');
+			const previousMtime = (await fsp.stat(file, { bigint: true })).mtimeNs;
+			const utimes = vi.mocked(fsp.utimes);
+			utimes.mockClear();
+			utimes.mockImplementationOnce(async () => {});
+			const written = await bucket.put('catalog.json', '{"v":2}');
+			expect(utimes.mock.calls.length).toBeGreaterThanOrEqual(2);
+			const mtime = (await fsp.stat(file, { bigint: true })).mtimeNs;
+			expect(mtime).toBeGreaterThan(previousMtime);
+			expect(written.etag).not.toBe(previous!.etag);
+			expect((await bucket.head('catalog.json'))!.etag).toBe(written.etag);
+		});
+
+		it('refuses to publish when the filesystem never advances the staged mtime', async () => {
+			const root = makeRoot();
+			const bucket = new FsStorage({ root });
+			const file = path.join(root, 'catalog.json');
+			await bucket.put('catalog.json', '{"v":1}');
+			const tick = Math.floor(Date.now() / 1000) + 10_800;
+			await fsp.utimes(file, tick, tick);
+			const utimes = vi.mocked(fsp.utimes);
+			utimes.mockImplementation(async () => {});
+			try {
+				await expect(bucket.put('catalog.json', '{"v":2}')).rejects.toThrow(/could not advance/);
+			} finally {
+				utimes.mockReset();
+			}
+			expect(await (await bucket.get('catalog.json'))!.text()).toBe('{"v":1}');
+			expect(await fsp.readdir(path.join(root, '.tmp'))).toEqual([]);
 		});
 
 		it('CAS race across two instances in one process has exactly one winner', async () => {

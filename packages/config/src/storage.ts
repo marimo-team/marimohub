@@ -6,7 +6,7 @@ import { AzureStorage } from '@marimo-hub/storage-azure';
 import { S3Storage } from '@marimo-hub/storage-s3';
 import { GcsStorage } from '@marimo-hub/storage-gcs';
 import { FsStorage } from '@marimo-hub/storage-fs';
-import { parseBool, parseEnumOr, requiredVar } from './env';
+import { parseBool, parseEnumOr, parseIntEnv, requiredVar } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 import type { LoadedAdapterLibraries } from './library';
@@ -48,7 +48,7 @@ function s3Credentials(env: Env) {
 export function makeStorage(env: Env, libraries?: LoadedAdapterLibraries): Bucket {
 	const backend = storageBackend(env);
 	switch (backend) {
-		case 's3':
+		case 's3': {
 			// Static creds are all-or-nothing. If only one half is set, silently
 			// dropping it (and falling back to the ambient AWS chain — a different
 			// identity) is a misconfiguration that fails in confusing ways at runtime.
@@ -63,7 +63,14 @@ export function makeStorage(env: Env, libraries?: LoadedAdapterLibraries): Bucke
 					{ variable: 'MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID', docs: 'docs/configuration.md#storage' },
 				);
 			}
+			const maxSockets = parseIntEnv(env, 'MARIMOHUB_STORAGE_S3_MAX_SOCKETS');
+			if (maxSockets !== undefined && (!Number.isSafeInteger(maxSockets) || maxSockets < 1)) {
+				throw new ConfigError('MARIMOHUB_STORAGE_S3_MAX_SOCKETS must be a positive safe integer', {
+					variable: 'MARIMOHUB_STORAGE_S3_MAX_SOCKETS',
+				});
+			}
 			return new S3Storage({
+				maxSockets,
 				bucket: requiredVar(env, 'MARIMOHUB_STORAGE_S3_BUCKET', {
 					remediation:
 						'Set it to the name of the bucket that backs the hub (e.g. orgname-marimohub).',
@@ -74,6 +81,7 @@ export function makeStorage(env: Env, libraries?: LoadedAdapterLibraries): Bucke
 				credentials: s3Credentials(env),
 				forcePathStyle: parseBool(env, 'MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE'),
 			});
+		}
 		case 'gcs':
 			// Google Cloud Storage via its native JSON API (generation-based CAS).
 			// Auth: a service-account key JSON (MARIMOHUB_STORAGE_GCS_SA_KEY) minted

@@ -1,5 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { createUIMessageStreamResponse } from 'ai';
+import { deferOrAwait } from '@marimo-hub/core';
 import {
 	ChatPermissionGrantSchema,
 	ConversationIdSchema,
@@ -228,14 +229,22 @@ app.openapi(
 	async (c) => {
 		const body = c.req.valid('json');
 		const deps = c.get('deps');
+		const params = c.req.valid('param');
 		const turn = streamTurn({
 			...context(c),
-			...c.req.valid('param'),
+			...params,
 			...(body.resume === true
 				? { resume: true, acknowledgeUncertain: body.acknowledge_uncertain }
 				: { content: body.content }),
 		});
-		deps.backgroundTasks?.defer(turn.done.catch(() => {}));
+		// The turn reports its own failures to the client stream.
+		void deferOrAwait(
+			deps.backgroundWork,
+			'conversation.turn',
+			() => turn.done.catch(() => {}),
+			deps.metrics,
+			{ project_id: params.pid, conversation_id: params.cid },
+		);
 		await turn.started;
 		return createUIMessageStreamResponse({ stream: turn.stream });
 	},

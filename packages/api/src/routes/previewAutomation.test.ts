@@ -132,6 +132,14 @@ async function prepare(id: string) {
 	return api.deps.services.previews.prepare(await record(id), api.deps.sourceControl, true);
 }
 
+async function groups() {
+	return (await api.deps.services.previews.store.project(pid)).automations ?? [];
+}
+function headWrites() {
+	const put = vi.spyOn(api.bucket, 'put');
+	return () => put.mock.calls.filter(([key]) => key === paths.previewProject(pid)).length;
+}
+
 async function createLazyBranch() {
 	return expectOk<{ id: string }>(
 		await api.request('POST', base, {
@@ -144,6 +152,38 @@ async function createLazyBranch() {
 }
 
 describe('PR preview automation', () => {
+	it('resumes exhausted preparation only when the target generation changes', async () => {
+		const first = (await reconcile(1)).items[0];
+		const preview = await record(first.id);
+		await api.bucket.put(
+			paths.preview(pid, nid, preview.id),
+			JSON.stringify({
+				...preview,
+				preparation: 'failed',
+				preparation_failures: 5,
+				error: 'Unable to prepare the preview.',
+				next_attempt_at: Date.now() + 3_600_000,
+			}),
+		);
+		await reconcile(2, SHA, { keep: 3 });
+		await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+		expect(reader.fetchWorkspace).not.toHaveBeenCalled();
+		expect((await record(first.id)).preparation_failures).toBe(5);
+		head = NEXT;
+		await reconcile(3, NEXT);
+		expect(await record(first.id)).toMatchObject({
+			preparation: 'pending',
+			preparation_failures: 0,
+		});
+		expect((await record(first.id)).error).toBeUndefined();
+		await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+		expect(await record(first.id)).toMatchObject({
+			preparation: 'ready',
+			preparation_failures: 0,
+			current: { commit: NEXT },
+		});
+	});
+
 	it('reuses the sticky ID across commits and retries, with no finite expiry', async () => {
 		const first = await reconcile(1);
 		expect(first.items[0]).toMatchObject({ name: 'feature/chart', expires_at: null, eager: true });
@@ -532,6 +572,144 @@ describe('PR preview automation', () => {
 			expect(await api.deps.services.sessions.listByProject(pid)).toEqual([]);
 		},
 	);
+
+	it('rejects a synchronize event after the PR closed', async () => {
+		await reconcile(1);
+		const [{ key }] = await groups();
+		state = 'closed';
+		await reconcile(2, SHA, {}, 'closed');
+		await expectError(await api.request('POST', `${base}/reconcile`, event(3, NEXT)), 409);
+		expect(await api.deps.services.previews.store.getAutomation(pid, key)).toMatchObject({
+			state: 'closed',
+			run_number: 2,
+		});
+	});
+
+	it('rejects run numbers that could fence a group permanently', () => {
+		expect(PreviewReconcileSchema.safeParse(event(2 ** 53 - 1)).success).toBe(false);
+		expect(PreviewReconcileSchema.safeParse({ ...event(1), run_id: '1'.repeat(21) }).success).toBe(
+			false,
+		);
+		expect(PreviewReconcileSchema.parse({ ...event(1), commit: 'A'.repeat(40) }).commit).toBe(
+			'a'.repeat(40),
+		);
+	});
+
+	it('keeps the failure backoff when a visit requests a failed lazy preview', async () => {
+		const first = (await reconcile(1, SHA, { eager: false })).items[0];
+		await expectOk(await api.request('POST', `${base}/${first.id}/prepare`), 202);
+		vi.mocked(reader.fetchWorkspace).mockRejectedValueOnce(new Error('archive interrupted'));
+		const failed = await prepare(first.id);
+		expect(failed.preparation).toBe('failed');
+		expect(failed.next_attempt_at).toBeGreaterThan(Date.now());
+		await expectOk(await api.request('POST', `${base}/${first.id}/prepare`), 202);
+		expect((await record(first.id)).next_attempt_at).toBe(failed.next_attempt_at);
+		await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+		expect(reader.fetchWorkspace).toHaveBeenCalledTimes(1);
+		vi.spyOn(Date, 'now').mockReturnValue(failed.next_attempt_at! + 1);
+		await expectOk(await api.request('POST', `${base}/${first.id}/prepare`), 202);
+		expect((await record(first.id)).next_attempt_at).toBe(0);
+		await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+		expect((await record(first.id)).current?.commit).toBe(SHA);
+	});
+
+	it('does not write the project head for failed PR checks', async () => {
+		const first = (await reconcile(1)).items[0];
+		await prepare(first.id);
+		vi.mocked(reader.getPullRequest!).mockRejectedValue(new Error('GitHub unavailable'));
+		const writes = headWrites();
+		await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+		expect(reader.getPullRequest).toHaveBeenCalledTimes(2);
+		expect(writes()).toBe(0);
+		expect((await groups())[0].checked_at).toBeUndefined();
+	});
+
+	it('stamps successful PR checks at most hourly and polls once a minute', async () => {
+		const first = (await reconcile(1)).items[0];
+		await prepare(first.id);
+		const now = Date.now();
+		const time = vi.spyOn(Date, 'now').mockReturnValue(now);
+		const writes = headWrites();
+		const service = api.deps.services.previews;
+		await service.preparePending(api.deps.sourceControl!);
+		expect(writes()).toBe(1);
+		expect((await groups())[0].checked_at).toBe(now);
+		await service.preparePending(api.deps.sourceControl!);
+		expect(reader.getPullRequest).toHaveBeenCalledTimes(2);
+		time.mockReturnValue(now + 30 * 60_000);
+		await service.preparePending(api.deps.sourceControl!);
+		expect(reader.getPullRequest).toHaveBeenCalledTimes(3);
+		expect(writes()).toBe(1);
+		time.mockReturnValue(now + 61 * 60_000);
+		await service.preparePending(api.deps.sourceControl!);
+		expect(writes()).toBe(2);
+		expect((await groups())[0].checked_at).toBe(now + 61 * 60_000);
+	});
+
+	it('closes a group that was never verified for seven days', async () => {
+		const first = (await reconcile(1)).items[0];
+		vi.mocked(reader.getPullRequest!).mockRejectedValue(new NotFoundError('PR unavailable'));
+		const time = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6 * 86_400_000);
+		await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+		expect(await groups()).toHaveLength(1);
+		time.mockReturnValue(Date.now() + 2 * 86_400_000);
+		await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+		expect(await groups()).toEqual([]);
+		expect((await record(first.id)).state).toBe('deleting');
+	});
+
+	it('closes a group after the GitHub App loses repository access for seven days', async () => {
+		const first = (await reconcile(1)).items[0];
+		await prepare(first.id);
+		const now = Date.now() + 86_400_000;
+		const time = vi.spyOn(Date, 'now').mockReturnValue(now);
+		await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+		expect((await groups())[0].checked_at).toBe(now);
+		vi.spyOn(api.deps.sourceControl!, 'getReader').mockReturnValue(undefined);
+		time.mockReturnValue(now + 6 * 86_400_000);
+		await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+		expect(await groups()).toHaveLength(1);
+		time.mockReturnValue(now + 7 * 86_400_000);
+		await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+		expect(await groups()).toEqual([]);
+		expect((await record(first.id)).state).toBe('deleting');
+	});
+
+	it.each(['manual', 'automation'] as const)(
+		'reads the project head once per maintenance pass with %s previews',
+		async (kind) => {
+			if (kind === 'manual') {
+				const manual = await expectOk<{ id: string }>(
+					await api.request('POST', base, {
+						name: 'manual',
+						source: { type: 'commit', commit: SHA },
+					}),
+					202,
+				);
+				await prepare(manual.id);
+			} else {
+				await prepare((await reconcile(1)).items[0].id);
+				await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+			}
+			const get = vi.spyOn(api.bucket, 'get');
+			await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+			// Discovery, the shared maintenance read, and the post-materialization recheck.
+			expect(get.mock.calls.filter(([key]) => key === paths.previewProject(pid))).toHaveLength(3);
+		},
+	);
+
+	it('stops polling GitHub after the project is deleted', async () => {
+		const first = (await reconcile(1)).items[0];
+		await prepare(first.id);
+		await api.deps.services.projects.deleteProject(pid, ACTOR);
+		await sweepPreviews(api.deps);
+		expect(await groups()).toEqual([]);
+		expect((await record(first.id)).state).not.toBe('active');
+		vi.mocked(reader.getPullRequest!).mockClear();
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2 * 60_000);
+		await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+		expect(reader.getPullRequest).not.toHaveBeenCalled();
+	});
 
 	it('keeps previews when GitHub temporarily hides the PR with a 404', async () => {
 		const first = (await reconcile(1)).items[0];

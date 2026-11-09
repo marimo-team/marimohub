@@ -138,6 +138,7 @@ export async function captureFilesystemSnapshot(
 				'filesystem_snapshot.delete',
 				() => fs.deleteSnapshot(previous.snapshot_id),
 				metrics,
+				{ project_id: projectId, notebook_id: notebookId, snapshot_id: previous.snapshot_id },
 			);
 		}
 	} catch (err) {

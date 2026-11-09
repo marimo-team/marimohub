@@ -5,7 +5,8 @@ import type { CatalogService } from '../services/catalog/CatalogService';
 import type { ProjectService } from '../services/content/ProjectService';
 import type { ProjectId } from '../ids';
 import { ProjectId as ProjectIdValue } from '../ids';
-import { PreconditionFailedError, NotFoundError } from '../errors';
+import { PreconditionFailedError } from '../errors';
+import { logEvent } from '../logs';
 import { embedWithDeadline } from './embeddings';
 import { searchPaths } from './paths';
 import {
@@ -263,13 +264,12 @@ export class SearchIndexer {
 		return snapshot.projects.find((project) => project.id === projectId)?.search_refresh ?? null;
 	}
 	private async liveProject(projectId: ProjectId) {
-		try {
-			const project = await this.projects.getProject(projectId);
-			return project.status === 'deleted' ? null : project;
-		} catch (error) {
-			if (error instanceof NotFoundError) return null;
-			throw error;
+		const project = await this.projects.findProject(projectId);
+		if (!project) {
+			logEvent({ level: 'info', event: 'search.project_missing', project_id: projectId });
+			return null;
 		}
+		return project.status === 'deleted' ? null : project;
 	}
 	private async embed(
 		documents: SearchDocument[],

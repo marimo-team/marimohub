@@ -5,6 +5,8 @@ export * from './notifierContract';
 export * from './objectBrowseContract';
 export * from './RecordingBucket';
 export * from './assertions';
+export * from './backgroundWork';
+export * from './warmPool';
 export * from './fakes';
 export * from './fixtures';
 export * from './time';

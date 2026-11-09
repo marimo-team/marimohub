@@ -1462,6 +1462,15 @@ export function objectContentUrl(input: {
 
 // Notebooks
 
+// A stable selector keeps the memoised notebook list referentially stable across renders.
+function uniqueNotebooks(data: { pages: { items: NotebookEntry[] }[] }): NotebookEntry[] {
+	const notebooks = new Map<string, NotebookEntry>();
+	for (const page of data.pages) {
+		for (const item of page.items) notebooks.set(item.id, item);
+	}
+	return [...notebooks.values()];
+}
+
 function notebooksQueryOptions(projectId: string, filters: NotebookListFilters) {
 	return infiniteQueryOptions({
 		queryKey: notebookKeys.filteredList(projectId, filters),
@@ -1477,13 +1486,7 @@ function notebooksQueryOptions(projectId: string, filters: NotebookListFilters) 
 				}),
 			),
 		getNextPageParam: (page) => page.next_cursor,
-		select: (data) => {
-			const notebooks = new Map<string, NotebookEntry>();
-			for (const page of data.pages) {
-				for (const item of page.items) notebooks.set(item.id, item);
-			}
-			return [...notebooks.values()];
-		},
+		select: uniqueNotebooks,
 	});
 }
 
@@ -1977,7 +1980,7 @@ function mergeJobRuns(...groups: JobRun[][]): JobRun[] {
 			if (!current || (!isTerminalRun(current) && isTerminalRun(run))) runs.set(run.run_id, run);
 		}
 	}
-	return [...runs.values()];
+	return [...runs.values()].sort((a, b) => Date.parse(b.queued_at) - Date.parse(a.queued_at));
 }
 
 function jobRunQueryOptions(projectId: string, notebookId: string, jobId: string, runId: string) {
@@ -2053,6 +2056,17 @@ export function useJobRunsQuery(projectId: string, notebookId: string, jobId: st
 			for (const result of results) {
 				if (result.status === 'fulfilled') updates.set(result.value.run_id, result.value);
 			}
+			if (
+				page.next_cursor &&
+				previous?.observed.length &&
+				!previous.observed.some((run) => headIds.has(run.run_id)) &&
+				client.getQueryData(historyKey)
+			) {
+				// A burst larger than one page can leave a gap ahead of the old history cursor.
+				await client.cancelQueries({ queryKey: historyKey, exact: true });
+				signal.throwIfAborted();
+				client.setQueryData(historyKey, { pages: [page], pageParams: [null] });
+			}
 			return {
 				...page,
 				observed: observed.map((run) => updates.get(run.run_id) ?? run),
@@ -2076,7 +2090,8 @@ export function useJobRunsQuery(projectId: string, notebookId: string, jobId: st
 		staleTime: Infinity,
 	});
 	return {
-		...latest,
+		isPending: latest.isPending,
+		refetch: latest.refetch,
 		data:
 			latest.data &&
 			mergeJobRuns(latest.data.observed, ...(history.data?.pages.map((page) => page.items) ?? [])),

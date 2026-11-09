@@ -1,4 +1,5 @@
 import { ACTOR } from '@marimo-hub/core/testing';
+import { gunzipSync } from 'node:zlib';
 import type { ServerType } from '@hono/node-server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiDeps } from '@marimo-hub/api';
@@ -96,6 +97,88 @@ describe('bootstrap', () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		vi.useRealTimers();
+	});
+
+	it.each([
+		new SubdomainExposure(),
+		new ProxyExposure('a-secret-that-is-at-least-thirty-two-bytes'),
+	])('compresses API JSON with $mode exposure', async (exposure) => {
+		vi.useRealTimers();
+		deps.sandbox.exposure = exposure;
+		deps.authenticator = {
+			authenticate: async () => ({
+				id: ACTOR,
+				email: 'actor@example.com',
+				credential: { kind: 'development' },
+			}),
+		};
+		await createServices(deps.bucket).projects.createProject(
+			{ name: 'Compression', description: 'description '.repeat(500) },
+			ACTOR,
+		);
+		const harness = makeHarness(deps);
+		await bootstrap(BASE_ENV, harness.overrides);
+		const fetch = harness.serveFn.mock.calls[0][0].fetch;
+		for (const encoding of ['gzip', 'identity']) {
+			const response = (await fetch(
+				new Request('http://localhost/api/v1/projects', {
+					headers: { 'Accept-Encoding': encoding },
+				}),
+				{} as never,
+			)) as Response;
+			expect(response.status).toBe(200);
+			expect(response.headers.get('Content-Encoding')).toBe(encoding === 'gzip' ? 'gzip' : null);
+			const bytes = Buffer.from(await response.arrayBuffer());
+			const body = (encoding === 'gzip' ? gunzipSync(bytes) : bytes).toString();
+			expect(body).toContain('Compression');
+			const revalidated = (await fetch(
+				new Request('http://localhost/api/v1/projects', {
+					headers: {
+						'Accept-Encoding': encoding,
+						'If-None-Match': response.headers.get('ETag')!,
+					},
+				}),
+				{} as never,
+			)) as Response;
+			expect(revalidated.status).toBe(304);
+			expect(revalidated.headers.get('Vary')).toContain('Accept-Encoding');
+			expect(revalidated.headers.has('Content-Encoding')).toBe(false);
+			expect(await revalidated.text()).toBe('');
+		}
+	});
+
+	it.each([
+		['/api/ai/v1/models', 'GET', 404],
+		['/api/cli/v1/token', 'POST', 422],
+		['/api/sync/git/v1/projects/invalid/notebooks/invalid', 'POST', 401],
+	] as const)('compresses JSON errors under %s', async (path, method, status) => {
+		vi.useRealTimers();
+		const harness = makeHarness(deps);
+		await bootstrap(BASE_ENV, harness.overrides);
+		const fetch = harness.serveFn.mock.calls[0][0].fetch;
+		const request = async (encoding: string) =>
+			(await fetch(
+				new Request(`http://localhost${path}`, {
+					method,
+					headers: {
+						'Accept-Encoding': encoding,
+						'Content-Type': 'application/json',
+						'X-Request-Id': 'compression-regression',
+					},
+					...(method === 'POST' ? { body: '{}' } : {}),
+				}),
+				{} as never,
+			)) as Response;
+		const compressed = await request('gzip');
+		const identity = await request('identity');
+		expect(compressed.status).toBe(status);
+		expect(identity.status).toBe(status);
+		expect(compressed.headers.get('Content-Encoding')).toBe('gzip');
+		expect(identity.headers.has('Content-Encoding')).toBe(false);
+		expect(compressed.headers.get('Vary')).toContain('Accept-Encoding');
+		expect(gunzipSync(Buffer.from(await compressed.arrayBuffer())).toString()).toBe(
+			await identity.text(),
+		);
 	});
 
 	it('logs the build version at boot when telemetry export is disabled', async () => {
@@ -818,7 +901,7 @@ describe('bootstrap', () => {
 	it('defaults API shutdown to a 30 second drain budget', async () => {
 		const harness = makeHarness(deps);
 		const handle = await bootstrap({ MARIMOHUB_STATIC_ROOT: './public' }, harness.overrides);
-		deps.backgroundTasks!.defer(new Promise(() => {}));
+		void deps.backgroundWork!.defer('test', () => new Promise(() => {}));
 		const draining = handle!.drain();
 		await vi.advanceTimersByTimeAsync(29_999);
 		expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('drain_timeout'));
@@ -872,7 +955,7 @@ describe('bootstrap', () => {
 		};
 		const harness = makeHarness(deps);
 		const handle = await bootstrap(BASE_ENV, harness.overrides);
-		deps.backgroundTasks?.defer(delivery);
+		void deps.backgroundWork!.defer('test', () => delivery);
 
 		let drained = false;
 		const draining = handle?.drain().then(() => {
@@ -892,7 +975,7 @@ describe('bootstrap', () => {
 		deps.notifier = { deliver: vi.fn(async () => 'delivered' as const), close: closeNotifier };
 		const harness = makeHarness(deps, { closeImmediately: false });
 		const handle = await bootstrap(BASE_ENV, harness.overrides);
-		deps.backgroundTasks?.defer(new Promise<void>(() => {}));
+		void deps.backgroundWork!.defer('test', () => new Promise<void>(() => {}));
 
 		const draining = handle?.drain();
 		await vi.advanceTimersByTimeAsync(9_999);

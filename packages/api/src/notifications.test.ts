@@ -4,6 +4,7 @@ import {
 	BROADCAST_NOTIFICATION_FIXTURE,
 	MemoryBucket,
 	NOTIFICATION_FIXTURE,
+	queuedBackgroundWork,
 } from '@marimo-hub/core/testing';
 import type { ApiDeps } from './context';
 import { scheduleNotification, scheduleProjectAlert } from './notifications';
@@ -34,25 +35,22 @@ afterEach(() => {
 describe('scheduleNotification', () => {
 	it('registers delivery with the request background-task scheduler', async () => {
 		const deliver = vi.fn(async () => 'delivered' as const);
-		let deferred: Promise<unknown> | undefined;
-		const defer = vi.fn((task: Promise<unknown>) => {
-			deferred = task;
-		});
+		const host = queuedBackgroundWork();
 		const render = vi.fn(() => NOTIFICATION_FIXTURE);
 
 		scheduleNotification(
 			notificationDeps({
 				notifier: { deliver } as Notifier,
-				backgroundTasks: { defer },
+				backgroundWork: host.work,
 			}),
 			'member.invited',
 			{},
 			render,
 		);
 
-		expect(defer).toHaveBeenCalledOnce();
+		expect(host.labels).toEqual(['notification.delivery']);
 		expect(render).not.toHaveBeenCalled();
-		await deferred;
+		await host.runAll();
 		expect(deliver).toHaveBeenCalledOnce();
 	});
 

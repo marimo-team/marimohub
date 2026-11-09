@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { UIMessageChunk } from 'ai';
-import { ACTOR } from '@marimo-hub/core/testing';
+import { ACTOR, localResourceSecurity, makeSubjectContext } from '@marimo-hub/core/testing';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
-import { CHAT_LIMITS } from '@marimo-hub/core/chat';
+import { CHAT_LIMITS, ChatPermissionStore } from '@marimo-hub/core/chat';
 import type { TurnCheckpoint, TurnContext } from '@marimo-hub/core/chat';
 import type { SearchIndexer, SearchService } from '@marimo-hub/core/search';
 import type { ApiDeps } from '../context';
+import { withRequestMemo } from '../requestMemo';
 import { createInitializedBucket, createTestApi, expectOk } from '../testing';
 import { openToolSession } from './tools';
 
@@ -15,7 +17,7 @@ const principal: AuthenticatedPrincipal = {
 	credential: { kind: 'development' },
 };
 
-async function session(overrides: Partial<ApiDeps> = {}) {
+async function session(overrides: Partial<ApiDeps> = {}, scope = (deps: ApiDeps) => deps) {
 	const bucket = await createInitializedBucket();
 	const api = createTestApi({ bucket, deps: overrides });
 	const created = await expectOk<{ id: string }>(
@@ -23,7 +25,7 @@ async function session(overrides: Partial<ApiDeps> = {}) {
 		201,
 	);
 	const project = await api.deps.services.projects.getProject(created.id as never);
-	const tools = await openToolSession(api.deps, principal, project, {
+	const tools = await openToolSession(scope(api.deps), principal, project, {
 		method: 'POST',
 		path: '/test',
 		hostname: 'localhost',
@@ -131,11 +133,73 @@ describe('chat tool session', () => {
 		await tools.close();
 	});
 
+	describe('a mutating call that fails', () => {
+		async function allowedCreate() {
+			const opened = await session();
+			await new ChatPermissionStore(opened.api.deps.bucket).grant(opened.project.id, ACTOR, {
+				kind: 'tool',
+				scope_key: 'tool:create_notebook',
+				scope_label: 'creating notebooks in this project',
+				action: 'Create a notebook',
+			});
+			return opened;
+		}
+
+		it('reports a connect failure as known, since the call never reached the server', async () => {
+			const { call, checkpoints, tools } = await allowedCreate();
+			const connect = vi
+				.spyOn(Client.prototype, 'connect')
+				.mockRejectedValueOnce(new Error('transport down'));
+			await expect(call('create_notebook', { title: 'T', code: 'import marimo' })).rejects.toThrow(
+				/^TOOL_FAILED: The tool could not start/,
+			);
+			connect.mockRestore();
+			expect(checkpoints.map((c) => c.type)).toEqual(['tool_started', 'tool_completed']);
+			expect(checkpoints[1]).toMatchObject({ outcome: 'known' });
+			await tools.close();
+		});
+
+		it('reports a call that did not return as uncertain', async () => {
+			const { call, checkpoints, tools } = await allowedCreate();
+			const callTool = vi
+				.spyOn(Client.prototype, 'callTool')
+				.mockRejectedValueOnce(new Error('timed out'));
+			await expect(call('create_notebook', { title: 'T', code: 'import marimo' })).rejects.toThrow(
+				/^TOOL_FAILED: The tool did not return a result/,
+			);
+			callTool.mockRestore();
+			expect(checkpoints[1]).toMatchObject({ type: 'tool_completed', outcome: 'uncertain' });
+			await tools.close();
+		});
+	});
+
 	it('returns a tool budget message once the per-turn cap is reached', async () => {
 		const { call, tools } = await session();
 		tools.state.calls = 24;
 		expect(await call('list_catalog', {})).toMatchObject({ code: 'TOOL_LIMIT' });
 		expect(tools.state.toolLimit).toBe(true);
+		await tools.close();
+	});
+
+	it('resolves the subject context once per call so each call observes revocation', async () => {
+		const security = localResourceSecurity(['UNCLASSIFIED', 'SECRET'], makeSubjectContext());
+		const resolve = vi.spyOn(security.subjectContext!, 'resolve');
+		const { api, call, project, tools } = await session(
+			{ resourceSecurity: security },
+			withRequestMemo,
+		);
+		await api.deps.services.projects.setSecurityLabels(
+			project.id,
+			{ classification: 'SECRET', compartments: [] },
+			ACTOR,
+		);
+		resolve.mockClear();
+		await expect(call('list_catalog', {})).resolves.toHaveProperty('projects');
+		expect(resolve).toHaveBeenCalledTimes(1);
+		await expect(call('list_catalog', {})).resolves.toHaveProperty('projects');
+		expect(resolve).toHaveBeenCalledTimes(2);
+		resolve.mockResolvedValue(makeSubjectContext({ classification: 'UNCLASSIFIED' }));
+		await expect(call('list_catalog', {})).rejects.toThrow(/not found/i);
 		await tools.close();
 	});
 });

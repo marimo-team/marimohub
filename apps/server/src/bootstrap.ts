@@ -3,12 +3,11 @@ import type { ServerType } from '@hono/node-server';
 import { httpInstrumentationMiddleware } from '@hono/otel';
 import { secureHeaders } from 'hono/secure-headers';
 import { Hono } from 'hono';
-import { compress, COMPRESSIBLE_CONTENT_TYPE_REGEX } from 'hono/compress';
 import type { ApiDeps } from '@marimo-hub/api';
 import { createApi, SANDBOX_PROXY_PREFIXES } from '@marimo-hub/api';
 import { createFromEnvAsync, isConfigError } from '@marimo-hub/config';
 import { disposeNotifier, InFlightWork } from '@marimo-hub/core';
-import type { BackgroundWork } from '@marimo-hub/core';
+import { backgroundWorkFrom } from '@marimo-hub/core/ports/background-work';
 import {
 	startPreviewPreparation,
 	startJobScheduler,
@@ -17,6 +16,7 @@ import {
 	startSessionLifecycle,
 	startWarmPools,
 } from './cron';
+import { compressResponse } from './compression';
 import { validateServerEnv } from './env';
 import { BackgroundLoops } from './backgroundLoops';
 import { logEvent } from './log';
@@ -63,11 +63,9 @@ export async function bootstrap(
 		});
 
 	const backgroundTasks = new InFlightWork();
-	const backgroundWork: BackgroundWork = {
-		defer(_label, task) {
-			void backgroundTasks.track(Promise.resolve().then(task)).catch(() => {});
-		},
-	};
+	const backgroundWork = backgroundWorkFrom((task) => {
+		void backgroundTasks.track(task).catch(() => {});
+	});
 	let thumbnailDeadline: number | undefined;
 	// Telemetry sink: services emit CAS/reaper/snapshot signals here; the maintenance
 	// loop flushes them as one wide event per cycle (and request-path CAS contention
@@ -110,12 +108,6 @@ export async function bootstrap(
 		) * 1000;
 	deps.sandbox.thumbnailDeadline = () => thumbnailDeadline;
 	deps.backgroundWork = backgroundWork;
-	deps.backgroundTasks = {
-		drainsOnShutdown: true,
-		defer(task) {
-			void backgroundTasks.track(task).catch(() => {});
-		},
-	};
 	// Installed for metrics-only mode too: RED metrics still record, spans don't.
 	if (otel)
 		deps.tracingMiddleware = httpInstrumentationMiddleware({ disableTracing: !otel.tracing });
@@ -210,32 +202,25 @@ export async function bootstrap(
 	const port = Number(validatedEnv.PORT ?? 3000);
 	// Unset listens on every interface, which a container needs to publish the port.
 	const hostname = overrides.hostname ?? validatedEnv.MARIMOHUB_BIND_HOST;
-	let serverFetch = app.fetch;
+	const serverApp = new Hono();
+	serverApp.use('/api/*', compressResponse());
 	if (deps.sandbox.exposure?.mode === 'proxy') {
-		const proxyApp = new Hono();
-		const compressProxy = compress({
-			contentTypeFilter: (type) =>
-				!/^\s*text\/event-stream(?:[;\s]|$)/i.test(type) &&
-				COMPRESSIBLE_CONTENT_TYPE_REGEX.test(type),
-		});
 		for (const prefix of Object.values(SANDBOX_PROXY_PREFIXES)) {
 			const path = `${prefix}/*`;
-			proxyApp.use(path, compressProxy);
-			proxyApp.all(path, (c) => {
-				// Node fetch adds accept-encoding when absent. Request identity upstream
-				// and negotiate compression using the original client request here.
+			serverApp.use(path, compressResponse());
+			serverApp.all(path, (c) => {
+				// Node fetch adds accept-encoding when absent. Negotiate only at this boundary.
 				const headers = new Headers(c.req.raw.headers);
 				headers.set('accept-encoding', 'identity');
 				return app.fetch(new Request(c.req.raw, { headers }), c.env);
 			});
 		}
-		// Node bindings in env back getConnInfo for routes behind this wrapper.
-		proxyApp.all('*', (c) => app.fetch(c.req.raw, c.env));
-		serverFetch = proxyApp.fetch;
 	}
+	// Node bindings in env back getConnInfo for routes behind this wrapper.
+	serverApp.all('*', (c) => app.fetch(c.req.raw, c.env));
 
 	const serverOptions = {
-		fetch: serverFetch,
+		fetch: serverApp.fetch,
 		port,
 		...(hostname ? { hostname } : {}),
 	};

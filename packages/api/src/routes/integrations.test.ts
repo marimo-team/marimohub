@@ -185,7 +185,7 @@ describe('Integrations routes', () => {
 		vi.spyOn(local.deps.services.events, 'append').mockRejectedValue(
 			new Error('storage credential do-not-log'),
 		);
-		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 
 		const res = await local.request('POST', `/projects/${pid}/integrations`, {
 			kind: 'postgres',

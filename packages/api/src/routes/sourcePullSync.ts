@@ -21,7 +21,10 @@ import type { ApiDeps } from '../context';
 import { appendAudit } from '../log';
 import { loadAuthorizedNotebook } from '../shared';
 
-type PullSyncDeps = Pick<ApiDeps, 'services' | 'sourceControl' | 'policy' | 'backgroundTasks'>;
+type PullSyncDeps = Pick<
+	ApiDeps,
+	'services' | 'sourceControl' | 'policy' | 'backgroundWork' | 'metrics'
+>;
 
 export interface SyncTarget {
 	git: GitSource;

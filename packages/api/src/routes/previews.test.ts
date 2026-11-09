@@ -887,6 +887,73 @@ describe('Notebook previews', () => {
 });
 
 describe('Preview failure recovery and boundaries', () => {
+	describe('deferred preparation requests', () => {
+		async function managedLazy() {
+			const result = await expectOk<{ items: { id: string }[] }>(
+				await api.request('POST', `${base}/reconcile`, {
+					repository: 'owner/repo',
+					pull_request: 1,
+					event: 'opened',
+					commit: SHA,
+					workflow_id: '10',
+					run_id: '1',
+					run_number: 1,
+					event_at: new Date().toISOString(),
+					policy: { mode: 'sticky', keep: 5, eager: false },
+				}),
+				202,
+			);
+			return result.items[0];
+		}
+
+		it('lets app-users request a managed lazy preview', async () => {
+			const preview = await managedLazy();
+			const appUser = await userApi('app-user');
+			expect(
+				await expectOk<{ preparation: string }>(
+					await appUser.request('POST', `${base}/${preview.id}/prepare`),
+					202,
+				),
+			).toMatchObject({ preparation: 'pending' });
+		});
+
+		it('denies viewers without app access and non-members', async () => {
+			const preview = await managedLazy();
+			await userApi('viewer');
+			const viewer = createTestApi({
+				bucket: api.bucket,
+				userId: uid('viewer'),
+				compute: api.deps.compute,
+				deps: { sourceControl: api.deps.sourceControl, policy: { viewerMode: 'static' } },
+			});
+			await expectError(await viewer.request('POST', `${base}/${preview.id}/prepare`), 403);
+			const outsider = createTestApi({
+				bucket: api.bucket,
+				userId: uid('outsider'),
+				deps: { sourceControl: api.deps.sourceControl },
+			});
+			await expectError(await outsider.request('POST', `${base}/${preview.id}/prepare`), 404);
+			expect(
+				(await api.deps.services.previews.get(pid, nid, PreviewId.parse(preview.id))).preparation,
+			).toBe('deferred');
+		});
+
+		it.each(['expired', 'deleted'] as const)(
+			'returns 404 for a %s manual lazy preview',
+			async (reason) => {
+				const preview = await expectOk<{ id: string; expires_at: string }>(
+					await api.request('POST', base, { ...body, eager: false }),
+					202,
+				);
+				if (reason === 'expired')
+					vi.spyOn(Date, 'now').mockReturnValue(Date.parse(preview.expires_at) + 1);
+				else await expectOk(await api.request('DELETE', `${base}/${preview.id}`), 202);
+				await expectError(await api.request('POST', `${base}/${preview.id}/prepare`), 404);
+				expect(reader.fetchWorkspace).not.toHaveBeenCalled();
+			},
+		);
+	});
+
 	it.each([
 		{ viewerMode: 'static', mode: 'app' },
 		{ viewerMode: 'static', mode: 'edit' },
@@ -1242,7 +1309,7 @@ describe('Preview failure recovery and boundaries', () => {
 		);
 		expect(stillRunning.status).toBe('running');
 		expect(stillRunning.origin!.revision_id).toBe(record.current!.version_id);
-		await expectOk(await api.request('DELETE', sessionPath));
+		await expectOk(await api.request('DELETE', sessionPath), 202);
 		await sweepPreviews(api.deps);
 		expect(
 			(await api.deps.services.previews.get(pid, nid, record.id)).revisions.map(
@@ -1277,6 +1344,7 @@ describe('Preview admission fencing', () => {
 				'DELETE',
 				`/projects/${pid}/notebooks/${first.notebook_id}/sessions/${first.session_id}`,
 			),
+			202,
 		);
 		await expectOk(await api.request('POST', `${base}/${record.id}/sessions`, { mode: 'edit' }));
 		expect((await api.deps.services.previews.get(pid, nid, record.id)).admissions).toHaveLength(10);
@@ -1838,6 +1906,187 @@ describe('asynchronous preview preparation', () => {
 });
 
 describe('preview worker recovery', () => {
+	it('processes an explicit retry for a failed pinned preview without resuming polling', async () => {
+		const service = api.deps.services.previews;
+		const pending = await service.create(
+			pid,
+			nid,
+			{ name: 'Pinned', source: { type: 'commit', commit: SHA } },
+			ACTOR,
+			api.deps.sourceControl,
+		);
+		const ready = await service.prepare(pending, api.deps.sourceControl);
+		vi.spyOn(service, 'source').mockRejectedValueOnce(new Error('unavailable'));
+		const failed = await service.prepare(ready, api.deps.sourceControl, true);
+		expect(failed).toMatchObject({ preparation: 'failed', current: ready.current });
+		await expectOk(await api.request('POST', `${base}/${ready.id}/prepare`), 202);
+		expect(await service.get(pid, nid, ready.id)).toMatchObject({
+			preparation: 'failed',
+			next_attempt_at: failed.next_attempt_at,
+		});
+		const time = vi.spyOn(Date, 'now').mockReturnValue(failed.next_attempt_at! + 1);
+		await expectOk(await api.request('POST', `${base}/${ready.id}/prepare`), 202);
+		expect((await service.get(pid, nid, ready.id)).preparation).toBe('pending');
+		const claim = vi.spyOn(service.store, 'claim');
+		await service.preparePending(api.deps.sourceControl!);
+		expect(await service.get(pid, nid, ready.id)).toMatchObject({
+			preparation: 'ready',
+			preparation_failures: 0,
+			current: ready.current,
+		});
+		expect(claim).toHaveBeenCalledExactlyOnceWith(pid, ready.id);
+		claim.mockClear();
+		time.mockReturnValue(Date.now() + 61_000);
+		await service.preparePending(api.deps.sourceControl!);
+		expect(claim).not.toHaveBeenCalled();
+		expect(reader.fetchWorkspace).toHaveBeenCalledOnce();
+	});
+
+	it('reports exhaustion only at the threshold when forced failures continue', async () => {
+		const service = api.deps.services.previews;
+		let preview = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+		vi.spyOn(service, 'source').mockRejectedValue(new Error('unavailable'));
+		const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+		for (let failures = 1; failures <= 7; failures++) {
+			preview = await service.prepare(preview, api.deps.sourceControl, true);
+			expect(preview.preparation_failures).toBe(failures);
+			expect(errors).toHaveBeenCalledTimes(failures < 5 ? 0 : 1);
+		}
+		expect(JSON.parse(errors.mock.calls[0][0])).toMatchObject({
+			event: 'preview_preparation_exhausted',
+			preview_id: preview.id,
+			preparation_failures: 5,
+		});
+	});
+
+	it('skips live preparation leases without claiming work or starving another preview', async () => {
+		const service = api.deps.services.previews;
+		const busy = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+		const pending = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+		await api.bucket.put(
+			paths.preview(pid, nid, busy.id),
+			JSON.stringify({
+				...busy,
+				preparation: 'preparing',
+				lease: { token: 'other-worker', expires_at: Date.now() + 120_000 },
+			}),
+		);
+		const claim = vi.spyOn(service.store, 'claim');
+		await service.prepare(busy, api.deps.sourceControl);
+		expect(claim).not.toHaveBeenCalled();
+		await service.preparePending(api.deps.sourceControl!);
+		expect(claim).toHaveBeenCalledExactlyOnceWith(pid, pending.id);
+		expect((await service.get(pid, nid, pending.id)).preparation).toBe('ready');
+	});
+
+	it('recovers an abandoned attempt after its retry delay', async () => {
+		vi.useFakeTimers();
+		const service = api.deps.services.previews;
+		const pending = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+		await api.bucket.put(
+			paths.preview(pid, nid, pending.id),
+			JSON.stringify({
+				...pending,
+				preparation: 'preparing',
+				lease: { token: 'abandoned', expires_at: Date.now() - 1 },
+			}),
+		);
+		await service.preparePending(api.deps.sourceControl!);
+		const failed = await service.get(pid, nid, pending.id);
+		expect(failed).toMatchObject({ preparation: 'failed', preparation_failures: 1 });
+		const writes = vi.spyOn(api.bucket, 'put');
+		await service.preparePending(api.deps.sourceControl!);
+		expect(writes).not.toHaveBeenCalled();
+		expect(reader.fetchWorkspace).not.toHaveBeenCalled();
+		vi.setSystemTime(failed.next_attempt_at! + 1);
+		await service.preparePending(api.deps.sourceControl!);
+		expect(await service.get(pid, nid, pending.id)).toMatchObject({
+			preparation: 'ready',
+			preparation_failures: 0,
+			current: { commit: SHA },
+		});
+	});
+
+	it('stops retrying after repeated lease expiry and reports exhaustion once', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		const service = api.deps.services.previews;
+		const pending = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+		await api.bucket.put(
+			paths.preview(pid, nid, pending.id),
+			JSON.stringify({
+				...pending,
+				preparation: 'preparing',
+				preparation_failures: 4,
+				lease: { token: 'abandoned', expires_at: Date.now() - 1 },
+			}),
+		);
+		const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+		await Promise.all([
+			service.preparePending(api.deps.sourceControl!),
+			service.preparePending(api.deps.sourceControl!),
+		]);
+		const failed = await service.get(pid, nid, pending.id);
+		expect(failed).toMatchObject({ preparation: 'failed', preparation_failures: 5 });
+		expect(failed.lease).toBeUndefined();
+		expect(failed.next_attempt_at).toBeGreaterThan(Date.now());
+		expect(reader.getBranchHead).not.toHaveBeenCalled();
+		const writes = vi.spyOn(api.bucket, 'put');
+		vi.setSystemTime(Date.now() + 3_600_000);
+		await service.preparePending(api.deps.sourceControl!);
+		expect(writes).not.toHaveBeenCalled();
+		expect(errors).toHaveBeenCalledTimes(1);
+		expect(JSON.parse(errors.mock.calls[0][0])).toMatchObject({
+			event: 'preview_preparation_exhausted',
+			preview_id: pending.id,
+			preparation_failures: 5,
+		});
+	});
+
+	it.each([true, false])(
+		'bounds repeated failures and allows an explicit retry: eager=%s',
+		async (eager) => {
+			vi.useFakeTimers();
+			const service = api.deps.services.previews;
+			let preview = await service.create(
+				pid,
+				nid,
+				{ ...body, eager },
+				ACTOR,
+				api.deps.sourceControl,
+			);
+			if (!eager) preview = await service.requestPreparation(preview);
+			vi.mocked(reader.fetchWorkspace).mockRejectedValue(new Error('unavailable'));
+			const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+			for (let failures = 1; failures <= 5; failures++) {
+				await service.preparePending(api.deps.sourceControl!);
+				preview = await service.get(pid, nid, preview.id);
+				expect(preview.preparation_failures).toBe(failures);
+				expect(preview.next_attempt_at).toBeGreaterThan(Date.now());
+				await service.preparePending(api.deps.sourceControl!);
+				expect(reader.fetchWorkspace).toHaveBeenCalledTimes(failures);
+				vi.setSystemTime(preview.next_attempt_at! + 1);
+			}
+			const writes = vi.spyOn(api.bucket, 'put');
+			await service.preparePending(api.deps.sourceControl!);
+			await service.prepare(preview, api.deps.sourceControl);
+			expect(writes).not.toHaveBeenCalled();
+			expect(reader.fetchWorkspace).toHaveBeenCalledTimes(5);
+			expect(errors).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(901_000);
+			await sweepPreviews(api.deps);
+			vi.mocked(reader.fetchWorkspace).mockResolvedValue([
+				{ path: 'notebook.py', bytes: new TextEncoder().encode('import marimo') },
+			]);
+			await expectOk(await api.request('POST', `${base}/${preview.id}/prepare`), 202);
+			await service.preparePending(api.deps.sourceControl!);
+			expect(await service.get(pid, nid, preview.id)).toMatchObject({
+				preparation: 'ready',
+				preparation_failures: 0,
+				current: { commit: SHA },
+			});
+		},
+	);
+
 	it('rotates due previews within a project and skips pinned revisions after preparation', async () => {
 		const service = api.deps.services.previews;
 		const branch = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
@@ -1957,7 +2206,7 @@ describe('preview session resource identity', () => {
 				),
 				404,
 			);
-			await expectOk(await api.request('DELETE', path));
+			await expectOk(await api.request('DELETE', path), 202);
 		},
 	);
 

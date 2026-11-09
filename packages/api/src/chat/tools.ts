@@ -12,6 +12,7 @@ import type { ApiDeps } from '../context';
 import { DEFAULT_CHAT_CONFIG } from '../context';
 import { createMcpServer } from '../mcp/server';
 import type { StartRequestContext } from '../mcp/server';
+import { withRequestMemo } from '../requestMemo';
 import { loadVisibleProject } from '../shared';
 import { assertChatPrincipalCurrent } from './access';
 import { checkPermission } from './permissions/gate';
@@ -118,20 +119,40 @@ export async function openToolSession(
 	project: Project,
 	request: StartRequestContext,
 ): Promise<ToolSession> {
-	const server = createMcpServer(deps, principal, request);
-	const client = new Client({ name: 'marimohub-chat', version: '1' });
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const close = async () => {
+	const open = new Set<() => Promise<void>>();
+	const connect = async (scope: ApiDeps) => {
+		const server = createMcpServer(scope, principal, request);
+		const client = new Client({ name: 'marimohub-chat', version: '1' });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const disconnect = async () => {
+			open.delete(disconnect);
+			try {
+				await client.close();
+			} finally {
+				await server.close();
+			}
+		};
+		open.add(disconnect);
 		try {
-			await client.close();
-		} finally {
-			await server.close();
+			await server.connect(serverTransport);
+			await client.connect(clientTransport);
+		} catch (error) {
+			await disconnect();
+			throw error;
 		}
+		return { client, disconnect };
+	};
+	const close = async () => {
+		await Promise.allSettled([...open].map((disconnect) => disconnect()));
 	};
 	try {
-		await server.connect(serverTransport);
-		await client.connect(clientTransport);
-		const { tools: exposed } = await client.listTools();
+		const listing = await connect(deps);
+		let exposed: Awaited<ReturnType<Client['listTools']>>['tools'];
+		try {
+			({ tools: exposed } = await listing.client.listTools());
+		} finally {
+			await listing.disconnect();
+		}
 		const definitions: ToolDefinition[] = exposed.map((tool) => ({
 			name: tool.name,
 			description: tool.description ?? tool.name,
@@ -236,14 +257,26 @@ export async function openToolSession(
 						return output;
 					}
 					signal.throwIfAborted();
-					await assertChatPrincipalCurrent(deps, principal, signal);
-					await loadVisibleProject(deps.services.projects, project.id, principal, deps);
+					// A turn outlives its request; each call must observe revocation.
+					const callDeps = withRequestMemo(deps);
+					await assertChatPrincipalCurrent(callDeps, principal, signal);
+					await loadVisibleProject(callDeps.services.projects, project.id, principal, callDeps);
+					let connection: Awaited<ReturnType<typeof connect>>;
+					try {
+						connection = await connect(callDeps);
+					} catch (error) {
+						if (signal.aborted) throw error;
+						// Nothing was sent to the server, so the call is known not to have run.
+						await complete('The tool server could not be started.', 'known');
+						throw new Error('TOOL_FAILED: The tool could not start. Nothing changed.');
+					}
 					let reply: Awaited<ReturnType<Client['callTool']>>;
 					try {
-						reply = await client.callTool({ name: definition.name, arguments: scoped }, undefined, {
-							signal,
-							timeout: timeoutMs,
-						});
+						reply = await connection.client.callTool(
+							{ name: definition.name, arguments: scoped },
+							undefined,
+							{ signal, timeout: timeoutMs },
+						);
 					} catch (error) {
 						if (signal.aborted) throw error;
 						// The call may have reached the server; only the server's answer is known.
@@ -254,6 +287,9 @@ export async function openToolSession(
 						throw new Error(
 							'TOOL_FAILED: The tool did not return a result. Inspect the resource before retrying.',
 						);
+					} finally {
+						// The outcome is already settled; a failed teardown must not replace it.
+						await connection.disconnect().catch(() => {});
 					}
 					const content = z.array(z.looseObject({ type: z.string() })).parse(reply.content ?? []);
 					const structured = z.record(z.string(), z.unknown()).safeParse(reply.structuredContent);

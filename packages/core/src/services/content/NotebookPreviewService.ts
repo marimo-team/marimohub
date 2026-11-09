@@ -8,6 +8,7 @@ import type { NotebookId, PreviewId, ProjectId, SessionId, UserId } from '../../
 import { BUCKET_SCAN_CONCURRENCY, MAX_WORKSPACE_BYTES } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { PreviewStore, PREVIEW_LIMITS } from './PreviewStore';
+import type { PreviewProject } from './PreviewStore';
 import { createNotebookId, createPreviewId, createVersionId } from '../../ids';
 import {
 	BadRequestError,
@@ -20,7 +21,7 @@ import { paths } from '../../paths';
 import { sha256Hex } from '../../internal/sha256';
 import { parseStored, readStored } from '../../schema';
 import type { GitSource } from '../../schema';
-import { mutateObject } from '../catalog/cas';
+import { mutateObject, mutateObjectWithOutcome } from '../catalog/cas';
 import { deleteByPrefix } from '../catalog/storage';
 import { AppPoolStore } from '../runtime/AppPoolStore';
 import type { NotebookService } from './NotebookService';
@@ -39,9 +40,31 @@ import {
 	previewKey,
 } from './notebookPreviews';
 import type { NotebookPreview, PreviewCreate, PreviewIntent } from './notebookPreviews';
-import type { PreviewReconcile } from './previewAutomation';
+import type { PreviewAutomationGroup, PreviewReconcile } from './previewAutomation';
 
 type RetireRuntime = (pid: ProjectId, nid: NotebookId) => Promise<boolean>;
+const MAX_PREPARATION_FAILURES = 5;
+
+function preparationDue(record: NotebookPreview, force = false): boolean {
+	if (record.state !== 'active') return false;
+	if (record.lease) return record.lease.expires_at <= Date.now();
+	return (
+		force ||
+		(record.preparation_failures < MAX_PREPARATION_FAILURES &&
+			(record.next_attempt_at ?? 0) <= Date.now() &&
+			!(
+				record.source.type === 'commit' &&
+				record.current &&
+				!record.pull_request &&
+				record.preparation !== 'pending'
+			))
+	);
+}
+
+// A successful PR check is persisted at most this often, so polling does not rewrite the project head.
+const AUTOMATION_CHECK_STAMP_MS = 3_600_000;
+// Managed groups may have no expiry; this closes them once GitHub access has failed for a week.
+const AUTOMATION_UNVERIFIED_MS = 7 * 86_400_000;
 
 function retirePreviewRecord(current: NotebookPreview): NotebookPreview | null {
 	return current.state === 'active'
@@ -82,6 +105,8 @@ function applyAutomationIntent(
 					lease: undefined,
 					next_attempt_at: 0,
 					preparation: intent.eager === false ? ('deferred' as const) : ('pending' as const),
+					preparation_failures: 0,
+					error: undefined,
 				}
 			: {}),
 	};
@@ -89,6 +114,8 @@ function applyAutomationIntent(
 
 export class NotebookPreviewService {
 	readonly store: PreviewStore;
+	// Maintenance runs on one replica, so a restart only repeats one check per group.
+	private readonly automationChecks = new Map<ProjectId, Map<string, number>>();
 	async finishMove(source: ProjectId, nid: NotebookId): Promise<void> {
 		await this.store.finishMove(source, nid);
 		await deleteByPrefix(this.bucket, paths.previewRecords(source, nid));
@@ -170,8 +197,12 @@ export class NotebookPreviewService {
 		return this.mutate(intent, (current) => applyAutomationIntent(current, intent));
 	}
 
-	async projectRecords(pid: ProjectId, nid?: NotebookId): Promise<NotebookPreview[]> {
-		const entries = (await this.store.project(pid)).entries.filter(
+	async projectRecords(
+		pid: ProjectId,
+		nid?: NotebookId,
+		read?: PreviewProject,
+	): Promise<NotebookPreview[]> {
+		const entries = (read ?? (await this.store.project(pid))).entries.filter(
 			(entry) => !nid || entry.intent.notebook_id === nid,
 		);
 		const records = await mapWithConcurrency(entries, BUCKET_SCAN_CONCURRENCY, async (entry) => {
@@ -262,6 +293,55 @@ export class NotebookPreviewService {
 				? update(current)
 				: null,
 		);
+	}
+
+	private async failPreparation(
+		record: NotebookPreview,
+		token: string,
+		error: unknown,
+		expired = false,
+	): Promise<NotebookPreview> {
+		const key = previewKey(record.project_id, record.notebook_id, record.id);
+		const result = await mutateObjectWithOutcome<NotebookPreview>(
+			this.bucket,
+			key,
+			(raw) => parseStored(PreviewRecordSchema, raw, key),
+			(current) => {
+				const leaseExpired = (current.lease?.expires_at ?? 0) <= Date.now();
+				if (
+					current.state !== 'active' ||
+					current.lease?.token !== token ||
+					leaseExpired !== expired
+				)
+					return null;
+				return {
+					...current,
+					preparation: 'failed',
+					error: 'Unable to prepare the preview. Check the source and GitHub App access.',
+					lease: undefined,
+					checked_at: new Date().toISOString(),
+					preparation_failures: current.preparation_failures + 1,
+					next_attempt_at:
+						Date.now() +
+						Math.min(3_600_000, PREVIEW_POLL_MS * 2 ** Math.min(current.preparation_failures, 6)) *
+							(0.75 + Math.random() * 0.5),
+				};
+			},
+			{ notFound: () => new NotFoundError('Preview not found') },
+		);
+		if (result.written && result.value.preparation_failures === MAX_PREPARATION_FAILURES) {
+			logOperationalError(
+				'preview_preparation_exhausted',
+				{
+					project_id: record.project_id,
+					notebook_id: record.notebook_id,
+					preview_id: record.id,
+					preparation_failures: result.value.preparation_failures,
+				},
+				error,
+			);
+		}
+		return result.value;
 	}
 
 	async create(
@@ -380,10 +460,30 @@ export class NotebookPreviewService {
 			const applied = applyAutomationIntent(persisted, record);
 			const current = applied ?? persisted;
 			if (!previewAvailable(current)) throw new NotFoundError('Preview not found');
+			// Page views request preparation on mount, so they must not skip the failure backoff.
+			const backoff =
+				current.preparation === 'failed' && (current.next_attempt_at ?? 0) > Date.now();
+			if (current.preparation === 'failed' && !backoff) {
+				return {
+					...current,
+					preparation: 'pending',
+					preparation_failures: 0,
+					error: undefined,
+					next_attempt_at: 0,
+					requested_generation: previewGeneration(current),
+					demand: current.automation ? undefined : current.eager === false,
+					requested_commit: undefined,
+					observed_commit: undefined,
+				};
+			}
 			if (current.eager !== false) return applied;
+			const nextAttemptAt = backoff ? current.next_attempt_at : 0;
 			if (current.automation) {
 				const generation = previewGeneration(current)!;
-				if (requestedPreviewGeneration(current) === generation && current.preparation !== 'failed')
+				if (
+					requestedPreviewGeneration(current) === generation &&
+					(current.preparation !== 'failed' || backoff)
+				)
 					return applied;
 				return {
 					...current,
@@ -391,7 +491,7 @@ export class NotebookPreviewService {
 					demand: undefined,
 					requested_commit: undefined,
 					observed_commit: undefined,
-					next_attempt_at: 0,
+					next_attempt_at: nextAttemptAt,
 					preparation: current.preparation === 'deferred' ? 'pending' : current.preparation,
 				};
 			}
@@ -406,41 +506,64 @@ export class NotebookPreviewService {
 				...current,
 				demand: true,
 				requested_commit: undefined,
-				next_attempt_at: 0,
+				next_attempt_at: nextAttemptAt,
 				preparation: current.preparation === 'deferred' ? 'pending' : current.preparation,
 			};
 		});
 	}
 
+	/** Returns `project` when it is still current, so callers can skip another read. */
 	private async reconcileAutomations(
 		pid: ProjectId,
+		project: PreviewProject,
 		registry: SourceControlRegistry,
 		signal?: AbortSignal,
-	) {
-		const groups = ((await this.store.project(pid)).automations ?? [])
-			.filter(
-				(group) =>
-					group.state === 'active' && (group.checked_at ?? 0) + PREVIEW_POLL_MS <= Date.now(),
+	): Promise<PreviewProject | undefined> {
+		const active = (project.automations ?? []).filter((group) => group.state === 'active');
+		const previous = this.automationChecks.get(pid);
+		const attempts = new Map<string, number>();
+		for (const group of active) {
+			const at = previous?.get(group.key);
+			if (at !== undefined) attempts.set(group.key, at);
+		}
+		if (attempts.size > 0) this.automationChecks.set(pid, attempts);
+		else this.automationChecks.delete(pid);
+		if (!project.automations?.length) return project;
+		const now = Date.now();
+		const groups = active
+			.filter((group) => (attempts.get(group.key) ?? 0) + PREVIEW_POLL_MS <= now)
+			.sort(
+				(a, b) =>
+					(attempts.get(a.key) ?? 0) - (attempts.get(b.key) ?? 0) ||
+					(a.checked_at ?? 0) - (b.checked_at ?? 0),
 			)
-			.sort((a, b) => (a.checked_at ?? 0) - (b.checked_at ?? 0))
 			.slice(0, 1);
 		const boundedSignal = AbortSignal.any([
 			AbortSignal.timeout(30_000),
 			...(signal ? [signal] : []),
 		]);
+		let changed = false;
+		const close = async (group: PreviewAutomationGroup) => {
+			changed = true;
+			await this.store.closeAutomation(pid, group.key, group.revision);
+		};
 		for (const group of groups) {
+			attempts.set(group.key, now);
+			this.automationChecks.set(pid, attempts);
 			try {
 				const { source, reader } = await this.source(pid, group.notebook_id, registry);
 				if (source.repo !== group.repository) {
-					await this.store.closeAutomation(pid, group.key, group.revision);
+					await close(group);
 					continue;
 				}
 				const pr = await reader.getPullRequest!(group.repository, group.pull_request, {
 					signal: boundedSignal,
 				});
-				if (pr.state === 'closed' || !pr.sameRepository)
-					await this.store.closeAutomation(pid, group.key, group.revision);
-				else await this.store.checkedAutomation(pid, group.key, group.revision);
+				if (pr.state === 'closed' || !pr.sameRepository) await close(group);
+				else if ((group.checked_at ?? 0) + AUTOMATION_CHECK_STAMP_MS <= Date.now()) {
+					changed = true;
+					await this.store.checkedAutomation(pid, group.key, group.revision);
+				}
 			} catch (error) {
 				if (error instanceof NotFoundError) {
 					const parent = await this.notebooks
@@ -450,11 +573,12 @@ export class NotebookPreviewService {
 							throw failure;
 						});
 					if (!parent || parent.status === 'deleted') {
-						await this.store.closeAutomation(pid, group.key, group.revision);
+						await close(group);
 						continue;
 					}
 				}
-				await this.store.checkedAutomation(pid, group.key, group.revision);
+				const verifiedAt = Math.max(group.checked_at ?? 0, Date.parse(group.last_commit_at));
+				if (verifiedAt + AUTOMATION_UNVERIFIED_MS <= Date.now()) await close(group);
 				logOperationalError(
 					'preview_automation_check_failed',
 					{ project_id: pid, notebook_id: group.notebook_id },
@@ -462,7 +586,11 @@ export class NotebookPreviewService {
 				);
 			}
 		}
-		await this.store.planAutomations(pid);
+		// Each store write above already planned the head in its CAS.
+		if (changed) return undefined;
+		const planned = await this.store.planAutomations(pid, project);
+		// Membership can change during a GitHub call; materializing a stale entry would recreate it.
+		return planned || groups.length > 0 ? undefined : project;
 	}
 
 	async prepare(
@@ -473,15 +601,19 @@ export class NotebookPreviewService {
 	): Promise<NotebookPreview> {
 		externalSignal?.throwIfAborted();
 		if (initial.state !== 'active') return initial;
-		const record = await this.get(initial.project_id, initial.notebook_id, initial.id);
+		let record = await this.get(initial.project_id, initial.notebook_id, initial.id);
 		if (record.state !== 'active') return record;
 		if (previewExpired(record)) return this.retireExpired(record);
-		if (
-			!force &&
-			((record.next_attempt_at ?? 0) > Date.now() ||
-				(record.source.type === 'commit' && record.current && !record.pull_request))
-		)
-			return record;
+		if (!preparationDue(record, force)) return record;
+		if (record.lease) {
+			record = await this.failPreparation(
+				record,
+				record.lease.token,
+				new Error('Preview preparation lease expired'),
+				true,
+			);
+			if (!force || record.lease || record.state !== 'active') return record;
+		}
 		const claim = await this.store.claim(record.project_id, record.id);
 		if (!claim) return record;
 		const token = claim.token;
@@ -495,7 +627,7 @@ export class NotebookPreviewService {
 			Math.max(0, claim.expires_at - Date.now() - 1000),
 		);
 		try {
-			return await this.prepareClaimed(record, registry, claim, signal, externalSignal);
+			return await this.prepareClaimed(record, registry, claim, signal, force, externalSignal);
 		} finally {
 			clearTimeout(timeout);
 			await this.store.release(token);
@@ -507,6 +639,7 @@ export class NotebookPreviewService {
 		registry: SourceControlRegistry | undefined,
 		claim: { token: string; expires_at: number },
 		signal: AbortSignal,
+		force: boolean,
 		externalSignal?: AbortSignal,
 	): Promise<NotebookPreview> {
 		const token = claim.token;
@@ -523,11 +656,7 @@ export class NotebookPreviewService {
 		};
 		const claimed = await this.mutate(initial, (current) => {
 			const effective = applyAutomationIntent(current, initial) ?? current;
-			if (
-				effective.state !== 'active' ||
-				(effective.lease && effective.lease.expires_at > Date.now())
-			)
-				return null;
+			if (!preparationDue(effective, force) || effective.lease) return null;
 			return {
 				...effective,
 				preparation: 'preparing',
@@ -587,6 +716,7 @@ export class NotebookPreviewService {
 						return {
 							...current,
 							preparation: 'deferred',
+							preparation_failures: 0,
 							lease: undefined,
 							error: undefined,
 							next_attempt_at: Date.now() + PREVIEW_POLL_MS,
@@ -609,6 +739,7 @@ export class NotebookPreviewService {
 					return {
 						...current,
 						preparation: 'deferred',
+						preparation_failures: 0,
 						observed_commit: commit,
 						requested_commit: undefined,
 						lease: undefined,
@@ -770,18 +901,7 @@ export class NotebookPreviewService {
 					});
 				if (!parent || parent.status === 'deleted') return this.retire(record);
 			}
-			return this.mutateLeased(record, token, (current) => ({
-				...current,
-				preparation: 'failed',
-				error: 'Unable to prepare the preview. Check the source and GitHub App access.',
-				lease: undefined,
-				checked_at: new Date().toISOString(),
-				preparation_failures: current.preparation_failures + 1,
-				next_attempt_at:
-					Date.now() +
-					Math.min(3_600_000, PREVIEW_POLL_MS * 2 ** Math.min(current.preparation_failures, 6)) *
-						(0.75 + Math.random() * 0.5),
-			}));
+			return this.failPreparation(record, token, error);
 		}
 	}
 
@@ -989,12 +1109,14 @@ export class NotebookPreviewService {
 			await Promise.allSettled(
 				projects.slice(offset, offset + PREVIEW_LIMITS.concurrency).map(async (pid) => {
 					try {
-						await this.reconcileAutomations(pid, registry, signal);
-						const records = (await this.projectRecords(pid)).filter(
-							(record) =>
-								record.state === 'active' &&
-								(record.next_attempt_at ?? 0) <= Date.now() &&
-								!(record.source.type === 'commit' && record.current && !record.pull_request),
+						const project = await this.reconcileAutomations(
+							pid,
+							await this.store.project(pid),
+							registry,
+							signal,
+						);
+						const records = (await this.projectRecords(pid, undefined, project)).filter((record) =>
+							preparationDue(record),
 						);
 						records.sort(
 							(a, b) =>

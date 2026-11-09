@@ -31,6 +31,59 @@ function fakeApi(handlers: {
 const target = { sandboxId: 'abc-123', host: 'abc-123.sandbox.example.com', port: 2718 };
 
 describe('createKernelIngressPublisher', () => {
+	it.each([403, 500])(
+		'propagates Ingress publication failure without retrying: %i',
+		async (ingressStatus) => {
+			const { api, calls } = fakeApi({
+				services: () => ({ items: [{ metadata: { name: 'svc', uid: 'uid' } }] }),
+				ingressStatus,
+			});
+			const publisher = createKernelIngressPublisher({
+				namespace: 'ns',
+				ingressClassName: 'traefik',
+				api,
+			});
+			await expect(publisher.publish(target)).rejects.toThrow(new RegExp(`HTTP ${ingressStatus}`));
+			expect(calls.filter((call) => call.method === 'POST')).toHaveLength(1);
+		},
+	);
+
+	it('copies validated annotations onto the Ingress', async () => {
+		const { api, calls } = fakeApi({
+			services: () => ({ items: [{ metadata: { name: 'service', uid: 'uid' } }] }),
+		});
+		const annotations = {
+			'traefik.ingress.kubernetes.io/router.middlewares': 'ns-compress@kubernetescrd',
+		};
+		const publisher = createKernelIngressPublisher({
+			namespace: 'ns',
+			ingressClassName: 'traefik',
+			ingressAnnotations: annotations,
+			api,
+		});
+		await publisher.publish(target);
+		expect(calls.find((call) => call.method === 'POST')?.body).toMatchObject({
+			metadata: { annotations },
+		});
+	});
+
+	it.each<Record<string, string>>([
+		{ 'bad/key/name': 'x' },
+		{ 'UPPER.example/key': 'x' },
+		{ key: 'x'.repeat(256 * 1024) },
+	])('rejects invalid annotations before contacting Kubernetes', (ingressAnnotations) => {
+		const { api, calls } = fakeApi({});
+		expect(() =>
+			createKernelIngressPublisher({
+				namespace: 'ns',
+				ingressClassName: 'traefik',
+				ingressAnnotations,
+				api,
+			}),
+		).toThrow();
+		expect(calls).toEqual([]);
+	});
+
 	it('creates an Ingress for the runner Service, owner-referenced to it', async () => {
 		const { api, calls } = fakeApi({
 			services: () => ({ items: [{ metadata: { name: 'sabc-123-service', uid: 'uid-1' } }] }),

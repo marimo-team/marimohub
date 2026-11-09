@@ -13,6 +13,7 @@ import { ACTOR, makeProject, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import {
 	composeSessionEnv,
+	federatedCredentialsFor,
 	resolveFederatedVars,
 	resolveIntegrationRender,
 	resolveJobSandboxEnv,
@@ -733,5 +734,78 @@ describe('composeSessionEnv', () => {
 		expect(composeSessionEnv({ integrationEnv })?.vars).toMatchObject({
 			AWS_ACCESS_KEY_ID: 'integration',
 		});
+	});
+});
+
+describe('project WIF reuse', () => {
+	it('shares sessions within a project and isolates projects, workload kinds, and targets', async () => {
+		const exchange = vi.fn(async () => ({
+			accessKeyId: 'AK',
+			secretAccessKey: 'SK',
+			expiration: new Date(Date.now() + 60 * 60_000).toISOString(),
+		}));
+		const config = makeTestWif({ exchange });
+		const project = makeProject({ federation: { enabled: true } });
+		const session = () => ({ kind: 'session' as const, id: createSessionId() });
+		await Promise.all([
+			federatedCredentialsFor({ wif: config }, project, session())!(),
+			federatedCredentialsFor({ wif: config }, project, session())!(),
+		]);
+		expect(exchange).toHaveBeenCalledOnce();
+		const getShared = vi.spyOn(wifCredentialCacheFor(config), 'getShared');
+		expect(
+			federatedCredentialsFor({ wif: config }, project, session(), { restricted: true }),
+		).toBeUndefined();
+		expect(
+			federatedCredentialsFor(
+				{ wif: config },
+				{ ...project, federation: { enabled: false } },
+				session(),
+			),
+		).toBeUndefined();
+		expect(getShared).not.toHaveBeenCalled();
+		await federatedCredentialsFor(
+			{ wif: config },
+			makeProject({ federation: { enabled: true } }),
+			session(),
+		)!();
+		await federatedCredentialsFor({ wif: config }, project, {
+			kind: 'job-run',
+			id: createRunId(),
+		})!();
+		await federatedCredentialsFor({ wif: makeTestWif({ exchange }) }, project, session())!();
+		expect(exchange).toHaveBeenCalledTimes(4);
+		getShared.mockRestore();
+	});
+
+	it('primes each session endpoint from the same project exchange', async () => {
+		const exchange = vi.fn(async () => ({
+			accessKeyId: 'AK',
+			secretAccessKey: 'SK',
+			expiration: new Date(Date.now() + 60 * 60_000).toISOString(),
+		}));
+		const config = makeTestWif({ exchange, credentialsEndpoint: true });
+		const project = makeProject({ federation: { enabled: true } });
+		for (const id of [createSessionId(), createSessionId()]) {
+			await resolveFederatedVars(
+				{ wif: config },
+				{
+					project,
+					workload: { kind: 'session', id },
+					restricted: false,
+					credentialsEndpoint: {
+						url: 'https://hub.example.com/api/wif/v1/credentials',
+						principal: { id: ACTOR, email: 'a@x', credential: { kind: 'sso' } },
+						expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+					},
+				},
+			);
+			const miss = vi.fn(async () => {
+				throw new Error('cache miss');
+			});
+			expect((await wifCredentialCacheFor(config).get(id, miss)).accessKeyId).toBe('AK');
+			expect(miss).not.toHaveBeenCalled();
+		}
+		expect(exchange).toHaveBeenCalledOnce();
 	});
 });

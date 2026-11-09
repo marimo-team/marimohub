@@ -33,6 +33,15 @@ describe('logging integrations', () => {
 			logger_names: [{ name: 'my_app' }, { name: 'another.worker' }],
 			expected: ['my_app', 'another.worker'],
 		},
+		{
+			logger_names: [{ name: 'my_app' }, { name: 'My_App' }, { name: '分析.worker' }],
+			expected: ['my_app', 'My_App', '分析.worker'],
+		},
+		{ logger_names: [{ name: 'a'.repeat(256) }], expected: ['a'.repeat(256)] },
+		{
+			logger_names: Array.from({ length: 32 }, (_, index) => ({ name: `app${index}` })),
+			expected: Array.from({ length: 32 }, (_, index) => `app${index}`),
+		},
 	])('renders logger namespaces: $logger_names', ({ logger_names, expected }) => {
 		const config = parse({ url: 'https://example.test/v1/logs', logger_names });
 		const destination = otlpLogs.render({ ...context, config }).logging![0];
@@ -161,6 +170,12 @@ describe('logging integrations', () => {
 		{ logger_names: [{ name: 'my_app' }, { name: '' }] },
 		{ logger_names: [{ name: 'my_app', typo: true }] },
 		{ logger_names: null },
+		...[' my_app', 'my_app ', 'my app', '\t', '.my_app', 'my_app.', 'my..app', '.'].map((name) => ({
+			logger_names: [{ name }],
+		})),
+		{ logger_names: [{ name: 'a'.repeat(257) }] },
+		{ logger_names: Array.from({ length: 33 }, (_, index) => ({ name: `app${index}` })) },
+		{ logger_names: [{ name: 'my_app' }, { name: 'my_app' }] },
 		{ auth: null },
 		{ auth: { method: 'oauth2' } },
 		{ auth: { method: 'none', token: 'stray' } },

@@ -10,6 +10,9 @@ Notebook files, credentials, and kernels load after assignment.
 
 1. Maintenance persists creation reservations before provider calls. Creating and ready members count toward the target.
 2. A sandbox becomes ready after `ready()` and a bounded command probe succeed.
+   Between the probe and readiness, fill pre-installs the notebook bridge with `--install-only`.
+   A failed pre-install keeps the member, and the kernel launcher retries installation.
+   See [Installation and sandbox images](../packages/notebook-bridge/README.md#installation-and-sandbox-images).
 3. Reservation records the destination and changes the operation token. Reconnect and a bounded probe overlap session publication and admission.
 4. Handoff checks the current session, claim token, and deadline while URL preparation runs. Workspace writes and credential injection wait for handoff.
 5. Session teardown owns assigned sandboxes. Claims never return to the pool. Failed cleanup retains ownership for retry.

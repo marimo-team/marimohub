@@ -231,16 +231,7 @@ function useProjectContent() {
 	const { data: sessions, isLoading: sessionsLoading } = useProjectSessionsQuery(pid!);
 	const [
 		{ data: project },
-		{
-			data: notebooks,
-			isFetching,
-			isPending,
-			hasNextPage,
-			fetchNextPage,
-			isFetchingNextPage,
-			isError,
-			error,
-		},
+		{ data: notebooks, isFetching, hasNextPage, fetchNextPage, isFetchingNextPage, isError, error },
 	] = useProjectContentQueries(pid!, filters);
 	const notebooksFetching = filtersPending || isFetching;
 	const createNotebook = useCreateNotebook(pid!);
@@ -749,8 +740,9 @@ function useProjectContent() {
 				values={filters}
 				statuses={NOTEBOOK_STATUS_FILTERS}
 				resultCount={notebooks.length}
+				hasMoreResults={hasNextPage}
 				resultsId="notebook-results"
-				isLoading={isPending}
+				isLoading={false}
 				isFetching={notebooksFetching}
 				onChange={setFilters}
 				actions={
@@ -806,7 +798,7 @@ function useProjectContent() {
 				}
 				isFetching={notebooksFetching}
 				isFiltered={filtersActive}
-				isLoading={isPending}
+				isLoading={false}
 				itemName="notebook"
 				onReset={() => setFilters({})}
 				resultsId="notebook-results"

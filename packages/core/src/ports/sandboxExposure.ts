@@ -29,7 +29,7 @@ export interface ExposureContext {
 }
 
 export interface ExposurePreparation {
-	/** Opt in to marimo's HTTPS-only partitioned session cookie. */
+	/** Request marimo's partitioned session cookie. The provisioner applies it only to an HTTPS kernel URL. */
 	cookiePartitioned?: boolean;
 	/**
 	 * Base path marimo serves under (`--base-url`), so its asset/websocket URLs

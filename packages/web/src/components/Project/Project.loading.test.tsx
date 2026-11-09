@@ -244,9 +244,11 @@ describe('notebook pagination', () => {
 		await screen.findByText('Notebook 99', {}, { timeout: 10_000 });
 		expect(screen.getAllByTestId('notebook-row')).toHaveLength(100);
 		expect(fetch.mock.calls.filter(([url]) => String(url).includes('cursor='))).toHaveLength(0);
+		await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('100+ notebooks'));
 		fireEvent.click(screen.getByRole('button', { name: 'Load more notebooks' }));
 		await screen.findByText('Notebook 149', {}, { timeout: 10_000 });
 		expect(screen.getAllByTestId('notebook-row')).toHaveLength(150);
+		await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('150 notebooks'));
 		expect(screen.queryByRole('button', { name: 'Load more notebooks' })).not.toBeInTheDocument();
 	});
 });

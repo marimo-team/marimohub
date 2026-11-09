@@ -94,7 +94,7 @@ export const previewWorkKey = paths.previewWork;
 export const previewCleanupCursorKey = paths.previewCleanupCursor;
 export const PreviewCursorSchema = z.object({ cursor: z.string().optional() });
 
-type PreviewProject = z.infer<typeof PreviewProjectSchema>;
+export type PreviewProject = z.infer<typeof PreviewProjectSchema>;
 type PreviewReceipts = z.infer<typeof PreviewReceiptsSchema>;
 
 function admitMovedEntries(
@@ -165,6 +165,16 @@ function admitMovedReceipts(record: PreviewReceipts, receipts: PreviewReceipts['
 function hasWork(project: PreviewProject): boolean {
 	return (
 		project.entries.length > 0 || !!project.automations?.some((group) => group.state === 'active')
+	);
+}
+
+function needsPlanning(project: PreviewProject): boolean {
+	if (hasWork(project) && !project.work_id) return true;
+	const planned = structuredClone(project);
+	planProjectAutomations(planned);
+	return (
+		planned.automations?.some((group) => group.state !== 'active') === true ||
+		JSON.stringify(planned) !== JSON.stringify(project)
 	);
 }
 
@@ -368,10 +378,12 @@ export class PreviewStore {
 		});
 	}
 
-	async closeAutomation(pid: ProjectId, key: string, revision: number) {
+	/** Without `revision`, closes whichever lifecycle is active. */
+	async closeAutomation(pid: ProjectId, key: string, revision?: number) {
 		await this.changeProject(pid, (project) => {
 			const group = project.automations?.find((item) => item.key === key);
-			if (!group || group.revision !== revision || group.state !== 'active') return;
+			if (group?.state !== 'active') return;
+			if (revision !== undefined && group.revision !== revision) return;
 			retireAutomationGroup(group, 'closed');
 		});
 	}
@@ -395,8 +407,11 @@ export class PreviewStore {
 		});
 	}
 
-	async planAutomations(pid: ProjectId) {
+	/** Skips the CAS round trip when the `read` head needs no planning. Returns whether it planned. */
+	async planAutomations(pid: ProjectId, read?: PreviewProject): Promise<boolean> {
+		if (read && !needsPlanning(read)) return false;
 		await this.changeProject(pid, () => null);
+		return true;
 	}
 
 	constructor(private readonly bucket: Bucket) {}

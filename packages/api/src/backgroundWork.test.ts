@@ -6,10 +6,10 @@ import { deferTeardown } from './shared';
 afterEach(() => vi.restoreAllMocks());
 
 describe('teardown scheduling fallback', () => {
-	it.each(['reject', 'queue-then-reject', 'start-then-reject', 'async-reject', 'legacy'] as const)(
+	it.each(['reject', 'queue-then-reject', 'start-then-reject', 'async-reject'] as const)(
 		'awaits one cleanup and retains log context when the host does %s',
 		async (mode) => {
-			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 			const metrics = { increment: vi.fn(), gauge: vi.fn(), histogram: vi.fn() };
 			const session = makeSession();
 			const context = {
@@ -26,24 +26,14 @@ describe('teardown scheduling fallback', () => {
 			});
 			const deps = makeTestDeps(new MemoryBucket(), {
 				metrics,
-				...(mode === 'legacy'
-					? {
-							backgroundTasks: {
-								defer: () => {
-									throw new Error('host closed');
-								},
-							},
-						}
-					: {
-							backgroundWork: {
-								defer: (_label, run) => {
-									if (mode === 'queue-then-reject') queued.push(run);
-									if (mode === 'start-then-reject') void run();
-									if (mode === 'async-reject') return Promise.reject(new Error('host closed'));
-									throw new Error('host closed');
-								},
-							},
-						}),
+				backgroundWork: {
+					defer: (_label, run) => {
+						if (mode === 'queue-then-reject') queued.push(run);
+						if (mode === 'start-then-reject') void run();
+						if (mode === 'async-reject') return Promise.reject(new Error('host closed'));
+						throw new Error('host closed');
+					},
+				},
 			});
 			let settled = false;
 			const pending = deferTeardown(deps, 'session.stop', task, context).then(() => {
@@ -69,13 +59,13 @@ describe('teardown scheduling fallback', () => {
 			expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
 				...context,
 				event: 'background_work_failed',
-				label: 'session.stop',
+				operation: 'session.stop',
 			});
 		},
 	);
 
 	it('isolates a failed fallback and reports both failures without repeating cleanup', async () => {
-		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 		const metrics = { increment: vi.fn(), gauge: vi.fn(), histogram: vi.fn() };
 		const session = makeSession();
 		const tasks: (() => Promise<unknown>)[] = [];

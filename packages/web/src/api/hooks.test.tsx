@@ -1171,6 +1171,52 @@ describe('delete mutations and the apps gallery cache', () => {
 });
 
 describe('job history polling', () => {
+	it('reopens exhausted history when a burst of runs leaves a gap between head polls', async () => {
+		let newest = 200;
+		const runs = (first: number, last: number) =>
+			Array.from({ length: first - last + 1 }, (_, index) => ({
+				run_id: `run-${first - index}`,
+				status: 'succeeded',
+				queued_at: new Date((first - index) * 1_000).toISOString(),
+			}));
+		stubFetch(async (input) => {
+			const cursor = new URL(String(input), 'http://localhost').searchParams.get('cursor');
+			if (cursor === 'before-101') return jsonOk({ items: runs(100, 1), next_cursor: null });
+			if (cursor === 'before-251')
+				return jsonOk({ items: runs(250, 151), next_cursor: 'before-151' });
+			if (cursor === 'before-151')
+				return jsonOk({ items: runs(150, 51), next_cursor: 'before-51' });
+			if (cursor === 'before-51') return jsonOk({ items: runs(50, 1), next_cursor: null });
+			return jsonOk({
+				items: runs(newest, newest - 99),
+				next_cursor: newest === 200 ? 'before-101' : 'before-251',
+			});
+		});
+		const { result } = renderHookWithClient(() => useJobRunsQuery(PID, NID, 'job'), {
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.data).toHaveLength(100));
+		await act(async () => {
+			await result.current.fetchNextPage();
+		});
+		await waitFor(() => expect(result.current.hasNextPage).toBe(false));
+		newest = 350;
+		await act(async () => {
+			await result.current.refetch();
+		});
+		await waitFor(() => expect(result.current.hasNextPage).toBe(true));
+		for (let page = 0; page < 3; page++) {
+			await act(async () => {
+				await result.current.fetchNextPage();
+			});
+		}
+		await waitFor(() => expect(result.current.data).toHaveLength(350));
+		expect(result.current.data?.map((run) => run.run_id)).toEqual(
+			runs(350, 1).map((run) => run.run_id),
+		);
+		expect(result.current.hasNextPage).toBe(false);
+	});
+
 	it('does not start historical refreshes after an abandoned head request resolves', async () => {
 		const pending = deferred<Response>();
 		let polling = false;

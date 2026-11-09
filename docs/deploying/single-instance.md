@@ -262,3 +262,5 @@ storage preflight failures, and kernel startup failures.
 
 [Storage](../storage.md) · [Compute](../compute.md) · [Auth](../auth.md) ·
 [Security](../security.md) · [Configuration](../configuration.md)
+
+See [asset caching](./asset-caching.md) to reuse marimo frontend assets across sessions.

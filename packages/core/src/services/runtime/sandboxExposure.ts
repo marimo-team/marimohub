@@ -40,22 +40,14 @@ export function localKernelBasePath(
 export class SubdomainExposure implements SandboxExposure {
 	readonly mode = 'subdomain' as const;
 
-	constructor(private readonly cookiePartitioned?: boolean) {}
-
+	// The provisioner partitions the cookie only for an HTTPS kernel URL, because browsers drop
+	// `Secure` cookies over HTTP.
 	async prepare(ctx: ExposureContext): Promise<ExposurePreparation> {
-		if (!ctx.kernelAuthToken) return {};
-		return {
-			cookiePartitioned: this.cookiePartitioned ?? new URL(ctx.appBaseUrl).protocol === 'https:',
-		};
+		return ctx.kernelAuthToken ? { cookiePartitioned: true } : {};
 	}
 
 	async finalize(exposedUrl: string, ctx: ExposureContext): Promise<ExposureResult> {
 		const url = new URL(exposedUrl);
-		if ((await this.prepare(ctx)).cookiePartitioned && url.protocol !== 'https:') {
-			throw new Error(
-				'Partitioned kernel cookies require an HTTPS sandbox URL. Configure sandbox TLS or set MARIMOHUB_SANDBOX_COOKIE_PARTITIONED=false for same-site HTTP development.',
-			);
-		}
 		if (url.searchParams.has('access_token')) {
 			throw new Error('Sandbox exposure URL contains reserved access_token query parameter');
 		}

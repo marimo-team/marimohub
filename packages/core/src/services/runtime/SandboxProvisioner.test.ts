@@ -1852,20 +1852,30 @@ describe('SandboxProvisioner', () => {
 			expect(calls.destroy).toBe(1);
 		});
 
-		it('rejects plaintext CHIPS exposure before starting marimo', async () => {
+		it.each([
+			['https://kernel.example:8443', true],
+			['http://kernel.example:2718', false],
+		] as const)('partitions the kernel cookie for %s: %s', async (url, partitioned) => {
 			const { instance, calls } = makeFakeSandbox();
-			instance.prepareExposure = async () => ({ url: 'http://kernel.example:2718' });
-			await expect(
-				new SandboxProvisioner(fakeComputeFrom(instance)).provision({
-					...provisionOptions,
-					kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
-					cookiePartitioned: true,
-				}),
-			).rejects.toMatchObject({
-				cause: { message: 'Partitioned kernel cookies require an HTTPS sandbox URL' },
+			instance.prepareExposure = async () => ({ url });
+			instance.exposePort = async () => ({ url });
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...provisionOptions,
+				kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
+				cookiePartitioned: true,
 			});
-			expect(calls.startProcess).toHaveLength(0);
-			expect(calls.destroy).toBe(1);
+			expect(calls.startProcess[0].cmd).toMatch(
+				new RegExp(`^\\(export MARIMO_SERVER_SESSION_COOKIE_PARTITIONED=${partitioned}; `),
+			);
+		});
+
+		it('does not set the cookie policy for tokenless sessions', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...provisionOptions,
+				cookiePartitioned: true,
+			});
+			expect(calls.startProcess[0].cmd).not.toContain('MARIMO_SERVER_SESSION_COOKIE_PARTITIONED');
 		});
 
 		it('names the owner to the provider, project and user', async () => {

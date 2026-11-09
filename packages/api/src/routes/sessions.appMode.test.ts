@@ -50,7 +50,7 @@ describe('Session routes (app mode)', () => {
 		expect(app.session_id).not.toBe(edit.session_id);
 		expect(app.status).toBe('running');
 
-		await expectOk(await owner('DELETE', sessionsPath(`/${app.session_id}`)));
+		await expectOk(await owner('DELETE', sessionsPath(`/${app.session_id}`)), 202);
 		const remaining = await expectOk<any>(await owner('GET', sessionsPath(`/${edit.session_id}`)));
 		expect(remaining.status).toBe('running');
 	});
@@ -115,7 +115,7 @@ describe('Session routes (app mode)', () => {
 			expect.objectContaining({ session_id: app.session_id, state: 'ready', users: 1 }),
 		]);
 
-		await expectOk(await owner('DELETE', sessionsPath(`/${app.session_id}`)));
+		await expectOk(await owner('DELETE', sessionsPath(`/${app.session_id}`)), 202);
 		expect(await pool.inspect(pid, nid)).toEqual([
 			expect.objectContaining({ state: 'retiring', users: 0 }),
 		]);
@@ -536,7 +536,7 @@ describe('Session routes (app mode)', () => {
 				expect(app.mode).toBe('app');
 				expect(app.status).toBe('running');
 				expect(app.ephemeral).toBeFalsy();
-				await expectOk(await owner('DELETE', sessionsPath(`/${app.session_id}`)));
+				await expectOk(await owner('DELETE', sessionsPath(`/${app.session_id}`)), 202);
 			}
 		});
 
@@ -893,7 +893,7 @@ describe('Session routes (app mode)', () => {
 		const services = createServices(bucket);
 		const before = await services.notebooks.listVersions(pid, nid);
 		const app = await expectOk<any>(await owner('POST', sessionsPath(), { mode: 'app' }));
-		await expectOk(await owner('DELETE', sessionsPath(`/${app.session_id}`)));
+		await expectOk(await owner('DELETE', sessionsPath(`/${app.session_id}`)), 202);
 		const after = await services.notebooks.listVersions(pid, nid);
 		expect(after.length).toBe(before.length);
 	});

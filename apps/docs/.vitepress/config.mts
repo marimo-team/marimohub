@@ -216,6 +216,7 @@ export default defineConfig({
 					{ text: 'AWS', link: '/deploying/aws' },
 					{ text: 'Azure', link: '/deploying/azure' },
 					{ text: 'Cloudflare', link: '/deploying/cloudflare' },
+					{ text: 'Asset caching', link: '/deploying/asset-caching' },
 				],
 			},
 			{

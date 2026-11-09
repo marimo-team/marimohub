@@ -1196,7 +1196,7 @@ To limit a destination's exports, set `logger_names`:
 ```
 
 `my_app` matches itself and dotted descendants such as `my_app.worker`, but not `my_application`.
-Matching is case-sensitive, with no wildcards. An omitted or empty list exports all eligible loggers.
+Matching is case-sensitive and does not support wildcards. An omitted or empty list exports all eligible loggers.
 Level thresholds still apply. The exporter excludes `opentelemetry`, `urllib3`, `requests`, and their descendants.
 
 Each record includes project, notebook, workload, sandbox, integration, mode, and process identifiers.
@@ -1412,6 +1412,25 @@ Each secret field uses an inline encrypted value or an external reference.
 API reads return a marker for inline values or metadata for references. They
 never return a resolved value. See
 [Integration secret sources](./integration-secrets.md) for setup and API shapes.
+
+## Performance
+
+Each process caches up to 4,096 encrypted integration versions per store.
+Heads stay fresh on each start. Decrypted configurations and rendered environments are not cached.
+
+Kubernetes integrations share one Secret fetch per render, with separate authorization checks.
+Later renders read secrets again unless `MARIMOHUB_SECRETS_KUBERNETES_CACHE_TTL_SECONDS` is set above `0`.
+AWS Secrets Manager caching defaults to off. For a 60-second cache, set
+`MARIMOHUB_SECRETS_AWS_CACHE_TTL_SECONDS=60`. Secret rotation can take that long to reach new sessions.
+
+CodeArtifact tokens share a bounded cache by domain, owner, region, and credentials.
+Rotation selects a new entry. Reuse requires at least ten hours remaining: two hours for a twelve-hour token.
+Concurrent starts share requests. Cancellable requests remain separate.
+The `codeartifact_token_cache_hit` debug event reports remaining lifetime without credential values.
+
+WIF credentials share a bounded cache per configuration, project, and workload kind, with more than 45 minutes remaining.
+Undated credentials are not reused. Restricted viewers and projects with federation disabled cannot use the cache.
+Sessions keep separate endpoint entries and authorization tokens. The exchanged JWT identifies the first workload.
 
 ## Failure model
 

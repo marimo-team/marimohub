@@ -77,6 +77,8 @@ Resource groups:
   endpoint returns newest events first. It supports exact filters for event type,
   actor ID, and project ID. The default range is the last 30 UTC days. A custom
   inclusive range cannot contain more than 30 days.
+  The server can write an audit event after it sends the response. If the process
+  crashes before the write, the event is lost.
 - **Notebooks** — create and manage local or Git-synced notebooks, read code,
   manage versions, and rotate notebook sync tokens.
   [Move a notebook](./organizing-projects.md#move-a-notebook-to-another-project) to another project:
@@ -88,6 +90,11 @@ Resource groups:
 
 - **Sessions** — list, create, inspect, heartbeat, and stop kernel sessions.
   The session routes also expose editor ownership and exclusive takeover.
+  `DELETE …/sessions/{sid}` returns `202` unless the request sets `wait=true`.
+  With `wait=true`, it returns `200` after teardown finishes.
+  If another request owns the teardown, `wait=true` returns a retryable `503`.
+  For where teardown runs and how it drains, see
+  [Session stop and recovery](./operations.md#session-stop-and-recovery).
   [Secondary surfaces](/surfaces) provide VS Code and OpenCode access within edit sessions.
 - **Notebook imports** — [import a local folder](/importing-notebooks) as
   notebooks with their supporting files:

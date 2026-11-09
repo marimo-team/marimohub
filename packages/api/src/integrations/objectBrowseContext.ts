@@ -27,12 +27,7 @@ interface CachedCredentials {
 type CredentialCache = LazyMap<string, CachedCredentials>;
 
 function createCredentialCache(): CredentialCache {
-	return new LazyMap(
-		async () => {
-			throw new Error('A credential load function is required.');
-		},
-		{ maxSize: MAX_CREDENTIAL_CACHE_ENTRIES },
-	);
+	return new LazyMap({ maxSize: MAX_CREDENTIAL_CACHE_ENTRIES });
 }
 
 let credentialCaches = new WeakMap<ApiDeps, CredentialCache>();

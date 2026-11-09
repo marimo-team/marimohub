@@ -11,7 +11,7 @@ import {
 import { paths } from '../../paths';
 
 export { PreviewIdSchema } from '../../schema';
-const CommitShaSchema = z.string().regex(/^[a-fA-F0-9]{40}$/);
+export const CommitShaSchema = z.string().regex(/^[a-fA-F0-9]{40}$/);
 export const PreviewSourceSchema = z.discriminatedUnion('type', [
 	z.strictObject({
 		type: z.literal('branch'),

@@ -199,6 +199,7 @@ MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
 MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=  # secret
+MARIMOHUB_STORAGE_S3_MAX_SOCKETS=256
 MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
 
 # --- Compute ---
@@ -245,6 +246,7 @@ exports[`config -> code generators > default-prod (s3 + modal + oidc) > compose 
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
       MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
+      MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
       MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
       MARIMOHUB_COMPUTE_BACKEND: modal
       MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
@@ -277,6 +279,7 @@ config:
   MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
+  MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
   MARIMOHUB_COMPUTE_BACKEND: modal
   MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
@@ -320,6 +323,7 @@ const bucket = new S3Storage({
 	endpoint: "https://s3.us-east-1.amazonaws.com",
 	region: "us-east-1",
 	forcePathStyle: true,
+	maxSockets: Number("256"),
 });
 
 const compute = new ModalCompute({
@@ -971,6 +975,7 @@ MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
 MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=  # secret
+MARIMOHUB_STORAGE_S3_MAX_SOCKETS=256
 MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
 
 # --- Compute ---
@@ -1026,6 +1031,7 @@ exports[`config -> code generators > s3 + coreweave + oidc, custom image > compo
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
       MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
+      MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
       MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
       MARIMOHUB_COMPUTE_BACKEND: coreweave
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/acme/marimo-sandbox:v1
@@ -1067,6 +1073,7 @@ config:
   MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
+  MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
   MARIMOHUB_COMPUTE_BACKEND: coreweave
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/acme/marimo-sandbox:v1
@@ -1119,6 +1126,7 @@ const bucket = new S3Storage({
 	endpoint: "https://s3.us-east-1.amazonaws.com",
 	region: "us-east-1",
 	forcePathStyle: true,
+	maxSockets: Number("256"),
 });
 
 const compute = new CoreWeaveCompute({
@@ -1163,6 +1171,7 @@ MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
 MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=  # secret
+MARIMOHUB_STORAGE_S3_MAX_SOCKETS=256
 MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
 
 # --- Compute ---
@@ -1203,6 +1212,7 @@ exports[`config -> code generators > s3 + docker + dev > compose 1`] = `
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
       MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
+      MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
       MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
       MARIMOHUB_COMPUTE_BACKEND: docker
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
@@ -1229,6 +1239,7 @@ config:
   MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
+  MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
   MARIMOHUB_COMPUTE_BACKEND: docker
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
@@ -1266,6 +1277,7 @@ const bucket = new S3Storage({
 	endpoint: "https://s3.us-east-1.amazonaws.com",
 	region: "us-east-1",
 	forcePathStyle: true,
+	maxSockets: Number("256"),
 });
 
 const compute = new DockerCompute({
@@ -1308,6 +1320,7 @@ MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
 MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=  # secret
+MARIMOHUB_STORAGE_S3_MAX_SOCKETS=256
 MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
 
 # --- Compute ---
@@ -1346,6 +1359,7 @@ exports[`config -> code generators > s3 + docker + proxy-header > compose 1`] = 
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
       MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
+      MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
       MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
       MARIMOHUB_COMPUTE_BACKEND: docker
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
@@ -1370,6 +1384,7 @@ config:
   MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
+  MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
   MARIMOHUB_COMPUTE_BACKEND: docker
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
@@ -1405,6 +1420,7 @@ const bucket = new S3Storage({
 	endpoint: "https://s3.us-east-1.amazonaws.com",
 	region: "us-east-1",
 	forcePathStyle: true,
+	maxSockets: Number("256"),
 });
 
 const compute = new DockerCompute({
@@ -1529,6 +1545,7 @@ MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
 MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=  # secret
+MARIMOHUB_STORAGE_S3_MAX_SOCKETS=256
 MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
 
 # --- Compute ---
@@ -1576,6 +1593,7 @@ exports[`config -> code generators > s3 + e2b + oidc > compose 1`] = `
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
       MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
+      MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
       MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
       MARIMOHUB_COMPUTE_BACKEND: e2b
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
@@ -1609,6 +1627,7 @@ config:
   MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
+  MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
   MARIMOHUB_COMPUTE_BACKEND: e2b
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
@@ -1653,6 +1672,7 @@ const bucket = new S3Storage({
 	endpoint: "https://s3.us-east-1.amazonaws.com",
 	region: "us-east-1",
 	forcePathStyle: true,
+	maxSockets: Number("256"),
 });
 
 const compute = new E2bCompute({
@@ -1696,6 +1716,7 @@ MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
 MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=  # secret
+MARIMOHUB_STORAGE_S3_MAX_SOCKETS=256
 MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
 
 # --- Compute ---
@@ -1751,6 +1772,7 @@ exports[`config -> code generators > s3 + modal + oidc, bedrock ai > compose 1`]
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
       MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
+      MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
       MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
       MARIMOHUB_COMPUTE_BACKEND: modal
       MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
@@ -1792,6 +1814,7 @@ config:
   MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
+  MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
   MARIMOHUB_COMPUTE_BACKEND: modal
   MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
@@ -1845,6 +1868,7 @@ const bucket = new S3Storage({
 	endpoint: "https://s3.us-east-1.amazonaws.com",
 	region: "us-east-1",
 	forcePathStyle: true,
+	maxSockets: Number("256"),
 });
 
 const compute = new ModalCompute({
@@ -1901,6 +1925,7 @@ MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
 MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=  # secret
+MARIMOHUB_STORAGE_S3_MAX_SOCKETS=256
 MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
 
 # --- Compute ---
@@ -1958,6 +1983,7 @@ exports[`config -> code generators > s3 + modal + oidc, managed ai > compose 1`]
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
       MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
+      MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
       MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
       MARIMOHUB_COMPUTE_BACKEND: modal
       MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
@@ -2001,6 +2027,7 @@ config:
   MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
+  MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
   MARIMOHUB_COMPUTE_BACKEND: modal
   MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
@@ -2055,6 +2082,7 @@ const bucket = new S3Storage({
 	endpoint: "https://s3.us-east-1.amazonaws.com",
 	region: "us-east-1",
 	forcePathStyle: true,
+	maxSockets: Number("256"),
 });
 
 const compute = new ModalCompute({
@@ -2108,6 +2136,7 @@ MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=eu-west-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
 MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=  # secret
+MARIMOHUB_STORAGE_S3_MAX_SOCKETS=256
 MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
 
 # --- Compute ---
@@ -2154,6 +2183,7 @@ exports[`config -> code generators > s3 + modal + oidc, value overrides > compos
       MARIMOHUB_STORAGE_S3_REGION: eu-west-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
       MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
+      MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
       MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
       MARIMOHUB_COMPUTE_BACKEND: modal
       MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
@@ -2186,6 +2216,7 @@ config:
   MARIMOHUB_STORAGE_S3_BUCKET: my-bucket
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: eu-west-1
+  MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
   MARIMOHUB_COMPUTE_BACKEND: modal
   MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
@@ -2229,6 +2260,7 @@ const bucket = new S3Storage({
 	endpoint: "https://s3.us-east-1.amazonaws.com",
 	region: "eu-west-1",
 	forcePathStyle: true,
+	maxSockets: Number("256"),
 });
 
 const compute = new ModalCompute({
@@ -2274,6 +2306,7 @@ MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
 MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=  # secret
+MARIMOHUB_STORAGE_S3_MAX_SOCKETS=256
 MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
 
 # --- Compute ---
@@ -2311,6 +2344,7 @@ exports[`config -> code generators > s3 + none + dev > compose 1`] = `
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
       MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
+      MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
       MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
       MARIMOHUB_COMPUTE_BACKEND: none
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
@@ -2334,6 +2368,7 @@ config:
   MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
+  MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
   MARIMOHUB_COMPUTE_BACKEND: none
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
@@ -2367,6 +2402,7 @@ const bucket = new S3Storage({
 	endpoint: "https://s3.us-east-1.amazonaws.com",
 	region: "us-east-1",
 	forcePathStyle: true,
+	maxSockets: Number("256"),
 });
 
 const compute = {
@@ -2411,6 +2447,7 @@ MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
 MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=  # secret
+MARIMOHUB_STORAGE_S3_MAX_SOCKETS=256
 MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
 
 # --- Compute ---
@@ -2459,6 +2496,7 @@ exports[`config -> code generators > s3 + wandb + oidc > compose 1`] = `
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
       MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
+      MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
       MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
       MARIMOHUB_COMPUTE_BACKEND: wandb
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
@@ -2493,6 +2531,7 @@ config:
   MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
+  MARIMOHUB_STORAGE_S3_MAX_SOCKETS: 256
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
   MARIMOHUB_COMPUTE_BACKEND: wandb
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
@@ -2538,6 +2577,7 @@ const bucket = new S3Storage({
 	endpoint: "https://s3.us-east-1.amazonaws.com",
 	region: "us-east-1",
 	forcePathStyle: true,
+	maxSockets: Number("256"),
 });
 
 const compute = createWandbCompute({

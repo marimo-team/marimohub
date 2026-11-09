@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadRoute } from './lazyRoute';
+import { createElement, Suspense } from 'react';
+import { render, screen } from '@testing-library/react';
+import { lazyRoute, loadRoute } from './lazyRoute';
 
 afterEach(() => {
 	sessionStorage.clear();
@@ -45,5 +47,42 @@ describe('route chunk recovery', () => {
 		const reload = vi.fn();
 		await expect(loadRoute(() => Promise.reject(error), reload)).rejects.toBe(error);
 		expect(reload).not.toHaveBeenCalled();
+	});
+});
+
+describe('route chunk preload', () => {
+	it('shares one import between the preload and the render', async () => {
+		const load = vi.fn(async () => ({ default: () => createElement('p', null, 'Route ready') }));
+		const Route = lazyRoute(load);
+		Route.preload();
+		Route.preload();
+		render(createElement(Suspense, { fallback: null }, createElement(Route)));
+		expect(await screen.findByText('Route ready')).toBeVisible();
+		expect(load).toHaveBeenCalledTimes(1);
+	});
+
+	it('retries the import on render after a failed preload', async () => {
+		const load = vi
+			.fn()
+			.mockRejectedValueOnce(new TypeError('Failed to fetch dynamically imported module'))
+			.mockResolvedValue({ default: () => createElement('p', null, 'Route ready') });
+		const Route = lazyRoute(load);
+		Route.preload();
+		await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+		await Promise.resolve();
+		render(createElement(Suspense, { fallback: null }, createElement(Route)));
+		expect(await screen.findByText('Route ready')).toBeVisible();
+		expect(load).toHaveBeenCalledTimes(2);
+		expect(sessionStorage.getItem('marimohub:chunk-reload')).toBeNull();
+	});
+
+	it('leaves chunk recovery of a failed preload to the render', async () => {
+		const load = vi
+			.fn()
+			.mockRejectedValue(new TypeError('Failed to fetch dynamically imported module'));
+		lazyRoute(load).preload();
+		await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+		await Promise.resolve();
+		expect(sessionStorage.getItem('marimohub:chunk-reload')).toBeNull();
 	});
 });

@@ -596,6 +596,39 @@ describe('resumable search indexing', () => {
 		expect(result.revision).not.toBe(old.revision);
 		expect(await f.index.publish(scope, old.snapshot, old.revision)).toBe(false);
 	});
+	it.each(['before', 'during'])('handles a project removed %s discovery', async (when) => {
+		const f = await setup();
+		const scope = { projectId: f.project.id, source: f.source.id };
+		const old = await f.index.read(scope);
+		const page = vi.spyOn(f.source, 'page');
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		if (when === 'before') {
+			await f.bucket.delete(paths.project(f.project.id).meta);
+		} else {
+			page.mockImplementation(async () => {
+				await f.bucket.delete(paths.project(f.project.id).meta);
+				return { documents: old.snapshot!.documents, partial: false, cursor: undefined };
+			});
+		}
+		await f.indexer.tick(signal());
+		expect((await f.index.head(scope)).deleted).toBe(true);
+		expect((await f.index.read(scope)).snapshot).toBeNull();
+		expect(await f.index.publish(scope, old.snapshot, old.revision)).toBe(false);
+		if (when === 'before') expect(page).not.toHaveBeenCalled();
+		expect(log).toHaveBeenCalledWith(expect.stringContaining('"level":"info"'));
+	});
+	it('propagates project read failures without deleting the search index', async () => {
+		const f = await setup();
+		const scope = { projectId: f.project.id, source: f.source.id };
+		const old = await f.index.read(scope);
+		const get = f.bucket.get.bind(f.bucket);
+		vi.spyOn(f.bucket, 'get').mockImplementation((key, options) => {
+			if (key === paths.project(f.project.id).meta) throw new Error('storage unavailable');
+			return get(key, options);
+		});
+		await expect(f.indexer.tick(signal())).rejects.toThrow('storage unavailable');
+		expect(await f.index.read(scope)).toEqual(old);
+	});
 	it('keeps the published snapshot through a failed page and resumes its cursor', async () => {
 		const f = await setup();
 		const scope = { projectId: f.project.id, source: f.source.id };

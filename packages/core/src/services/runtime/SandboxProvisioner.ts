@@ -269,6 +269,7 @@ export interface ProvisionOptions {
 	 * the proxied prefix. Omit in `subdomain` mode (the kernel serves at root).
 	 */
 	baseUrl?: string;
+	/** Partition marimo's session cookie; applied only when the kernel's browser URL is HTTPS. */
 	cookiePartitioned?: boolean;
 	/** Browser URL when exposure differs from the compute URL, such as Hub proxy mode. */
 	publicUrl?: string;
@@ -1640,12 +1641,6 @@ export class SandboxProvisioner {
 				new Error('Sandbox URL must use HTTP or HTTPS'),
 			);
 		}
-		if (publicUrl && options.cookiePartitioned && publicUrl.protocol !== 'https:') {
-			throw provisionFailure(
-				'configuring the kernel origin',
-				new Error('Partitioned kernel cookies require an HTTPS sandbox URL'),
-			);
-		}
 		const startup: MarimoStartup = {
 			plan: buildMarimoLaunch(
 				{
@@ -1655,7 +1650,7 @@ export class SandboxProvisioner {
 					mode: options.launchMode,
 					assetUrl: options.assetUrl,
 					baseUrl: options.baseUrl,
-					cookiePartitioned: options.cookiePartitioned,
+					cookiePartitioned: options.cookiePartitioned && publicUrl?.protocol === 'https:',
 					allowedOrigin: publicUrl?.origin,
 					tokenPasswordFile:
 						options.kernelAuthToken !== undefined ? KERNEL_AUTH_TOKEN_FILE : undefined,

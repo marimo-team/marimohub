@@ -1,7 +1,7 @@
 import { consumeIntegrationBudget } from './integrations/browse';
 import { Hono } from 'hono';
 import { describe, expect, it, vi } from 'vitest';
-import type { HonoEnv } from './context';
+import type { ApiDeps, HonoEnv } from './context';
 import { requestMemoMiddleware, withRequestMemo } from './requestMemo';
 import { makeTestDeps } from './testing';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
@@ -12,33 +12,18 @@ describe('request memo middleware', () => {
 		const app = new Hono<HonoEnv>();
 		const load = vi.fn(async () => 42);
 		app.use('*', requestMemoMiddleware(deps));
+		const memo = (c: { get(key: 'deps'): ApiDeps }) => c.get('deps').readMemo!;
 		app.use('*', async (c, next) => {
-			expect(c.get('deps').readMemo).toBe(c.get('readMemo'));
-			await c.get('readMemo').read(['value'], load);
+			await memo(c).read(['value'], load);
 			await next();
 		});
-		app.get('/', async (c) => c.json(await c.get('readMemo').read(['value'], load)));
+		app.get('/', async (c) => c.json(await memo(c).read(['value'], load)));
 		const responses = await Promise.all([app.request('/'), app.request('/')]);
 		for (const response of responses) expect(await response.json()).toBe(42);
 		expect(load).toHaveBeenCalledTimes(2);
 		expect(await (await app.request('/')).json()).toBe(42);
 		expect(load).toHaveBeenCalledTimes(3);
 		expect(deps.readMemo).toBeUndefined();
-	});
-
-	it('reads updated state after a write within the same request', async () => {
-		const app = new Hono<HonoEnv>();
-		let value = 1;
-		app.use('*', requestMemoMiddleware(makeTestDeps(new MemoryBucket())));
-		app.post('/', async (c) => {
-			const memo = c.get('readMemo');
-			const before = await memo.read(['value'], () => value);
-			await memo.mutate(() => {
-				value = 2;
-			});
-			return c.json([before, await memo.read(['value'], () => value)]);
-		});
-		expect(await (await app.request('/', { method: 'POST' })).json()).toEqual([1, 2]);
 	});
 
 	it('preserves shared rate limits across requests and nested operation scopes', () => {

@@ -1,12 +1,28 @@
+import { BoundedLruMap } from '@marimo-hub/core/cache';
+import { logEvent } from '@marimo-hub/core/logs';
+import { sha256Hex } from '@marimo-hub/core/sha256';
 import { Sha256 } from '@aws-crypto/sha256-js';
 import { SignatureV4 } from '@smithy/signature-v4';
 import { z } from 'zod';
 import { UnavailableError } from '@marimo-hub/core/errors';
 import { AWS_REGION_NAME_REGEX, awsDnsSuffix } from '@marimo-hub/core/ports/package-registry';
-import type { PackageRegistryCredentialProvider } from '@marimo-hub/core/ports/package-registry';
+import type {
+	CodeArtifactSource,
+	PackageRegistryCredentialProvider,
+} from '@marimo-hub/core/ports/package-registry';
+import type { TempS3Creds } from '@marimo-hub/core/ports/credential-broker';
 
 /** The AWS maximum; the hub never renews a token, so sessions restart after it expires. */
 const TOKEN_DURATION_SECONDS = 43_200;
+const MIN_REMAINING_MS = 10 * 60 * 60_000;
+
+type ResolveOptions = Parameters<PackageRegistryCredentialProvider['resolve']>[1];
+
+type Token = { username: string; password: string; expiresAt: string };
+interface TokenEntry {
+	token: Promise<Token>;
+	expiresAt: number;
+}
 
 const responseSchema = z.object({
 	authorizationToken: z
@@ -18,22 +34,71 @@ const responseSchema = z.object({
 });
 
 export class AwsCodeArtifactCredentials implements PackageRegistryCredentialProvider {
-	async resolve(
-		source: Parameters<PackageRegistryCredentialProvider['resolve']>[0],
-		options: Parameters<PackageRegistryCredentialProvider['resolve']>[1],
+	private readonly tokens: BoundedLruMap<string, TokenEntry>;
+
+	constructor(maxEntries = 4096) {
+		this.tokens = new BoundedLruMap(maxEntries);
+	}
+
+	async resolve(source: CodeArtifactSource, options: ResolveOptions): Promise<Token> {
+		// Never fall back to the hub's ambient AWS identity for project-authored configuration.
+		const credentials =
+			source.auth.method === 'static'
+				? {
+						accessKeyId: source.auth.access_key_id,
+						secretAccessKey: source.auth.secret_access_key,
+						sessionToken: source.auth.session_token,
+					}
+				: options.federatedCredentials;
+		// A caller-owned cancellation must not abort another start's shared mint.
+		if (options.signal) return this.mint(source, options, credentials);
+		// Include secret rotation without retaining plaintext credentials in cache keys.
+		const identity = await sha256Hex(
+			JSON.stringify([
+				credentials?.accessKeyId,
+				credentials?.secretAccessKey,
+				credentials?.sessionToken,
+			]),
+		);
+		const key = JSON.stringify([
+			source.region,
+			source.domain,
+			source.domain_owner,
+			source.auth.method,
+			identity,
+		]);
+		const hit = this.tokens.get(key);
+		if (hit && hit.expiresAt - Date.now() >= MIN_REMAINING_MS) {
+			const token = await hit.token;
+			logEvent({
+				level: 'debug',
+				event: 'codeartifact_token_cache_hit',
+				remaining_lifetime_ms: Date.parse(token.expiresAt) - Date.now(),
+			});
+			return { ...token };
+		}
+		const entry: TokenEntry = {
+			expiresAt: Infinity,
+			token: this.mint(source, options, credentials).then((token) => {
+				entry.expiresAt = Date.parse(token.expiresAt);
+				return token;
+			}),
+		};
+		entry.token.catch(() => {
+			if (this.tokens.peek(key) === entry) this.tokens.delete(key);
+		});
+		this.tokens.set(key, entry);
+		return { ...(await entry.token) };
+	}
+
+	private async mint(
+		source: CodeArtifactSource,
+		options: ResolveOptions,
+		credentials: TempS3Creds | undefined,
 	) {
 		let signal = options.signal;
 		try {
 			options.signal?.throwIfAborted();
-			// Never fall back to the hub's ambient AWS identity for project-authored configuration.
-			const credentials =
-				source.auth.method === 'static'
-					? {
-							accessKeyId: source.auth.access_key_id,
-							secretAccessKey: source.auth.secret_access_key,
-							sessionToken: source.auth.session_token,
-						}
-					: options.federatedCredentials;
 			if (!credentials?.accessKeyId || !credentials.secretAccessKey) {
 				throw new Error('Missing AWS credentials');
 			}

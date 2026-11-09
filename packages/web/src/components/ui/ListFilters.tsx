@@ -16,6 +16,7 @@ interface ListFiltersProps<Status extends string> {
 	values: ListFilterValues<Status>;
 	statuses: readonly ListFilterStatus<Status>[];
 	resultCount: number;
+	hasMoreResults?: boolean;
 	resultsId: string;
 	isLoading: boolean;
 	isFetching: boolean;
@@ -35,6 +36,7 @@ export function ListFilters<Status extends string>({
 	values,
 	statuses,
 	resultCount,
+	hasMoreResults = false,
 	resultsId,
 	isLoading,
 	isFetching,
@@ -64,12 +66,12 @@ export function ListFilters<Status extends string>({
 		focusSearchOnOpen.current = false;
 		input.focus();
 	}, [isOpen]);
-	const pluralName = `${itemName}${resultCount === 1 ? '' : 's'}`;
+	const pluralName = `${itemName}${resultCount === 1 && !hasMoreResults ? '' : 's'}`;
 	const announcement = isLoading
 		? `Loading ${itemName}s…`
 		: isFetching
 			? `Updating ${itemName}s…`
-			: `${resultCount} ${pluralName}`;
+			: `${resultCount}${hasMoreResults ? '+' : ''} ${pluralName}`;
 
 	return (
 		<div className="mb-3">

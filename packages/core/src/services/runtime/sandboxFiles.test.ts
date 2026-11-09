@@ -2113,6 +2113,25 @@ describe('sandboxFiles security', () => {
 		expect(decode(fs.get('a.txt')!)).toBe('hi');
 	});
 
+	it('restoreWorkspace does not retry a write the adapter marks non-retryable', async () => {
+		const { nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile('a.txt'), 'hi');
+		const { instance: base } = makeFsSandbox();
+		const expired = Object.assign(new Error('File write retry budget expired'), {
+			retryable: false,
+		});
+		const writeFiles = vi.fn(async () => {
+			throw expired;
+		});
+		const instance = { ...base, writeFiles } as unknown as typeof base;
+
+		await expect(restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT)).rejects.toBe(
+			expired,
+		);
+		expect(writeFiles).toHaveBeenCalledOnce();
+	});
+
 	it('restoreWorkspace throws after exhausting write attempts', async () => {
 		const { nb } = nbCtx();
 		const bucket = new MemoryBucket();

@@ -13,6 +13,7 @@ describe('sandbox preconnect', () => {
 		const links = () => document.head.querySelectorAll('link[rel="preconnect"]');
 		expect(links()).toHaveLength(1);
 		expect(links()[0]).toHaveAttribute('href', 'https://sandbox.example');
+		expect(links()[0]).not.toHaveAttribute('crossorigin');
 		first.rerender({ url: undefined });
 		expect(links()).toHaveLength(1);
 		second.unmount();

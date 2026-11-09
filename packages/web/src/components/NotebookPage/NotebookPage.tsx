@@ -3,7 +3,7 @@ import { HelpMenu } from '@/components/Header/HelpMenu';
 import { AnnouncementBanner } from '@/components/Shell/AnnouncementBanner';
 import { hasNotebookPreviews } from '@/api/previews';
 import { PageTitle } from '@/components/ui/PageTitle';
-import { lazy, Suspense, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { NOTEBOOK_IFRAME_SANDBOX } from '@marimo-hub/notebook-bridge/host';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { AlertTriangle, AppWindow, ArrowLeft, Bot, Code2, Eye, FileCode2 } from 'lucide-react';
@@ -47,18 +47,13 @@ import { SessionControl } from './SessionControl';
 import type { SecondarySurfaceFrame } from './OpenMenu';
 import { ShareMenu } from './ShareMenu';
 import { NotebookFrame } from './NotebookFrame';
+import { lazyDialog } from '@/components/ui/lazyDialog';
+import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
 
-const RenameNotebookDialog = lazy(() =>
-	import('@/components/Notebook/RenameNotebookDialog').then((module) => ({
-		default: module.RenameNotebookDialog,
-	})),
-);
-
-const ThumbnailDialog = lazy(() =>
-	import('@/components/Notebook/ThumbnailDialog').then((module) => ({
-		default: module.ThumbnailDialog,
-	})),
-);
+const RenameNotebookDialog = lazyDialog(async () => {
+	const module = await import('@/components/Notebook/RenameNotebookDialog');
+	return { default: module.RenameNotebookDialog };
+});
 
 const SURFACE_TAB_ICONS = {
 	vscode: Code2,
@@ -676,16 +671,12 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 				</div>
 			</header>
 			<AnnouncementBanner />
-			{thumbnailModal.isOpen && (
-				<Suspense fallback={null}>
-					<ThumbnailDialog
-						projectId={pid!}
-						notebookId={nid!}
-						isOpen={thumbnailModal.isOpen}
-						onClose={thumbnailModal.close}
-					/>
-				</Suspense>
-			)}
+			<ThumbnailDialog
+				projectId={pid!}
+				notebookId={nid!}
+				isOpen={thumbnailModal.isOpen}
+				onClose={thumbnailModal.close}
+			/>
 
 			{staticView && (
 				<StaticNotebookView
@@ -931,15 +922,13 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 				</div>
 			)}
 
-			{!isApp && renameModal.isOpen && (
-				<Suspense fallback={null}>
-					<RenameNotebookDialog
-						isOpen={renameModal.isOpen}
-						onClose={renameModal.close}
-						projectId={pid!}
-						notebook={{ id: nid!, title }}
-					/>
-				</Suspense>
+			{!isApp && (
+				<RenameNotebookDialog
+					isOpen={renameModal.isOpen}
+					onClose={renameModal.close}
+					projectId={pid!}
+					notebook={{ id: nid!, title }}
+				/>
 			)}
 
 			{!isApp && (

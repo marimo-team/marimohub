@@ -241,7 +241,7 @@ describe('filesystemSnapshots', () => {
 			const { instance } = makeFakeSandbox();
 			const provider = snapshotProvider(instance);
 			const tasks: (() => Promise<unknown>)[] = [];
-			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 			const metrics = { increment: vi.fn(), gauge: vi.fn() };
 			try {
 				await captureFilesystemSnapshot(
@@ -270,6 +270,13 @@ describe('filesystemSnapshots', () => {
 				await tasks[0]();
 				if (failDelete) {
 					expect(log).toHaveBeenCalledOnce();
+					expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
+						event: 'background_work_failed',
+						operation: 'filesystem_snapshot.delete',
+						project_id: project.id,
+						notebook_id: nb.id,
+						snapshot_id: 'snap_old',
+					});
 					expect(metrics.increment).toHaveBeenCalledWith('background.failed', 1, {
 						label: 'filesystem_snapshot.delete',
 					});

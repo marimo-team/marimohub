@@ -59,6 +59,7 @@ Any S3-compatible store: CoreWeave CAIOS, AWS S3, MinIO, Tigris, Ceph, or Cloudf
 | `MARIMOHUB_STORAGE_S3_REGION` | AWS region for the bucket. | — | `auto (SDK default)` | `us-east-1` |
 | `MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID` 🔒 | Access key id. Set both key id and secret together to use static credentials, or neither to use the SDK default credential chain. Setting only one is rejected at startup. | — | — | — |
 | `MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY` 🔒 | Secret access key (paired with the access key id above). | — | — | — |
+| `MARIMOHUB_STORAGE_S3_MAX_SOCKETS` | Maximum HTTP and HTTPS connections per origin. Must be a positive safe integer. | — | `256` | — |
 | `MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE` | Use path-style bucket addressing (required by MinIO/Ceph). | — | `false` | `true` |
 
 ### Google Cloud Storage
@@ -146,7 +147,7 @@ Read regardless of the selected compute backend.
 | `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE` | Whether editors may choose a non-default compute profile per notebook (`none` or `editors`). | — | `none` | `editors` |
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` | Public hostname used to expose kernel ports. | — | `'' (empty)` | `hub.example.com` |
 | `MARIMOHUB_COMPUTE_WORKDIR` | Working directory inside the sandbox where notebook files land and marimo runs. | — | `/workspace` | — |
-| `MARIMOHUB_COMPUTE_ASSET_URL` | Base URL for marimo frontend assets (e.g. a CDN). Omit to use the bundled assets. | — | — | `https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist` |
+| `MARIMOHUB_COMPUTE_ASSET_URL` | Versioned base URL for shared marimo frontend assets. Use {version} to match the installed marimo version. Recommended for connected deployments after worker, WASM, and CSP staging checks. Omit to use bundled sandbox assets. | — | — | `https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist` |
 | `MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS` | How long a session start waits for the marimo kernel to come up before failing. Generous by default because a cold sandbox may resolve + download the notebook environment on first boot. Served on `/api/v1/capabilities` so the client bounds its own startup wait with the same value. | — | `120` | — |
 | `MARIMOHUB_SURFACES` | Comma-separated editor surfaces enabled in notebook sandboxes. `marimo` is always available; add `vscode`, `opencode`, or both. | — | `marimo` | `marimo,vscode,opencode` |
 | `MARIMOHUB_SURFACE_VSCODE_FLAVOR` | Browser editor implementation (`code-server` or `openvscode`). `openvscode` is experimental: no published sandbox image ships it, and selecting it logs a warning at boot. | — | `code-server` | — |
@@ -173,7 +174,8 @@ CoreWeave Sandboxes via the `@coreweave/cwsandbox` SDK (Sandbox v1).
 | `MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG` | Tag applied to owned sandboxes for discovery and cleanup. | — | `marimohub` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE` | Template for the public kernel URL. Substitutes `{sandboxId}`, `{port}`, `{host}`, `{token}`. | — | `https://{sandboxId}-{port}.{host}` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID` | Runner (by operator-assigned id) sandboxes schedule on — must name your CKS sandbox runner. A create without a runner id schedules on the CoreWeave-managed serverless pool, not your cluster. Set to an empty value to opt into serverless. | — | `marimohub` | — |
-| `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE` | Namespace the sandbox runner creates kernel pods and Services in. Set it on a CKS runner without HTTPS endpoint routes: the kernel service is then declared with `custom` visibility (the sandbox template must declare `network.ingress` sources) and the hub creates a per-kernel Ingress there (hostname from `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` + the hostname template), owner-referenced to the runner's Service. Needs the chart's `sandboxIngress.namespace` RBAC. The Ingress carries no `tls` block or annotations, so Traefik must serve it from its default TLSStore (a wildcard certificate for the sandbox hostname). Omit on runners that publish `public` kernel services themselves. | — | — | `org-ns-ab12cd` |
+| `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE` | Namespace the sandbox runner creates kernel pods and Services in. Set it on a CKS runner without HTTPS endpoint routes: the kernel service is then declared with `custom` visibility (the sandbox template must declare `network.ingress` sources) and the hub creates a per-kernel Ingress there (hostname from `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` + the hostname template), owner-referenced to the runner's Service. Needs the chart's `sandboxIngress.namespace` RBAC. The Ingress carries no `tls` block, so Traefik must serve it from its default TLSStore (a wildcard certificate for the sandbox hostname). Omit on runners that publish `public` kernel services themselves. | — | — | `org-ns-ab12cd` |
+| `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS` | JSON object of string annotations for hub-published kernel Ingresses. Requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE. Keys and total size must satisfy Kubernetes annotation limits. | — | — | `{"traefik.ingress.kubernetes.io/router.middlewares":"sandbox-kernel-compress@kubernetescrd"}` |
 | `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS` | IngressClass for hub-published kernel Ingresses. Only meaningful with `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE` (rejected at boot without it); the default applies once that namespace is set. | — | `traefik` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID` | Org-scoped sandbox template every sandbox is created from — custom specs such as GPU placement, egress rules, or pod shape. Omit to use the runner's default policy. | — | — | `tmpl-marimohub` |
 | `MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_TEMPLATE_ID` | Sandbox template used only for editor-or-higher edit sandboxes; must differ from `MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID`. The template must mount the per-user volume at `/var/run/marimohub/user-home` (`subPathExpr: $(MARIMOHUB_USER_HOME_KEY)`) and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes use the normal template. | — | — | `tmpl-marimohub-user-home` |
@@ -347,11 +349,9 @@ How running kernels are surfaced to the browser, agnostic of the compute backend
 
 `MARIMOHUB_SANDBOX_EXPOSURE=subdomain`
 
-Uses the public kernel URL directly. Set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` to a sibling subdomain or separate domain.
+Uses the public kernel URL directly. This mode reads `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` from the shared Compute settings. Set that variable to a sibling subdomain or separate domain.
 
-| Variable | Description | Required | Default | Example |
-| --- | --- | --- | --- | --- |
-| `MARIMOHUB_SANDBOX_COOKIE_PARTITIONED` | Enable CHIPS for authenticated subdomain sessions. Defaults to true for HTTPS Hub URLs, otherwise false. Requires HTTPS kernels and marimo support for MARIMO_SERVER_SESSION_COOKIE_PARTITIONED. | — | — | `true` |
+_No environment variables to set here._
 
 ### Proxy (through the app)
 

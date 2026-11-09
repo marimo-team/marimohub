@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createProjectId, createServices, paths, ProjectId } from '@marimo-hub/core';
-import { ACTOR, MemoryNotifier, uid } from '@marimo-hub/core/testing';
+import { ACTOR, MemoryNotifier, queuedBackgroundWork, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import type { ProjectAlertDispatcher } from '@marimo-hub/core';
 import {
@@ -1198,15 +1198,11 @@ describe('Read visibility (MARIMOHUB_DEFAULT_ROLE)', () => {
 
 	it('alerts on effective default access changes only', async () => {
 		const deliver = vi.fn<ProjectAlertDispatcher['deliver']>(async () => 'delivered' as const);
-		const tasks: Promise<unknown>[] = [];
+		const host = queuedBackgroundWork();
 		const alertsOwner = createTestApi({
 			bucket,
 			deps: {
-				backgroundTasks: {
-					defer: (task) => {
-						tasks.push(task);
-					},
-				},
+				backgroundWork: host.work,
 				projectAlerts: {
 					store: {} as never,
 					dispatcher: { deliver, test: vi.fn() },
@@ -1217,12 +1213,12 @@ describe('Read visibility (MARIMOHUB_DEFAULT_ROLE)', () => {
 
 		await expectOk(await alertsOwner('PATCH', `/projects/${pid}`, { default_role: 'inherit' }));
 		await expectOk(await alertsOwner('PATCH', `/projects/${pid}`, { name: 'Renamed' }));
-		await Promise.all(tasks);
+		await host.runAll();
 		expect(deliver).not.toHaveBeenCalled();
 
 		await expectOk(await alertsOwner('PATCH', `/projects/${pid}`, { default_role: 'none' }));
 		await expectOk(await alertsOwner('PATCH', `/projects/${pid}`, { default_role: 'none' }));
-		await Promise.all(tasks);
+		await host.runAll();
 		expect(deliver).toHaveBeenCalledOnce();
 		expect(deliver).toHaveBeenCalledWith(
 			pid,

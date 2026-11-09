@@ -12,6 +12,7 @@ import {
 import { createIntegrationId, createProjectId, createSessionId } from '../../ids';
 import type { ProjectId, SessionId } from '../../ids';
 import { paths } from '../../paths';
+import { IntegrationVersionRecordSchema, StoredObjectError } from '../../schema';
 import type { Bucket, BucketListOptions } from '../../ports/bucket';
 import { ObjectBrowseError } from '../../ports/objectBrowser';
 import type { ObjectBrowseContext, ObjectBrowser } from '../../ports/objectBrowser';
@@ -877,6 +878,7 @@ describe('ProjectIntegrationsStore', () => {
 		expect(contexts).toHaveLength(2);
 		expect(contexts[0]).toBe(contexts[1]);
 		expect(contexts[0]).toEqual({
+			operation: expect.any(Object),
 			scope: 'project',
 			projectId: pid,
 			integrationId: created.id,
@@ -2471,7 +2473,9 @@ describe('OrgIntegrationsStore + project inheritance', () => {
 		expect(contexts).toEqual([{ scope: 'org', integrationId: created.id }]);
 		contexts.length = 0;
 		await scopedProject.resolveForSession(pid, renderContext(createSessionId()));
-		expect(contexts).toEqual([{ scope: 'org', integrationId: created.id }]);
+		expect(contexts).toEqual([
+			{ scope: 'org', integrationId: created.id, operation: expect.any(Object) },
+		]);
 	});
 
 	it('passes organization ownership without an integration id for a new draft', async () => {
@@ -3503,5 +3507,209 @@ describe('bounded integration discovery', () => {
 			store.list(createProjectId(), { maxHeads: 2, signal: controller.signal }),
 		).rejects.toMatchObject({ name: 'AbortError' });
 		expect(list).not.toHaveBeenCalled();
+	});
+});
+
+describe('session integration input caches', () => {
+	async function createFixture() {
+		const bucket = new MemoryBucket();
+		const store = makeStore(bucket);
+		const pid = createProjectId();
+		const created = await store.create(
+			pid,
+			{ kind: 'echo', name: 'cached', config: { token: 'secret' } },
+			ACTOR,
+		);
+		return {
+			bucket,
+			store,
+			pid,
+			created,
+			key: paths.project(pid).integration(created.id).version(1),
+		};
+	}
+
+	it('caches encrypted versions, clones reads, and observes head changes', async () => {
+		const { bucket, store, pid, created, key } = await createFixture();
+		const get = vi.spyOn(bucket, 'get');
+		const first = await store.get(pid, created.id);
+		first.config.greeting = 'mutated';
+		const render = () => store.resolveForSession(pid, renderContext(createSessionId()));
+		expect((await render())?.vars?.ECHO_CACHED_GREETING).toBe('hi');
+		expect((await render())?.vars?.ECHO_CACHED_TOKEN).toBe('secret');
+		expect(get.mock.calls.filter(([k]) => k === key)).toHaveLength(1);
+		await store.update(pid, created.id, { enabled: false }, ACTOR);
+		expect(await render()).toBeUndefined();
+	});
+
+	it('protects cached records from an in-place kind migration', async () => {
+		const { bucket, pid, created, key } = await createFixture();
+		const registry = new IntegrationRegistry();
+		registry.register(
+			defineIntegration({
+				...echoKind,
+				schemaVersion: 2,
+				migrate(config) {
+					const stored = config as Record<string, unknown>;
+					stored.greeting = `${String(stored.greeting)}!`;
+					return stored;
+				},
+			}),
+		);
+		const store = new ProjectIntegrationsStore({ bucket, registry, codec });
+		const get = vi.spyOn(bucket, 'get');
+		expect((await store.get(pid, created.id)).config.greeting).toBe('hi!');
+		expect((await store.get(pid, created.id)).config.greeting).toBe('hi!');
+		expect(get.mock.calls.filter(([path]) => path === key)).toHaveLength(1);
+	});
+
+	it.each([
+		'missing',
+		'malformed JSON',
+		'invalid schema',
+		'wrong identity',
+		'newer schema',
+	] as const)('retries a version after a %s read failure', async (failure) => {
+		const { bucket, store, pid, created, key } = await createFixture();
+		const original = await (await bucket.get(key))!.text();
+		if (failure === 'missing') await bucket.delete(key);
+		else if (failure === 'malformed JSON') await bucket.put(key, '{');
+		else if (failure === 'invalid schema') await bucket.put(key, '{}');
+		else {
+			const record = IntegrationVersionRecordSchema.parse(JSON.parse(original));
+			await bucket.put(
+				key,
+				JSON.stringify({
+					...record,
+					...(failure === 'wrong identity' ? { version: 999 } : { schema_version: 999 }),
+				}),
+			);
+		}
+		await expect(store.get(pid, created.id)).rejects.toThrow(
+			{
+				missing: NotFoundError,
+				'malformed JSON': StoredObjectError,
+				'invalid schema': StoredObjectError,
+				'wrong identity': ValidationError,
+				'newer schema': ValidationError,
+			}[failure],
+		);
+		await bucket.put(key, original);
+		const get = vi.spyOn(bucket, 'get');
+		expect((await store.get(pid, created.id)).config.greeting).toBe('hi');
+		expect((await store.get(pid, created.id)).config.greeting).toBe('hi');
+		expect(get.mock.calls.filter(([path]) => path === key)).toHaveLength(1);
+	});
+
+	it('stops rendering disabled and deleted org heads even with a warm version cache', async () => {
+		const bucket = new MemoryBucket();
+		const registry = new IntegrationRegistry();
+		registry.register(echoKind);
+		const org = new OrgIntegrationsStore({ bucket, registry, codec });
+		const store = makeStore(bucket);
+		const pid = createProjectId();
+		const created = await org.create(
+			{ kind: 'echo', name: 'shared', config: { token: 'secret' } },
+			ACTOR,
+		);
+		const render = () => store.resolveForSession(pid, renderContext(createSessionId()));
+		expect((await render())?.vars.ECHO_SHARED_TOKEN).toBe('secret');
+		await org.update(created.id, { enabled: false }, ACTOR);
+		expect(await render()).toBeUndefined();
+		await org.update(created.id, { enabled: true }, ACTOR);
+		expect((await render())?.vars.ECHO_SHARED_TOKEN).toBe('secret');
+		await org.delete(created.id);
+		expect(await render()).toBeUndefined();
+	});
+
+	it('resolves secrets again after rotation and does not return an old render after resolver failure', async () => {
+		const resolve = vi
+			.fn<SecretResolver['resolve']>()
+			.mockResolvedValueOnce('old-secret')
+			.mockRejectedValueOnce(new SecretResolutionError('unavailable', 'backend unavailable'))
+			.mockResolvedValue('rotated-secret');
+		const store = makeStore(new MemoryBucket(), true, [{ ...vaultResolver, resolve }]);
+		const pid = createProjectId();
+		await store.create(
+			pid,
+			{
+				kind: 'echo',
+				name: 'cached',
+				config: { token: { $secret: { kind: 'reference', backend: 'vault', locator: 'shared' } } },
+			},
+			ACTOR,
+		);
+		const render = () => store.resolveForSession(pid, renderContext(createSessionId()));
+		expect((await render())?.vars.ECHO_CACHED_TOKEN).toBe('old-secret');
+		await expect(render()).rejects.toThrow(UnavailableError);
+		expect((await render())?.vars.ECHO_CACHED_TOKEN).toBe('rotated-secret');
+		expect(resolve).toHaveBeenCalledTimes(3);
+	});
+
+	it('evicts least recently used versions at the configured bound', async () => {
+		const bucket = new MemoryBucket();
+		const registry = new IntegrationRegistry();
+		registry.register(echoKind);
+		const store = new ProjectIntegrationsStore({
+			bucket,
+			registry,
+			codec,
+			versionCacheMaxEntries: 2,
+		});
+		const pid = createProjectId();
+		const instances: { id: ReturnType<typeof createIntegrationId> }[] = [];
+		for (const name of ['one', 'two', 'three']) {
+			instances.push(
+				await store.create(pid, { kind: 'echo', name, config: { token: 'secret' } }, ACTOR),
+			);
+		}
+		const get = vi.spyOn(bucket, 'get');
+		for (const index of [0, 1, 0, 2, 0, 1]) await store.get(pid, instances[index].id);
+		expect(
+			get.mock.calls.filter(
+				([key]) => key === paths.project(pid).integration(instances[0].id).version(1),
+			),
+		).toHaveLength(1);
+		expect(
+			get.mock.calls.filter(
+				([key]) => key === paths.project(pid).integration(instances[1].id).version(1),
+			),
+		).toHaveLength(2);
+	});
+
+	it('shares read identity across integrations without sharing authorization contexts or renders', async () => {
+		const contexts: SecretResolutionContext[] = [];
+		const resolver: SecretResolver = {
+			...vaultResolver,
+			resolve: async (_ref, context) => {
+				contexts.push(context);
+				return 'resolved';
+			},
+		};
+		const bucket = new MemoryBucket();
+		const store = makeStore(bucket, true, [resolver]);
+		const pid = createProjectId();
+		const ids = [];
+		for (const name of ['one', 'two']) {
+			const created = await store.create(
+				pid,
+				{
+					kind: 'echo',
+					name,
+					config: {
+						token: { $secret: { kind: 'reference', backend: 'vault', locator: 'shared' } },
+					},
+				},
+				ACTOR,
+			);
+			ids.push(created.id);
+		}
+		await store.resolveForSession(pid, renderContext(createSessionId()));
+		expect(contexts.map((context) => context.integrationId)).toEqual(ids);
+		expect(contexts[0]).not.toBe(contexts[1]);
+		expect(contexts[0].operation).toBeDefined();
+		expect(contexts[0].operation).toBe(contexts[1].operation);
+		await store.resolveForSession(pid, renderContext(createSessionId()));
+		expect(contexts[2].operation).not.toBe(contexts[0].operation);
 	});
 });
