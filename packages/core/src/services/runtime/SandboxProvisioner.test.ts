@@ -4990,3 +4990,70 @@ describe('combined preparation failure cleanup', () => {
 		expect(calls.startProcess).toEqual([]);
 	});
 });
+
+it.each([false, true])(
+	'maps deferred agent payload paths with execInput support %s',
+	async (execInput) => {
+		const { instance, calls } = makeFakeSandbox();
+		Object.assign(instance, { supportsLaunchSetupOutput: true });
+		instance.ready = async () => {};
+		instance.resolveProcessPath = (path) => `/mapped${path}`;
+		if (execInput) instance.execInput = vi.fn();
+		instance.launchProcess = vi.fn(async (command, options) => ({
+			success: true as const,
+			process: await instance.startProcess(command, options),
+			timings: { setup: 0, start: 0, waitport: 0 },
+		}));
+		await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+			sandboxId: createSandboxId(),
+			projectId: createProjectId(),
+			notebookId: createNotebookId(),
+			hostname: 'localhost',
+			bucket: bucketConfig,
+			sessionEnv: {
+				files: [{ path: '.claude/CLAUDE.md', relativeTo: 'home', content: 'private instructions' }],
+			},
+		});
+		const payloads = calls.writeFiles
+			.flat()
+			.filter(({ path }) => path.startsWith('/tmp/.marimohub-agent-context-'));
+		expect(payloads).toHaveLength(1);
+		const setup = vi.mocked(instance.launchProcess).mock.calls[0][1].setup!;
+		expect(setup).toContain(` < '/mapped${payloads[0].path}'`);
+		expect(setup).toContain(`rm -f '/mapped${payloads[0].path}'`);
+		expect(setup).not.toContain('private instructions');
+		if (execInput) expect(instance.execInput).not.toHaveBeenCalled();
+	},
+);
+
+it.each([
+	['invalid_home', 'Invalid sandbox home directory.'],
+	['invalid_manifest', 'Invalid previous agent context file list.'],
+	['unsafe_path', 'Agent context paths must not contain symlinks or enter the workspace.'],
+	['root_workspace', 'Agent context requires a workspace directory other than /.'],
+	['private raw output', 'Could not install agent context files.'],
+])('reports an actionable deferred agent-context failure for %s', async (stdout, message) => {
+	const { instance, calls } = makeFakeSandbox();
+	Object.assign(instance, { supportsLaunchSetupOutput: true });
+	instance.ready = async () => {};
+	instance.launchProcess = async () => ({
+		success: false,
+		reason: 'setup_exit',
+		stdout,
+		stderr: '__MARIMOHUB_SETUP__ step agent_context 1000000\nprivate diagnostic',
+		timings: { setup: 1, start: 0, waitport: 0 },
+	});
+	await expect(
+		new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+			sandboxId: createSandboxId(),
+			projectId: createProjectId(),
+			notebookId: createNotebookId(),
+			hostname: 'localhost',
+			bucket: bucketConfig,
+			sessionEnv: {
+				files: [{ path: '.claude/CLAUDE.md', relativeTo: 'home', content: 'private instructions' }],
+			},
+		}),
+	).rejects.toMatchObject({ name: 'PythonEnvironmentSetupError', message });
+	expect(calls.destroy).toBe(1);
+});

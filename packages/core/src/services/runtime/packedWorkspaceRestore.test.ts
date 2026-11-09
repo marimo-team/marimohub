@@ -774,3 +774,206 @@ it('falls back to ordinary writes when a custom image workspace rejects extracti
 	expect(calls.writeFiles).toHaveLength(2);
 	expect(calls.writeFiles[1]).toHaveLength(257);
 });
+
+describe('fresh workspace archive admission', () => {
+	async function fixture(count = 257) {
+		const bucket = new MemoryBucket();
+		for (let i = 0; i < count; i++) await bucket.put(`objects/données/${i}.bin`, 'data');
+		const read = bucket.get.bind(bucket);
+		const get = vi.spyOn(bucket, 'get');
+		const { instance, calls } = makeFakeSandbox();
+		return { bucket, get, read, instance, calls };
+	}
+
+	it('reserves both archive buffers before reads and waits only before transfer', async () => {
+		const w = await fixture();
+		const budget = new ByteBudget(100_000);
+		const ready = Promise.withResolvers<void>();
+		const waiting = Promise.withResolvers<void>();
+		const write = w.instance.writeFiles.bind(w.instance);
+		w.instance.writeFiles = async (files) => {
+			const archive = files.find(({ path }) => path.endsWith('/workspace.zip'))!
+				.content as Uint8Array;
+			expect(budget.capacity - budget.available).toBe(2 * archive.byteLength);
+			await write(files);
+		};
+		const restore = restoreWorkspace(w.instance, w.bucket, 'objects/', '/workspace', {
+			packLargeWorkspace: true,
+			prefetchBudget: budget,
+			waitUntilReady: () => {
+				waiting.resolve();
+				return ready.promise;
+			},
+		});
+		try {
+			await waiting.promise;
+			expect(w.get).toHaveBeenCalledTimes(257);
+			expect(w.calls.writeFiles).toEqual([]);
+			expect(budget.available).toBeLessThan(budget.capacity);
+		} finally {
+			ready.resolve();
+		}
+		await expect(restore).resolves.toEqual({ objectCount: 257, bytes: 1028 });
+		expect(budget.available).toBe(budget.capacity);
+	});
+
+	it('uses ordinary writes when another archive owns the shared capacity', async () => {
+		const first = await fixture();
+		const second = await fixture();
+		const budget = new ByteBudget(100_000);
+		const ready = Promise.withResolvers<void>();
+		const waiting = Promise.withResolvers<void>();
+		const pending = restoreWorkspace(first.instance, first.bucket, 'objects/', '/workspace', {
+			packLargeWorkspace: true,
+			prefetchBudget: budget,
+			waitUntilReady: () => {
+				waiting.resolve();
+				return ready.promise;
+			},
+		});
+		try {
+			await waiting.promise;
+			const available = budget.available;
+			await restoreWorkspace(second.instance, second.bucket, 'objects/', '/workspace', {
+				packLargeWorkspace: true,
+				prefetchBudget: budget,
+			});
+			expect(second.calls.writeFiles).toHaveLength(1);
+			expect(second.calls.writeFiles[0]).toHaveLength(257);
+			expect(second.get).toHaveBeenCalledTimes(257);
+			expect(budget.available).toBe(available);
+		} finally {
+			ready.resolve();
+		}
+		await pending;
+		expect(budget.available).toBe(budget.capacity);
+	});
+
+	it('defers all object reads when no prefetch capacity is available', async () => {
+		const w = await fixture();
+		const ready = Promise.withResolvers<void>();
+		const waiting = Promise.withResolvers<void>();
+		const restore = restoreWorkspace(w.instance, w.bucket, 'objects/', '/workspace', {
+			packLargeWorkspace: true,
+			prefetchBudget: new ByteBudget(0),
+			waitUntilReady: () => {
+				waiting.resolve();
+				return ready.promise;
+			},
+		});
+		try {
+			await waiting.promise;
+			expect(w.get).not.toHaveBeenCalled();
+		} finally {
+			ready.resolve();
+		}
+		await restore;
+		expect(w.calls.writeFiles[0]).toHaveLength(257);
+	});
+
+	it('releases an archive reservation when readiness fails without touching the sandbox', async () => {
+		const w = await fixture();
+		const budget = new ByteBudget(100_000);
+		await expect(
+			restoreWorkspace(w.instance, w.bucket, 'objects/', '/workspace', {
+				packLargeWorkspace: true,
+				prefetchBudget: budget,
+				waitUntilReady: async () => {
+					throw new Error('boot failed');
+				},
+			}),
+		).rejects.toThrow('boot failed');
+		expect(w.calls.writeFiles).toEqual([]);
+		expect(w.calls.exec).toEqual([]);
+		expect(budget.available).toBe(budget.capacity);
+	});
+
+	it('logs extraction failure, releases its reservation, and falls back to ordinary writes', async () => {
+		const w = await fixture();
+		const budget = new ByteBudget(100_000);
+		w.instance.exec = async (command) =>
+			execResult(!command.startsWith('python3'), '', 'private extraction detail');
+		const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			await expect(
+				restoreWorkspace(w.instance, w.bucket, 'objects/', '/workspace', {
+					packLargeWorkspace: true,
+					prefetchBudget: budget,
+				}),
+			).resolves.toEqual({ objectCount: 257, bytes: 1028 });
+			expect(w.calls.writeFiles).toHaveLength(2);
+			expect(w.calls.writeFiles[1]).toHaveLength(257);
+			expect(logged).toHaveBeenCalledOnce();
+			expect(JSON.parse(logged.mock.calls[0][0])).toMatchObject({
+				event: 'packed_workspace_restore_failed',
+				recovered: true,
+				error: { name: 'Error' },
+			});
+			expect(logged.mock.calls[0][0]).not.toContain('private extraction detail');
+			expect(budget.available).toBe(budget.capacity);
+		} finally {
+			logged.mockRestore();
+		}
+	});
+
+	it('falls back when archive output exceeds the reserved size', async () => {
+		const w = await fixture();
+		const originalGet = w.read;
+		w.get.mockImplementation(async (key, options) => {
+			const object = await originalGet(key, options);
+			if (!object || !key.endsWith('/0.bin')) return object;
+			return { ...object, bytes: async () => new Uint8Array(100_000) };
+		});
+		const budget = new ByteBudget(100_000);
+		const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			await expect(
+				restoreWorkspace(w.instance, w.bucket, 'objects/', '/workspace', {
+					packLargeWorkspace: true,
+					prefetchBudget: budget,
+				}),
+			).resolves.toEqual({ objectCount: 257, bytes: 100_000 + 256 * 4 });
+			expect(w.calls.writeFiles).toHaveLength(1);
+			expect(w.calls.writeFiles[0]).toHaveLength(257);
+			expect(logged).toHaveBeenCalledOnce();
+			expect(budget.available).toBe(budget.capacity);
+		} finally {
+			logged.mockRestore();
+		}
+	});
+
+	it.each(['total bytes', 'file bytes', 'file count'] as const)(
+		'skips ZIP when configured workspace limits exceed the extractor %s limit',
+		async (limit) => {
+			const w = await fixture(limit === 'file count' ? 1001 : 257);
+			const list = w.bucket.list.bind(w.bucket);
+			vi.spyOn(w.bucket, 'list').mockImplementation(async (options) => {
+				const result = await list(options);
+				return {
+					...result,
+					objects: result.objects.map((object) => ({
+						...object,
+						size:
+							limit === 'total bytes'
+								? 1024 * 1024
+								: limit === 'file bytes' && object.key.endsWith('/0.bin')
+									? MAX_FILE_BYTES + 1
+									: object.size,
+					})),
+				};
+			});
+			await restoreWorkspace(w.instance, w.bucket, 'objects/', '/workspace', {
+				packLargeWorkspace: true,
+				limits: {
+					maxFiles: 2000,
+					maxFileBytes: MAX_FILE_BYTES + 1,
+					maxTotalBytes: 512 * 1024 * 1024,
+				},
+			});
+			expect(w.get).toHaveBeenCalledTimes(limit === 'file count' ? 1001 : 257);
+			expect(w.calls.writeFiles.flat().some(({ path }) => path.endsWith('/workspace.zip'))).toBe(
+				false,
+			);
+		},
+	);
+});

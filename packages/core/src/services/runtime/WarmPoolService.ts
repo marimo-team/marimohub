@@ -366,12 +366,14 @@ export class WarmPoolService {
 									content,
 								})),
 							);
-							await instance.exec(`python ${shellQuote(launcher)} --install-only`, {
+							const result = await instance.exec(`python ${shellQuote(launcher)} --install-only`, {
 								timeout: 10_000,
 								maxOutputBytes: 4096,
 							});
-						} catch {
+							if (!result.success) throw new Error('Notebook bridge preinstallation failed');
+						} catch (error) {
 							// The kernel launcher retries optional bridge installation.
+							this.report('bridge_install_failed', error, { sandbox_id: member.sandbox_id });
 						}
 					}
 				} finally {

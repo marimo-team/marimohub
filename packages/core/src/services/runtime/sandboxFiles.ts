@@ -1,5 +1,6 @@
 import { Zip, ZipPassThrough } from 'fflate';
-import { restorePackedWorkspaceBytes } from './packedWorkspaceRestore';
+import { MAX_PACKED_ARCHIVE_BYTES, restorePackedWorkspaceBytes } from './packedWorkspaceRestore';
+import { MAX_DECOMPRESSED_ARCHIVE_BYTES } from '../../integrations/workspaceArchive';
 import {
 	WORKSPACE_LIMITS,
 	validateWorkspaceLimits,
@@ -25,7 +26,12 @@ import type {
 	ReadFileResult,
 	SandboxInstance,
 } from '../../ports/sandbox';
-import { MAX_ARTIFACT_BYTES, MAX_WORKSPACE_BYTES } from '../../constants';
+import {
+	MAX_ARTIFACT_BYTES,
+	MAX_WORKSPACE_BYTES,
+	MAX_WORKSPACE_FILE_BYTES,
+	MAX_WORKSPACE_FILES,
+} from '../../constants';
 import { shellQuote } from './shell';
 
 import { isRegenerableArtifactPath } from '../../integrations/workspaceIgnore';
@@ -287,11 +293,13 @@ export async function restoreWorkspace(
 
 	let selectedCount = 0;
 	let selectedBytes = 0;
+	const overlaySizes: number[] = [];
 	for (const { key } of options.overlay ?? []) {
 		const object = await bucket.head(key);
 		if (!object) throw new NotFoundError(`Workspace source ${key} not found`);
 		selectedCount++;
 		selectedBytes += object.size;
+		overlaySizes.push(object.size);
 		if (
 			object.size > limits.maxFileBytes ||
 			selectedCount > limits.maxFiles ||
@@ -316,6 +324,32 @@ export async function restoreWorkspace(
 		selectedBytes += object.size;
 		return true;
 	});
+	const packCandidate =
+		options.packLargeWorkspace &&
+		selectedCount > 256 &&
+		workingDir !== '/' &&
+		selectedCount <= MAX_WORKSPACE_FILES &&
+		selectedBytes <= MAX_DECOMPRESSED_ARCHIVE_BYTES &&
+		[...wanted.map(({ size }) => size), ...overlaySizes].every(
+			(size) => size <= MAX_WORKSPACE_FILE_BYTES,
+		);
+	let packedSize = 0;
+	if (packCandidate) {
+		const encoder = new TextEncoder();
+		const packedPaths = [
+			...wanted.map(({ dest }) => dest.slice(workingDir.length + 1)),
+			...(options.overlay ?? []).map(({ path }) => path),
+		];
+		// Stored ZIP: local header, data descriptor, central header, two names, and end record.
+		packedSize =
+			selectedBytes +
+			22 +
+			packedPaths.reduce((total, path) => total + 92 + 2 * encoder.encode(path).byteLength, 0);
+	}
+	const pack = packCandidate && packedSize <= MAX_PACKED_ARCHIVE_BYTES;
+	// Concatenation briefly retains both the ZIP chunks and the contiguous transfer buffer.
+	using packedReservation = pack ? options.prefetchBudget?.tryReserve(2 * packedSize) : undefined;
+	const canPack = pack && (!options.prefetchBudget || packedReservation);
 	const overlayFiles = await loadWorkspaceOverlay(bucket, workingDir, options.overlay);
 
 	// File writes create parents, but an empty workspace still needs a working directory.
@@ -358,46 +392,59 @@ export async function restoreWorkspace(
 		loaded.catch(() => {});
 		return { loaded, reservation };
 	};
-	if (
-		options.packLargeWorkspace &&
-		wanted.length + overlayFiles.length > 256 &&
-		workingDir !== '/'
-	) {
-		await options.waitUntilReady?.();
-		ready = true;
-		const chunks: Uint8Array[] = [];
-		let archiveBytes = 0;
-		const archive = new Zip((error, chunk) => {
-			if (error) throw error;
-			archiveBytes += chunk.byteLength;
-			if (archiveBytes > 256 * 1024 * 1024)
-				throw new Error('Packed workspace archive exceeds the transport limit');
-			chunks.push(chunk);
-		});
-		const add = (file: { path: string; content: Uint8Array }) => {
-			const entry = new ZipPassThrough(file.path.slice(workingDir.length + 1));
-			archive.add(entry);
-			entry.push(file.content, true);
-			objectCount++;
-			bytes += file.content.byteLength;
-		};
-		for (const file of overlayFiles) add(file);
-		for (const batch of batches) {
-			for (const file of await fetchBatch(batch)) if (file) add(file);
+	if (canPack) {
+		const reportPackedFailure = (error: unknown) =>
+			logOperationalError(
+				'packed_workspace_restore_failed',
+				{ operation: 'session.workspace_archive.restore', object: sourcePrefix, recovered: true },
+				error,
+			);
+		const packed = await (async () => {
+			try {
+				const chunks: Uint8Array[] = [];
+				let archiveBytes = 0;
+				const archive = new Zip((error, chunk) => {
+					if (error) throw error;
+					archiveBytes += chunk.byteLength;
+					if (archiveBytes > Math.min(packedSize, MAX_PACKED_ARCHIVE_BYTES))
+						throw new Error('Packed workspace archive exceeds the reserved transport limit');
+					chunks.push(chunk);
+				});
+				const add = (file: { path: string; content: Uint8Array }) => {
+					const entry = new ZipPassThrough(file.path.slice(workingDir.length + 1));
+					archive.add(entry);
+					entry.push(file.content, true);
+					objectCount++;
+					bytes += file.content.byteLength;
+				};
+				for (const file of overlayFiles) add(file);
+				for (const batch of batches) {
+					for (const file of await fetchBatch(batch)) if (file) add(file);
+				}
+				archive.end();
+				const result = new Uint8Array(archiveBytes);
+				let offset = 0;
+				for (const chunk of chunks) {
+					result.set(chunk, offset);
+					offset += chunk.byteLength;
+				}
+				return result;
+			} catch (error) {
+				reportPackedFailure(error);
+				return;
+			}
+		})();
+		if (packed) {
+			await options.waitUntilReady?.();
+			ready = true;
+			const restored = await restorePackedWorkspaceBytes(sandbox, packed, workingDir);
+			if (restored.status === 'restored') {
+				await createSandboxDirectories(sandbox, directories);
+				return { objectCount, bytes };
+			}
+			if (restored.status === 'failed') reportPackedFailure(restored.error);
 		}
-		archive.end();
-		const packed = new Uint8Array(archiveBytes);
-		let offset = 0;
-		for (const chunk of chunks) {
-			packed.set(chunk, offset);
-			offset += chunk.byteLength;
-		}
-		chunks.length = 0;
-		const restored = await restorePackedWorkspaceBytes(sandbox, packed, workingDir);
-		if (restored.status === 'restored') {
-			await createSandboxDirectories(sandbox, directories);
-			return { objectCount, bytes };
-		}
+		packedReservation?.[Symbol.dispose]();
 		// Custom images can ship workspace files; retain the ordinary overwrite semantics there.
 		objectCount = 0;
 		bytes = 0;

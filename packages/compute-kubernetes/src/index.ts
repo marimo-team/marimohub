@@ -558,6 +558,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	async execInput(cmd: string, input: Uint8Array, options?: ExecOptions): Promise<ExecResult> {
 		await this.ensure();
 		const result = await this.execInPod(cmd, {
+			login: true,
 			stdin: input,
 			timeout: options?.timeout,
 			maxOutputBytes: options?.maxOutputBytes,

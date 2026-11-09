@@ -8,7 +8,7 @@ import type { SandboxInstance } from '../../ports/sandbox';
 import { shellQuote } from './shell';
 
 // Valid workspace and Git trees top out at 200 MiB; the remainder covers ZIP metadata.
-const MAX_PACKED_ARCHIVE_BYTES = 256 * 1024 * 1024;
+export const MAX_PACKED_ARCHIVE_BYTES = 256 * 1024 * 1024;
 
 export const EXTRACT_PACKED_WORKSPACE = String.raw`
 import os

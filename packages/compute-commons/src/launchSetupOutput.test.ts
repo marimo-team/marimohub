@@ -14,6 +14,7 @@ describe('LaunchSetupOutput', () => {
 			`${marker.slice(split)},"setupMs":10}\n${'kernel noise'.repeat(100_000)}`,
 		);
 		output.feed('stdout', 'kernel stdout');
+		expect(output.complete).toBe(true);
 		expect(output.output).toMatchObject({ stdout: 'setup stdout\n', stderr: 'setup stderr\n' });
 	});
 

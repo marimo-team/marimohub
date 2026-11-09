@@ -330,3 +330,22 @@ it('rejects a symlinked manifest directory before writing home files', () => {
 	expect(install()).toEqual({ status: 1, stdout: 'unsafe_path\n' });
 	expect(existsSync(join(root, home, instruction))).toBe(false);
 });
+
+it('decodes stdin as UTF-8 when the text stream uses an ASCII locale', () => {
+	const content = 'Unicode: 🐻 café';
+	const payload = {
+		root,
+		workdir: '/workspace',
+		files: [{ path: instruction, content }],
+		restored: false,
+	};
+	expect(
+		run(
+			['-'],
+			home,
+			"import sys\nsys.stdin.reconfigure(encoding='ascii', errors='strict')\n",
+			JSON.stringify(payload),
+		),
+	).toEqual({ status: 0, stdout: '' });
+	expect(read(`${home}/${instruction}`)).toBe(content);
+});

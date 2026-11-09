@@ -12,6 +12,13 @@ const INSTALL_ERRORS: Record<string, string> = {
 	root_workspace: 'Agent context requires a workspace directory other than /.',
 };
 
+export function agentContextInstallFailureMessage(stdout: string): string {
+	const code = stdout.trim();
+	return Object.hasOwn(INSTALL_ERRORS, code)
+		? INSTALL_ERRORS[code]
+		: 'Could not install agent context files.';
+}
+
 export async function prepareAgentHomeFiles(
 	sandbox: SandboxInstance,
 	files: SessionRender['files'],
@@ -21,6 +28,7 @@ export async function prepareAgentHomeFiles(
 	files: { path: string; content: string }[];
 	input?: Uint8Array;
 	command?: string;
+	payloadPath?: string;
 	install?: () => Promise<void>;
 }> {
 	const homeFiles = files.filter((file) => file.relativeTo === 'home');
@@ -46,7 +54,11 @@ export async function prepareAgentHomeFiles(
 	const input = new TextEncoder().encode(content);
 	const command = `python3 -I -c ${shellQuote(INSTALL_AGENT_CONTEXT)} -`;
 	return {
-		files: files.filter((file) => file.relativeTo !== 'home'),
+		files: [
+			...files.filter((file) => file.relativeTo !== 'home'),
+			...(!sandbox.execInput ? [{ path: payload, content }] : []),
+		],
+		...(!sandbox.execInput ? { payloadPath: payload } : {}),
 		input,
 		command,
 		async install() {
@@ -55,7 +67,6 @@ export async function prepareAgentHomeFiles(
 			if (sandbox.execInput) {
 				result = await sandbox.execInput(command, input, options);
 			} else {
-				await sandbox.writeFiles([{ path: payload, content }]);
 				const path = shellQuote(sandbox.resolveProcessPath?.(payload) ?? payload);
 				result = await sandbox.exec(
 					`python3 -I -c ${shellQuote(INSTALL_AGENT_CONTEXT)} ${path}`,
@@ -63,11 +74,7 @@ export async function prepareAgentHomeFiles(
 				);
 			}
 			if (!result.success)
-				throw new ValidationError(
-					Object.hasOwn(INSTALL_ERRORS, result.stdout.trim())
-						? INSTALL_ERRORS[result.stdout.trim()]
-						: 'Could not install agent context files.',
-				);
+				throw new ValidationError(agentContextInstallFailureMessage(result.stdout));
 		},
 	};
 }

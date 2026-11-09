@@ -1546,11 +1546,16 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			const key = `${port}:${new URL(url).hostname}`;
 			let publishing = this.exposures.get(key);
 			if (!publishing) {
-				publishing = this.config.kernelIngress.publish({
-					sandboxId: sandbox.sandboxId,
-					host: new URL(url).hostname,
-					port,
-				});
+				publishing = this.config.kernelIngress
+					.publish({
+						sandboxId: sandbox.sandboxId,
+						host: new URL(url).hostname,
+						port,
+					})
+					.catch((error) => {
+						if (this.exposures.get(key) === publishing) this.exposures.delete(key);
+						throw error;
+					});
 				this.exposures.set(key, publishing);
 			}
 			await publishing;

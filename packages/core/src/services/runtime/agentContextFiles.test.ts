@@ -10,13 +10,15 @@ it('prepares home content as bytes without querying HOME first', async () => {
 	const prepared = await prepareAgentHomeFiles(instance, files, '/workspace');
 	expect(calls.exec).toEqual([]);
 	expect(calls.readFile).toEqual([]);
-	expect(prepared.files).toHaveLength(0);
+	expect(prepared.files).toHaveLength(1);
+	expect(prepared.files[0].path).toBe(prepared.payloadPath);
 	expect(JSON.parse(new TextDecoder().decode(prepared.input))).toEqual({
 		root: '/',
 		workdir: '/workspace',
 		restored: false,
 		files: [{ path: '.claude/CLAUDE.md', content: 'instructions' }],
 	});
+	await instance.writeFiles(prepared.files);
 	await prepared.install!();
 	expect(calls.writeFiles).toHaveLength(1);
 	expect(calls.exec).toHaveLength(1);
@@ -35,7 +37,8 @@ it('uses adapter file coordinates and maps the installer payload to process coor
 		workdir: '/workspace',
 	});
 	await prepared.install!();
-	expect(calls.exec[0]).toContain(`'/sandbox${calls.writeFiles[0][0].path}'`);
+	expect(calls.exec[0]).toContain(`'/sandbox${prepared.payloadPath}'`);
+	expect(calls.writeFiles).toEqual([]);
 });
 
 it.each(['.ssh/config', '.claude/../other', '.agents/skills/marimo-pair/SKILL.md'])(
@@ -62,24 +65,27 @@ it('does not add requests or uploads for ordinary integration files', async () =
 	expect(calls.readFile).toEqual([]);
 });
 
-it('returns ordinary files separately from the home request', async () => {
+it('includes the fallback payload in the ordinary file batch', async () => {
 	const { instance } = makeFakeSandbox();
 	const ordinary = { path: '/tmp/marimohub-integrations/file', content: 'config' };
 	const prepared = await prepareAgentHomeFiles(instance, [ordinary, ...files], '/workspace');
-	expect(prepared.files).toHaveLength(1);
+	expect(prepared.files).toHaveLength(2);
 	expect(prepared.files[0]).toEqual(ordinary);
+	expect(prepared.files[1].path).toBe(prepared.payloadPath);
 });
 
 it('requests restore cleanup even after the integration was removed', async () => {
 	const { instance, calls } = makeFakeSandbox();
 	const prepared = await prepareAgentHomeFiles(instance, [], '/workspace', true);
-	expect(prepared.files).toEqual([]);
+	expect(prepared.files).toHaveLength(1);
 	await prepared.install!();
+	expect(calls.writeFiles).toEqual([]);
 	expect(calls.exec).toHaveLength(1);
 	expect(calls.exec[0]).not.toContain('--inline');
 	expect(calls.exec[0]).not.toContain('"restored"');
 	expect(JSON.parse(new TextDecoder().decode(prepared.input))).toMatchObject({
 		files: [],
+		workdir: '/workspace',
 		restored: true,
 	});
 	expect(calls.readFile).toEqual([]);
@@ -131,6 +137,8 @@ it('sends home content on stdin without an environment or payload-file write', a
 	const { instance, calls } = makeFakeSandbox();
 	instance.execInput = vi.fn(async () => ({ success: true as const, stdout: '', stderr: '' }));
 	const prepared = await prepareAgentHomeFiles(instance, files, '/workspace');
+	expect(prepared.files).toEqual([]);
+	expect(prepared.payloadPath).toBeUndefined();
 	await prepared.install!();
 	expect(instance.execInput).toHaveBeenCalledWith(prepared.command, prepared.input, {
 		timeout: 10_000,

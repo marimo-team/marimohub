@@ -11,6 +11,7 @@ Transfers of up to eight files use concurrent SDK writes.
 Larger transfers use sequential binary stdin batches of up to 128 files or 4 MiB.
 Oversized files occupy their own batch.
 Destinations must be unique absolute paths, and payloads never enter command arguments.
+Packed writes create mode `0600` files and remove group and other permissions from existing files.
 
 Packed batches have a 60 s deadline per attempt and retry `UNAVAILABLE` up to three times.
 Retries release the upload slot during backoff. A failed packed batch stops later batches.
@@ -45,9 +46,10 @@ User-home bootstrap precedes the receiver in the same command, without session e
 For SDK writes, files of at least 4 MiB use `writeStream` when available.
 
 CoreWeave combines workspace files, credentials, bridge files, and agent requests before launch.
-Fresh workspaces with more than 256 files use a ZIP archive, capped at 256 MiB.
-The hub reads files in bounded batches but buffers the archive.
-Extraction requires an empty workspace. Otherwise, restoration falls back to individual files.
+Fresh workspaces with more than 256 files can use ZIP restore within extractor limits and the shared memory budget.
+The hub reserves peak archive memory before reads and waits for readiness only before transfer.
+Archive transfers retain the 256 MiB cap and require an empty workspace.
+Otherwise, restoration uses ordinary file batches. Archive failures produce an operational log before fallback.
 Snapshot restores and mounted workspaces keep their existing paths.
 
 ## Provision telemetry

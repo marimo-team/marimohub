@@ -333,6 +333,27 @@ describe('KubernetesCompute', () => {
 		});
 	});
 
+	describe('execInput()', () => {
+		it('uses a login shell for python while leaving session env unflushed', async () => {
+			const world = makeWorld();
+			const instance = makeCompute(world).create(SANDBOX_ID);
+			await instance.setEnvVars({ TOKEN: 'session-secret' });
+			const input = new TextEncoder().encode('{"content":"données"}');
+			const result = await instance.execInput!('python3 -I -c installer -', input, {
+				timeout: 10_000,
+				maxOutputBytes: 4096,
+			});
+			expectExecResult(result, { success: true, stdout: '', stderr: '' });
+			expect(world.execCalls).toHaveLength(1);
+			const call = world.execCalls[0];
+			expect(call.command.slice(0, 2)).toEqual(['sh', '-lc']);
+			expect(call.command[2]).toContain(shellQuote('python3 -I -c installer -'));
+			expect(call.command[2]).not.toContain('session-secret');
+			expect(call.stdin).toBe(input);
+			expect(call.options).toEqual({ timeout: 10_000, maxOutputBytes: 4096 });
+		});
+	});
+
 	describe('lazy ensure()', () => {
 		it('validates programmatic templates before creating a sandbox', () => {
 			const world = makeWorld();

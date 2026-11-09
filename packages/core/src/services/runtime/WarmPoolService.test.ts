@@ -1491,8 +1491,14 @@ describe('warm pool failure boundaries', () => {
 it('preinstalls the bridge before publishing a warm member', async () => {
 	const w = setup();
 	const created = w.compute.create.bind(w.compute);
-	const writes = vi.fn(async () => {});
-	const exec = vi.fn(async (_command: string) => execResult(true, '', ''));
+	const states: string[] = [];
+	const writes = vi.fn(async (_files: Parameters<SandboxInstance['writeFiles']>[0]) => {
+		states.push((await w.members())[0].state);
+	});
+	const exec = vi.fn(async (command: string) => {
+		if (command.includes('--install-only')) states.push((await w.members())[0].state);
+		return execResult(true, '', '');
+	});
 	w.compute.create = (id, options) => ({ ...created(id, options), writeFiles: writes, exec });
 	const service = new WarmPoolService(
 		w.service.store,
@@ -1506,8 +1512,58 @@ it('preinstalls the bridge before publishing a warm member', async () => {
 	);
 	await service.sweep();
 	expect(writes).toHaveBeenCalledOnce();
-	expect(exec.mock.calls.some(([command]) => String(command).includes('--install-only'))).toBe(
-		true,
-	);
-	expect((await w.members())[0].state).toBe('ready');
+	const member = (await w.members())[0];
+	const path = `/tmp/marimohub-bridge/${member.sandbox_id}/bridge.py`;
+	expect(writes).toHaveBeenCalledWith([{ path, content: 'launcher' }]);
+	expect(exec).toHaveBeenCalledWith(`python '${path}' --install-only`, {
+		timeout: 10_000,
+		maxOutputBytes: 4096,
+	});
+	expect(states).toEqual(['creating', 'creating']);
+	expect(member.state).toBe('ready');
 });
+
+it.each(['write', 'throw', 'exit'] as const)(
+	'reports a bridge preinstall %s failure without discarding the warm member',
+	async (failure) => {
+		const w = setup();
+		const create = w.compute.create.bind(w.compute);
+		w.compute.create = (id, options) => ({
+			...create(id, options),
+			async writeFiles() {
+				if (failure === 'write') throw new Error('private-write-detail');
+			},
+			async exec(command) {
+				if (command.includes('--install-only')) {
+					if (failure === 'throw') throw new Error('private-exec-detail');
+					return execResult(false, 'private-output', 'private-error');
+				}
+				return execResult(true, '', '');
+			},
+		});
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const service = new WarmPoolService(
+			w.service.store,
+			w.compute,
+			w.sessions,
+			w.config,
+			metrics,
+			w.now,
+			undefined,
+			{ launcher: 'bridge.py', files: [{ name: 'bridge.py', content: 'launcher' }] },
+		);
+		await service.sweep();
+		const member = (await w.members())[0];
+		expect(member.state).toBe('ready');
+		expect(metrics.increment).toHaveBeenCalledWith('warm_pool.bridge_install_failed');
+		expect(log.mock.calls.map(([entry]) => JSON.parse(String(entry)))).toContainEqual(
+			expect.objectContaining({
+				event: 'warm_pool_bridge_install_failed',
+				sandbox_id: member.sandbox_id,
+			}),
+		);
+		expect(log.mock.calls.flat().join(' ')).not.toContain('private-');
+		expect(w.destroyed).toEqual([]);
+	},
+);

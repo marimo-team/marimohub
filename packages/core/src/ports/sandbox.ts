@@ -243,7 +243,13 @@ export interface SandboxInstance {
 	mountBucket(options: MountBucketOptions): Promise<void>;
 	unmountBucket(mountPath: string): Promise<void>;
 	startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess>;
-	/** Opt in only when launch results preserve separate setup stdout and stderr. */
+	/**
+	 * Opt into shared workspace/session/bridge writes, setup inside launchProcess,
+	 * and ZIP restore for large fresh workspaces. Requires binary-safe writeFiles,
+	 * python3 on PATH for the command transport, and launchProcess results with
+	 * separate setup stdout/stderr on success and failure. Headless prepare()
+	 * still completes setup before it returns.
+	 */
 	readonly supportsLaunchSetupOutput?: boolean;
 	/**
 	 * Start a checked setup + long-running process and wait for readiness as one

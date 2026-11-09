@@ -7,7 +7,7 @@ import { prepareMarimoPresentation } from '../marimoConfig';
 export type { SessionEnv } from './sandboxEnvironment';
 import type { WorkspaceLimits, WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
 import { allSettled } from 'better-all';
-import { prepareAgentHomeFiles } from './agentContextFiles';
+import { agentContextInstallFailureMessage, prepareAgentHomeFiles } from './agentContextFiles';
 import type { Attributes, Span as OtelSpan } from '@opentelemetry/api';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { withDeadline } from '../../async';
@@ -168,6 +168,8 @@ function pythonEnvironmentSetupFailure(
 	result: ExecResult,
 	failedStep?: string,
 ): PythonEnvironmentSetupError {
+	if (failedStep === 'agent_context')
+		return new PythonEnvironmentSetupError(agentContextInstallFailureMessage(result.stdout));
 	const startupScript = /^startup_script_(\d+)$/.exec(failedStep ?? '');
 	if (startupScript) {
 		return new PythonEnvironmentSetupError(
@@ -1531,11 +1533,14 @@ export class SandboxProvisioner {
 						options.restoreFilesystemSnapshotId !== undefined,
 					);
 					if (batch.deferSetup && prepared.input && prepared.command) {
-						const path = `/tmp/.marimohub-agent-context-${crypto.randomUUID()}.json`;
-						await batch.staged.writeFiles([{ path, content: prepared.input }]);
+						const path =
+							prepared.payloadPath ?? `/tmp/.marimohub-agent-context-${crypto.randomUUID()}.json`;
+						if (!prepared.payloadPath)
+							await batch.staged.writeFiles([{ path, content: prepared.input }]);
+						const processPath = shellQuote(sandbox.resolveProcessPath?.(path) ?? path);
 						batch.setupPrefix.push({
 							name: 'agent_context',
-							command: `(${prepared.command} < ${shellQuote(path)}; status=$?; rm -f ${shellQuote(path)}; exit "$status")`,
+							command: `(${prepared.command} < ${processPath}; status=$?; rm -f ${processPath}; exit "$status")`,
 						});
 					} else if (prepared.install && batch.staged !== sandbox)
 						batch.installers.push(prepared.install);

@@ -2938,16 +2938,24 @@ it('retries an unavailable packed stream with identical bytes', async () => {
 	}
 });
 
-it('shares early ingress publication with exposePort', async () => {
+it('shares in-flight ingress publication with exposePort', async () => {
 	const world = makeWorld();
-	const publish = vi.fn(async () => {});
+	const pending = Promise.withResolvers<void>();
+	const publish = vi.fn(() => pending.promise);
 	const instance = makeCompute(world, {
 		...baseConfig,
 		kernelIngress: { publish, remove: async () => {} },
 	}).create(SANDBOX_ID, { reuse: false });
 	await instance.ready!();
-	await instance.prepareExposure!(2718, { hostname: 'example.test', token: 'token' });
-	await instance.exposePort(2718, { hostname: 'example.test', token: 'token' });
+	const options = { hostname: 'example.test', token: 'token' };
+	const preparing = instance.prepareExposure!(2718, options);
+	const exposed = instance.exposePort(2718, options);
+	await vi.waitFor(() => expect(publish).toHaveBeenCalledOnce());
+	pending.resolve();
+	await expect(Promise.all([preparing, exposed])).resolves.toEqual([
+		undefined,
+		{ url: 'https://cw-1-2718.example.test' },
+	]);
 	expect(publish).toHaveBeenCalledOnce();
 	expect(publish).toHaveBeenCalledWith({
 		sandboxId: 'cw-1',
@@ -2955,6 +2963,29 @@ it('shares early ingress publication with exposePort', async () => {
 		port: 2718,
 	});
 	expect(world.registry.get('cw-1')!.fake.startCalls).toEqual([]);
+});
+
+it('retries failed ingress publication while retaining successful publications', async () => {
+	const world = makeWorld();
+	const failure = new Error('ingress unavailable');
+	const pending = Promise.withResolvers<void>();
+	const publish = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(undefined);
+	const instance = makeCompute(world, {
+		...baseConfig,
+		kernelIngress: { publish, remove: async () => {} },
+	}).create(SANDBOX_ID, { reuse: false });
+	await instance.ready!();
+	const options = { hostname: 'example.test' };
+	const preparing = expect(instance.prepareExposure!(2718, options)).rejects.toBe(failure);
+	const exposing = expect(instance.exposePort(2718, options)).rejects.toBe(failure);
+	await vi.waitFor(() => expect(publish).toHaveBeenCalledOnce());
+	pending.reject(failure);
+	await Promise.all([preparing, exposing]);
+	await expect(instance.exposePort(2718, options)).resolves.toEqual({
+		url: 'https://cw-1-2718.example.test',
+	});
+	await instance.prepareExposure!(2718, options);
+	expect(publish).toHaveBeenCalledTimes(2);
 });
 
 it('counts environment and launch streams once on a cold start and drains a warm claim', async () => {
