@@ -1,6 +1,7 @@
 import { DEFAULT_THEME_CONFIG } from '../theme';
 import { generateThemePalette } from '../themePalette';
-import { describe, expect, it } from 'vitest';
+import * as themePalette from '../themePalette';
+import { describe, expect, it, vi } from 'vitest';
 import { parse } from 'smol-toml';
 import {
 	assembleMarimoToml,
@@ -304,4 +305,22 @@ describe('deployment brand CSS', () => {
 		const css = ':root { --operator-color: purple; }';
 		expect(marimoBrandDisplay(DEFAULT_THEME_CONFIG, css).files![0].content).toBe(css);
 	});
+});
+
+it('computes the brand palette once per theme object', () => {
+	const theme = {
+		...DEFAULT_THEME_CONFIG,
+		primary_color: '#7c3aed',
+		notebook_palette: 'full' as const,
+	};
+	const generate = vi.spyOn(themePalette, 'generateThemePalette');
+	try {
+		const first = marimoBrandDisplay(theme);
+		expect(marimoBrandDisplay(theme)).toEqual(first);
+		expect(generate).toHaveBeenCalledOnce();
+		marimoBrandDisplay({ ...theme, primary_color: '#2563eb' });
+		expect(generate).toHaveBeenCalledTimes(2);
+	} finally {
+		generate.mockRestore();
+	}
 });

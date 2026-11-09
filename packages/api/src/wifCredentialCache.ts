@@ -8,7 +8,7 @@ const DEFAULT_MAX_ENTRIES = 10_000;
 type DatedCreds = TempS3Creds & { expiration: string };
 
 interface CacheEntry {
-	creds: Promise<DatedCreds>;
+	creds: Promise<TempS3Creds>;
 	reuseUntil: number;
 }
 
@@ -27,6 +27,18 @@ export class WifCredentialCache {
 	}
 
 	get(key: string, exchange: () => Promise<TempS3Creds>): Promise<DatedCreds> {
+		return this.load(key, exchange) as Promise<DatedCreds>;
+	}
+
+	getShared(key: string, exchange: () => Promise<TempS3Creds>): Promise<TempS3Creds> {
+		return this.load(`shared\0${key}`, exchange, 45 * 60_000);
+	}
+
+	private load(
+		key: string,
+		exchange: () => Promise<TempS3Creds>,
+		minimumLifetimeMs?: number,
+	): Promise<TempS3Creds> {
 		const hit = this.entries.get(key);
 		if (hit && hit.reuseUntil > this.now()) return hit.creds;
 		const entry: CacheEntry = {
@@ -37,13 +49,17 @@ export class WifCredentialCache {
 				.then((creds) => {
 					const expiresAt = Date.parse(creds.expiration ?? '');
 					const remaining = expiresAt - this.now();
-					if (!Number.isFinite(expiresAt) || remaining <= 0) {
-						throw new UnavailableError(
-							'WIF endpoint delivery requires a valid future credential expiration',
-						);
+					// Static delivery accepts undated credentials, but they cannot be reused.
+					if (minimumLifetimeMs !== undefined && creds.expiration === undefined) {
+						if (this.entries.peek(key) === entry) this.entries.delete(key);
+						return { ...creds };
 					}
-					// A fixed margin would make short-lived credentials miss the cache immediately.
-					entry.reuseUntil = expiresAt - Math.min(REFRESH_MARGIN_MS, remaining / 2);
+					if (!Number.isFinite(expiresAt) || remaining <= 0) {
+						throw new UnavailableError('WIF credentials require a valid future expiration');
+					}
+					// Session endpoints can refresh short-lived credentials; shared starts need the full margin.
+					const margin = minimumLifetimeMs ?? Math.min(REFRESH_MARGIN_MS, remaining / 2);
+					entry.reuseUntil = expiresAt - margin;
 					return { ...creds, expiration: new Date(expiresAt).toISOString() };
 				}),
 		};

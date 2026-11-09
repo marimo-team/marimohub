@@ -169,3 +169,109 @@ describe('wifCredentialCacheFor', () => {
 		expect(wifCredentialCacheFor(makeTestWif())).not.toBe(wifCredentialCacheFor(a));
 	});
 });
+
+describe('shared WIF credentials', () => {
+	it('requires 45 minutes remaining without shortening the margin for short credentials', async () => {
+		const { cache, exchange, advance } = fixture();
+		await cache.getShared('project', exchange);
+		advance(15 * MINUTE - 1);
+		await cache.getShared('project', exchange);
+		expect(exchange).toHaveBeenCalledOnce();
+		advance(1);
+		await cache.getShared('project', exchange);
+		expect(exchange).toHaveBeenCalledTimes(2);
+		const short = fixture(30 * MINUTE);
+		await short.cache.getShared('project', short.exchange);
+		await short.cache.getShared('project', short.exchange);
+		expect(short.exchange).toHaveBeenCalledTimes(2);
+	});
+
+	it.each(['invalid', '2025-12-31T23:59:59Z'])(
+		'rejects invalid shared expiration %s and retries',
+		async (expiration) => {
+			const { cache, exchange } = fixture();
+			exchange.mockResolvedValueOnce({ accessKeyId: 'AK', secretAccessKey: 'SK', expiration });
+			await expect(cache.getShared('project', exchange)).rejects.toThrow(/expiration/);
+			expect((await cache.getShared('project', exchange)).accessKeyId).toBe('AK2');
+		},
+	);
+
+	it('coalesces failed shared refreshes, rejects stale credentials, and retries', async () => {
+		const { cache, exchange, advance } = fixture();
+		await cache.getShared('project', exchange);
+		advance(15 * MINUTE);
+		const pending = Promise.withResolvers<Awaited<ReturnType<typeof exchange>>>();
+		exchange.mockImplementationOnce(() => pending.promise);
+		const results = Promise.allSettled([
+			cache.getShared('project', exchange),
+			cache.getShared('project', exchange),
+		]);
+		pending.reject(new Error('broker failed'));
+		expect(await results).toEqual([
+			{ status: 'rejected', reason: expect.objectContaining({ message: 'broker failed' }) },
+			{ status: 'rejected', reason: expect.objectContaining({ message: 'broker failed' }) },
+		]);
+		expect((await cache.getShared('project', exchange)).accessKeyId).toBe('AK3');
+		expect(exchange).toHaveBeenCalledTimes(3);
+	});
+
+	it.each(['rejected', 'short-lived', 'valid'] as const)(
+		'an evicted %s exchange cannot evict or replace newer credentials',
+		async (outcome) => {
+			const now = Date.parse('2026-01-01T00:00:00Z');
+			const cache = new WifCredentialCache(() => now, 1);
+			const pending = Promise.withResolvers<TempS3Creds>();
+			const result = Promise.allSettled([cache.getShared('project', () => pending.promise)]);
+			const exchange = vi.fn(async () => ({
+				accessKeyId: 'new',
+				secretAccessKey: 'SK',
+				expiration: new Date(now + 60 * MINUTE).toISOString(),
+			}));
+			await cache.getShared('other', exchange);
+			const replacement = await cache.getShared('project', exchange);
+			if (outcome === 'rejected') pending.reject(new Error('failed'));
+			else
+				pending.resolve({
+					accessKeyId: 'old',
+					secretAccessKey: 'SK',
+					expiration: new Date(now + (outcome === 'valid' ? 60 : 10) * MINUTE).toISOString(),
+				});
+			expect((await result)[0].status).toBe(outcome === 'rejected' ? 'rejected' : 'fulfilled');
+			expect(await cache.getShared('project', exchange)).toEqual(replacement);
+			expect(exchange).toHaveBeenCalledTimes(2);
+		},
+	);
+
+	it('rejects credentials that expire during a shared exchange and retries', async () => {
+		const { cache, exchange, advance } = fixture();
+		const pending = Promise.withResolvers<TempS3Creds>();
+		const first = cache.getShared('project', () => pending.promise);
+		advance(60 * MINUTE);
+		pending.resolve({
+			accessKeyId: 'old',
+			secretAccessKey: 'SK',
+			expiration: '2026-01-01T01:00:00Z',
+		});
+		await expect(first).rejects.toThrow(/expiration/);
+		expect((await cache.getShared('project', exchange)).accessKeyId).toBe('AK1');
+	});
+
+	it('keeps session and shared entries separate even when their supplied keys match', async () => {
+		const { cache, exchange, advance } = fixture();
+		await cache.get('same', exchange);
+		await cache.getShared('same', exchange);
+		expect(exchange).toHaveBeenCalledTimes(2);
+		advance(15 * MINUTE);
+		expect((await cache.get('same', exchange)).accessKeyId).toBe('AK1');
+		expect((await cache.getShared('same', exchange)).accessKeyId).toBe('AK3');
+	});
+
+	it('coalesces pending exchanges but never retains undated credentials', async () => {
+		const { cache } = fixture();
+		const exchange = vi.fn(async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK' }));
+		await Promise.all([cache.getShared('project', exchange), cache.getShared('project', exchange)]);
+		expect(exchange).toHaveBeenCalledOnce();
+		await cache.getShared('project', exchange);
+		expect(exchange).toHaveBeenCalledTimes(2);
+	});
+});

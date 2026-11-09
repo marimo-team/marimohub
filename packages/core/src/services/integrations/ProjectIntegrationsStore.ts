@@ -1,3 +1,4 @@
+import { BoundedLruMap } from '../../cache';
 import {
 	ForbiddenError,
 	ConflictError,
@@ -279,6 +280,7 @@ async function curatedCredentialError<T>(run: () => Promise<T>, message: string)
 }
 
 export interface IntegrationsStoreOptions {
+	versionCacheMaxEntries?: number;
 	packageRegistryCredentials?: PackageRegistryCredentialProvider;
 	/** Required with the credential provider; token acquisition shares this probe across tests and startup. */
 	packageRegistryProbe?: IntegrationProbe;
@@ -336,6 +338,7 @@ const sharedDatabaseTestBudget: SlidingWindowBudget<'test'> = createSlidingWindo
  * consumers use the tier facades below, which pin the scope.
  */
 class ScopedIntegrationsStore {
+	private readonly versions: BoundedLruMap<string, IntegrationVersionRecord>;
 	private readonly packageRegistryCredentials?: PackageRegistryCredentialProvider;
 	private readonly packageRegistryProbe?: IntegrationProbe;
 	private readonly bucket: Bucket;
@@ -356,6 +359,7 @@ class ScopedIntegrationsStore {
 	private readonly databaseTestBudget: SlidingWindowBudget<'test'>;
 
 	constructor(options: IntegrationsStoreOptions) {
+		this.versions = new BoundedLruMap(options.versionCacheMaxEntries ?? 4096);
 		this.packageRegistryCredentials = options.packageRegistryCredentials;
 		this.packageRegistryProbe = options.packageRegistryProbe;
 		this.bucket = options.bucket;
@@ -1625,9 +1629,10 @@ class ScopedIntegrationsStore {
 		head: IntegrationRecord,
 		renderProjectId: ProjectId,
 		context: SessionRenderContext,
+		resolutionOperation?: SecretResolutionContext['operation'],
 	): Promise<RenderedIntegration> {
 		const { def, version, config } = await this.loadCurrent(scope, head);
-		const resolved = await this.open(scope, head.id, def, config);
+		const resolved = await this.open(scope, head.id, def, config, resolutionOperation);
 		const parsed = def.configSchema.safeParse(resolved);
 		if (!parsed.success) {
 			// Never surface the Zod issues here — the resolved config is plaintext.
@@ -1784,9 +1789,12 @@ class ScopedIntegrationsStore {
 		version: number,
 	): Promise<IntegrationVersionRecord> {
 		const key = scope.integration(head.id).version(version);
-		const body = await this.bucket.get(key);
-		if (!body) throw new NotFoundError(`Integration ${head.id} version ${version} not found`);
-		const record = await readStored(IntegrationVersionRecordSchema, body, key);
+		let record = this.versions.get(key);
+		if (!record) {
+			const body = await this.bucket.get(key);
+			if (!body) throw new NotFoundError(`Integration ${head.id} version ${version} not found`);
+			record = await readStored(IntegrationVersionRecordSchema, body, key);
+		}
 		// The record ENVELOPE version (distinct from the kind's schemaVersion):
 		// interpreting a newer envelope with these semantics could mis-handle
 		// fields it added. Older envelopes route through an upgrade seam here once
@@ -1798,7 +1806,8 @@ class ScopedIntegrationsStore {
 			);
 		}
 		this.assertVersionIdentity(head, version, record, key);
-		return record;
+		this.versions.set(key, record);
+		return structuredClone(record);
 	}
 
 	/**
@@ -2005,10 +2014,12 @@ class ScopedIntegrationsStore {
 		id: IntegrationId,
 		def: IntegrationDefinition,
 		stored: Record<string, unknown>,
+		resolutionOperation?: SecretResolutionContext['operation'],
 	): Promise<Record<string, unknown>> {
 		const codec = this.codec;
 		const contextFor = this.secretContext(scope, id);
 		const resolutionContext = this.secretResolutionContext(scope, id);
+		if (resolutionOperation) resolutionContext.operation = resolutionOperation;
 		return openConfig({
 			stored,
 			paths: this.registry.secretPathsOf(def.kind),
@@ -2446,8 +2457,9 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		].sort((a, b) => a.head.name.localeCompare(b.head.name));
 		if (active.length === 0) return undefined;
 
+		const resolutionOperation = {};
 		const rendered = await mapWithConcurrency(active, BUCKET_SCAN_CONCURRENCY, (item) =>
-			this.store.renderOne(item.scope, item.head, projectId, context),
+			this.store.renderOne(item.scope, item.head, projectId, context, resolutionOperation),
 		);
 		return bundleIntegrations(rendered, context.workload);
 	}

@@ -9,9 +9,13 @@ export interface SecretRef {
 }
 
 /** Stable for every secret field opened as part of one integration operation. */
-export type SecretResolutionContext =
+export type SecretResolutionContext = (
 	| { scope: 'project'; projectId: ProjectId; integrationId?: IntegrationId }
-	| { scope: 'org'; integrationId?: IntegrationId };
+	| { scope: 'org'; integrationId?: IntegrationId }
+) & {
+	/** Read deduplication only; authorization must use this context's scope and integration. */
+	operation?: object;
+};
 
 export class SecretResolutionError extends Error {
 	constructor(

@@ -72,7 +72,17 @@ export const marimoSharingDisabled: MarimoConfigContributor = () => ({
 
 const BRAND_CSS_PATH = `${XDG_CONFIG_HOME}/marimo/brand.css`;
 
+const brandCssCache = new WeakMap<ThemeConfig, string>();
+
 export function renderMarimoBrandCss(theme: ThemeConfig): string {
+	const cached = brandCssCache.get(theme);
+	if (cached !== undefined) return cached;
+	const css = computeMarimoBrandCss(theme);
+	brandCssCache.set(theme, css);
+	return css;
+}
+
+function computeMarimoBrandCss(theme: ThemeConfig): string {
 	if (!theme.notebook_palette || theme.notebook_palette === 'off') return '';
 	const palette = generateThemePalette(theme);
 	if (!palette) return '';
