@@ -1906,6 +1906,59 @@ describe('asynchronous preview preparation', () => {
 });
 
 describe('preview worker recovery', () => {
+	it('processes an explicit retry for a failed pinned preview without resuming polling', async () => {
+		const service = api.deps.services.previews;
+		const pending = await service.create(
+			pid,
+			nid,
+			{ name: 'Pinned', source: { type: 'commit', commit: SHA } },
+			ACTOR,
+			api.deps.sourceControl,
+		);
+		const ready = await service.prepare(pending, api.deps.sourceControl);
+		vi.spyOn(service, 'source').mockRejectedValueOnce(new Error('unavailable'));
+		const failed = await service.prepare(ready, api.deps.sourceControl, true);
+		expect(failed).toMatchObject({ preparation: 'failed', current: ready.current });
+		await expectOk(await api.request('POST', `${base}/${ready.id}/prepare`), 202);
+		expect(await service.get(pid, nid, ready.id)).toMatchObject({
+			preparation: 'failed',
+			next_attempt_at: failed.next_attempt_at,
+		});
+		const time = vi.spyOn(Date, 'now').mockReturnValue(failed.next_attempt_at! + 1);
+		await expectOk(await api.request('POST', `${base}/${ready.id}/prepare`), 202);
+		expect((await service.get(pid, nid, ready.id)).preparation).toBe('pending');
+		const claim = vi.spyOn(service.store, 'claim');
+		await service.preparePending(api.deps.sourceControl!);
+		expect(await service.get(pid, nid, ready.id)).toMatchObject({
+			preparation: 'ready',
+			preparation_failures: 0,
+			current: ready.current,
+		});
+		expect(claim).toHaveBeenCalledExactlyOnceWith(pid, ready.id);
+		claim.mockClear();
+		time.mockReturnValue(Date.now() + 61_000);
+		await service.preparePending(api.deps.sourceControl!);
+		expect(claim).not.toHaveBeenCalled();
+		expect(reader.fetchWorkspace).toHaveBeenCalledOnce();
+	});
+
+	it('reports exhaustion only at the threshold when forced failures continue', async () => {
+		const service = api.deps.services.previews;
+		let preview = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+		vi.spyOn(service, 'source').mockRejectedValue(new Error('unavailable'));
+		const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+		for (let failures = 1; failures <= 7; failures++) {
+			preview = await service.prepare(preview, api.deps.sourceControl, true);
+			expect(preview.preparation_failures).toBe(failures);
+			expect(errors).toHaveBeenCalledTimes(failures < 5 ? 0 : 1);
+		}
+		expect(JSON.parse(errors.mock.calls[0][0])).toMatchObject({
+			event: 'preview_preparation_exhausted',
+			preview_id: preview.id,
+			preparation_failures: 5,
+		});
+	});
+
 	it('skips live preparation leases without claiming work or starving another preview', async () => {
 		const service = api.deps.services.previews;
 		const busy = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);

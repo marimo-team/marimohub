@@ -52,7 +52,12 @@ function preparationDue(record: NotebookPreview, force = false): boolean {
 		force ||
 		(record.preparation_failures < MAX_PREPARATION_FAILURES &&
 			(record.next_attempt_at ?? 0) <= Date.now() &&
-			!(record.source.type === 'commit' && record.current && !record.pull_request))
+			!(
+				record.source.type === 'commit' &&
+				record.current &&
+				!record.pull_request &&
+				record.preparation !== 'pending'
+			))
 	);
 }
 
@@ -324,7 +329,7 @@ export class NotebookPreviewService {
 			},
 			{ notFound: () => new NotFoundError('Preview not found') },
 		);
-		if (result.written && result.value.preparation_failures >= MAX_PREPARATION_FAILURES) {
+		if (result.written && result.value.preparation_failures === MAX_PREPARATION_FAILURES) {
 			logOperationalError(
 				'preview_preparation_exhausted',
 				{
