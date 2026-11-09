@@ -16,6 +16,87 @@ describe('Semaphore', () => {
 		expect(semaphore.available).toBe(1);
 		expect(() => semaphore.release()).toThrow(/more times than acquire/);
 	});
+
+	it('rejects an already-aborted admission without consuming a permit', async () => {
+		const semaphore = new Semaphore(1);
+		const reason = new Error('cancelled');
+		const work = vi.fn(async () => {});
+		await expect(semaphore.run(work, AbortSignal.abort(reason))).rejects.toBe(reason);
+		expect(work).not.toHaveBeenCalled();
+		expect(semaphore.available).toBe(1);
+		expect(semaphore.pending).toBe(0);
+	});
+
+	it('removes cancelled waiters and preserves FIFO admission for remaining work', async () => {
+		const semaphore = new Semaphore(1);
+		await semaphore.acquire();
+		const controller = new AbortController();
+		const reason = new Error('expired');
+		const started: string[] = [];
+		const first = semaphore.run(async () => {
+			started.push('first');
+		});
+		const cancelled = semaphore.run(async () => {
+			started.push('cancelled');
+		}, controller.signal);
+		const rejected = expect(cancelled).rejects.toBe(reason);
+		const last = semaphore.run(async () => {
+			started.push('last');
+		});
+		expect(semaphore.pending).toBe(3);
+		controller.abort(reason);
+		await rejected;
+		expect(semaphore.pending).toBe(2);
+		expect(semaphore.available).toBe(0);
+		semaphore.release();
+		await Promise.all([first, last]);
+		expect(started).toEqual(['first', 'last']);
+		expect(semaphore.available).toBe(1);
+		expect(semaphore.pending).toBe(0);
+	});
+
+	it.each([false, true])('normalizes non-Error cancellation with queued=%s', async (queued) => {
+		const semaphore = new Semaphore(1);
+		if (queued) await semaphore.acquire();
+		const controller = new AbortController();
+		if (!queued) controller.abort('cancelled');
+		const pending = semaphore.run(async () => {}, controller.signal);
+		const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+		if (queued) controller.abort('cancelled');
+		await rejected;
+		if (queued) semaphore.release();
+		expect(semaphore.available).toBe(1);
+		expect(semaphore.pending).toBe(0);
+	});
+
+	it('returns a granted permit if cancellation wins before work starts', async () => {
+		const semaphore = new Semaphore(1);
+		await semaphore.acquire();
+		const controller = new AbortController();
+		const reason = new Error('expired');
+		const work = vi.fn(async () => {});
+		const pending = semaphore.run(work, controller.signal);
+		const rejected = expect(pending).rejects.toBe(reason);
+		semaphore.release();
+		controller.abort(reason);
+		await rejected;
+		expect(work).not.toHaveBeenCalled();
+		expect(semaphore.available).toBe(1);
+		expect(semaphore.pending).toBe(0);
+	});
+
+	it('keeps a running task admitted until it settles after cancellation', async () => {
+		const semaphore = new Semaphore(1);
+		const controller = new AbortController();
+		const work = Promise.withResolvers<void>();
+		const pending = semaphore.run(() => work.promise, controller.signal);
+		await Promise.resolve();
+		controller.abort();
+		expect(semaphore.available).toBe(0);
+		work.resolve();
+		await pending;
+		expect(semaphore.available).toBe(1);
+	});
 });
 
 describe('mapWithConcurrency', () => {

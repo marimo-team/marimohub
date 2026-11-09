@@ -1,5 +1,11 @@
 import { assertPositiveInteger } from './internal/validation';
 
+function abortError(signal?: AbortSignal): Error {
+	return signal?.reason instanceof Error
+		? signal.reason
+		: new DOMException('The operation was aborted.', 'AbortError');
+}
+
 /**
  * Counting semaphore that gates async work to at most `permits` in-flight
  * tasks. Waiters are released in FIFO order.
@@ -27,13 +33,23 @@ export class Semaphore {
 		return this.waiters.length;
 	}
 
-	acquire(): Promise<void> {
+	acquire(signal?: AbortSignal): Promise<void> {
+		if (signal?.aborted) return Promise.reject(abortError(signal));
 		if (this.permits > 0) {
 			this.permits--;
 			return Promise.resolve();
 		}
-		return new Promise<void>((resolve) => {
-			this.waiters.push(resolve);
+		return new Promise<void>((resolve, reject) => {
+			const grant = () => {
+				signal?.removeEventListener('abort', onAbort);
+				resolve();
+			};
+			const onAbort = () => {
+				this.waiters.splice(this.waiters.indexOf(grant), 1);
+				reject(abortError(signal));
+			};
+			this.waiters.push(grant);
+			signal?.addEventListener('abort', onAbort, { once: true });
 		});
 	}
 
@@ -51,10 +67,11 @@ export class Semaphore {
 		this.permits++;
 	}
 
-	/** Acquire a permit, run `fn`, then release the permit. */
-	async run<T>(fn: () => Promise<T>): Promise<T> {
-		await this.acquire();
+	/** The signal cancels admission; started work retains its permit until it settles. */
+	async run<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+		await this.acquire(signal);
 		try {
+			if (signal?.aborted) throw abortError(signal);
 			return await fn();
 		} finally {
 			this.release();

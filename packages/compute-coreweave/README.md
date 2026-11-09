@@ -7,31 +7,30 @@ Part of [marimohub](../../README.md). See [docs/compute.md](../../docs/compute.m
 
 ## File uploads
 
-Gateway batches allow up to eight active write RPCs per sandbox. Direct and
-`auto` modes allow two across workspace, injection, bridge uploads, and all
-handles to that sandbox, leaving runner admission headroom for commands.
-Other sandboxes have independent slots. This is a provider-local bound
-(normally one server process), not a distributed quota; the runner still
-controls admission across clients.
-W&B's Gateway-only file adapter also keeps eight slots.
-Each file has a 60 s budget starting at its first RPC; retries and later queue
-waits consume that same budget. Initial queueing does not. A retry releases its
-RPC slot while waiting.
-All destinations must be unique absolute paths.
-The adapter validates and copies the destinations before it waits for sandbox readiness.
+Upload concurrency is limited per batch and per sandbox:
 
-`UNAVAILABLE` and `RESOURCE_EXHAUSTED` file writes retry at most three times,
-using 250, 1,000, and 3,000 ms backoff or a longer server-suggested delay.
-Server delays above 10 s fail without retrying early. A retry is not dispatched
-after the file's budget expires. Each SDK call receives its remaining time and
-an abort signal, and the adapter also enforces that deadline.
-Persistent admission/quota failures still fail after the bounded retries.
-Any other error, or a write that runs out of retries, stops new uploads in that batch, including uploads that wait for a slot.
-Active uploads finish their retries, and then the batch rejects.
-Other batches continue. Completed writes stay in the sandbox.
+- `direct` and `auto` (default): two active writes.
+- `gateway` and W&B: eight active writes.
 
-The SDK creates parent directories and handles file-size limits, streaming fallback, and direct mTLS or Gateway routing.
-File contents go directly to the SDK.
+Handles and upload phases share the sandbox limit within one provider instance.
+Other sandboxes and server processes have independent limits. The runner controls admission across clients.
+Batch limits let bridge and credential uploads proceed between workspace upload waves.
+
+Each file has a 60 s budget from its first RPC, including retries and subsequent queue waits.
+Initial queue time is excluded. Expired retries leave the queue without dispatch.
+SDK calls receive the remaining time and an abort signal. The adapter also enforces the deadline.
+
+`UNAVAILABLE` and `RESOURCE_EXHAUSTED` retry at most three times, after 250, 1,000, and 3,000 ms.
+A longer server delay takes precedence. Delays over 10 s fail immediately. Retries release their slots during backoff.
+A final error stops new writes in that batch. Active writes finish their retries before the batch rejects.
+Other batches continue. Completed writes remain in the sandbox.
+
+`coreweave_file_upload_backoff` reports retries, cumulative backoff time, and the outcome once per affected batch.
+For repeated direct admission failures, its hint suggests `MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE=gateway`.
+The event omits file paths, contents, and server messages.
+
+Destinations must be unique absolute paths. The adapter checks and copies them before sandbox readiness.
+The SDK handles parent directories, file-size limits, streaming fallback, and transport routing.
 
 ## Data-plane mode
 
