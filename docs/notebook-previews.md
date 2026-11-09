@@ -30,7 +30,11 @@ Closing or merging the PR retires its managed previews.
 Lazy preparation requires an authorized visit for each new target. Once requested, preparation retries after failures without another visit.
 Compute starts when a user opens an app or editor.
 
-The Action updates one PR comment and includes links in the workflow summary.
+The Action accepts a single notebook or a `targets` JSON array of project/notebook pairs across projects.
+It merges results into one sticky PR comment per Hub, with project, notebook, preview, commit, and status columns.
+Sequential Action steps preserve each other's rows. All preview workflows must share a PR-level concurrency group.
+The workflow summary includes results for the current step. Failed targets do not prevent other targets from receiving previews.
+See [Bulk previews](https://github.com/marimo-team/marimohub/tree/main/actions/preview#bulk-previews) for configuration and migration instructions.
 The Hub retries capacity waits and checks closure even when the close workflow is missed. Retired groups do not consume active-group capacity.
 See the [Action README](https://github.com/marimo-team/marimohub/tree/main/actions/preview) for installation, permissions, limits, and version pinning.
 Stop Hub writers while upgrading all replicas. Older versions cannot read compact project intents or null expiry.

@@ -19,7 +19,7 @@ permissions:
   actions: read
   pull-requests: write
 concurrency:
-  group: ${quote(`marimo-preview-${options.projectId}-${options.notebookId}-\${{ github.event.pull_request.number }}`)}
+  group: marimo-preview-\${{ github.event.pull_request.number }}
   queue: max
   cancel-in-progress: false
 jobs:

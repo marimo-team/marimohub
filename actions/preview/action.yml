@@ -6,12 +6,15 @@ inputs:
     required: true
   project-id:
     description: Project containing the notebook
-    required: true
+    required: false
   notebook-id:
     description: Git-synced notebook to preview
-    required: true
+    required: false
+  targets:
+    description: JSON array of project-id and notebook-id pairs with optional display names; replaces project-id and notebook-id
+    required: false
   hub-token:
-    description: Hub API token with the preview.manage action for this project
+    description: Hub API token with the preview.manage action for every target project
     required: true
   github-token:
     description: GitHub token with actions read and pull requests write permissions
@@ -29,7 +32,7 @@ inputs:
     description: Optional inactivity timeout from 1 to 30 days; omitted means until PR closes
 outputs:
   previews:
-    description: JSON array of preview IDs, URLs, commits, and preparation states
+    description: JSON array of project IDs, notebook IDs, preview IDs, URLs, commits, and preparation states
   preview-ids:
     description: JSON array of retained preview IDs
   preview-urls:

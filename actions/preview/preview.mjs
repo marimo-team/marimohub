@@ -9,6 +9,50 @@ function integer(value, fallback, max, name) {
 	return Number(input);
 }
 
+function targets(input) {
+	const list = input('targets').trim();
+	const project = input('project-id').trim();
+	const notebook = input('notebook-id').trim();
+	if (!list) {
+		if (!project || !notebook)
+			throw new Error('Provide targets or both project-id and notebook-id');
+		return [{ project, notebook }];
+	}
+	if (project || notebook)
+		throw new Error('targets cannot be combined with project-id or notebook-id');
+	let entries;
+	try {
+		entries = JSON.parse(list);
+	} catch {
+		throw new Error('targets must be a JSON array');
+	}
+	if (!Array.isArray(entries) || entries.length === 0 || entries.length > 100)
+		throw new Error('targets must contain 1 to 100 project/notebook pairs');
+	const seen = new Set();
+	return entries.map((entry) => {
+		if (
+			!entry ||
+			typeof entry !== 'object' ||
+			Array.isArray(entry) ||
+			Object.keys(entry).some((key) => !['project-id', 'notebook-id', 'name'].includes(key)) ||
+			!['project-id', 'notebook-id'].every(
+				(key) => typeof entry[key] === 'string' && entry[key].trim(),
+			) ||
+			(entry.name !== undefined && (typeof entry.name !== 'string' || !entry.name.trim()))
+		)
+			throw new Error('Each target requires project-id and notebook-id, with an optional name');
+		const target = {
+			project: entry['project-id'].trim(),
+			notebook: entry['notebook-id'].trim(),
+			name: entry.name?.trim(),
+		};
+		const key = JSON.stringify([target.project, target.notebook]);
+		if (seen.has(key)) throw new Error('targets must not contain duplicate project/notebook pairs');
+		seen.add(key);
+		return target;
+	});
+}
+
 export function configuration(input) {
 	const required = (key) => {
 		const value = input(key).trim();
@@ -36,8 +80,7 @@ export function configuration(input) {
 	if (!['true', 'false'].includes(eager)) throw new Error('eager must be true or false');
 	return {
 		hub: hub.href.replace(/\/$/, ''),
-		project: required('project-id'),
-		notebook: required('notebook-id'),
+		targets: targets(input),
 		token: required('hub-token'),
 		githubToken: required('github-token'),
 		policy: {
@@ -57,30 +100,67 @@ function markdown(value) {
 		.replaceAll(/[\r\n]/g, ' ');
 }
 
-export function renderComment(config, result) {
-	const key = createHash('sha256')
-		.update(JSON.stringify([config.hub, config.project, config.notebook]))
-		.digest('hex');
-	const marker = `<!-- marimohub-preview:${key} -->`;
-	const lines = [marker, '### marimo notebook previews', ''];
-	if (result.state !== 'active') lines.push('These previews are retired.');
+function hash(value) {
+	return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function targetKey(config, target) {
+	return hash([config.hub, target.project, target.notebook]);
+}
+
+function renderTarget(config, { target, result, error }) {
+	const key = targetKey(config, target);
+	const rows = [];
+	const row = (preview, commit, status) =>
+		rows.push(
+			`| ${markdown(target.project)} | ${markdown(target.name ?? target.notebook)} | ${preview} | ${commit} | ${status} |`,
+		);
+	if (error) row('—', '—', 'Reconciliation failed. See workflow logs.');
+	else if (result.state !== 'active') row('—', '—', 'retired');
 	else {
-		if (result.pending) lines.push('Some previews are waiting for project capacity.', '');
-		if (result.items.length === 0) lines.push('No previews are available yet.');
 		for (const item of result.items) {
 			const url = new URL(item.url);
 			if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid preview URL');
 			const commit = item.target_commit ?? item.commit;
-			lines.push(
-				`- [${markdown(item.name)}](<${url.href.replaceAll('>', '%3E')}>) · ${commit ? markdown(commit.slice(0, 12)) : 'pending'} · ${markdown(item.preparation)}`,
+			row(
+				`[${markdown(item.name)}](<${url.href.replaceAll('>', '%3E').replaceAll('|', '%7C')}>)`,
+				commit ? markdown(commit.slice(0, 12)) : 'pending',
+				markdown(item.preparation),
 			);
 		}
-		lines.push(
+		if (result.pending) row('—', '—', 'waiting for project capacity');
+		else if (rows.length === 0) row('—', '—', 'No previews are available yet.');
+	}
+	rows[0] = rows[0].replace('| ', `| <!-- marimohub-preview-target:${key} --> `);
+	rows[rows.length - 1] = rows
+		.at(-1)
+		.replace(/ \|$/, ` <!-- /marimohub-preview-target:${key} --> |`);
+	return rows.join('\n');
+}
+
+export function renderComment(config, results, previous = '') {
+	const marker = `<!-- marimohub-previews:${hash(config.hub)} -->`;
+	const rows = new Map();
+	// Keep whole target blocks so commit retention replaces all rows for that notebook.
+	for (const match of previous.matchAll(
+		/^\| <!-- marimohub-preview-target:([a-f0-9]{64}) --> [\s\S]*?<!-- \/marimohub-preview-target:\1 --> \|$/gm,
+	))
+		rows.set(match[1], match[0]);
+	for (const entry of results)
+		rows.set(targetKey(config, entry.target), renderTarget(config, entry));
+	return {
+		marker,
+		body: [
+			marker,
+			'### marimo notebook previews',
+			'',
+			'| Project | Notebook | Preview | Commit | Status |',
+			'| --- | --- | --- | --- | --- |',
+			...rows.values(),
 			'',
 			'Opening a deferred preview prepares its code. Compute starts when you open an app or editor.',
-		);
-	}
-	return { marker, body: lines.join('\n') };
+		].join('\n'),
+	};
 }
 
 async function responseJson(response, service) {
@@ -131,7 +211,7 @@ export async function runPreview({
 			...(body ? { body: JSON.stringify(body) } : {}),
 		});
 		if (!response.ok) throw new Error(`GitHub request failed (${response.status})`);
-		return responseJson(response, 'GitHub');
+		return response.status === 204 ? undefined : responseJson(response, 'GitHub');
 	};
 	const run = await github(`/actions/runs/${encodeURIComponent(env.GITHUB_RUN_ID)}`);
 	const body = {
@@ -145,49 +225,85 @@ export async function runPreview({
 		event_at: run.created_at,
 		policy: config.policy,
 	};
-	const response = await request(
-		`${config.hub}/api/v1/projects/${encodeURIComponent(config.project)}/notebooks/${encodeURIComponent(config.notebook)}/previews/reconcile`,
-		{
-			method: 'POST',
-			redirect: 'error',
-			signal: AbortSignal.timeout(60_000),
-			headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' },
-			body: JSON.stringify(body),
-		},
-	);
-	if (!response.ok)
-		throw new Error(
-			`Hub preview reconciliation failed (${response.status}); check the notebook, token grant, and GitHub App connection`,
-		);
-	const envelope = await responseJson(response, 'Hub');
-	if (!envelope.success) throw new Error('Hub preview reconciliation failed');
-	const result = envelope.data;
-	const comment = renderComment(config, result);
-	const previews = result.items.map((item) => ({
-		id: item.id,
-		url: item.url,
-		commit: item.target_commit ?? item.commit,
-		preparation: item.preparation,
-	}));
+	const results = [];
+	const previews = [];
+	const failures = [];
+	for (const target of config.targets) {
+		try {
+			const response = await request(
+				`${config.hub}/api/v1/projects/${encodeURIComponent(target.project)}/notebooks/${encodeURIComponent(target.notebook)}/previews/reconcile`,
+				{
+					method: 'POST',
+					redirect: 'error',
+					signal: AbortSignal.timeout(60_000),
+					headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' },
+					body: JSON.stringify(body),
+				},
+			);
+			if (!response.ok)
+				throw new Error(
+					`Hub preview reconciliation failed (${response.status}); check the notebook, token grant, and GitHub App connection`,
+				);
+			const envelope = await responseJson(response, 'Hub');
+			if (!envelope.success) throw new Error('Hub preview reconciliation failed');
+			const result = envelope.data;
+			const entry = { target, result };
+			renderTarget(config, entry);
+			const items = result.items.map((item) => ({
+				project_id: target.project,
+				notebook_id: target.notebook,
+				id: item.id,
+				url: item.url,
+				commit: item.target_commit ?? item.commit,
+				preparation: item.preparation,
+			}));
+			results.push(entry);
+			previews.push(...items);
+		} catch (error) {
+			warning(`Preview target ${target.project}/${target.notebook}: ${error.message}`);
+			failures.push(error);
+			results.push({ target, error: true });
+		}
+	}
+	const comment = renderComment(config, results);
 	await output('previews', JSON.stringify(previews));
 	await output('preview-ids', JSON.stringify(previews.map((item) => item.id)));
 	await output('preview-urls', JSON.stringify(previews.map((item) => item.url)));
 	await output('commits', JSON.stringify(previews.map((item) => item.commit)));
 	await summary(`${comment.body}\n`);
 	try {
-		let existing;
+		const legacyMarkers = new Set(
+			config.targets.map((target) => `<!-- marimohub-preview:${targetKey(config, target)} -->`),
+		);
+		const matching = [];
 		for (let page = 1; ; page++) {
 			const comments = await github(`/issues/${pr.number}/comments?per_page=100&page=${page}`);
-			existing = comments.find(
-				(item) => item.user?.type === 'Bot' && item.body?.includes(comment.marker),
+			matching.push(
+				...comments.filter(
+					(item) =>
+						item.user?.type === 'Bot' &&
+						(item.body?.includes(comment.marker) ||
+							[...legacyMarkers].some((marker) => item.body?.includes(marker))),
+				),
 			);
-			if (existing || comments.length < 100) break;
+			if (comments.length < 100) break;
 		}
-		if (existing) await github(`/issues/comments/${existing.id}`, 'PATCH', { body: comment.body });
-		else await github(`/issues/${pr.number}/comments`, 'POST', { body: comment.body });
+		const existing = matching.find((item) => item.body.includes(comment.marker)) ?? matching[0];
+		const merged = renderComment(config, results, matching.map((item) => item.body).join('\n'));
+		if (merged.body.length > 60_000) throw new Error('Preview comment exceeds the size limit');
+		if (existing) await github(`/issues/comments/${existing.id}`, 'PATCH', { body: merged.body });
+		else await github(`/issues/${pr.number}/comments`, 'POST', { body: merged.body });
+		for (const duplicate of matching) {
+			if (duplicate.id !== existing?.id) await github(`/issues/comments/${duplicate.id}`, 'DELETE');
+		}
 	} catch {
 		warning(
-			'Previews were accepted, but the PR comment could not be updated. Check pull-requests: write. Links are in the workflow summary.',
+			'Preview results could not be written to the PR comment. Check pull-requests: write and comment size. Results are in the workflow summary.',
 		);
 	}
+	if (failures.length === 1) throw failures[0];
+	if (failures.length > 1)
+		throw new Error(
+			`Hub preview reconciliation failed for ${failures.length} targets. Check the notebook grants and GitHub App connections.`,
+		);
 }

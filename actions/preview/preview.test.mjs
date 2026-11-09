@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -30,7 +31,8 @@ function fixture(overrides = {}) {
 		preparation: 'deferred',
 	};
 	const result = { state: 'active', pending: false, items: [item] };
-	const marker = renderComment(configuration(input), result).marker;
+	const config = configuration(input);
+	const marker = renderComment(config, [{ target: config.targets[0], result }]).marker;
 	const options = {
 		input,
 		event: {
@@ -179,7 +181,7 @@ await test('GitHub run lookup failures stop before contacting the Hub', async ()
 	}
 });
 
-await test('Hub authorization, conflict, capacity, and server failures never publish links', async () => {
+await test('Hub failures publish an error row without links or private diagnostics', async () => {
 	for (const status of [401, 403, 409, 429, 503]) {
 		const { options, calls, outputs, summaries } = fixture();
 		const fetch = options.fetch;
@@ -191,23 +193,27 @@ await test('Hub authorization, conflict, capacity, and server failures never pub
 			runPreview(options),
 			new RegExp(`Hub preview reconciliation failed \\(${status}\\)`),
 		);
-		assert.deepEqual(outputs, {});
-		assert.deepEqual(summaries, []);
-		assert.ok(calls.every((call) => !call.url.includes('/comments')));
+		assert.equal(outputs.previews, '[]');
+		assert.match(summaries[0], /Reconciliation failed/);
+		assert.doesNotMatch(summaries[0], /private diagnostic|https:/);
+		assert.ok(calls.some((call) => call.init.method === 'PATCH'));
 	}
 });
 
-await test('a disconnected Hub does not publish a success comment or outputs', async () => {
+await test('a disconnected Hub publishes an error row without successful outputs', async () => {
 	const { options, calls, outputs } = fixture();
 	const fetch = options.fetch;
 	options.fetch = (url, init) =>
 		url.endsWith('/reconcile') ? Promise.reject(new TypeError('fetch failed')) : fetch(url, init);
 	await assert.rejects(runPreview(options), /fetch failed/);
-	assert.deepEqual(outputs, {});
-	assert.ok(calls.every((call) => !call.url.includes('/comments')));
+	assert.equal(outputs.previews, '[]');
+	assert.match(
+		calls.find((call) => call.init.method === 'PATCH').init.body,
+		/Reconciliation failed/,
+	);
 });
 
-await test('malformed successful responses do not expose response bodies or emit outputs', async () => {
+await test('malformed successful responses do not expose response bodies or emit preview links', async () => {
 	for (const target of ['github', 'hub']) {
 		const { options, outputs } = fixture();
 		const fetch = options.fetch;
@@ -219,17 +225,18 @@ await test('malformed successful responses do not expose response bodies or emit
 			runPreview(options),
 			(error) => !error.message.includes('secret diagnostic'),
 		);
-		assert.deepEqual(outputs, {});
+		if (target === 'github') assert.deepEqual(outputs, {});
+		else assert.equal(outputs.previews, '[]');
 	}
 });
 
-await test('rejects invalid preview URLs before writing outputs', async () => {
+await test('rejects invalid preview URLs before writing preview links', async () => {
 	const { options, result, outputs, summaries } = fixture();
 	// eslint-disable-next-line no-script-url -- Untrusted API response fixture.
 	result.items[0].url = 'javascript:alert(1)';
 	await assert.rejects(runPreview(options), /Invalid preview URL/);
-	assert.deepEqual(outputs, {});
-	assert.deepEqual(summaries, []);
+	assert.equal(outputs.previews, '[]');
+	assert.doesNotMatch(summaries[0], /javascript:/);
 });
 
 await test('finds the sticky comment on a later page without creating a duplicate', async () => {
@@ -459,4 +466,273 @@ await test('entrypoint writes outputs and summary when comment permissions fail'
 	assert.deepEqual(outputs['preview-urls'], [previews.items[0].url]);
 	assert.deepEqual(outputs.commits, [previews.items[0].target_commit]);
 	assert.equal(outputs.previews[0].preparation, 'deferred');
+});
+
+function bulkFixture(
+	entries = [
+		{ 'project-id': 'project-a', 'notebook-id': 'notebook-a', name: 'Sales dashboard' },
+		{ 'project-id': 'project-b', 'notebook-id': 'notebook-b' },
+	],
+) {
+	return fixture({ 'project-id': '', 'notebook-id': '', targets: JSON.stringify(entries) });
+}
+
+await test('validates the full target list before making any requests', async () => {
+	for (const targets of [
+		'private invalid JSON',
+		'null',
+		'{}',
+		'[]',
+		'[null]',
+		'[[]]',
+		'["project/notebook"]',
+		JSON.stringify([{ 'project-id': 'p' }]),
+		JSON.stringify([{ 'project-id': 'p', 'notebook-id': 1 }]),
+		JSON.stringify([{ 'project-id': ' ', 'notebook-id': 'n' }]),
+		JSON.stringify([{ 'project-id': 'p', 'notebook-id': 'n', name: '' }]),
+		JSON.stringify([{ 'project-id': 'p', 'notebook-id': 'n', name: 123 }]),
+		JSON.stringify([{ 'project-id': 'p', 'notebook-id': 'n', typo: true }]),
+		JSON.stringify([
+			{ 'project-id': 'p', 'notebook-id': 'n' },
+			{ 'project-id': ' p ', 'notebook-id': 'n' },
+		]),
+		JSON.stringify(
+			Array.from({ length: 101 }, (_, i) => ({ 'project-id': 'p', 'notebook-id': `${i}` })),
+		),
+	]) {
+		const { options, calls } = fixture();
+		const input = options.input;
+		options.input = (key) =>
+			key === 'targets' ? targets : ['project-id', 'notebook-id'].includes(key) ? '' : input(key);
+		await assert.rejects(runPreview(options), (error) => !error.message.includes('private'));
+		assert.equal(calls.length, 0);
+	}
+	assert.throws(
+		() => fixture({ targets: '[{"project-id":"p","notebook-id":"n"}]' }),
+		/cannot be combined/,
+	);
+	assert.throws(() => fixture({ 'notebook-id': '' }), /Provide targets/);
+});
+
+await test('reconciles notebooks across projects and publishes one table with attributable outputs', async () => {
+	const { options, calls, outputs, summaries } = bulkFixture();
+	const fetch = options.fetch;
+	options.fetch = (url, init) =>
+		url.includes('/comments?') ? Promise.resolve(Response.json([])) : fetch(url, init);
+	await runPreview(options);
+	const reconciles = calls.filter((call) => call.url.endsWith('/reconcile'));
+	assert.equal(reconciles.length, 2);
+	assert.match(reconciles[0].url, /projects\/project-a\/notebooks\/notebook-a\//);
+	assert.match(reconciles[1].url, /projects\/project-b\/notebooks\/notebook-b\//);
+	assert.equal(reconciles[0].init.body, reconciles[1].init.body);
+	assert.equal(calls.filter((call) => call.url.includes('/actions/runs/')).length, 1);
+	const comments = calls.filter(
+		(call) => call.url.endsWith('/comments') && call.init.method === 'POST',
+	);
+	assert.equal(comments.length, 1);
+	const body = JSON.parse(comments[0].init.body).body;
+	assert.match(body, /\| Project \| Notebook \| Preview \| Commit \| Status \|/);
+	assert.match(body, /project-a \| Sales dashboard/);
+	assert.match(body, /project-b \| notebook-b/);
+	assert.equal(body, summaries[0].trimEnd());
+	assert.deepEqual(
+		JSON.parse(outputs.previews).map((item) => [item.project_id, item.notebook_id]),
+		[
+			['project-a', 'notebook-a'],
+			['project-b', 'notebook-b'],
+		],
+	);
+});
+
+await test('merges sequential notebook updates and replaces all retained commits without duplicating rows', async () => {
+	let saved;
+	const writes = [];
+	for (const [notebook, commits, state] of [
+		['a', ['111', '222'], 'active'],
+		['b', ['333'], 'active'],
+		['a', ['444'], 'active'],
+		['b', [], 'closed'],
+	]) {
+		const { options, result } = fixture({ 'notebook-id': notebook });
+		const fetch = options.fetch;
+		result.state = state;
+		result.items = commits.map((commit) => ({
+			...result.items[0],
+			target_commit: commit,
+			name: `preview-${commit}`,
+		}));
+		options.fetch = (url, init) => {
+			if (url.includes('/comments?'))
+				return Promise.resolve(
+					Response.json(saved ? [{ id: 7, user: { type: 'Bot' }, body: saved }] : []),
+				);
+			if (url.includes('/comments') && ['PATCH', 'POST'].includes(init.method)) {
+				saved = JSON.parse(init.body).body;
+				writes.push(init.method);
+				return Promise.resolve(Response.json({ id: 7 }));
+			}
+			return fetch(url, init);
+		};
+		await runPreview(options);
+		if (notebook === 'b' && state === 'active') {
+			assert.match(saved, /preview-111/);
+			assert.match(saved, /preview-222/);
+			assert.match(saved, /preview-333/);
+		}
+	}
+	assert.deepEqual(writes, ['POST', 'PATCH', 'PATCH', 'PATCH']);
+	assert.match(saved, /preview-444/);
+	assert.match(saved, /\| b \| — \| — \| retired/);
+	assert.doesNotMatch(saved, /preview-111|preview-222|preview-333/);
+	assert.equal(saved.match(/<!-- marimohub-preview-target:/g).length, 2);
+});
+
+await test('continues after a failed target, publishes successful results, then fails the action', async () => {
+	const { options, calls, outputs, summaries } = bulkFixture();
+	const fetch = options.fetch;
+	options.fetch = (url, init) =>
+		url.includes('/notebooks/notebook-a/')
+			? Promise.resolve(new Response('secret diagnostic', { status: 403 }))
+			: fetch(url, init);
+	await assert.rejects(runPreview(options), /403/);
+	assert.ok(calls.some((call) => call.url.includes('/notebooks/notebook-b/')));
+	assert.equal(JSON.parse(outputs.previews).length, 1);
+	assert.equal(JSON.parse(outputs.previews)[0].notebook_id, 'notebook-b');
+	assert.match(summaries[0], /Sales dashboard \| — \| — \| Reconciliation failed/);
+	assert.match(summaries[0], /notebook-b \| \[feature\/chart\]/);
+	assert.doesNotMatch(summaries[0], /secret diagnostic/);
+	assert.ok(calls.some((call) => call.init.method === 'PATCH'));
+});
+
+await test('shows failed targets when every reconciliation fails', async () => {
+	const { options, outputs, summaries } = bulkFixture();
+	const fetch = options.fetch;
+	options.fetch = (url, init) =>
+		url.endsWith('/reconcile')
+			? Promise.resolve(Response.json({ success: false }))
+			: fetch(url, init);
+	await assert.rejects(runPreview(options), /failed for 2 targets/);
+	assert.equal(outputs.previews, '[]');
+	assert.equal(summaries[0].match(/Reconciliation failed/g).length, 2);
+});
+
+await test('shows capacity waits alongside retained previews and retires every target on close', async () => {
+	const { options, result, summaries, outputs, calls } = bulkFixture();
+	result.pending = true;
+	await runPreview(options);
+	assert.equal(summaries[0].match(/waiting for project capacity/g).length, 2);
+	assert.equal(JSON.parse(outputs.previews).length, 2);
+	options.event.action = 'closed';
+	result.state = 'closed';
+	result.items = [];
+	await runPreview(options);
+	assert.equal(outputs.previews, '[]');
+	assert.equal(summaries[1].match(/retired/g).length, 2);
+	assert.ok(
+		calls
+			.filter((call) => call.url.endsWith('/reconcile'))
+			.slice(-2)
+			.every((call) => JSON.parse(call.init.body).event === 'closed'),
+	);
+});
+
+await test('migrates old per-notebook comments and removes duplicates only after publishing the table', async () => {
+	const { options, calls } = bulkFixture();
+	const config = configuration(options.input);
+	const legacy = config.targets.map((target, id) => ({
+		id: id + 10,
+		user: { type: 'Bot' },
+		body: `<!-- marimohub-preview:${createHash('sha256')
+			.update(JSON.stringify([config.hub, target.project, target.notebook]))
+			.digest('hex')} -->\nOld preview`,
+	}));
+	const fetch = options.fetch;
+	options.fetch = (url, init) =>
+		url.includes('/comments?') ? Promise.resolve(Response.json(legacy)) : fetch(url, init);
+	await runPreview(options);
+	const writes = calls.filter(
+		(call) =>
+			['PATCH', 'POST', 'DELETE'].includes(call.init.method) && call.url.includes('/comments'),
+	);
+	assert.deepEqual(
+		writes.map((call) => [call.init.method, call.url.split('/').at(-1)]),
+		[
+			['PATCH', '10'],
+			['DELETE', '11'],
+		],
+	);
+	assert.match(JSON.parse(writes[0].init.body).body, /Sales dashboard/);
+	assert.match(JSON.parse(writes[0].init.body).body, /notebook-b/);
+	calls.length = 0;
+	options.fetch = (url, init) =>
+		init.method === 'PATCH'
+			? Promise.resolve(new Response('', { status: 403 }))
+			: url.includes('/comments?')
+				? Promise.resolve(Response.json(legacy))
+				: fetch(url, init);
+	await runPreview(options);
+	assert.ok(calls.every((call) => call.init.method !== 'DELETE'));
+});
+
+await test('comment identity depends on Hub URL, not target order or membership', () => {
+	const first = bulkFixture();
+	const second = fixture({ 'notebook-id': 'different' });
+	const otherHub = fixture({ 'hub-url': 'https://other.example.com' });
+	const marker = (f) => renderComment(configuration(f.options.input), []).marker;
+	assert.equal(marker(first), marker(second));
+	assert.notEqual(marker(first), marker(otherHub));
+});
+
+await test('escapes table text and URL pipes without introducing rows or HTML markers', () => {
+	const { options, result } = bulkFixture([
+		{ 'project-id': 'p', 'notebook-id': 'n', name: 'name|\n<!-- fake -->' },
+	]);
+	result.items[0].name = '[link]|\n<script>';
+	result.items[0].url = 'https://hub.example.com/preview/a|b';
+	const config = configuration(options.input);
+	const comment = renderComment(config, [{ target: config.targets[0], result }]);
+	assert.match(comment.body, /name\\\| \\<!-- fake --\\>/);
+	assert.match(comment.body, /a%7Cb/);
+	assert.doesNotMatch(comment.body, /<script>|\n<script>|\n<!-- fake/);
+	assert.equal(comment.body.split('\n').filter((line) => line.startsWith('|')).length, 3);
+});
+
+await test('oversized tables preserve outputs and existing comments without partial migration', async () => {
+	const { options, result, calls, outputs, warnings, summaries } = fixture();
+	result.items[0].name = 'x'.repeat(60_000);
+	await runPreview(options);
+	assert.equal(JSON.parse(outputs.previews).length, 1);
+	assert.ok(summaries[0].length > 60_000);
+	assert.equal(warnings.length, 1);
+	assert.match(warnings[0], /comment size/);
+	assert.ok(calls.every((call) => !['PATCH', 'DELETE'].includes(call.init.method)));
+});
+
+await test('bulk entrypoint writes partial results and fails when a target is rejected', async () => {
+	const { result: previews } = fixture();
+	const result = await entrypoint({
+		env: {
+			'INPUT_PROJECT-ID': '',
+			'INPUT_NOTEBOOK-ID': '',
+			INPUT_TARGETS: JSON.stringify([
+				{ 'project-id': 'p', 'notebook-id': 'bad' },
+				{ 'project-id': 'p', 'notebook-id': 'good' },
+			]),
+		},
+		preload: `globalThis.fetch = async (url) => {
+			if (url.includes('/actions/runs/')) return Response.json({ id: 123, workflow_id: 4, run_number: 5, created_at: '2026-01-01T00:00:00Z' });
+			if (url.includes('/notebooks/bad/')) return new Response('hub-secret diagnostic', { status: 403 });
+			if (url.endsWith('/reconcile')) return Response.json(${JSON.stringify({ success: true, data: previews })});
+			if (url.includes('/comments?')) return Response.json([]);
+			return Response.json({ id: 7 });
+		};`,
+	});
+	assert.equal(result.status, 1);
+	assert.match(result.stdout, /::warning::Preview target p\/bad:/);
+	assert.match(result.stdout, /::error::Hub preview reconciliation failed \(403\)/);
+	assert.doesNotMatch(result.stdout, /hub-secret diagnostic/);
+	assert.match(result.output, /"notebook_id":"good"/);
+	assert.doesNotMatch(result.output, /"notebook_id":"bad"/);
+	assert.match(result.summary, /Reconciliation failed/);
+	assert.match(result.summary, /feature\/chart/);
 });
