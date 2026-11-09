@@ -1,4 +1,5 @@
 import { httpInstrumentationMiddleware } from '@hono/otel';
+import { logOperationalError, StoredObjectError } from '@marimo-hub/core';
 import { metrics as metricsApi } from '@opentelemetry/api';
 import { logs as logsApi } from '@opentelemetry/api-logs';
 import { ExportResultCode } from '@opentelemetry/core';
@@ -223,7 +224,12 @@ describe('startOtel', () => {
 		expect(register).not.toHaveBeenCalled();
 		expect(setGlobal).toHaveBeenCalledOnce();
 
-		// shutdown flushes the batch that startOtel's own otel_started event produced.
+		const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+		logOperationalError(
+			'preview_work_scan_failed',
+			{ operation: 'preview.scan' },
+			new StoredObjectError('previews/bad.json', 'invalid_json', { causeName: 'SyntaxError' }),
+		);
 		await handle?.shutdown();
 		const started = exported.find((r) => r.attributes.event === 'otel_started');
 		expect(started).toBeDefined();
@@ -240,6 +246,14 @@ describe('startOtel', () => {
 			logs: true,
 			endpoint: 'http://localhost:4318',
 		});
+		const failures = exported.filter(
+			(record) => record.attributes.event === 'preview_work_scan_failed',
+		);
+		expect(failures).toHaveLength(1);
+		expect(failures[0].severityText).toBe('error');
+		expect(failures[0].body).toBe('preview_work_scan_failed');
+		expect(failures[0].attributes).toEqual(JSON.parse(stderr.mock.calls[0][0] as string));
+		expect(failures[0].resource.attributes).toMatchObject({ 'service.version': '1.2.3' });
 	});
 
 	it('reports the given build version on the resource and boot event', async () => {
