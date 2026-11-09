@@ -269,6 +269,9 @@ export interface ProvisionOptions {
 	 * the proxied prefix. Omit in `subdomain` mode (the kernel serves at root).
 	 */
 	baseUrl?: string;
+	cookiePartitioned?: boolean;
+	/** Browser URL when exposure differs from the compute URL, such as Hub proxy mode. */
+	publicUrl?: string;
 	marimoWatch?: boolean;
 	/**
 	 * CoreWeave-native filesystem snapshot id to restore the sandbox FROM, when the
@@ -874,9 +877,19 @@ export class SandboxProvisioner {
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
 	): Promise<ProvisionResult> {
-		const { load, startup, sw, mountPath } = await this.prepareInto(sandbox, options, true);
+		const { load, startup, sw, mountPath, exposedUrl } = await this.prepareInto(
+			sandbox,
+			options,
+			true,
+		);
 		await this.launchKernel(sandbox, mountPath, sw, startup);
 		const expose = await this.exposeKernel(sandbox, options, sw);
+		if (exposedUrl && new URL(expose).origin !== new URL(exposedUrl).origin) {
+			throw provisionFailure(
+				'exposing the kernel port',
+				new Error('Sandbox origin changed after launch'),
+			);
+		}
 
 		const counters = loadCounters(load);
 		// Last: the adapter's command count is only final once every phase has run.
@@ -895,6 +908,7 @@ export class SandboxProvisioner {
 		startup: MarimoStartup;
 		sw: Stopwatch;
 		mountPath: string;
+		exposedUrl?: string;
 	}> {
 		const launchStrategy = Promise.resolve(options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY);
 		launchStrategy.catch(() => {});
@@ -1020,9 +1034,13 @@ export class SandboxProvisioner {
 				});
 			});
 		let pythonPath: Promise<string> | undefined;
-		const setupEnvironment = async (bridgeLauncher: string | undefined) =>
+		const setupEnvironment = async (
+			bridgeLauncher: string | undefined,
+			publicUrl: string | undefined,
+		) =>
 			this.setupEnvironment(sandbox, options, mountPath, sw, await launchStrategy, {
 				bridgeLauncher: bridgeUnavailable ? undefined : bridgeLauncher,
+				publicUrl,
 				pythonPath,
 				deferSetup,
 				setupPrefix,
@@ -1034,6 +1052,7 @@ export class SandboxProvisioner {
 				(): undefined => {},
 			);
 
+		const exposeKernel = () => this.exposeKernel(sandbox, options, sw, 'prepare_exposure');
 		// Settle every writer before the caller can reclaim the sandbox.
 		const prepared = await allSettled<{
 			reachable: () => Promise<void>;
@@ -1041,7 +1060,7 @@ export class SandboxProvisioner {
 			inject: () => Promise<void>;
 			bridge: () => Promise<string | undefined>;
 			upload: () => Promise<void>;
-			exposure: () => Promise<void>;
+			exposure: () => Promise<string | undefined>;
 			setup: () => Promise<MarimoStartup>;
 		}>({
 			async reachable(): Promise<void> {
@@ -1077,13 +1096,18 @@ export class SandboxProvisioner {
 				await this.$.reachable;
 				return uploadBridge();
 			},
-			async exposure(): Promise<void> {
+			async exposure(): Promise<string | undefined> {
 				await this.$.reachable;
-				if (launch)
-					await sandbox.prepareExposure?.(MARIMO_PORT, {
-						hostname: options.hostname,
-						token: options.sandboxId,
-					});
+				if (!launch) return;
+				const reserved = await sandbox.prepareExposure?.(MARIMO_PORT, {
+					hostname: options.hostname,
+					token: options.sandboxId,
+				});
+				if (reserved) return reserved.url;
+				if (!options.publicUrl) {
+					await this.$.upload;
+					return exposeKernel();
+				}
 			},
 			async upload(): Promise<void> {
 				await this.$.inject;
@@ -1097,7 +1121,8 @@ export class SandboxProvisioner {
 				await this.$.upload;
 				// Waiting for the bridge upload lets setup write the final environment file, which
 				// the launch command then reuses instead of rewriting it.
-				return setupEnvironment(await this.$.bridge);
+				const exposedUrl = await this.$.exposure;
+				return setupEnvironment(await this.$.bridge, options.publicUrl ?? exposedUrl);
 			},
 		});
 		if (prepared.reachable.status === 'rejected') throw prepared.reachable.reason;
@@ -1109,7 +1134,13 @@ export class SandboxProvisioner {
 		if (prepared.exposure.status === 'rejected')
 			throw provisionFailure('exposing the kernel port', prepared.exposure.reason);
 		if (prepared.setup.status === 'rejected') throw prepared.setup.reason;
-		return { load: prepared.load.value, startup: prepared.setup.value, sw, mountPath };
+		return {
+			load: prepared.load.value,
+			startup: prepared.setup.value,
+			sw,
+			mountPath,
+			exposedUrl: prepared.exposure.value,
+		};
 	}
 
 	private async uploadNotebookBridge(
@@ -1594,6 +1625,7 @@ export class SandboxProvisioner {
 		launchStrategy: MarimoLaunchStrategyName,
 		prepared: {
 			bridgeLauncher?: string;
+			publicUrl?: string;
 			pythonPath?: Promise<string>;
 			deferSetup?: boolean;
 			setupPrefix?: MarimoLaunchPlan['setup'];
@@ -1601,6 +1633,19 @@ export class SandboxProvisioner {
 	): Promise<MarimoStartup> {
 		const sessionEnv = await options.sessionEnv;
 		const loggingPath = sessionEnv?.logging?.length ? LOGGING_DIR : undefined;
+		const publicUrl = prepared.publicUrl === undefined ? undefined : new URL(prepared.publicUrl);
+		if (publicUrl && !['http:', 'https:'].includes(publicUrl.protocol)) {
+			throw provisionFailure(
+				'configuring the kernel origin',
+				new Error('Sandbox URL must use HTTP or HTTPS'),
+			);
+		}
+		if (publicUrl && options.cookiePartitioned && publicUrl.protocol !== 'https:') {
+			throw provisionFailure(
+				'configuring the kernel origin',
+				new Error('Partitioned kernel cookies require an HTTPS sandbox URL'),
+			);
+		}
 		const startup: MarimoStartup = {
 			plan: buildMarimoLaunch(
 				{
@@ -1610,6 +1655,8 @@ export class SandboxProvisioner {
 					mode: options.launchMode,
 					assetUrl: options.assetUrl,
 					baseUrl: options.baseUrl,
+					cookiePartitioned: options.cookiePartitioned,
+					allowedOrigin: publicUrl?.origin,
 					tokenPasswordFile:
 						options.kernelAuthToken !== undefined ? KERNEL_AUTH_TOKEN_FILE : undefined,
 					watch: options.marimoWatch,
@@ -1767,9 +1814,10 @@ export class SandboxProvisioner {
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
 		sw: Stopwatch,
+		phase = 'expose',
 	): Promise<string> {
 		try {
-			const { url } = await withSandboxSpan(sw, 'expose', (time) =>
+			const { url } = await withSandboxSpan(sw, phase, (time) =>
 				time(() =>
 					sandbox.exposePort(MARIMO_PORT, {
 						hostname: options.hostname,

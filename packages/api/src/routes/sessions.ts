@@ -2262,7 +2262,8 @@ async function startNotebookSessionOnce(
 									if (warmClaim) await deps.warmPool!.handoff(warmClaim);
 								},
 								async provision(): Promise<ProvisionResult> {
-									const { baseUrl, publicUrl } = await sandboxExposure.prepare(exposureCtx);
+									const { baseUrl, publicUrl, cookiePartitioned } =
+										await sandboxExposure.prepare(exposureCtx);
 									preparedContextFile =
 										publicUrl === undefined
 											? undefined
@@ -2274,6 +2275,8 @@ async function startNotebookSessionOnce(
 										workspacePrefetch,
 										beforePrepare: this.$.handoff,
 										baseUrl,
+										publicUrl,
+										cookiePartitioned,
 										contextFile: preparedContextFile ?? { path: sandboxContextPath(sandboxId) },
 									});
 								},

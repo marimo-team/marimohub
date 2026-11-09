@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { buildMarimoLaunch, MARIMO_LAUNCH_STRATEGIES } from './marimoLaunch';
 import type { MarimoLaunchParams } from './marimoLaunch';
@@ -12,6 +13,34 @@ const BASE: MarimoLaunchParams = {
 };
 
 describe('buildMarimoLaunch', () => {
+	it.each([true, false])(
+		'carries CHIPS=%s through runtime-package commands',
+		(cookiePartitioned) => {
+			const plan = buildMarimoLaunch({
+				...BASE,
+				cookiePartitioned,
+				runtimePackages: ['rich==13.9.4'],
+				startupScripts: ['/tmp/start.sh'],
+			});
+			expect(plan.setup[0]).toEqual({ name: 'startup_script_1', command: "sh -e '/tmp/start.sh'" });
+			const result = execFileSync(
+				'sh',
+				[
+					'-c',
+					`uv() { case "$*" in *importlib.metadata*) printf '0.24.2' ;; *) printenv MARIMO_SERVER_SESSION_COOKIE_PARTITIONED ;; esac; }; ${plan.start}`,
+				],
+				{
+					encoding: 'utf8',
+					env: {
+						...process.env,
+						MARIMO_SERVER_SESSION_COOKIE_PARTITIONED: String(!cookiePartitioned),
+					},
+				},
+			);
+			expect(result.trim()).toBe(String(cookiePartitioned));
+		},
+	);
+
 	it.each(['edit', 'app', 'job'] as const)(
 		'resolves runtime packages only at launch without extra setup for %s',
 		(mode) => {
@@ -59,6 +88,44 @@ describe('buildMarimoLaunch', () => {
 			expect(plan.start).not.toContain('marimohub_marimo_version');
 		},
 	);
+	for (const strategy of ['uv-sync-edit', 'uv-script-pins', 'uv-sandbox'] as const) {
+		it.each(['edit', 'app'] as const)(`${strategy} configures CHIPS for %s`, (mode) => {
+			for (const cookiePartitioned of [true, false]) {
+				const { start } = buildMarimoLaunch({ ...BASE, mode, cookiePartitioned }, strategy);
+				expect(start).toMatch(
+					new RegExp(
+						`^\\(export MARIMO_SERVER_SESSION_COOKIE_PARTITIONED=${cookiePartitioned}; uv run `,
+					),
+				);
+				expect(start).not.toContain('MARIMO_SESSION_COOKIE_SAMESITE');
+			}
+		});
+	}
+
+	it('does not configure cookies for jobs, tokenless launches, or an unset policy', () => {
+		for (const params of [
+			BASE,
+			{ ...BASE, mode: 'job' as const, cookiePartitioned: true },
+			{ ...BASE, tokenPasswordFile: undefined, cookiePartitioned: true },
+		]) {
+			expect(buildMarimoLaunch(params).start).not.toContain('MARIMO_SERVER_SESSION_COOKIE');
+		}
+	});
+
+	it.each(['uv-sync-edit', 'uv-script-pins', 'uv-sandbox'] as const)(
+		'%s passes the exact public origin to browser sessions only',
+		(strategy) => {
+			for (const mode of ['edit', 'app', 'job'] as const) {
+				const { start } = buildMarimoLaunch(
+					{ ...BASE, mode, allowedOrigin: 'https://kernel.example:8443' },
+					strategy,
+				);
+				if (mode === 'job') expect(start).not.toContain('--allow-origins');
+				else expect(start).toContain("--allow-origins='https://kernel.example:8443'");
+			}
+		},
+	);
+
 	it('defaults to edit mode', () => {
 		const { start } = buildMarimoLaunch(BASE);
 		expect(start).toContain('marimo --quiet edit');

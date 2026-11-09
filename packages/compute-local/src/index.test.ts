@@ -657,6 +657,39 @@ exec "$NODE_BIN" -e 'const p=Number(process.argv[1]);require("http").createServe
 		for (const timing of Object.values(result.timings)) expect(timing).toBeGreaterThanOrEqual(0);
 	});
 
+	it('reserves one stable public port before launch, including concurrent preparations', async () => {
+		const sandbox = newSandbox();
+		const options = { hostname: 'ignored' };
+		const [first, second] = await Promise.all([
+			sandbox.prepareExposure!(2718, options),
+			sandbox.prepareExposure!(2718, options),
+		]);
+		expect(second).toEqual(first);
+		const process = await sandbox.startProcess(SERVER_CMD, { cwd: '/workspace' });
+		await process.waitForPort(2718, { timeout: 5000 });
+		const exposed = await sandbox.exposePort(2718, options);
+		expect(exposed).toEqual(first);
+		expect(await (await fetch(exposed.url)).text()).toBe('ok');
+	});
+
+	it('holds an unstarted port until destroy and permits retry after a reservation failure', async () => {
+		const first = newSandbox();
+		const reserved = await first.prepareExposure!(2718, { hostname: '' });
+		if (!reserved) throw new Error('missing reserved URL');
+		const port = Number(new URL(reserved.url).port);
+		const ranged = new LocalCompute({ ports: { start: port, end: port } });
+		const second = ranged.create(
+			`sb-reserve-${Math.random().toString(36).slice(2, 10)}` as SandboxId,
+		);
+		try {
+			await expect(second.prepareExposure!(2718, { hostname: '' })).rejects.toThrow(/no free port/);
+			await first.destroy();
+			expect(await second.prepareExposure!(2718, { hostname: '' })).toEqual(reserved);
+		} finally {
+			await second.destroy();
+		}
+	});
+
 	it.each([80, 2718])('maps logical port %i to a real free port and serves there', async (port) => {
 		const sb = newSandbox();
 		const proc = await sb.startProcess(serverCmdOn(port), { cwd: '/workspace' });

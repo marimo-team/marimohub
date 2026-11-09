@@ -182,6 +182,7 @@ describe('SandboxProvisioner tracing', () => {
 		expect(spans.map((span) => span.name).sort()).toEqual(
 			[
 				'sandbox.expose',
+				'sandbox.prepare_exposure',
 				'sandbox.files',
 				'sandbox.inject',
 				'sandbox.reachable',

@@ -224,7 +224,11 @@ Other adapters retain standalone setup, and headless `prepare()` completes setup
 
 `execInput` sends internal requests through stdin without session environment injection.
 Without `execInput`, agent requests use temporary files. Combined launch includes requests in the shared file transfer.
-`prepareExposure` starts routing publication before the kernel opens its port. `exposePort` awaits the same publication.
+Before marimo starts, the provisioner obtains the public URL and configures its exact browser origin.
+`prepareExposure` can reserve and return this URL without waiting for the kernel to listen.
+If it returns no URL, `exposePort` must support calls before launch.
+The provisioner calls `exposePort` again after kernel readiness and rejects a changed origin.
+Adapters that wait for kernel readiness in `exposePort` must return a stable URL from `prepareExposure`.
 
 **Editor sessions.** `MARIMOHUB_EDITOR_SANDBOX_SHARING` selects shared or
 exclusive access to one persistent sandbox per notebook. In exclusive mode,

@@ -137,6 +137,58 @@ describe('CloudflareSandboxProvider', () => {
 		});
 	});
 
+	describe('instance.prepareExposure()', () => {
+		it('reserves a tunnel once without probing the unstarted kernel', async () => {
+			fakeSandbox.tunnels.get.mockReset().mockResolvedValue({
+				url: 'https://reserved.trycloudflare.com',
+			});
+			const fetchSpy = vi.fn().mockResolvedValue({ status: 200 });
+			vi.stubGlobal('fetch', fetchSpy);
+			const instance = new CloudflareSandboxProvider(fakeNamespace, { useTunnel: true }).create(
+				SANDBOX_ID,
+			);
+			const options = { hostname: 'ignored.example.com' };
+			try {
+				const results = await Promise.all([
+					instance.prepareExposure!(8080, options),
+					instance.prepareExposure!(8080, options),
+				]);
+				expect(results).toEqual([
+					{ url: 'https://reserved.trycloudflare.com' },
+					{ url: 'https://reserved.trycloudflare.com' },
+				]);
+				expect(fetchSpy).not.toHaveBeenCalled();
+				expect(await instance.exposePort(8080, options)).toEqual(results[0]);
+				expect(fakeSandbox.tunnels.get).toHaveBeenCalledTimes(1);
+				expect(fetchSpy).toHaveBeenCalledWith(
+					'https://reserved.trycloudflare.com',
+					expect.objectContaining({ method: 'GET' }),
+				);
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+
+		it('retries a failed reservation and reuses the resulting preview URL', async () => {
+			fakeSandbox.exposePort
+				.mockReset()
+				.mockRejectedValueOnce(new Error('temporarily unavailable'))
+				.mockResolvedValueOnce({ url: 'https://reserved.kernel.example' });
+			const instance = makeProvider().create(SANDBOX_ID);
+			const options = { hostname: 'kernel.example', token: 'tok' };
+			await expect(instance.prepareExposure!(8080, options)).rejects.toThrow(
+				'temporarily unavailable',
+			);
+			expect(await instance.prepareExposure!(8080, options)).toEqual({
+				url: 'https://reserved.kernel.example',
+			});
+			expect(await instance.exposePort(8080, options)).toEqual({
+				url: 'https://reserved.kernel.example',
+			});
+			expect(fakeSandbox.exposePort).toHaveBeenCalledTimes(2);
+		});
+	});
+
 	describe('instance.exposePort()', () => {
 		it('delegates to sandbox.exposePort and returns url', async () => {
 			fakeSandbox.exposePort.mockResolvedValueOnce({ url: 'https://tunnel.example.com' });

@@ -1321,6 +1321,7 @@ describe('SandboxProvisioner', () => {
 			vi.spyOn(instance, 'writeFiles').mockRejectedValue(new Error('write unavailable'));
 			await new SandboxProvisioner(fakeComputeFrom(instance)).provision(options);
 			expect(calls.startProcess[0].cmd).toContain('marimo --quiet edit');
+			expect(calls.startProcess[0].cmd).toContain("--allow-origins='https://sandbox.example'");
 		});
 		it('retains the runtime layer when optional bridge preparation fails', async () => {
 			const { instance, calls } = makeFakeSandbox();
@@ -1790,6 +1791,81 @@ describe('SandboxProvisioner', () => {
 			expect(calls.startProcess[0].cmd).not.toContain('--asset-url');
 			// Binds all interfaces so the external ingress can reach the kernel.
 			expect(calls.startProcess[0].cmd).toContain('--host 0.0.0.0');
+		});
+
+		it.each([false, true])(
+			'reserves the tunnel origin before launch (supervised: %s)',
+			async (supervised) => {
+				const { instance, calls } = makeFakeSandbox();
+				const reservation = deferred<{ url: string }>();
+				const url = 'https://random.trycloudflare.com:8443/notebook?provider=one';
+				instance.prepareExposure = vi.fn(() => reservation.promise);
+				instance.exposePort = vi.fn(async () => {
+					expect(calls.startProcess).toHaveLength(1);
+					return { url };
+				});
+				if (supervised) {
+					instance.launchProcess = async (command, launch) => ({
+						success: true,
+						process: await instance.startProcess(command, launch),
+						timings: { setup: 0, start: 0, waitport: 0 },
+					});
+				}
+				const provisioning = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					...provisionOptions,
+					kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
+					cookiePartitioned: true,
+				});
+				await vi.waitFor(() => expect(instance.prepareExposure).toHaveBeenCalledOnce());
+				expect(calls.startProcess).toHaveLength(0);
+				reservation.resolve({ url });
+				expect((await provisioning).url).toBe(url);
+				expect(calls.startProcess[0].cmd).toContain(
+					"--allow-origins='https://random.trycloudflare.com:8443'",
+				);
+				expect(instance.exposePort).toHaveBeenCalledOnce();
+			},
+		);
+
+		it('uses the Hub origin for proxy exposure without exposing the upstream before launch', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			instance.exposePort = vi.fn(async () => {
+				expect(calls.startProcess).toHaveLength(1);
+				return { url: 'http://internal:2718' };
+			});
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...provisionOptions,
+				baseUrl: '/prefix/proxy/token',
+				publicUrl: 'https://hub.example:8443/prefix/proxy/token/',
+			});
+			expect(calls.startProcess[0].cmd).toContain("--allow-origins='https://hub.example:8443'");
+			expect(calls.startProcess[0].cmd).not.toContain("--allow-origins='http://internal");
+		});
+
+		it('cleans up when the exposed origin changes after launch', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			instance.prepareExposure = async () => ({ url: 'https://first.example' });
+			instance.exposePort = async () => ({ url: 'https://different.example' });
+			await expect(
+				new SandboxProvisioner(fakeComputeFrom(instance)).provision(provisionOptions),
+			).rejects.toMatchObject({ cause: { message: 'Sandbox origin changed after launch' } });
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('rejects plaintext CHIPS exposure before starting marimo', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			instance.prepareExposure = async () => ({ url: 'http://kernel.example:2718' });
+			await expect(
+				new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					...provisionOptions,
+					kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
+					cookiePartitioned: true,
+				}),
+			).rejects.toMatchObject({
+				cause: { message: 'Partitioned kernel cookies require an HTTPS sandbox URL' },
+			});
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
 		});
 
 		it('names the owner to the provider, project and user', async () => {
@@ -2541,6 +2617,7 @@ describe('SandboxProvisioner', () => {
 					path: sandboxContextPath(sandboxId),
 					content: '{"public_url":"https://hub.example/proxy/route/"}',
 				},
+				cookiePartitioned: true,
 				sessionEnv: { files: [{ path: '/creds', content: 'credential' }] },
 			});
 
@@ -2558,6 +2635,9 @@ describe('SandboxProvisioner', () => {
 				`--token --token-password-file '${KERNEL_AUTH_TOKEN_FILE}'`,
 			);
 			expect(calls.startProcess[0].cmd).not.toContain(TEST_KERNEL_AUTH_TOKEN);
+			expect(calls.startProcess[0].cmd).toMatch(
+				/^\(export MARIMO_SERVER_SESSION_COOKIE_PARTITIONED=true; /,
+			);
 		});
 
 		it('destroys the sandbox without starting marimo when the token file cannot be written', async () => {
@@ -4866,7 +4946,7 @@ describe('combined sandbox preparation', () => {
 			}),
 		});
 		expect(calls.destroy).toBe(1);
-		expect(calls.exposePort).toEqual([]);
+		expect(calls.exposePort).toHaveLength(1);
 	});
 
 	it.each(['setup_exit', 'setup_timeout'] as const)(
