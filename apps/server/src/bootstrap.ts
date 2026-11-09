@@ -211,8 +211,7 @@ export async function bootstrap(
 	// Unset listens on every interface, which a container needs to publish the port.
 	const hostname = overrides.hostname ?? validatedEnv.MARIMOHUB_BIND_HOST;
 	const serverApp = new Hono();
-	serverApp.use('/api/v1/*', compressResponse());
-	serverApp.use('/api/host/v1/*', compressResponse());
+	serverApp.use('/api/*', compressResponse());
 	if (deps.sandbox.exposure?.mode === 'proxy') {
 		for (const prefix of Object.values(SANDBOX_PROXY_PREFIXES)) {
 			const path = `${prefix}/*`;

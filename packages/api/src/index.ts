@@ -27,7 +27,7 @@ export {
 } from './sandboxProxy';
 export type { ProxyDecision } from './sandboxProxy';
 export { SANDBOX_PROXY_PREFIXES } from './proxyRoutes';
-export { appendVary, responseSizeBelow } from './responseUtils';
+export { appendVary } from './responseUtils';
 
 export { sweepAppPools } from './appPools';
 

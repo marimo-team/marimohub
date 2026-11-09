@@ -1,22 +1,12 @@
 import type { MiddlewareHandler } from 'hono';
 import { compress, COMPRESSIBLE_CONTENT_TYPE_REGEX } from 'hono/compress';
-import { parseAccept } from 'hono/utils/accept';
-import { appendVary, responseSizeBelow } from '@marimo-hub/api';
+import { appendVary } from '@marimo-hub/api';
 
 const MIN_COMPRESSION_BYTES = 1024;
 
 function isCompressible(type: string): boolean {
 	return (
 		!/^\s*text\/event-stream(?:[;\s]|$)/i.test(type) && COMPRESSIBLE_CONTENT_TYPE_REGEX.test(type)
-	);
-}
-
-function acceptsCompression(header: string | undefined): boolean {
-	const accepted = parseAccept(header ?? '');
-	const wildcard = accepted.find((entry) => entry.type === '*')?.q ?? 0;
-	return ['gzip', 'deflate'].some(
-		(encoding) =>
-			(accepted.find((entry) => entry.type.toLowerCase() === encoding)?.q ?? wildcard) > 0,
 	);
 }
 
@@ -43,13 +33,7 @@ export function compressResponse(): MiddlewareHandler {
 			!isCompressible(response.headers.get('Content-Type') ?? '')
 		)
 			return;
-		if (
-			!response.headers.has('Content-Length') &&
-			acceptsCompression(c.req.header('Accept-Encoding'))
-		) {
-			const size = await responseSizeBelow(response, MIN_COMPRESSION_BYTES);
-			if (size !== undefined) response.headers.set('Content-Length', String(size));
-		}
+		// Unknown-length bodies can be open streams; never read ahead to measure them.
 		await compressBody(c, async () => {});
 	};
 }

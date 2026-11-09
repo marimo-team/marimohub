@@ -83,7 +83,8 @@ Updater](https://argocd-image-updater.readthedocs.io/) or
 | `ingress.tls.*` | enabled, `marimohub-tls` | |
 | `metrics.enabled` / `.port` | `false` / `9464` | Prometheus scrape mode; port exposed on the Service, never the ingress |
 | `metrics.serviceMonitor.*` | disabled, `30s`, `{}` labels | Prometheus Operator ServiceMonitor |
-| `resources` | 100m/256Mi → 500m/512Mi | API container |
+| `resources` | 250m/512Mi → 2/1Gi | API container requests → limits |
+| `maintenance.resources` | 50m/128Mi → 250m/256Mi | Maintenance container requests → limits |
 | `nodeSelector` / `tolerations` / `affinity` | empty | Set per cluster |
 | `secretResolvers.kubernetes.enabled` | `false` | Resolve integration fields from Kubernetes Secrets |
 | `secretResolvers.kubernetes.cacheTtlSeconds` | `0` | Cross-operation Secret cache TTL |
@@ -242,5 +243,5 @@ For mutable tags, set `pullPolicy: Always` and change `revision` when the image 
 Traefik's `Middleware` CRD and `sandboxIngress.namespace`.
 See the [CKS recipe](../../docs/deploying/cks.md#kernel-response-compression) to attach it to kernel Ingresses.
 
-Hub pods request 250m CPU and 512Mi memory, with limits of 2 CPUs and 1Gi memory.
+API pods request 250m CPU and 512Mi memory, with limits of 2 CPUs and 1Gi memory.
 See [hub capacity](../../docs/deploying/kubernetes.md#hub-resource-capacity) to adjust these limits.

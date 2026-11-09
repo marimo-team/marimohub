@@ -1,9 +1,33 @@
 import type { MiddlewareHandler } from 'hono';
 import { etag, RETAINED_304_HEADERS } from 'hono/etag';
-import { responseSizeBelow } from './responseUtils';
 
 const MAX_ETAG_BYTES = 256 * 1024;
 const jsonContentType = /^application\/(?:json|[^;\s]+\+json)(?:\s*;|$)/i;
+
+async function readEtagBody(response: Response): Promise<Uint8Array<ArrayBuffer> | undefined> {
+	const reader = response.clone().body!.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			size += value.byteLength;
+			if (size > MAX_ETAG_BYTES) return;
+			chunks.push(value);
+		}
+	} finally {
+		// A tee's cancel waits for the original body, which the server has yet to send.
+		void reader.cancel().catch(() => {});
+	}
+	const body = new Uint8Array(size);
+	let offset = 0;
+	for (const chunk of chunks) {
+		body.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return body;
+}
 
 export function conditionalJsonEtag(): MiddlewareHandler {
 	const conditionalGet = etag({ weak: true });
@@ -20,10 +44,12 @@ export function conditionalJsonEtag(): MiddlewareHandler {
 
 		if (!response.headers.get('ETag')) {
 			if (Number(response.headers.get('Content-Length')) > MAX_ETAG_BYTES || !response.body) return;
-			// Most JSON routes omit Content-Length. Bound the read before Hono hashes the body.
-			const size = await responseSizeBelow(response, MAX_ETAG_BYTES + 1);
-			if (size === undefined) return;
-			response.headers.set('Content-Length', String(size));
+			const body = await readEtagBody(response);
+			if (!body?.byteLength) return;
+			const digest = new Uint8Array(await crypto.subtle.digest('SHA-1', body));
+			const hash = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+			response.headers.set('ETag', `W/"${hash}"`);
+			response.headers.set('Content-Length', String(body.byteLength));
 		}
 		await conditionalGet(c, async () => {});
 		if (c.res.status === 304) {

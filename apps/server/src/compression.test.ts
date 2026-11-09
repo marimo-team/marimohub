@@ -58,16 +58,58 @@ describe('response compression', () => {
 		},
 	);
 
-	it.each([1023, 1024, 1025])('uses the byte threshold for a %i-byte body', async (size) => {
-		const body = 'é'.repeat(Math.floor(size / 2)) + (size % 2 ? 'a' : '');
+	it.each([
+		['text/plain', ''],
+		['text/plain', 'first'],
+		['text/html', ''],
+		['text/html', '<p>first</p>'],
+	])('returns headers before an open %s stream ends: %j', async (contentType, body) => {
+		let controller!: ReadableStreamDefaultController<Uint8Array>;
 		const app = new Hono();
 		app.use('*', compressResponse());
-		app.get('/', (c) => c.text(body));
-		const response = await app.request('/', { headers: { 'Accept-Encoding': 'gzip' } });
-		expect(response.headers.get('Content-Encoding')).toBe(size < 1024 ? null : 'gzip');
-		const bytes = Buffer.from(await response.arrayBuffer());
-		expect((size < 1024 ? bytes : gunzipSync(bytes)).toString()).toBe(body);
+		app.get(
+			'/',
+			() =>
+				new Response(
+					new ReadableStream({
+						start(stream) {
+							controller = stream;
+							if (body) stream.enqueue(new TextEncoder().encode(body));
+						},
+					}),
+					{ headers: { 'Content-Type': contentType } },
+				),
+		);
+		let response: Response | undefined;
+		const request = Promise.resolve(
+			app.request('/', { headers: { 'Accept-Encoding': 'gzip' } }),
+		).then((value) => {
+			response = value;
+		});
+		try {
+			await vi.waitFor(() => expect(response).toBeDefined());
+			expect(response!.headers.get('Content-Encoding')).toBe('gzip');
+			expect(response!.headers.has('Content-Length')).toBe(false);
+		} finally {
+			controller.close();
+			await request;
+		}
+		expect(gunzipSync(Buffer.from(await response!.arrayBuffer())).toString()).toBe(body);
 	});
+
+	it.each([1023, 1024, 1025])(
+		'uses the declared byte threshold for a %i-byte body',
+		async (size) => {
+			const body = 'é'.repeat(Math.floor(size / 2)) + (size % 2 ? 'a' : '');
+			const app = new Hono();
+			app.use('*', compressResponse());
+			app.get('/', (c) => c.text(body, 200, { 'Content-Length': String(size) }));
+			const response = await app.request('/', { headers: { 'Accept-Encoding': 'gzip' } });
+			expect(response.headers.get('Content-Encoding')).toBe(size < 1024 ? null : 'gzip');
+			const bytes = Buffer.from(await response.arrayBuffer());
+			expect((size < 1024 ? bytes : gunzipSync(bytes)).toString()).toBe(body);
+		},
+	);
 
 	it.each<Record<string, string>>([
 		{ 'Cache-Control': 'private, No-Transform' },
@@ -124,13 +166,15 @@ describe('response compression', () => {
 		);
 	});
 
-	it('skips small JSON without a Content-Length', async () => {
+	it('compresses unknown-length JSON without probing its size', async () => {
 		const app = new Hono();
 		app.use('*', compressResponse());
 		app.get('/', (c) => c.json({ ok: true }));
 		const response = await app.request('/', { headers: { 'Accept-Encoding': 'gzip' } });
-		expect(response.headers.has('Content-Encoding')).toBe(false);
-		expect(await response.json()).toEqual({ ok: true });
+		expect(response.headers.get('Content-Encoding')).toBe('gzip');
+		expect(JSON.parse(gunzipSync(Buffer.from(await response.arrayBuffer())).toString())).toEqual({
+			ok: true,
+		});
 	});
 
 	it('leaves already-encoded bodies untouched', async () => {

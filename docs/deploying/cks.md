@@ -879,9 +879,15 @@ The annotation format is
 `<namespace>-<chart-fullname>-kernel-compress@kubernetescrd`.
 
 The chart creates the middleware. The annotation attaches it to new kernel
-Ingresses. Replace existing sandboxes to apply it to their Ingresses.
+Ingresses.
 Compression uses zstd, Brotli, or gzip and skips bodies smaller than 1 KiB and
 `text/event-stream` responses.
+
+For existing Ingresses, append the middleware reference to their comma-separated
+`traefik.ingress.kubernetes.io/router.middlewares` annotation without removing existing entries.
+This applies compression without terminating active sessions.
+If you recreate sandboxes instead, save active work first. Recreation terminates
+their kernel sessions.
 
 Before rollout, check compressed HTML and JSON responses through Traefik.
 Check that kernel events arrive without compression or buffering.

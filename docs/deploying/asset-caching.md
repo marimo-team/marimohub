@@ -37,8 +37,9 @@ If any check fails, leave the setting unset.
 ## Hub responses
 
 The Node server compresses eligible API and proxied kernel responses with gzip
-or deflate. It skips bodies smaller than 1 KiB, event streams, range responses,
-and already-encoded responses. WebSocket upgrades bypass compression.
+or deflate. It skips declared bodies smaller than 1 KiB, event streams, range
+responses, and already-encoded responses. Unknown-length responses compress
+without a size probe. WebSocket upgrades bypass compression.
 
 The frontend build emits Brotli and gzip files when they reduce asset size.
 The static server selects these files and retains immutable caching for

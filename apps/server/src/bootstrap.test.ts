@@ -147,6 +147,40 @@ describe('bootstrap', () => {
 		}
 	});
 
+	it.each([
+		['/api/ai/v1/models', 'GET', 404],
+		['/api/cli/v1/token', 'POST', 422],
+		['/api/sync/git/v1/projects/invalid/notebooks/invalid', 'POST', 401],
+	] as const)('compresses JSON errors under %s', async (path, method, status) => {
+		vi.useRealTimers();
+		const harness = makeHarness(deps);
+		await bootstrap(BASE_ENV, harness.overrides);
+		const fetch = harness.serveFn.mock.calls[0][0].fetch;
+		const request = async (encoding: string) =>
+			(await fetch(
+				new Request(`http://localhost${path}`, {
+					method,
+					headers: {
+						'Accept-Encoding': encoding,
+						'Content-Type': 'application/json',
+						'X-Request-Id': 'compression-regression',
+					},
+					...(method === 'POST' ? { body: '{}' } : {}),
+				}),
+				{} as never,
+			)) as Response;
+		const compressed = await request('gzip');
+		const identity = await request('identity');
+		expect(compressed.status).toBe(status);
+		expect(identity.status).toBe(status);
+		expect(compressed.headers.get('Content-Encoding')).toBe('gzip');
+		expect(identity.headers.has('Content-Encoding')).toBe(false);
+		expect(compressed.headers.get('Vary')).toContain('Accept-Encoding');
+		expect(gunzipSync(Buffer.from(await compressed.arrayBuffer())).toString()).toBe(
+			await identity.text(),
+		);
+	});
+
 	it('logs the build version at boot when telemetry export is disabled', async () => {
 		const harness = makeHarness(deps);
 		await bootstrap({ ...BASE_ENV, MARIMOHUB_VERSION: '1.2.3' }, harness.overrides);

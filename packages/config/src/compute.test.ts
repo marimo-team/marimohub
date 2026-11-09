@@ -1,13 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { Millis, Seconds } from '@marimo-hub/core';
 import { ModalCompute } from '@marimo-hub/compute-modal';
 import { LocalCompute } from '@marimo-hub/compute-local';
 import { DockerCompute } from '@marimo-hub/compute-container/docker';
 import { PodmanCompute } from '@marimo-hub/compute-container/podman';
-import { CoreWeaveCompute } from '@marimo-hub/compute-coreweave';
+import * as coreweave from '@marimo-hub/compute-coreweave';
 import { FargateCompute } from '@marimo-hub/compute-fargate';
 import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';
 import type { KubernetesPodTemplate } from '@marimo-hub/compute-kubernetes';
@@ -46,6 +46,7 @@ const configOf = (provider: unknown) =>
 				network?: string;
 				ownerTag?: string;
 				idleFallbackMs?: number;
+				kernelIngress?: coreweave.KernelIngressPublisher;
 				ingressAnnotations?: Record<string, string>;
 				ingressTlsMode?: string;
 				tlsSecretName?: string;
@@ -350,7 +351,7 @@ describe('makeCompute backend selection', () => {
 				MARIMOHUB_COMPUTE_WANDB_API_KEY: 'wb-key',
 				MARIMOHUB_COMPUTE_IMAGE: 'img',
 			}),
-		).toBeInstanceOf(CoreWeaveCompute);
+		).toBeInstanceOf(coreweave.CoreWeaveCompute);
 	});
 
 	it.each(['none', 'noop'])('returns a no-op provider for %s', (backend) => {
@@ -1148,15 +1149,26 @@ describe('optional compute configuration', () => {
 			MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
 			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
 		};
-		it('accepts kernel annotations with an ingress namespace', () => {
-			expect(() =>
-				makeCompute({
+		it('passes kernel annotations to the configured ingress publisher', () => {
+			const createPublisher = vi.spyOn(coreweave, 'createKernelIngressPublisher');
+			const annotations = {
+				'traefik.ingress.kubernetes.io/router.middlewares': 'sandboxes-compress@kubernetescrd',
+			};
+			try {
+				const provider = makeCompute({
 					...env,
 					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: 'sandboxes',
-					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS:
-						'{"traefik.ingress.kubernetes.io/router.middlewares":"sandboxes-compress@kubernetescrd"}',
-				}),
-			).not.toThrow();
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: JSON.stringify(annotations),
+				});
+				expect(createPublisher).toHaveBeenCalledExactlyOnceWith({
+					namespace: 'sandboxes',
+					ingressClassName: 'traefik',
+					ingressAnnotations: annotations,
+				});
+				expect(configOf(provider).kernelIngress).toBe(createPublisher.mock.results[0].value);
+			} finally {
+				createPublisher.mockRestore();
+			}
 		});
 		it.each(['not-json', '[]', '{"a":1}', '{"bad/key/name":"x"}'])(
 			'rejects malformed kernel annotations: %s',

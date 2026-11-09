@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, it, expect, vi } from 'vitest';
 import { Hono } from 'hono';
 import { conditionalJsonEtag } from './etag';
@@ -48,6 +49,53 @@ describe('JSON ETag scope', () => {
 		);
 		return app;
 	}
+
+	it.each([1023, 64 * 1024, 256 * 1024])(
+		'hashes one bounded body copy independently of %i-byte stream chunks',
+		async (chunkSize) => {
+			const body = JSON.stringify('é'.repeat((256 * 1024 - 2) / 2));
+			const bytes = new TextEncoder().encode(body);
+			const app = new Hono();
+			app.use('*', conditionalJsonEtag());
+			app.get(
+				'/',
+				() =>
+					new Response(
+						new ReadableStream({
+							start(controller) {
+								for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+									controller.enqueue(bytes.slice(offset, offset + chunkSize));
+								}
+								controller.close();
+							},
+						}),
+						{ headers: { 'Content-Type': 'application/json' } },
+					),
+			);
+			const clone = vi.spyOn(Response.prototype, 'clone');
+			try {
+				const response = await app.request('/');
+				expect(clone).toHaveBeenCalledTimes(1);
+				expect(response.headers.get('ETag')).toBe(
+					`W/"${createHash('sha1').update(bytes).digest('hex')}"`,
+				);
+				expect(response.headers.get('Content-Length')).toBe(String(bytes.length));
+				expect(await response.text()).toBe(body);
+			} finally {
+				clone.mockRestore();
+			}
+		},
+	);
+
+	it.each([null, ''])('does not hash an empty response: %s', async (body) => {
+		const app = new Hono();
+		app.use('*', conditionalJsonEtag());
+		app.get('/', () => new Response(body, { headers: { 'Content-Type': 'application/json' } }));
+		const response = await app.request('/', { headers: { 'If-None-Match': '*' } });
+		expect(response.status).toBe(200);
+		expect(response.headers.has('ETag')).toBe(false);
+		expect(await response.text()).toBe('');
+	});
 
 	it.each<Record<string, string>>([
 		{ 'Cache-Control': 'private, no-store' },
