@@ -31,6 +31,7 @@ afterEach(async () => {
 describe.runIf(Boolean(python))('notebook OTLP logging', () => {
 	it.each([
 		'python',
+		'logger-filter',
 		'edit',
 		'app',
 		'job',
@@ -148,6 +149,9 @@ describe.runIf(Boolean(python))('notebook logging failure isolation', () => {
 		'retry-after',
 		'retry-after-limit',
 		'record-encoding',
+		'logger-filter-encoding',
+		'logger-filter-delivery',
+		'logger-filter-invalid',
 		'sitecustomize-failure',
 		'existing-handler',
 		'netrc',

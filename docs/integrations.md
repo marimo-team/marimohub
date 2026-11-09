@@ -1189,6 +1189,16 @@ import logging
 logging.getLogger(__name__).info("Loaded dataset", extra={"rows": 1200})
 ```
 
+To limit a destination's exports, set `logger_names`:
+
+```json
+{ "logger_names": [{ "name": "my_app" }] }
+```
+
+`my_app` matches itself and dotted descendants such as `my_app.worker`, but not `my_application`.
+Matching is case-sensitive, with no wildcards. An omitted or empty list exports all eligible loggers.
+Level thresholds still apply. The exporter excludes `opentelemetry`, `urllib3`, `requests`, and their descendants.
+
 Each record includes project, notebook, workload, sandbox, integration, mode, and process identifiers.
 Logger levels, filters, or disabled propagation in notebook code can prevent export.
 Export includes `logging.exception()` records. It excludes `print()`, rich cell output, unlogged cell errors, existing log files, and exporter diagnostics.

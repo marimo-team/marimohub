@@ -11,13 +11,15 @@ from logging_receiver import OtlpReceiver
 
 directory, mode, command = sys.argv[1:]
 release = threading.Event()
-initialization_failure = mode in ('invalid-json', 'missing-config', 'partial-config', 'partial-initialization', 'worker-start-failure')
+initialization_failure = mode in ('invalid-json', 'missing-config', 'partial-config', 'partial-initialization', 'worker-start-failure', 'logger-filter-invalid')
 
 
 def respond(request):
     if not request.path.startswith('/failed/'):
         return False
-    if mode.startswith('http-'):
+    if mode == 'logger-filter-delivery':
+        request.send_response(503)
+    elif mode.startswith('http-'):
         request.send_response(int(mode.split('-')[1]), 'private-token')
     elif mode in ('partial-success', 'malformed-response', 'oversized-response'):
         body = {
@@ -59,6 +61,11 @@ base = server.url
 config[0]['url'] = base + '/failed/v1/logs'
 config[0]['level'] = 'INFO'
 config.append({**config[0], 'url': base + '/healthy/v1/logs', 'name': 'healthy', 'headers': {}})
+if mode in ('logger-filter-encoding', 'logger-filter-delivery'):
+    config[0]['loggerNames'] = ['my_app']
+    config[1]['loggerNames'] = ['my_app', 'other']
+elif mode == 'logger-filter-invalid':
+    config[1]['loggerNames'] = None
 refused = socket.socket()
 if mode == 'connection-refused':
     # Reserve a port without listening, so another process cannot acquire it.
@@ -189,11 +196,14 @@ bootstrap._processors[0].export = fail
 logging.error('fault-record')
 print('workload-completed')
 '''
-elif mode == 'record-encoding':
+elif mode in ('record-encoding', 'logger-filter-encoding', 'logger-filter-delivery'):
     workload = '''
 import logging
-logging.info('%d', 'not-a-number')
-logging.error('fault-record')
+logger = logging.getLogger('my_app')
+logger.info('%d', 'not-a-number')
+logger.error('fault-record')
+logging.getLogger('other').error('other-record')
+logging.getLogger('dependency').error('excluded-record')
 print('workload-completed')
 '''
 elif mode == 'sitecustomize-failure':
@@ -255,6 +265,11 @@ assert 'Exception in thread' not in stderr, stderr
 assert time.monotonic() - started < 10, 'export blocked notebook exit'
 assert not Path('unexpected').exists()
 counts = Counter((body, attrs['marimohub.integration']) for body, attrs, *_ in server.records)
+if mode in ('logger-filter-encoding', 'logger-filter-delivery'):
+    assert 'record_encoding_failed' in stderr, stderr
+    assert counts[('other-record', 'healthy')] == 1, counts
+    assert counts[('other-record', 'logs')] == 0, counts
+    assert not any(body == 'excluded-record' for body, _ in counts), counts
 failed_requests = [r for r in requests if r[0].startswith('/failed/')]
 diagnostics = [json.loads(line) for line in stderr.splitlines() if line.startswith('{')]
 
@@ -277,7 +292,7 @@ elif mode == 'shutdown-deadline':
     assert all(d['dropped_records'] == 1 for d in timeouts), diagnostics
 else:
     assert counts[('fault-record', 'healthy')] == 1, (counts, stderr)
-    if mode.startswith('http-') or mode in ('connection-refused', 'response-timeout', 'connection-reset', 'tls-error', 'exporter-exception', 'partial-success', 'malformed-response', 'oversized-response', 'retry-after-limit'):
+    if mode.startswith('http-') or mode in ('connection-refused', 'response-timeout', 'connection-reset', 'tls-error', 'exporter-exception', 'partial-success', 'malformed-response', 'oversized-response', 'retry-after-limit', 'logger-filter-delivery'):
         assert counts[('fault-record', 'logs')] == 0, counts
         reasons = ('delivery_failed_or_queue_full', 'shutdown_timeout') if mode == 'connection-refused' else ('delivery_failed_or_queue_full',)
         assert any(d['reason'] in reasons and d.get('destination') == 'logs' and d.get('dropped_records') == 1 for d in diagnostics), diagnostics

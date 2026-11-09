@@ -88,6 +88,14 @@ export const otlpLogs = defineIntegration({
 			.enum(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'])
 			.default('INFO')
 			.describe('Lowest Python log level to export'),
+		logger_names: z
+			.array(
+				z.strictObject({
+					name: z.string().min(1).describe('Logger name, including its dotted descendants'),
+				}),
+			)
+			.optional()
+			.describe('Export only these logger namespaces. Leave empty to export all eligible loggers.'),
 		service_name: z
 			.string()
 			.min(1)
@@ -141,6 +149,7 @@ export const otlpLogs = defineIntegration({
 			headers,
 			level: input.config.level,
 			serviceName: input.config.service_name,
+			loggerNames: input.config.logger_names?.map(({ name }) => name),
 			attributes: {
 				'marimohub.project_id': input.projectId,
 				'marimohub.workload_kind': input.workload.kind,

@@ -30,6 +30,13 @@ config_path = Path(directory, 'logging.json')
 config = json.loads(config_path.read_text())
 config[0]['url'] = server.url + '/v1/logs'
 config.append({**config[0], 'name': 'second', 'level': 'ERROR', 'headers': {}})
+if mode == 'logger-filter':
+    config.append({**config[0], 'name': 'unfiltered'})
+    config.append({**config[0], 'name': 'empty', 'loggerNames': []})
+    config.append({**config[0], 'name': 'root-only', 'loggerNames': ['root']})
+    config.append({**config[0], 'name': 'no-match', 'loggerNames': ['missing']})
+    config[0]['loggerNames'] = ['my_app', 'my_app', 'my_app.worker', 'pipeline', '分析', 'wild.*', 'requests']
+    config[1]['loggerNames'] = ['other']
 config_path.write_text(json.dumps(config))
 
 Path('custom').mkdir()
@@ -85,6 +92,25 @@ if __name__ == '__main__':
 ''')
 if mode in ('failure', 'redirect'):
     Path('workload.py').write_text("import logging\nlogging.warning('failure-record')\nprint('workload-completed')\n")
+elif mode == 'logger-filter':
+    Path('workload.py').write_text('''
+import logging
+import marimohub_logging as bootstrap
+
+for name in ['my_app', 'my_app.worker', 'my_app.worker.deep', 'pipeline', '分析.worker', 'wild.*', 'wild.child', 'My_app', 'my_application', 'other', 'dependency', 'marimo', 'requests.adapters', 'root']:
+    logging.getLogger(name).error(name)
+logging.getLogger('other').warning('below-level')
+
+class Unformattable:
+    def __str__(self):
+        raise AssertionError('excluded record was formatted')
+
+handler = next(h for h in logging.getLogger().handlers
+               if isinstance(h, bootstrap.Handler) and h.processor.name == 'logs')
+handler.handle(logging.makeLogRecord({'name': 'dependency', 'msg': Unformattable()}))
+handler.handle(logging.makeLogRecord({'name': 'dependency', 'msg': 'excluded-extra', 'extra': Unformattable()}))
+bootstrap.shutdown()
+''')
 elif mode == 'kernel-exit':
     Path('workload.py').write_text("""
 import logging
@@ -222,6 +248,18 @@ if mode == 'python':
     children = [attrs['process.pid'] for body, attrs, *_ in received if body == 'spawn-record']
     assert parents != children
     assert any(a.key == 'exception.stacktrace' for body, _, _, record in received if body == 'exception-record' for a in record.attributes)
+elif mode == 'logger-filter':
+    assert 'record_encoding_failed' not in stderr, stderr
+    assert 'my_application' in stderr, 'export selection changed console logging'
+    bodies = lambda destination: sorted(body for body, attrs, *_ in received
+                                       if attrs['marimohub.integration'] == destination)
+    assert bodies('logs') == sorted(['my_app', 'my_app.worker', 'my_app.worker.deep', 'pipeline', '分析.worker', 'wild.*']), received
+    assert bodies('second') == ['other'], received
+    assert bodies('root-only') == ['root'], received
+    assert bodies('no-match') == [], received
+    expected = sorted(['my_app', 'my_app.worker', 'my_app.worker.deep', 'pipeline', '分析.worker', 'wild.*', 'wild.child', 'My_app', 'my_application', 'other', 'dependency', 'marimo', 'root', 'below-level'])
+    assert bodies('unfiltered') == expected, received
+    assert bodies('empty') == expected, received
 elif mode == 'kernel-exit':
     assert sum(body == 'kernel-final-record' for body, *_ in received) == 1, received
 elif mode in ('edit', 'app', 'job'):
