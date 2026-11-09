@@ -16,7 +16,11 @@ describe('preview workflow', () => {
 		);
 		expect(workflow.on.pull_request.types).toEqual(['opened', 'reopened', 'synchronize', 'closed']);
 		expect(workflow.permissions).toEqual({ actions: 'read', 'pull-requests': 'write' });
-		expect(workflow.concurrency).toMatchObject({ queue: 'max', 'cancel-in-progress': false });
+		expect(workflow.concurrency).toEqual({
+			group: 'marimo-preview-${{ github.event.pull_request.number }}',
+			queue: 'max',
+			'cancel-in-progress': false,
+		});
 		expect(workflow.jobs.preview.steps).toHaveLength(1);
 		expect(PREVIEW_ACTION_REF).toMatch(/^[a-f0-9]{40}$/);
 		expect(workflow.jobs.preview.steps[0].uses).toBe(
