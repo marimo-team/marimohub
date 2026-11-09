@@ -1264,7 +1264,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SANDBOX_COOKIE_PARTITIONED',
 						name: 'Partitioned kernel cookies',
 						description:
-							'Use CHIPS for authenticated cross-site kernel frames. Defaults to true when the Hub URL is HTTPS, otherwise false. Requires an HTTPS kernel URL and a marimo image supporting MARIMO_SERVER_SESSION_COOKIE_PARTITIONED. Set false for same-site HTTP development.',
+							'Enable CHIPS for authenticated subdomain sessions. Defaults to true for HTTPS Hub URLs, otherwise false. Requires HTTPS kernels and marimo support for MARIMO_SERVER_SESSION_COOKIE_PARTITIONED.',
 						example: 'true',
 					},
 				],

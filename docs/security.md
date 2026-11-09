@@ -115,29 +115,25 @@ the frame. A separate window makes the kernel a first-party page. The prompt is
 dismissible and can also appear for healthy frames because browsers hide
 cross-origin load failures.
 
-For authenticated `subdomain` sessions, Hub requests partitioned cookies (CHIPS)
-when its public URL uses HTTPS. Override this with
-`MARIMOHUB_SANDBOX_COOKIE_PARTITIONED=true` or `false`. HTTP Hub URLs default to
-`false` for local development. Partitioned cookies require HTTPS kernel URLs;
-Hub rejects a plaintext kernel URL when this policy is enabled. `proxy` mode,
-tokenless sessions, and jobs do not request partitioned cookies.
+For authenticated `subdomain` sessions, HTTPS Hub URLs enable partitioned cookies
+(CHIPS) by default. HTTP Hub URLs default to `false`.
+`MARIMOHUB_SANDBOX_COOKIE_PARTITIONED=true` or `false` overrides this default.
+Hub rejects HTTP kernel URLs when CHIPS is enabled. Proxy mode, tokenless sessions,
+and jobs do not request CHIPS.
 
-This requires a sandbox image with native marimo support for
-`MARIMO_SERVER_SESSION_COOKIE_PARTITIONED` (currently unreleased). Build an image with
-that marimo change before using authenticated cross-site frames. Older images
-ignore the variable and retain their existing cookies; Hub does not separately
-request `SameSite=None`. Existing sessions must be restarted to pick up the policy.
+The sandbox image must support `MARIMO_SERVER_SESSION_COOKIE_PARTITIONED` in marimo.
+Older images ignore this variable. Restart existing sessions after you update the
+image or configuration.
 
-Marimo emits `HttpOnly; SameSite=None; Secure; Partitioned`. The browser chooses
-the top-level-site partition, so the cookie set inside Hub is not shared with
-an unrelated site or a separate kernel tab. Keep the token-bearing URL when
-opening a new window. TLS-terminating tunnels must preserve the public kernel
-`Host` header for marimo's cookie Origin checks.
+Marimo sets `HttpOnly; SameSite=None; Secure; Partitioned`. Browsers with CHIPS
+support store the cookie separately for each top-level site. To authenticate in a
+separate kernel tab, open the URL with its access token. TLS proxies must preserve
+the public kernel `Host`, including the port. Marimo's WebSocket policy also requires
+the public kernel origin in `--allow-origins` for tunnels.
 
-CHIPS support and browser cookie policy both matter. Blocking all cookies still
-prevents session authentication. The new-window recovery action remains
-available; Hub never falls back automatically to an unpartitioned cross-site
-cookie.
+Browsers without CHIPS support can treat the cookie as an ordinary cross-site
+cookie. Marimo's Origin check still applies. Blocking all cookies prevents cookie
+authentication. The new-window recovery action remains available.
 
 ## Secondary editor surfaces
 

@@ -52,6 +52,26 @@ describe('SubdomainExposure', () => {
 		);
 	});
 
+	it('does not require TLS for tokenless sessions with an explicit CHIPS policy', async () => {
+		const unauthenticated = { ...ctx, kernelAuthToken: undefined };
+		const forced = new SubdomainExposure(true);
+		expect(await forced.prepare(unauthenticated)).toEqual({});
+		expect(await forced.finalize('http://localhost:2718', unauthenticated)).toEqual({
+			clientUrl: 'http://localhost:2718/',
+		});
+	});
+
+	it('requires TLS when CHIPS is explicitly enabled for an HTTP Hub', async () => {
+		const local = { ...ctx, appBaseUrl: 'http://localhost:3000' };
+		const forced = new SubdomainExposure(true);
+		await expect(forced.finalize('http://localhost:2718', local)).rejects.toThrow(
+			'Partitioned kernel cookies require an HTTPS sandbox URL',
+		);
+		expect(await forced.finalize('https://kernel.example:8443', local)).toEqual({
+			clientUrl: `https://kernel.example:8443/?access_token=${TEST_KERNEL_AUTH_TOKEN}`,
+		});
+	});
+
 	it('adds the kernel token to the adapter URL and records no origin', async () => {
 		const result = await exposure.finalize('https://sbx-1.sandbox.example.net', ctx);
 		expect(result).toEqual({

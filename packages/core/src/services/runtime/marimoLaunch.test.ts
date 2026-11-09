@@ -13,24 +13,33 @@ const BASE: MarimoLaunchParams = {
 };
 
 describe('buildMarimoLaunch', () => {
-	it('carries CHIPS through runtime-package commands without dropping startup scripts', () => {
-		const plan = buildMarimoLaunch({
-			...BASE,
-			cookiePartitioned: true,
-			runtimePackages: ['rich==13.9.4'],
-			startupScripts: ['/tmp/start.sh'],
-		});
-		expect(plan.setup[0]).toEqual({ name: 'startup_script_1', command: "sh -e '/tmp/start.sh'" });
-		const result = execFileSync(
-			'sh',
-			[
-				'-c',
-				`uv() { case "$*" in *importlib.metadata*) printf '0.24.2' ;; *) printenv MARIMO_SERVER_SESSION_COOKIE_PARTITIONED ;; esac; }; ${plan.start}`,
-			],
-			{ encoding: 'utf8' },
-		);
-		expect(result.trim()).toBe('true');
-	});
+	it.each([true, false])(
+		'carries CHIPS=%s through runtime-package commands',
+		(cookiePartitioned) => {
+			const plan = buildMarimoLaunch({
+				...BASE,
+				cookiePartitioned,
+				runtimePackages: ['rich==13.9.4'],
+				startupScripts: ['/tmp/start.sh'],
+			});
+			expect(plan.setup[0]).toEqual({ name: 'startup_script_1', command: "sh -e '/tmp/start.sh'" });
+			const result = execFileSync(
+				'sh',
+				[
+					'-c',
+					`uv() { case "$*" in *importlib.metadata*) printf '0.24.2' ;; *) printenv MARIMO_SERVER_SESSION_COOKIE_PARTITIONED ;; esac; }; ${plan.start}`,
+				],
+				{
+					encoding: 'utf8',
+					env: {
+						...process.env,
+						MARIMO_SERVER_SESSION_COOKIE_PARTITIONED: String(!cookiePartitioned),
+					},
+				},
+			);
+			expect(result.trim()).toBe(String(cookiePartitioned));
+		},
+	);
 
 	it.each(['edit', 'app', 'job'] as const)(
 		'resolves runtime packages only at launch without extra setup for %s',

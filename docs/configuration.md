@@ -351,7 +351,7 @@ Uses the public kernel URL directly. Set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` to
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_SANDBOX_COOKIE_PARTITIONED` | Use CHIPS for authenticated cross-site kernel frames. Defaults to true when the Hub URL is HTTPS, otherwise false. Requires an HTTPS kernel URL and a marimo image supporting MARIMO_SERVER_SESSION_COOKIE_PARTITIONED. Set false for same-site HTTP development. | — | — | `true` |
+| `MARIMOHUB_SANDBOX_COOKIE_PARTITIONED` | Enable CHIPS for authenticated subdomain sessions. Defaults to true for HTTPS Hub URLs, otherwise false. Requires HTTPS kernels and marimo support for MARIMO_SERVER_SESSION_COOKIE_PARTITIONED. | — | — | `true` |
 
 ### Proxy (through the app)
 
