@@ -173,6 +173,56 @@ describe('bestEffort', () => {
 });
 
 describe('appendAudit', () => {
+	it.each([false, true])('records running audit metrics and failures (fail=%s)', async (fail) => {
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		const metrics = { increment: vi.fn(), gauge: vi.fn(), histogram: vi.fn() };
+		const gate = Promise.withResolvers<void>();
+		const tasks: (() => Promise<unknown>)[] = [];
+		await appendAudit(
+			{
+				metrics,
+				backgroundWork: {
+					defer: (_label, task) => {
+						tasks.push(task);
+					},
+				},
+			},
+			{ method: 'POST', path: '/test', userId: 'test' },
+			'test.event',
+			() => gate.promise,
+		);
+		expect(metrics.gauge).not.toHaveBeenCalled();
+		const pending = tasks[0]();
+		await Promise.resolve();
+		expect(metrics.gauge).toHaveBeenCalledExactlyOnceWith('background.in_flight', 1, {
+			label: 'audit_append',
+		});
+		if (fail)
+			gate.reject(
+				Object.assign(new Error('secret audit credential'), {
+					reason: 'secret audit credential',
+					object: 'secret audit credential',
+				}),
+			);
+		else gate.resolve();
+		await pending;
+		expect(metrics.gauge).toHaveBeenLastCalledWith('background.in_flight', 0, {
+			label: 'audit_append',
+		});
+		expect(metrics.histogram).toHaveBeenCalledExactlyOnceWith(
+			'background.duration_ms',
+			expect.any(Number),
+			{ label: 'audit_append' },
+		);
+		if (fail) {
+			expect(metrics.increment).toHaveBeenCalledExactlyOnceWith('background.failed', 1, {
+				label: 'audit_append',
+			});
+			expect(console.error).toHaveBeenCalledWith(expect.stringContaining('test.event'));
+			expect(vi.mocked(console.error).mock.calls[0][0]).not.toContain('secret audit credential');
+		} else expect(metrics.increment).not.toHaveBeenCalled();
+	});
+
 	it('hands an unstarted audit to the lazy scheduler', async () => {
 		const tasks: (() => Promise<unknown>)[] = [];
 		const action = vi.fn(async () => {});
@@ -220,7 +270,7 @@ describe('appendAudit', () => {
 	it.each(['reject', 'queue-then-reject', 'start-then-reject'] as const)(
 		'awaits fallback exactly once when the lazy scheduler does %s',
 		async (mode) => {
-			vi.spyOn(console, 'log').mockImplementation(() => {});
+			vi.spyOn(console, 'error').mockImplementation(() => {});
 			const gate = Promise.withResolvers<void>();
 			const entered = Promise.withResolvers<void>();
 			const action = vi.fn(() => {
@@ -251,12 +301,12 @@ describe('appendAudit', () => {
 			await pending;
 			for (const task of queued) await task();
 			expect(action).toHaveBeenCalledOnce();
-			expect(console.log).toHaveBeenCalledWith(expect.stringContaining('audit_schedule'));
+			expect(console.error).toHaveBeenCalledWith(expect.stringContaining('audit_append'));
 		},
 	);
 
 	it('awaits and contains audit failure without a scheduler', async () => {
-		vi.spyOn(console, 'log').mockImplementation(() => {});
+		vi.spyOn(console, 'error').mockImplementation(() => {});
 		const gate = Promise.withResolvers<void>();
 		let settled = false;
 		const pending = appendAudit(
@@ -271,11 +321,11 @@ describe('appendAudit', () => {
 		expect(settled).toBe(false);
 		gate.reject(new Error('storage unavailable'));
 		await expect(pending).resolves.toBeUndefined();
-		expect(console.log).toHaveBeenCalledWith(expect.stringContaining('audit_append'));
+		expect(console.error).toHaveBeenCalledWith(expect.stringContaining('audit_append'));
 	});
 
 	it('awaits the existing audit if its scheduler rejects, without writing twice', async () => {
-		vi.spyOn(console, 'log').mockImplementation(() => {});
+		vi.spyOn(console, 'error').mockImplementation(() => {});
 		const gate = Promise.withResolvers<void>();
 		const action = vi.fn(() => gate.promise);
 		const deps = {
@@ -298,7 +348,7 @@ describe('appendAudit', () => {
 		gate.resolve();
 		await assertion;
 		expect(action).toHaveBeenCalledOnce();
-		expect(console.log).toHaveBeenCalledWith(expect.stringContaining('audit_schedule'));
+		expect(console.error).toHaveBeenCalledWith(expect.stringContaining('audit_append'));
 	});
 
 	it('defers audit completion through the host scheduler', async () => {

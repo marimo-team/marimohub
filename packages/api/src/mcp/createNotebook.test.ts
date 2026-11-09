@@ -408,7 +408,7 @@ describe('session MCP tools', () => {
 		},
 	);
 
-	it('saves and idempotently stops a session without thumbnail work', async () => {
+	it('starts, saves, and idempotently stops a session without thumbnail work', async () => {
 		const { instance, calls } = makeFakeSandbox({
 			files: {
 				'/workspace/notebook.py': 'import marimo as mo # saved',
@@ -425,6 +425,7 @@ describe('session MCP tools', () => {
 		);
 		const client = await connect(deps);
 
+		const prepare = vi.spyOn(deps.services.notebooks.thumbnails, 'prepare');
 		const started = await client.callTool({
 			name: 'start_session',
 			arguments: { project: project.name, notebook: notebook.title, wait_seconds: 0 },
@@ -433,7 +434,7 @@ describe('session MCP tools', () => {
 			(started.structuredContent as { session_id: string }).session_id,
 		);
 		expect(started).toMatchObject({ structuredContent: { status: 'running', mode: 'edit' } });
-		const prepare = vi.spyOn(deps.services.notebooks.thumbnails, 'prepare');
+		expect(prepare).not.toHaveBeenCalled();
 
 		const stopped = await client.callTool({
 			name: 'stop_session',

@@ -1,6 +1,6 @@
-import { SessionRetirer } from '@marimo-hub/core';
+import { createSandboxId, SessionRetirer } from '@marimo-hub/core';
 import { describe, expect, it, vi } from 'vitest';
-import { ACTOR } from '@marimo-hub/core/testing';
+import { ACTOR, fakeComputeFrom, makeFakeSandbox } from '@marimo-hub/core/testing';
 import { connectMcpClient } from '../testing/mcp';
 import { assertNotificationMutationAllowed } from '../notifications';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
@@ -76,6 +76,65 @@ it.each([
 		} finally {
 			gate.resolve();
 			retire.mockRestore();
+		}
+	},
+);
+
+it.each(['notebook', 'project'] as const)(
+	'retires live app kernels inline when scheduling %s deletion fails',
+	async (scope) => {
+		const { instance, calls } = makeFakeSandbox();
+		const tasks: (() => Promise<unknown>)[] = [];
+		const api = createTestApi({
+			bucket: await createInitializedBucket(),
+			compute: fakeComputeFrom(instance),
+			deps: {
+				backgroundWork: {
+					defer: (_label, task) => {
+						tasks.push(task);
+						throw new Error('scheduler closed');
+					},
+				},
+			},
+		});
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const { projects, notebooks, sessions } = api.deps.services;
+			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
+			const notebook = await notebooks.createNotebook(
+				project.id,
+				{ title: 'N', description: '', code: '' },
+				ACTOR,
+			);
+			const apps = await Promise.all(
+				[1, 2].map(async () => {
+					const session = await sessions.createSession({
+						project_id: project.id,
+						notebook_id: notebook.id,
+						user_id: ACTOR,
+						mode: 'app',
+						sandbox_id: createSandboxId(),
+					});
+					return sessions.setRunning(project.id, session.session_id, 'https://kernel.example');
+				}),
+			);
+			const path = `/projects/${project.id}${scope === 'notebook' ? `/notebooks/${notebook.id}` : ''}`;
+			await expectOk(await api.request('DELETE', path));
+			expect(calls.destroy).toBe(2);
+			for (const app of apps)
+				expect((await sessions.getSession(project.id, app.session_id)).status).toBe('terminated');
+			for (const task of tasks) await task();
+			expect(calls.destroy).toBe(2);
+			const failure = log.mock.calls
+				.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+				.find((event) => event.label === `${scope}.retire_apps`);
+			expect(failure).toMatchObject({
+				event: 'background_work_failed',
+				project_id: project.id,
+				...(scope === 'notebook' ? { notebook_id: notebook.id } : {}),
+			});
+		} finally {
+			log.mockRestore();
 		}
 	},
 );

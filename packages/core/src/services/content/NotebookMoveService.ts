@@ -346,7 +346,10 @@ export class NotebookMoveService {
 		const previous = replay ? existing : pending;
 		const context = await this.context(source, destination, nid, previous);
 		await input.authorize(context);
-		if (replay) return movedNotebookMeta(existing);
+		if (replay) {
+			await this.owners.notebooks.pruneVersionsAfterMove(destination, nid);
+			return movedNotebookMeta(existing);
+		}
 		assertVersionMatch(context.notebook.updated_at, input.expectedVersion);
 
 		const executor = crypto.randomUUID();
@@ -533,6 +536,8 @@ export class NotebookMoveService {
 				await this.owners.proposals.finishMove(source, nid);
 				for (const snapshot of move.snapshots) await input.reclaimSnapshot!(snapshot);
 				move = await save({ phase: 'complete', lease: null });
+				// Queued saves still prune the source project, not these copied versions.
+				await this.owners.notebooks.pruneVersionsAfterMove(destination, nid);
 				return movedNotebookMeta(move);
 			} catch (error) {
 				// Drop the lease so a retry can resume at once instead of waiting for expiry.

@@ -185,7 +185,7 @@ describe('Integrations routes', () => {
 		vi.spyOn(local.deps.services.events, 'append').mockRejectedValue(
 			new Error('storage credential do-not-log'),
 		);
-		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 
 		const res = await local.request('POST', `/projects/${pid}/integrations`, {
 			kind: 'postgres',
@@ -197,7 +197,7 @@ describe('Integrations routes', () => {
 		const line = log.mock.calls.find((call) =>
 			String(call[0]).includes('audit_append'),
 		)?.[0] as string;
-		expect(line).toContain('best_effort_operation_failed');
+		expect(line).toContain('background_work_failed');
 		expect(line).toContain('integration.create');
 		expect(line).not.toContain('do-not-log');
 	});

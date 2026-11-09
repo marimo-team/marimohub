@@ -38,8 +38,11 @@ export async function deleteNotebookAndRetire(
 		);
 	}
 	await retireNotebookPreviews(deps, project.id, notebookId);
-	await deferTeardown(deps, 'notebook.retire_apps', () =>
-		retireLiveApps(deps, project.id, (session) => session.notebook_id === notebookId),
+	await deferTeardown(
+		deps,
+		'notebook.retire_apps',
+		() => retireLiveApps(deps, project.id, (session) => session.notebook_id === notebookId),
+		{ project_id: project.id, notebook_id: notebookId },
 	);
 	await cancelJobRuns(deps, project.id, user.id, notebookId);
 }

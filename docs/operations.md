@@ -105,22 +105,23 @@ A second signal during the drain exits immediately, without cleanup.
 
 Set the platform's kill window to at least the budget plus 20 seconds (140 seconds for maintenance with the default budget):
 
-| Platform          | Setting (default)                            | Guidance                                                                                   |
-| ----------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Kubernetes / Helm | `terminationGracePeriodSeconds` (30 s)       | API: 50 s. Maintenance: configured drain budget + 20 s.                                    |
-| Docker / Compose  | `stop_grace_period`, `docker stop -t` (10 s) | `140s` when `MARIMOHUB_RUN_MAINTENANCE=true`. The compose examples set it.                 |
-| Cloud Run         | Fixed (10 s)                                 | Set the budget to 10 or less and expect a forced drain, or run maintenance on GKE or a VM. |
-| Amazon ECS        | `stopTimeout` (30 s, maximum 120 s)          | `stopTimeout: 120` with a budget of 100 or less.                                           |
-| systemd           | `TimeoutStopSec` (90 s)                      | `TimeoutStopSec=140` for a maintenance unit, or lower the budget.                          |
+| Platform          | Setting (default)                                                    | Guidance                                                                                   |
+| ----------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Kubernetes / Helm | `terminationGracePeriodSeconds` (chart: API 50 s, maintenance 140 s) | Maintenance: configured drain budget + 20 s.                                               |
+| Docker / Compose  | `stop_grace_period`, `docker stop -t` (10 s)                         | `140s` when `MARIMOHUB_RUN_MAINTENANCE=true`. The compose examples set it.                 |
+| Cloud Run         | Fixed (10 s)                                                         | Set the budget to 10 or less and expect a forced drain, or run maintenance on GKE or a VM. |
+| Amazon ECS        | `stopTimeout` (30 s, maximum 120 s)                                  | `stopTimeout: 120` with a budget of 100 or less.                                           |
+| systemd           | `TimeoutStopSec` (90 s)                                              | `TimeoutStopSec=140` for a maintenance unit, or lower the budget.                          |
 
 With Helm, set the maintenance budget through `maintenance.shutdownTimeoutSeconds`.
 The chart rejects direct shutdown-timeout overrides to keep drain budgets within pod termination limits.
 
 ## Session stop and recovery
 
-On Node, stop marks the session `terminating` and invalidates any app-pool entry, then returns while teardown runs in the background.
+On Node, stop with `wait=false` (the default) marks the session `terminating` and invalidates any app-pool entry.
+It returns while teardown runs in the background.
 Workers and library callers without a scheduler await teardown.
-For an immediate restart, use `DELETE …/sessions/{sid}?wait=true`. The web restart flow does this.
+Use `DELETE …/sessions/{sid}?wait=true` to await teardown before a restart. The web restart flow does this.
 If another request owns teardown, `wait=true` returns a retryable `503`.
 
 Start waits up to 10 seconds for your previous editor to finish stopping, then reads the latest saved state.

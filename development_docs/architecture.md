@@ -452,6 +452,7 @@ Tasks must use their existing owner, tolerate repeats, and produce nothing a lat
 `background.in_flight` counts running tasks by label. `background.duration_ms` records execution time, excluding time waiting in the scheduler.
 Node drains core and API tasks before disposing compute clients.
 Workers use `waitUntil` for short tasks and keep teardown inline with `teardownInline: true`.
+Audits and teardown fall back to inline execution if the host rejects scheduling, without repeating work it already started.
 
 Stop marks the session `terminating` and invalidates any app-pool entry before deferring teardown.
 `wait=true` keeps teardown synchronous for restart clients.

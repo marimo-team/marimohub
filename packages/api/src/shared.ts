@@ -44,7 +44,6 @@ import {
 } from '@marimo-hub/core';
 import { appendJobRunFinishEvent, isTerminalRunStatus } from '@marimo-hub/core/jobs';
 import type {
-	BackgroundWork,
 	AuthorizationDecision,
 	AuthorizationPolicy,
 	AuthorizationSubject,
@@ -69,6 +68,9 @@ import type {
 } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { describeError, logEvent } from './log';
+import { backgroundWorkFor, withInlineFallback } from './backgroundWork';
+
+export { backgroundWorkFor } from './backgroundWork';
 
 // Re-export the injected-context types for route modules that import from './shared'.
 export type { ApiDeps, HonoEnv } from './context';
@@ -558,24 +560,14 @@ export async function assertSessionSurfaceAccess(
 	);
 }
 
-export function backgroundWorkFor(deps: ApiDeps): BackgroundWork | undefined {
-	return (
-		deps.backgroundWork ??
-		(deps.backgroundTasks
-			? {
-					defer: (_label, task) => deps.backgroundTasks!.defer(Promise.resolve().then(task)),
-				}
-			: undefined)
-	);
-}
-
 export async function deferTeardown(
 	deps: ApiDeps,
 	label: string,
 	task: () => Promise<unknown>,
+	context: { project_id: ProjectId; notebook_id?: NotebookId; session_id?: SessionId },
 ): Promise<void> {
 	const work = deps.teardownInline ? undefined : backgroundWorkFor(deps);
-	await deferOrAwait(work, label, task, deps.metrics);
+	await deferOrAwait(withInlineFallback(work), label, task, deps.metrics, context);
 }
 
 /** The retire seam (save + destroy + terminal mark + claim release) over this request's deps. */

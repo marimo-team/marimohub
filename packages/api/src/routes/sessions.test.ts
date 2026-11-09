@@ -680,14 +680,13 @@ describe('Session routes', () => {
 				last_heartbeat: startedAt,
 			});
 			await bucket.put(paths.session(pid, holder.session_id), JSON.stringify(holder));
-			return {
-				claimed: false,
-				claim: {
-					session_id: holder.session_id,
-					sharing: 'shared',
-					claimed_at: holder.started_at,
-				},
+			const claim = {
+				session_id: holder.session_id,
+				sharing: 'shared' as const,
+				claimed_at: holder.started_at,
 			};
+			await bucket.put(paths.editorClaim(pid, nid), JSON.stringify(claim));
+			return { claimed: false, claim };
 		});
 		try {
 			await expectError(await api.request('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
@@ -4348,6 +4347,108 @@ describe('Session routes', () => {
 		} finally {
 			capture.resolve({ snapshotId: 'captured-during-stop' });
 			vi.useRealTimers();
+		}
+	});
+
+	it.each(['absent', 'cleared'] as const)(
+		'retries fresh admission when the stopped editor claim becomes %s before waiting',
+		async (state) => {
+			const holder = await seedEditorHolder({ user_id: ACTOR, status: 'terminating' });
+			const compute = makeFakeSnapshotCompute();
+			const api = createTestApi({ bucket, compute });
+			const { sessions, notebooks } = api.deps.services;
+			await notebooks.setFsSnapshot(pid, nid, {
+				snapshot_id: 'before-stop',
+				captured_at: new Date().toISOString(),
+			});
+			const isClaimRetiring = sessions.isClaimRetiring.bind(sessions);
+			const retiring = vi
+				.spyOn(sessions, 'isClaimRetiring')
+				.mockImplementationOnce(async (...args) => {
+					const result = await isClaimRetiring(...args);
+					await notebooks.setFsSnapshot(pid, nid, {
+						snapshot_id: 'after-stop',
+						captured_at: new Date().toISOString(),
+					});
+					await sessions.markTerminated(pid, holder.session_id);
+					await sessions.markSandboxReclaimed(pid, holder.session_id, new Date().toISOString());
+					await sessions.releaseEditorFor(holder);
+					if (state === 'absent') await bucket.delete(paths.editorClaim(pid, nid));
+					return result;
+				});
+			try {
+				const replacement = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+				expect(replacement.session_id).not.toBe(holder.session_id);
+				expect(retiring).toHaveBeenCalledTimes(2);
+				expect(compute.createFromSnapshot).toHaveBeenCalledExactlyOnceWith(
+					expect.any(String),
+					'after-stop',
+					expect.anything(),
+				);
+			} finally {
+				retiring.mockRestore();
+			}
+		},
+	);
+
+	it.each([false, true])(
+		'does not retry through a transfer (cleared holder=%s)',
+		async (cleared) => {
+			const holder = await seedEditorHolder({
+				user_id: ACTOR,
+				status: 'terminating',
+				editor_sandbox_sharing: 'exclusive',
+			});
+			const compute = makeFakeCompute();
+			const create = vi.spyOn(compute, 'create');
+			const api = createTestApi({ bucket, compute });
+			const { sessions } = api.deps.services;
+			const isClaimRetiring = sessions.isClaimRetiring.bind(sessions);
+			const retiring = vi
+				.spyOn(sessions, 'isClaimRetiring')
+				.mockImplementationOnce(async (...args) => {
+					const result = await isClaimRetiring(...args);
+					const claim = await sessions.reserveTakeover(pid, nid, {
+						takeoverId: 'stop-start-race',
+						requestedBy: STRANGER,
+						expectedHolder: holder.session_id,
+						expectedActivity: 'idle',
+					});
+					if (cleared)
+						await bucket.put(
+							paths.editorClaim(pid, nid),
+							JSON.stringify({ ...claim, session_id: null }),
+						);
+					return result;
+				});
+			try {
+				await expectError(await api.request('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
+				expect(retiring).toHaveBeenCalledOnce();
+				expect(create).not.toHaveBeenCalled();
+				expect((await sessions.getEditorClaim(pid, nid))?.transfer?.takeover_id).toBe(
+					'stop-start-race',
+				);
+			} finally {
+				retiring.mockRestore();
+				create.mockRestore();
+			}
+		},
+	);
+
+	it('does not recursively retry if fresh admission also sees a retiring editor', async () => {
+		const compute = makeFakeCompute();
+		const create = vi.spyOn(compute, 'create');
+		const api = createTestApi({ bucket, compute });
+		const retiring = vi
+			.spyOn(api.deps.services.sessions, 'isClaimRetiring')
+			.mockResolvedValue(true);
+		try {
+			await expectError(await api.request('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
+			expect(retiring).toHaveBeenCalledTimes(2);
+			expect(create).not.toHaveBeenCalled();
+		} finally {
+			retiring.mockRestore();
+			create.mockRestore();
 		}
 	});
 

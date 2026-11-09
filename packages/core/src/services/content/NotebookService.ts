@@ -182,6 +182,10 @@ export class NotebookService {
 		await deleteByPrefix(this.bucket, `${nb.base}/`);
 	}
 
+	async pruneVersionsAfterMove(projectId: ProjectId, notebookId: NotebookId): Promise<void> {
+		await this.pruneVersions(projectId, notebookId, MAX_VERSIONS);
+	}
+
 	/**
 	 * Copies notebook files, versions, and source into the destination. The metadata record is
 	 * written last and still fenced by `moveId`, so the copy never resolves before publication.
@@ -1409,7 +1413,7 @@ export class NotebookService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		max: number,
-		keep: VersionId,
+		keep?: VersionId,
 	): Promise<void> {
 		await deferOrAwait(
 			this.backgroundWork,
@@ -1432,7 +1436,9 @@ export class NotebookService {
 				const protectedVersionIds = new Set(
 					await this.sessions.listProtectedVersionIds(projectId, notebookId),
 				);
-				protectedVersionIds.add(keep);
+				const current =
+					keep ?? (await this.getNotebookSource(projectId, notebookId)).current_version_id;
+				if (current) protectedVersionIds.add(current);
 				const protectedPrefixes = new Set(
 					[...protectedVersionIds].map((versionId) => `${versionsRoot}${versionId}/`),
 				);

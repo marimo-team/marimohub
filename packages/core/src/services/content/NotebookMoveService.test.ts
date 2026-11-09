@@ -12,10 +12,12 @@ import type { Bucket } from '../../ports/bucket';
 import { createNotebookId, createPreviewId, ProjectId, SandboxId, SessionId } from '../../ids';
 import type { NotebookId } from '../../ids';
 import type { NotebookMeta } from '../../schema';
+import type { BackgroundWork } from '../../ports/backgroundWork';
+import { MAX_VERSIONS } from './NotebookService';
 
-async function setup() {
+async function setup(backgroundWork?: BackgroundWork) {
 	const bucket = new MemoryBucket();
-	const services = createServices(bucket);
+	const services = createServices(bucket, undefined, { backgroundWork });
 	await services.catalog.initialize(ACTOR);
 	const from = await services.projects.createProject({ name: 'Source', description: '' }, ACTOR);
 	const to = await services.projects.createProject({ name: 'Destination', description: '' }, ACTOR);
@@ -107,6 +109,82 @@ function previewIntent(pid: ProjectId, nid: NotebookId) {
 }
 
 describe('NotebookMoveService', () => {
+	it.each([false, true])(
+		'prunes copied history after queued source work, including chained moves (%s)',
+		async (chained) => {
+			const tasks: (() => Promise<unknown>)[] = [];
+			const { bucket, services, from, to, notebook, input } = await setup({
+				defer: (_label, task) => {
+					tasks.push(task);
+				},
+			});
+			const oldest = (await services.notebooks.listVersions(from.id, notebook.id))[0].version_id;
+			let updated = notebook;
+			for (let i = 0; i < MAX_VERSIONS + 2; i++) {
+				updated = await services.notebooks.updateNotebook(
+					from.id,
+					notebook.id,
+					{ code: `v${i}` },
+					ACTOR,
+				);
+			}
+			let moveInput = { ...input, expectedVersion: updated.updated_at };
+			let moved = await services.moves.move(moveInput);
+			const oldProjects = [from.id];
+			if (chained) {
+				const third = await services.projects.createProject(
+					{ name: 'Third', description: '' },
+					ACTOR,
+				);
+				moveInput = {
+					...moveInput,
+					source: to.id,
+					destination: third.id,
+					expectedVersion: moved.updated_at,
+				};
+				moved = await services.moves.move(moveInput);
+				oldProjects.push(to.id);
+			}
+			const destination = moved.project_id;
+			expect(await services.notebooks.listVersions(destination, notebook.id)).toHaveLength(
+				MAX_VERSIONS + 3,
+			);
+			const liveSession = await services.sessions.createSession({
+				project_id: destination,
+				notebook_id: notebook.id,
+				user_id: ACTOR,
+				mode: 'app',
+				source_version_id: oldest,
+			});
+			for (const task of tasks.splice(0)) await task();
+			expect(await services.notebooks.listVersions(destination, notebook.id)).toHaveLength(
+				MAX_VERSIONS + 1,
+			);
+			expect((await services.notebooks.getVersion(destination, notebook.id, oldest)).code).toBe(
+				'print(1)',
+			);
+			expect(await services.notebooks.getNotebookContent(destination, notebook.id)).toBe(
+				`v${MAX_VERSIONS + 1}`,
+			);
+			for (const pid of oldProjects) {
+				expect(await bucket.get(paths.versionPruneCutoff(pid, notebook.id))).toBeNull();
+				expect(
+					(await bucket.list({ prefix: `${paths.project(pid).notebook(notebook.id).base}/` }))
+						.objects,
+				).toHaveLength(0);
+			}
+			await services.sessions.markFailed(destination, liveSession.session_id);
+			await services.moves.move(moveInput);
+			for (const task of tasks.splice(0)) await task();
+			expect(await services.notebooks.listVersions(destination, notebook.id)).toHaveLength(
+				MAX_VERSIONS,
+			);
+			expect(
+				await bucket.get(paths.project(destination).notebook(notebook.id).version(oldest).meta),
+			).toBeNull();
+		},
+	);
+
 	it.each([
 		{
 			name: 'a rename',

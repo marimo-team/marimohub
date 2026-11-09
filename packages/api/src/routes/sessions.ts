@@ -873,11 +873,16 @@ async function retireSelectedSession(
 		};
 		if (options.wait) reclaimed = await retire();
 		else
-			await deferTeardown(deps, 'session.stop', async () => {
-				if (!(await retire())) {
-					throw new UnavailableError('The session is still shutting down. Retry shortly.');
-				}
-			});
+			await deferTeardown(
+				deps,
+				'session.stop',
+				async () => {
+					if (!(await retire())) {
+						throw new UnavailableError('The session is still shutting down. Retry shortly.');
+					}
+				},
+				{ project_id: pid, notebook_id: nid, session_id: sid },
+			);
 	}
 	if (options.wait && (!reclaimed || (!transitioned && session.status === 'terminating'))) {
 		throw new UnavailableError('The session is still shutting down. Retry shortly.');
@@ -1372,7 +1377,8 @@ export async function startNotebookSession(input: {
 		const { sessions } = input.deps.services;
 		const { pid, nid, user, request } = input;
 		const claim = await sessions.getEditorClaim(pid, nid);
-		if (!claim?.session_id || claim.transfer) throw error;
+		if (claim?.transfer) throw error;
+		if (!claim?.session_id) return startNotebookSessionOnce(input);
 		const holder = await sessions.getSession(pid, claim.session_id);
 		if (holder.user_id !== user.id || holder.status !== 'terminating') throw error;
 
@@ -2484,11 +2490,15 @@ async function startNotebookSessionOnce(
 
 	if (replacingAfterTakeover && temporaryToRetire) {
 		const claimed = await sessions.beginTerminating(pid, temporaryToRetire.session_id);
-		await deferTeardown(deps, 'session.retire_temporary', () =>
-			sessionRetirer(deps).retire(claimed.session, {
-				teardown: claimed.transitioned,
-				thumbnail: 'skip',
-			}),
+		await deferTeardown(
+			deps,
+			'session.retire_temporary',
+			() =>
+				sessionRetirer(deps).retire(claimed.session, {
+					teardown: claimed.transitioned,
+					thumbnail: 'skip',
+				}),
+			{ project_id: pid, notebook_id: nid, session_id: claimed.session.session_id },
 		);
 	}
 
