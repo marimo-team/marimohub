@@ -787,6 +787,81 @@ describe('warm sandbox pools', () => {
 		expect(w.destroyed).toHaveLength(2);
 	});
 
+	it.each([
+		{ providerLifetimeMs: undefined, expectedAge: 6 * 60 * 60_000 },
+		{ providerLifetimeMs: 8 * 60 * 60_000, expectedAge: (3 * 60 + 48) * 60_000 },
+	])(
+		'migrates a legacy idle deadline without replacing the sandbox: %j',
+		async ({ providerLifetimeMs, expectedAge }) => {
+			const w = setup({ providerLifetimeMs, minimumRemainingMs: (4 * 60 + 12) * 60_000 });
+			await w.service.sweep();
+			const original = (await w.members())[0];
+			await w.service.store.updateMember(original, 'ready', (member) => {
+				member.ready_until = member.created_at + 30 * 60_000;
+			});
+			w.advance(30 * 60_000);
+			await w.service.sweep();
+			expect(w.created).toEqual([original.sandbox_id]);
+			expect(w.destroyed).toEqual([]);
+			expect((await w.members())[0]).toMatchObject({
+				...original,
+				ready_until: original.created_at + expectedAge,
+				checked_at: w.now(),
+			});
+			w.advance(expectedAge - 30 * 60_000 - 1);
+			await w.service.sweep();
+			expect(w.created).toEqual([original.sandbox_id]);
+			w.advance(1);
+			expect(await claimWarm(w.service, w.request())).toBeUndefined();
+			await w.service.sweep();
+			expect(w.destroyed).toEqual([original.sandbox_id]);
+		},
+	);
+
+	it('does not extend a legacy deadline after a session claims the sandbox', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const original = (await w.members())[0];
+		const legacyDeadline = original.created_at + 30 * 60_000;
+		await w.service.store.updateMember(original, 'ready', (member) => {
+			member.ready_until = legacyDeadline;
+		});
+		const claim = (await w.service.reserve(w.request()))!;
+		await w.service.sweep();
+		expect(await w.service.store.getMember(original.sandbox_id)).toMatchObject({
+			state: 'claimed',
+			token: claim.member.token,
+			ready_until: legacyDeadline,
+		});
+	});
+
+	it.each(['disabled', 'changed', 'unhealthy', 'expired'] as const)(
+		'retires a legacy member when its pool or sandbox is %s',
+		async (reason) => {
+			const w = setup();
+			await w.service.sweep();
+			const original = (await w.members())[0];
+			await w.service.store.updateMember(original, 'ready', (member) => {
+				member.ready_until = member.created_at + 30 * 60_000;
+			});
+			if (reason === 'unhealthy') {
+				vi.spyOn(w.live.get(original.sandbox_id)!, 'exec').mockRejectedValue(
+					new Error('unhealthy'),
+				);
+			}
+			w.advance(reason === 'expired' ? 6 * 60 * 60_000 : 30 * 60_000);
+			const config =
+				reason === 'disabled'
+					? { enabled: false }
+					: reason === 'changed'
+						? { profiles: [{ key: 'new-image', image: 'new-image', resources: {} }] }
+						: {};
+			await w.replica(config).sweep();
+			expect(w.destroyed).toEqual([original.sandbox_id]);
+			expect(await w.service.store.getMember(original.sandbox_id)).toBeUndefined();
+		},
+	);
+
 	it.each([undefined, 8 * 60 * 60_000])(
 		'keeps a healthy sandbox claimable after several idle hours with provider lifetime %s',
 		async (providerLifetimeMs) => {

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { WARM_POOL_MAX_IDLE_MS, sameComputeResources } from '@marimo-hub/core';
+import { sameComputeResources } from '@marimo-hub/core';
 import type { ComputeResources, Millis, SandboxProvider, WarmPoolConfig } from '@marimo-hub/core';
 import type { ComputeProfilesConfig } from './computeProfiles';
 import type { Env } from './env';
@@ -74,7 +74,8 @@ export function parseWarmPoolConfig(
 		provider: support.configuration,
 		providerLifetimeMs,
 		minimumRemainingMs,
-		maxIdleMs: WARM_POOL_MAX_IDLE_MS,
+		// Keep the deployed hash format stable; idle policy changes do not change sandbox identity.
+		maxIdleMs: 30 * 60_000,
 	});
 	const configured: readonly { name?: string; resources: ComputeResources }[] =
 		options.profiles.profiles.length > 0
