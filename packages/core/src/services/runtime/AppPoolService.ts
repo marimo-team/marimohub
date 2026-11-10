@@ -1,7 +1,13 @@
 import { APP_PRESENCE_PERSIST_INTERVAL_MS, BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { logOperationalError } from '../../operationalLog';
-import { ConflictError, NotFoundError, ResourceExhaustedError } from '../../errors';
+import {
+	ConflictError,
+	NotFoundError,
+	PreconditionFailedError,
+	ResourceExhaustedError,
+	UnavailableError,
+} from '../../errors';
 import { createSandboxId, createSessionId } from '../../ids';
 import type { NotebookId, ProjectId, SandboxId, SessionId, UserId, VersionId } from '../../ids';
 import type { Bucket } from '../../ports/bucket';
@@ -39,6 +45,7 @@ interface AppPoolRequest {
 	userId: UserId;
 	versionId: VersionId;
 	startupMs: number;
+	readSession?: boolean;
 }
 
 export class AppPoolService {
@@ -89,7 +96,7 @@ export class AppPoolService {
 			pool: AppPool;
 			decision: T | { kind: 'busy' };
 		},
-	): Promise<T> {
+	): Promise<T & { session?: Session }> {
 		const { known, ...observations } = await this.observePool(input.projectId, input.notebookId);
 		const reconciled = structuredClone(known?.value ?? emptyAppPool());
 		this.reconcileMembers(reconciled, observations);
@@ -116,7 +123,7 @@ export class AppPoolService {
 			operation_token: crypto.randomUUID(),
 			operation_expires_at: now + input.startupMs,
 		};
-		const { decision, newGeneration } = await this.store.mutate(
+		const { decision, newGeneration } = await this.store.mutateBatched(
 			input.projectId,
 			input.notebookId,
 			async (pool) => {
@@ -142,7 +149,18 @@ export class AppPoolService {
 				};
 			},
 			needsPrune ? undefined : known,
+			0,
 		);
+		const sessionRead =
+			input.readSession && decision.kind === 'reuse'
+				? this.sessions
+						.getSession(input.projectId, decision.member.session_id)
+						.catch((error: unknown): Session | undefined => {
+							if (error instanceof NotFoundError) return;
+							throw error;
+						})
+				: Promise.resolve(undefined);
+		sessionRead.catch(() => {});
 		const ownsAdmission = decision.kind === 'reserve' || newGeneration !== undefined;
 		if (ownsAdmission || (operation === 'replace' && decision.kind === 'reuse')) {
 			try {
@@ -179,7 +197,7 @@ export class AppPoolService {
 			decision: decision.kind,
 		});
 		if (decision.kind === 'busy') throw new ResourceExhaustedError('App is busy. Retry shortly.');
-		return decision;
+		return { ...decision, session: await sessionRead };
 	}
 
 	private async assertCommittedVersion(
@@ -287,7 +305,7 @@ export class AppPoolService {
 		sessionId: SessionId,
 		visit?: AppVisit,
 	): Promise<boolean> {
-		return this.store.mutate(projectId, notebookId, (pool) => {
+		const update = (pool: AppPool) => {
 			const now = this.now();
 			expireAppPresence(pool, now);
 			const member = pool.members.find(
@@ -311,7 +329,7 @@ export class AppPoolService {
 			const visitId = visit?.visit_id ?? 'api';
 			const currentVisit = assignment.visits.find((item) => item.visit_id === visitId);
 			if (!currentVisit && !legacyVisit) return { pool, value: false };
-			// Keep at least half a lease durable; no process-local renewal buffer is needed.
+			// Skip fresh visits; due renewals are acknowledged only after the batch commits.
 			const persistInterval = Math.min(
 				APP_PRESENCE_PERSIST_INTERVAL_MS,
 				this.policy.userLeaseMs / 2,
@@ -323,7 +341,18 @@ export class AppPoolService {
 				renewAppVisit(assignment, visitId, now + this.policy.userLeaseMs);
 			delete member.idle_since;
 			return { pool, value: true };
-		});
+		};
+		const known = await this.store.readWithEtag(projectId, notebookId);
+		const original = known?.value ?? emptyAppPool();
+		const result = update(structuredClone(original));
+		if (JSON.stringify(result.pool) === JSON.stringify(original)) return result.value;
+		try {
+			return await this.store.mutateBatched(projectId, notebookId, update, known, 1000, true);
+		} catch (error) {
+			if (error instanceof ConflictError && error.cause instanceof PreconditionFailedError)
+				throw new UnavailableError('App presence is busy. Retry shortly.', { cause: error });
+			throw error;
+		}
 	}
 
 	async leave(

@@ -1,6 +1,12 @@
 import { writeFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AuthorizationService, PreconditionFailedError, paths } from '@marimo-hub/core';
+import {
+	AppPoolService,
+	AuthorizationService,
+	PreconditionFailedError,
+	paths,
+} from '@marimo-hub/core';
+import type { AppVisit, Bucket, SessionId } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { ACTOR } from '@marimo-hub/core/testing';
 import { expectOk } from './testing';
@@ -14,6 +20,7 @@ type Operation = { method: string; key: string; conditional?: boolean; conflict?
 
 class MeasuredBucket extends MemoryBucket {
 	operations: Operation[] = [];
+	forcedConflicts = new Map<string, number>();
 	delay: (method: string, key: string) => number = () => 0;
 
 	private async record(operation: Operation) {
@@ -44,6 +51,11 @@ class MeasuredBucket extends MemoryBucket {
 		};
 		await this.record(operation);
 		try {
+			const remaining = this.forcedConflicts.get(args[0]) ?? 0;
+			if (remaining > 0) {
+				this.forcedConflicts.set(args[0], remaining - 1);
+				throw new PreconditionFailedError('Injected contention');
+			}
 			return await super.put(...args);
 		} catch (error) {
 			operation.conflict = error instanceof PreconditionFailedError;
@@ -59,7 +71,42 @@ class MeasuredBucket extends MemoryBucket {
 	}
 }
 
-const fixture = (labeled = false) => createAppSessionFixture(new MeasuredBucket(), labeled);
+async function fixture(labeled = false) {
+	const f = await createAppSessionFixture(new MeasuredBucket(), labeled);
+	const base = `/projects/${f.project.id}/notebooks/${f.notebook.id}/sessions`;
+	return {
+		...f,
+		admitVisit: async (visitId: string) =>
+			expectOk<{ session_id: SessionId; app_assignment: AppVisit }>(
+				await f.client.request('POST', base, { mode: 'app', app_visit_id: visitId }),
+			),
+		poolWrites: () =>
+			f.bucket.operations.filter((op) => op.method === 'put' && op.key === f.poolKey),
+		renew: (pool: AppPoolService, visit = f.admission.app_assignment) =>
+			pool.heartbeat(f.project.id, f.notebook.id, f.session.user_id, f.admission.session_id, visit),
+	};
+}
+
+function freezeHeartbeatClock() {
+	const now = Date.now() + 61_000;
+	vi.useFakeTimers();
+	vi.setSystemTime(now);
+	vi.spyOn(Math, 'random').mockReturnValue(0);
+	return now;
+}
+
+function blockNextWrite(bucket: MeasuredBucket, failure?: Error) {
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const put = bucket.put.bind(bucket);
+	const writes = vi.spyOn(bucket, 'put').mockImplementationOnce(async (...args) => {
+		entered.resolve();
+		await release.promise;
+		if (failure) throw failure;
+		return put(...args);
+	});
+	return { entered: entered.promise, release: release.resolve, writes };
+}
 
 function counts(operations: Operation[]) {
 	const reads = operations.filter((op) => ['get', 'head', 'list'].includes(op.method));
@@ -82,7 +129,485 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
+describe('app pool failure recovery', () => {
+	it.each(['conflict', 'offline', 'lost-acknowledgement'] as const)(
+		'rejects a whole failed heartbeat batch and recovers with the same visit: %s',
+		async (failureMode) => {
+			const f = await fixture();
+			freezeHeartbeatClock();
+			const pool = new AppPoolService(f.bucket, f.services.sessions);
+			const before = await pool.store.read(f.project.id, f.notebook.id);
+			const failure = new Error('Storage unavailable');
+			const put = f.bucket.put.bind(f.bucket);
+			const writes = vi.spyOn(f.bucket, 'put').mockImplementation(async (...args) => {
+				if (args[0] !== f.poolKey) return put(...args);
+				if (failureMode === 'conflict') throw new PreconditionFailedError('Contended');
+				if (failureMode === 'lost-acknowledgement') await put(...args);
+				throw failure;
+			});
+			const renew = () => f.renew(pool);
+			const batch = Promise.allSettled(Array.from({ length: 50 }, renew));
+			await vi.runAllTimersAsync();
+			for (const outcome of await batch) {
+				expect(outcome.status).toBe('rejected');
+				if (outcome.status === 'rejected') {
+					if (failureMode === 'conflict')
+						expect(outcome.reason).toMatchObject({ code: 'SERVICE_UNAVAILABLE', status: 503 });
+					else expect(outcome.reason).toBe(failure);
+				}
+			}
+			const failed = await pool.store.read(f.project.id, f.notebook.id);
+			if (failureMode !== 'lost-acknowledgement') expect(failed).toEqual(before);
+			else
+				expect(failed!.assignments[0].visits[0].expires_at).toBeGreaterThan(
+					before!.assignments[0].visits[0].expires_at,
+				);
+			writes.mockRestore();
+			f.bucket.operations = [];
+			const recovered = renew();
+			await vi.runAllTimersAsync();
+			expect(await recovered).toBe(true);
+			const after = await pool.store.read(f.project.id, f.notebook.id);
+			expect(after!.assignments[0].generation).toBe(f.admission.app_assignment.generation);
+			expect(after!.assignments[0].visits[0].expires_at).toBeGreaterThan(
+				before!.assignments[0].visits[0].expires_at,
+			);
+			expect(f.poolWrites()).toHaveLength(failureMode === 'lost-acknowledgement' ? 0 : 1);
+		},
+	);
+
+	it.each([false, true])(
+		'drains the next batch after a blocked write (first write fails: %s)',
+		async (failFirst) => {
+			const f = await fixture();
+			vi.useFakeTimers();
+			const store = new AppPoolService(f.bucket, f.services.sessions).store;
+			const known = await store.readWithEtag(f.project.id, f.notebook.id);
+			const initialExpiry = known!.value.assignments[0].visits[0].expires_at;
+			const { entered, release, writes } = blockNextWrite(
+				f.bucket,
+				failFirst ? new Error('Storage unavailable') : undefined,
+			);
+			const change = () =>
+				store.mutateBatched(
+					f.project.id,
+					f.notebook.id,
+					(pool) => {
+						pool.assignments[0].visits[0].expires_at += 10;
+						return { pool, value: pool.assignments[0].visits[0].expires_at };
+					},
+					known,
+					1000,
+					true,
+				);
+			let firstSettled = false;
+			const first = Promise.allSettled([change()]).then((outcome) => {
+				firstSettled = true;
+				return outcome[0];
+			});
+			await vi.advanceTimersByTimeAsync(1000);
+			await entered;
+			expect(firstSettled).toBe(false);
+			expect(await store.readWithEtag(f.project.id, f.notebook.id)).toEqual(known);
+			let secondSettled = false;
+			const second = change().then((value) => {
+				secondSettled = true;
+				return value;
+			});
+			release();
+			await vi.advanceTimersByTimeAsync(0);
+			expect((await first).status).toBe(failFirst ? 'rejected' : 'fulfilled');
+			await vi.advanceTimersByTimeAsync(999);
+			expect(secondSettled).toBe(false);
+			expect(writes).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(await second).toBe(initialExpiry + (failFirst ? 10 : 20));
+			expect(writes).toHaveBeenCalledTimes(2);
+		},
+	);
+
+	it('discards changes made by a rejected callback while committing the other admissions', async () => {
+		const f = await fixture();
+		const store = new AppPoolService(f.bucket, f.services.sessions).store;
+		const known = await store.readWithEtag(f.project.id, f.notebook.id);
+		const rejected = new Error('Admission denied');
+		const outcomes = await Promise.allSettled([
+			store.mutateBatched(
+				f.project.id,
+				f.notebook.id,
+				(pool) => {
+					pool.members = [];
+					pool.assignments = [];
+					throw rejected;
+				},
+				known,
+				0,
+			),
+			store.mutateBatched(
+				f.project.id,
+				f.notebook.id,
+				(pool) => {
+					pool.assignments[0].visits[0].expires_at += 10;
+					return { pool, value: 'admitted' };
+				},
+				known,
+				0,
+			),
+		]);
+		expect(outcomes).toEqual([
+			{ status: 'rejected', reason: rejected },
+			{ status: 'fulfilled', value: 'admitted' },
+		]);
+		const stored = await store.read(f.project.id, f.notebook.id);
+		expect(stored!.members).toEqual(known!.value.members);
+		expect(stored!.assignments).toHaveLength(1);
+		expect(stored!.assignments[0].visits[0].expires_at).toBe(
+			known!.value.assignments[0].visits[0].expires_at + 10,
+		);
+	});
+
+	it.each(['departure', 'deletion'] as const)(
+		'cannot overwrite %s with an in-flight renewal',
+		async (action) => {
+			const f = await fixture();
+			freezeHeartbeatClock();
+			const pool = new AppPoolService(f.bucket, f.services.sessions);
+			const { entered, release } = blockNextWrite(f.bucket);
+			const pending = f.renew(pool);
+			await vi.advanceTimersByTimeAsync(1000);
+			await entered;
+			if (action === 'deletion') await pool.store.retireForDeletion(f.project.id, f.notebook.id);
+			else
+				await pool.leave(
+					f.project.id,
+					f.notebook.id,
+					f.session.user_id,
+					f.admission.session_id,
+					f.admission.app_assignment,
+				);
+			release();
+			await vi.runAllTimersAsync();
+			expect(await pending).toBe(false);
+			const stored = await pool.store.read(f.project.id, f.notebook.id);
+			expect(stored!.assignments.flatMap((assignment) => assignment.visits)).toEqual([]);
+			if (action === 'deletion') expect(stored!.deleted_at).toBeDefined();
+		},
+	);
+
+	it('renews 100 visits across four independent replica queues without losing CAS updates', async () => {
+		const f = await fixture();
+		const visits = await Promise.all(
+			Array.from({ length: 100 }, async (_, index) => {
+				const result = await f.admitVisit(`replica-${index}`);
+				return result.app_assignment;
+			}),
+		);
+		const now = freezeHeartbeatClock();
+		const replicas = Array.from({ length: 4 }, () => {
+			const bucket: Bucket = {
+				get: f.bucket.get.bind(f.bucket),
+				head: f.bucket.head.bind(f.bucket),
+				put: f.bucket.put.bind(f.bucket),
+				delete: f.bucket.delete.bind(f.bucket),
+				list: f.bucket.list.bind(f.bucket),
+			};
+			return new AppPoolService(bucket, f.services.sessions);
+		});
+		f.bucket.operations = [];
+		const pending = Promise.all(
+			visits.map((visit, index) => f.renew(replicas[index % replicas.length], visit)),
+		);
+		await vi.runAllTimersAsync();
+		expect(await pending).toEqual(Array.from({ length: 100 }, () => true));
+		const writes = f.poolWrites();
+		expect(writes.filter((op) => !op.conflict)).toHaveLength(4);
+		expect(writes.some((op) => op.conflict)).toBe(true);
+		const stored = await replicas[0].store.read(f.project.id, f.notebook.id);
+		for (const visit of visits) {
+			const assignment = stored!.assignments.find((item) => item.visit_id === visit.visit_id)!;
+			expect(assignment.generation).toBe(visit.generation);
+			expect(assignment.visits[0].expires_at).toBeGreaterThanOrEqual(
+				now + replicas[0].policy.userLeaseMs,
+			);
+		}
+	});
+});
+
 describe('app operation budgets', () => {
+	it('admits a cold burst while the reservation owner is still creating its session', async () => {
+		const f = await fixture();
+		await new AppPoolService(f.bucket, f.services.sessions).invalidate(
+			f.project.id,
+			f.notebook.id,
+			f.admission.session_id,
+		);
+		const sessions = f.client.deps.services.sessions;
+		const create = sessions.createSessionWithEtag.bind(sessions);
+		const createSession = vi
+			.spyOn(sessions, 'createSessionWithEtag')
+			.mockImplementation(async (...args) => {
+				await pause(1500);
+				return create(...args);
+			});
+		const admissions = await Promise.all(
+			Array.from({ length: 100 }, async (_, index) => f.admitVisit(`cold-${index}`)),
+		);
+		expect(createSession).toHaveBeenCalledOnce();
+		expect(new Set(admissions.map((admission) => admission.session_id)).size).toBe(1);
+		expect(admissions[0].session_id).not.toBe(f.admission.session_id);
+	}, 30_000);
+
+	it('renews a visit after a three-minute background-tab pause', async () => {
+		const f = await fixture();
+		const now = Date.now();
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(now + 180_000);
+		expect((await expectOk(await f.heartbeat())).status).toBe('running');
+	});
+
+	it('overlaps the post-admission source fence with the session read', async () => {
+		const f = await fixture();
+		const sourceKey = paths.project(f.project.id).notebook(f.notebook.id).source;
+		const get = f.bucket.get.bind(f.bucket);
+		let sources = 0;
+		let sessions = 0;
+		const fence = Promise.withResolvers<void>();
+		vi.spyOn(f.bucket, 'get').mockImplementation(async (key) => {
+			if (key === f.sessionKey && ++sessions === 2) await fence.promise;
+			if (key === sourceKey && ++sources === 3) {
+				expect(sessions).toBe(2);
+				fence.resolve();
+			}
+			return get(key);
+		});
+		await expectOk(
+			await f.client.request(
+				'POST',
+				`/projects/${f.project.id}/notebooks/${f.notebook.id}/sessions`,
+				{ mode: 'app', app_visit_id: 'parallel-read' },
+			),
+		);
+		expect(sources).toBe(3);
+		expect(sessions).toBe(2);
+	});
+
+	it.each(['stale generation', 'expired lease'] as const)(
+		'reports %s as a terminal conflict',
+		async (reason) => {
+			const f = await fixture();
+			const assignment = { ...f.admission.app_assignment };
+			if (reason === 'expired lease') {
+				const pool = await new AppPoolService(f.bucket, f.services.sessions).store.read(
+					f.project.id,
+					f.notebook.id,
+				);
+				vi.useFakeTimers({ toFake: ['Date'] });
+				vi.setSystemTime(pool!.assignments[0].visits[0].expires_at + 1);
+			} else assignment.generation = 'stale';
+			const response = await f.client.request(
+				'POST',
+				`/projects/${f.project.id}/notebooks/${f.notebook.id}/sessions/${f.admission.session_id}/heartbeat`,
+				assignment,
+			);
+			expect(response.status).toBe(409);
+			expect(await response.json()).toMatchObject({
+				error: { code: 'CONFLICT', message: 'The app assignment expired. Open the app again.' },
+			});
+		},
+	);
+
+	it.each([2, 3])(
+		'preserves the stale-version conflict at source check %s',
+		async (sourceCheck) => {
+			const f = await fixture();
+			vi.spyOn(Math, 'random').mockReturnValue(0);
+			const admit = vi.spyOn(AppPoolService.prototype, 'admit');
+			const sourceKey = paths.project(f.project.id).notebook(f.notebook.id).source;
+			const get = f.bucket.get.bind(f.bucket);
+			let reads = 0;
+			vi.spyOn(f.bucket, 'get').mockImplementation(async (key) => {
+				if (key === sourceKey && ++reads === sourceCheck) {
+					await f.services.notebooks.commitSession(
+						f.project.id,
+						f.notebook.id,
+						{ code: 'published concurrently' },
+						ACTOR,
+					);
+				}
+				return get(key);
+			});
+			const response = await f.client.request(
+				'POST',
+				`/projects/${f.project.id}/notebooks/${f.notebook.id}/sessions`,
+				{ mode: 'app', app_visit_id: 'stale-version' },
+			);
+			expect(response.status).toBe(409);
+			expect(await response.json()).toMatchObject({
+				error: { code: 'CONFLICT', message: 'The app version changed. Retry shortly.' },
+			});
+			expect(admit).toHaveBeenCalledOnce();
+			const pool = await new AppPoolService(f.bucket, f.services.sessions).store.read(
+				f.project.id,
+				f.notebook.id,
+			);
+			expect(pool!.assignments.some((assignment) => assignment.visit_id === 'stale-version')).toBe(
+				false,
+			);
+		},
+	);
+
+	it.each([
+		{ conflicts: 12, attempts: 2, status: 200 },
+		{ conflicts: 48, attempts: 4, status: 503 },
+	])(
+		'retries exhausted CAS admissions ($conflicts conflicts)',
+		async ({ conflicts, attempts, status }) => {
+			const f = await fixture();
+			vi.spyOn(Math, 'random').mockReturnValue(0);
+			const admit = vi.spyOn(AppPoolService.prototype, 'admit');
+			f.bucket.forcedConflicts.set(f.poolKey, conflicts);
+			const response = await f.client.request(
+				'POST',
+				`/projects/${f.project.id}/notebooks/${f.notebook.id}/sessions`,
+				{ mode: 'app', app_visit_id: 'cas-retry' },
+			);
+			expect(response.status).toBe(status);
+			expect(admit).toHaveBeenCalledTimes(attempts);
+			expect(admit.mock.calls.map(([input]) => input.visitId)).toEqual(
+				Array(attempts).fill('cas-retry'),
+			);
+			if (status === 200) {
+				expect(await expectOk(response)).toMatchObject({
+					session_id: f.admission.session_id,
+					app_assignment: { visit_id: 'cas-retry' },
+				});
+			} else {
+				expect(await response.json()).toMatchObject({ error: { code: 'SERVICE_UNAVAILABLE' } });
+			}
+		},
+	);
+
+	it('reclaims a crashed startup reservation after the startup timeout and margin', async () => {
+		const f = await fixture();
+		const pool = new AppPoolService(f.bucket, f.services.sessions, undefined, undefined, () =>
+			Date.now(),
+		);
+		const initial = (await pool.store.read(f.project.id, f.notebook.id))!.members[0];
+		expect(initial.operation_expires_at - initial.created_at).toBe(150_000);
+		await pool.invalidate(f.project.id, f.notebook.id, f.admission.session_id);
+		const input = {
+			projectId: f.project.id,
+			notebookId: f.notebook.id,
+			userId: f.session.user_id,
+			versionId: f.session.source_version_id!,
+			visitId: 'crashed-start',
+			startupMs: 150_000,
+		};
+		const crashed = await pool.admit(input);
+		expect(crashed.kind).toBe('reserve');
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(crashed.member.operation_expires_at + 1);
+		const next = await pool.admit(input);
+		expect(next.kind).toBe('reserve');
+		expect(next.member.session_id).not.toBe(crashed.member.session_id);
+		await expect(
+			pool.complete(
+				f.project.id,
+				f.notebook.id,
+				crashed.member.session_id,
+				crashed.member.operation_token,
+			),
+		).rejects.toThrow('expired');
+	});
+
+	it('admits 200 visits through contention and batches their durable heartbeat renewals', async () => {
+		const f = await fixture();
+		const base = `/projects/${f.project.id}/notebooks/${f.notebook.id}/sessions`;
+		f.bucket.forcedConflicts.set(f.poolKey, 3);
+		f.bucket.operations = [];
+		const visits = await Promise.all(
+			Array.from({ length: 200 }, async (_, index) => {
+				const admission = await f.admitVisit(`burst-${index}`);
+				expect(admission.session_id).toBe(f.admission.session_id);
+				return admission.app_assignment;
+			}),
+		);
+		expect(new Set(visits.map((visit) => visit.generation)).size).toBe(200);
+		const { poolWrites } = f;
+		expect(poolWrites().filter((op) => op.conflict)).toHaveLength(3);
+		expect(poolWrites().filter((op) => !op.conflict)).toHaveLength(1);
+		makeHeartbeatDue();
+		f.bucket.operations = [];
+		const before = await new AppPoolService(f.bucket, f.services.sessions).store.read(
+			f.project.id,
+			f.notebook.id,
+		);
+		const responses = await Promise.all(
+			visits.map(async (visit) =>
+				f.client.request('POST', `${base}/${f.admission.session_id}/heartbeat`, visit),
+			),
+		);
+		for (const response of responses) expect((await expectOk(response)).status).toBe('running');
+		expect(poolWrites()).toHaveLength(1);
+		const after = await new AppPoolService(f.bucket, f.services.sessions).store.read(
+			f.project.id,
+			f.notebook.id,
+		);
+		for (const visit of visits) {
+			const expiry = (pool: NonNullable<typeof before>) =>
+				pool.assignments.find((a) => a.visit_id === visit.visit_id)!.visits[0].expires_at;
+			expect(expiry(after!)).toBeGreaterThan(expiry(before!));
+		}
+		f.bucket.operations = [];
+		await Promise.all(
+			visits.map(async (visit) =>
+				f.client.request('POST', `${base}/${f.admission.session_id}/heartbeat`, visit),
+			),
+		);
+		expect(poolWrites()).toHaveLength(0);
+	}, 30_000);
+
+	it('does not resurrect a visit that leaves while its renewal is queued', async () => {
+		const f = await fixture();
+		makeHeartbeatDue();
+		const pool = new AppPoolService(f.bucket, f.services.sessions);
+		const read = pool.store.readWithEtag.bind(pool.store);
+		const queued = Promise.withResolvers<void>();
+		vi.spyOn(pool.store, 'readWithEtag').mockImplementation(async (...args) => {
+			const record = await read(...args);
+			queued.resolve();
+			return record;
+		});
+		const heartbeat = f.renew(pool);
+		await queued.promise;
+		await pool.leave(
+			f.project.id,
+			f.notebook.id,
+			f.session.user_id,
+			f.admission.session_id,
+			f.admission.app_assignment,
+		);
+		expect(await heartbeat).toBe(false);
+		expect(await expectOk(await f.admit())).toHaveProperty('app_assignment');
+	});
+
+	it('reports exhausted pool heartbeat writes as retryable before lease expiry', async () => {
+		const f = await fixture();
+		makeHeartbeatDue();
+		vi.spyOn(Math, 'random').mockReturnValue(0);
+		const put = f.bucket.put.bind(f.bucket);
+		vi.spyOn(f.bucket, 'put').mockImplementation(async (...args) => {
+			if (args[0] === f.poolKey) throw new PreconditionFailedError('Injected contention');
+			return put(...args);
+		});
+		const response = await f.heartbeat();
+		expect(response.status).toBe(503);
+		expect(await response.json()).toMatchObject({
+			success: false,
+			error: { code: 'SERVICE_UNAVAILABLE', message: 'App presence is busy. Retry shortly.' },
+		});
+	});
+
 	it('loads notebook detail only once for content and uses metadata alone for deep links', async () => {
 		const f = await fixture();
 		const nb = paths.project(f.project.id).notebook(f.notebook.id);

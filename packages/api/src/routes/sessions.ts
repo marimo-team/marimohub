@@ -39,6 +39,7 @@ import {
 	sleep,
 	BadRequestError,
 	ConflictError,
+	PreconditionFailedError,
 	WarmPoolClaimExpiredError,
 	createKernelAuthToken,
 	createSandboxId,
@@ -1714,17 +1715,28 @@ async function startNotebookSessionOnce(
 		notebookId: nid,
 		userId: user.id,
 		versionId: sourceVersionId!,
-		startupMs: Math.max(sandbox.startupTimeoutMs ?? 900_000, 900_000),
+		startupMs:
+			sandbox.startupTimeoutMs === 0 ? 900_000 : (sandbox.startupTimeoutMs ?? 120_000) + 30_000,
+		readSession: true,
 	};
-	const admission =
-		mode !== 'app'
-			? undefined
-			: body?.replace_app_session_id
-				? await appPool.replace({
-						...admissionInput,
-						replacesSessionId: body.replace_app_session_id,
-					})
-				: await appPool.admit({ ...admissionInput, visitId: body?.app_visit_id });
+	const admitApp = () =>
+		body?.replace_app_session_id
+			? appPool.replace({ ...admissionInput, replacesSessionId: body.replace_app_session_id })
+			: appPool.admit({ ...admissionInput, visitId: body?.app_visit_id });
+	const admitWithRetry = async () => {
+		for (let attempt = 0; ; attempt++) {
+			try {
+				return await admitApp();
+			} catch (error) {
+				if (!(error instanceof ConflictError) || !(error.cause instanceof PreconditionFailedError))
+					throw error;
+				if (attempt === 3)
+					throw new UnavailableError('The app is busy. Retry shortly.', { cause: error });
+				await sleep(Math.floor(Math.random() * Math.min(2000, 250 * 2 ** attempt)));
+			}
+		}
+	};
+	const admission = mode === 'app' ? await admitWithRetry() : undefined;
 	const appAssignment = admission?.assignment
 		? { visit_id: body?.app_visit_id ?? 'api', generation: admission.assignment.generation }
 		: undefined;
@@ -1732,16 +1744,21 @@ async function startNotebookSessionOnce(
 		if (admission?.kind !== 'reuse') return;
 		for (let attempt = 0; attempt < 20; attempt++) {
 			try {
-				const session = await sessions.getSession(pid, admission.member.session_id);
-				if (session.status !== 'running' && session.status !== 'starting')
-					throw new ConflictError('The app session ended. Retry shortly.');
-				return session;
+				const session =
+					attempt === 0
+						? admission.session
+						: await sessions.getSession(pid, admission.member.session_id);
+				if (session) {
+					if (session.status !== 'running' && session.status !== 'starting')
+						throw new ConflictError('The app session ended. Retry shortly.');
+					return session;
+				}
 			} catch (error) {
 				if (!(error instanceof NotFoundError)) throw error;
 			}
-			await sleep(50);
+			await sleep(Math.floor(Math.min(200, 50 * 2 ** attempt) * (0.5 + Math.random() * 0.5)));
 		}
-		throw new ConflictError('The app is starting. Retry shortly.');
+		throw new UnavailableError('The app is starting. Retry shortly.');
 	};
 	const reusableCandidate = mode === 'edit' ? editorReuse?.session : await reusableApp();
 	if (reusableCandidate) {

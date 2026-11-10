@@ -73,7 +73,7 @@ describe('NotebookPage query parameters', () => {
 	});
 
 	it('preserves the deep link after readmission, without carrying over old credentials', async () => {
-		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 		const options: Parameters<typeof makeFetch>[0] = {
 			role: 'editor',
 			session: runningSession({
@@ -83,7 +83,8 @@ describe('NotebookPage query parameters', () => {
 		};
 		const impl = makeFetch(options);
 		renderPage('app', { search: '?id=123&access_token=evil' });
-		const initial = await screen.findByTitle('Forecast');
+		await act(() => vi.advanceTimersByTimeAsync(100));
+		const initial = screen.getByTitle('Forecast');
 		options.session = runningSession({ mode: 'app', status: 'terminated', sandbox_url: undefined });
 		options.projectSessions = [
 			runningSession({
@@ -96,7 +97,8 @@ describe('NotebookPage query parameters', () => {
 		expect(screen.queryByTitle('Forecast')).toBeNull();
 		options.session = options.projectSessions[0];
 		fireEvent.click(screen.getByRole('button', { name: 'Restart app' }));
-		const frame = await screen.findByTitle('Forecast');
+		await act(() => vi.advanceTimersByTimeAsync(100));
+		const frame = screen.getByTitle('Forecast');
 		expect(frame).not.toBe(initial);
 		expect(frame).toHaveAttribute(
 			'src',
@@ -106,7 +108,7 @@ describe('NotebookPage query parameters', () => {
 	});
 
 	it('removes the live frame when access is revoked and query changes cannot restore it', async () => {
-		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 		const options: Parameters<typeof makeFetch>[0] = {
 			role: 'editor',
 			session: runningSession({ mode: 'app' }),
@@ -116,7 +118,8 @@ describe('NotebookPage query parameters', () => {
 			search: '?id=123',
 			controls: <NavigationControls />,
 		});
-		await screen.findByTitle('Forecast');
+		await act(() => vi.advanceTimersByTimeAsync(100));
+		screen.getByTitle('Forecast');
 		options.session = runningSession({
 			mode: 'app',
 			sandbox_url: undefined,
@@ -243,10 +246,11 @@ describe('NotebookPage query parameters', () => {
 	);
 
 	it('keeps the frame mounted through reserved query changes, theme changes, and heartbeats', async () => {
-		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 		const impl = makeFetch({ role: 'editor', session: runningSession({ mode: 'app' }) });
 		renderPage('app', { search: '?id=123', controls: <NavigationControls /> });
-		const initial = await screen.findByTitle('Forecast');
+		await act(() => vi.advanceTimersByTimeAsync(100));
+		const initial = screen.getByTitle('Forecast');
 		fireEvent.click(screen.getByText('Reserved query'));
 		fireEvent.click(screen.getByText('Toggle test theme'));
 		expect(document.documentElement).toHaveClass('dark');

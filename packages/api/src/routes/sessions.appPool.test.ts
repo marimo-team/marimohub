@@ -96,8 +96,8 @@ describe('app pool HTTP integration', () => {
 			});
 			await expectError(
 				await api('bob').request('POST', path(), { mode: 'app', app_visit_id: 'tab' }),
-				409,
-				'CONFLICT',
+				state === 'missing' ? 503 : 409,
+				state === 'missing' ? 'SERVICE_UNAVAILABLE' : 'CONFLICT',
 			);
 			expect(interrupted).toBe(true);
 		},
@@ -194,7 +194,7 @@ describe('app pool HTTP integration', () => {
 				});
 				expect(sessionReads).toBe(3);
 			} else if (state === 'missing') {
-				await expectError(response, 409, 'CONFLICT');
+				await expectError(response, 503, 'SERVICE_UNAVAILABLE');
 				expect(sessionReads).toBe(21);
 			} else {
 				await expectError(response, 503, 'SERVICE_UNAVAILABLE');
@@ -887,8 +887,8 @@ describe('app pool HTTP integration', () => {
 			try {
 				await expectError(
 					await api('bob').request('POST', path(), { mode: 'app' }),
-					409,
-					'CONFLICT',
+					503,
+					'SERVICE_UNAVAILABLE',
 				);
 				const pool = await new AppPoolService(bucket, sessions, policy).store.read(pid, nid);
 				const member = pool!.members.find((item) => item.state === 'starting')!;

@@ -1,4 +1,5 @@
 import { cachedRead } from '../../async';
+import { sleep } from '../../duration';
 import { NotebookId, ProjectId } from '../../ids';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
@@ -33,6 +34,19 @@ const InspectablePoolSchema = AppPoolSchema.refine(
 		),
 	'Pool timestamps cannot be represented as ISO dates',
 );
+
+type PoolUpdate<T> = (
+	pool: AppPool,
+) => { pool: AppPool; value: T } | Promise<{ pool: AppPool; value: T }>;
+
+type PendingUpdate = {
+	update: PoolUpdate<unknown>;
+	resolve: (value: unknown) => void;
+	reject: (reason: unknown) => void;
+};
+
+// Routes construct stores per request; the bucket identifies their shared replica.
+const batches = new WeakMap<Bucket, Map<string, PendingUpdate[]>>();
 
 export class AppPoolStore {
 	async freezeForMove(pid: ProjectId, nid: NotebookId): Promise<void> {
@@ -138,10 +152,77 @@ export class AppPoolStore {
 		};
 	}
 
+	async mutateBatched<T>(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		update: PoolUpdate<T>,
+		known: KnownObject<AppPool> | null | undefined,
+		intervalMs: number,
+		serialize = false,
+	): Promise<T> {
+		let pending = batches.get(this.bucket);
+		if (!pending) {
+			pending = new Map();
+			batches.set(this.bucket, pending);
+		}
+		const key = `${paths.appPool(projectId, notebookId)}:${intervalMs}`;
+		const result = Promise.withResolvers<T>();
+		const entry: PendingUpdate = {
+			update,
+			resolve: (value) => result.resolve(value as T),
+			reject: result.reject,
+		};
+		const existing = pending.get(key);
+		if (existing) existing.push(entry);
+		else {
+			const queue = [entry];
+			pending.set(key, queue);
+			void (async () => {
+				let initial = known;
+				while (queue.length > 0) {
+					await (intervalMs === 0 ? Promise.resolve() : sleep(intervalMs));
+					if (!serialize) pending.delete(key);
+					const batch = queue.splice(0);
+					try {
+						const outcomes = await this.mutate(
+							projectId,
+							notebookId,
+							async (pool) => {
+								let current = pool;
+								const outcomes: PromiseSettledResult<unknown>[] = [];
+								for (const item of batch) {
+									try {
+										// A rejected admission must not leak changes into another caller's commit.
+										const next = await item.update(structuredClone(current));
+										current = next.pool;
+										outcomes.push({ status: 'fulfilled', value: next.value });
+									} catch (reason) {
+										outcomes.push({ status: 'rejected', reason });
+									}
+								}
+								return { pool: current, value: outcomes };
+							},
+							initial,
+						);
+						for (const [index, outcome] of outcomes.entries()) {
+							if (outcome.status === 'fulfilled') batch[index].resolve(outcome.value);
+							else batch[index].reject(outcome.reason);
+						}
+					} catch (error) {
+						for (const item of batch) item.reject(error);
+					}
+					initial = undefined;
+				}
+				if (pending.get(key) === queue) pending.delete(key);
+			})();
+		}
+		return result.promise;
+	}
+
 	async mutate<T>(
 		projectId: ProjectId,
 		notebookId: NotebookId,
-		update: (pool: AppPool) => { pool: AppPool; value: T } | Promise<{ pool: AppPool; value: T }>,
+		update: PoolUpdate<T>,
 		known?: KnownObject<AppPool> | null,
 	): Promise<T> {
 		const key = paths.appPool(projectId, notebookId);
@@ -175,6 +256,7 @@ export class AppPoolStore {
 			},
 			{
 				retries: 12,
+				backoffMs: (attempt) => Math.floor(Math.random() * Math.min(1000, 50 * 2 ** attempt)),
 				onConflict: () => this.metrics.increment('app_pool.cas.conflicts'),
 				onExhausted: () => this.metrics.increment('app_pool.cas.exhausted'),
 			},
