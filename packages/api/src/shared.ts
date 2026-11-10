@@ -1,4 +1,5 @@
 import type { PromiseMemo } from '@marimo-hub/core/async';
+import { weakMemo } from '@marimo-hub/core/cache';
 import { SessionLinkSchema } from '@marimo-hub/core/session-links';
 import { SEARCH_KINDS } from '@marimo-hub/core/search';
 import { OpenAPIHono, z } from '@hono/zod-openapi';
@@ -158,17 +159,13 @@ export async function initializeForSubject(
 	});
 }
 
-/** Guards share an authorization service within the same dependency bundle. */
-const AUTHZ_SERVICES = new WeakMap<AuthzDeps, AuthorizationService>();
-
-export function authorizationService(deps: AuthzDeps): AuthorizationService {
-	let service = AUTHZ_SERVICES.get(deps);
-	if (!service) {
-		service = new AuthorizationService(deps.policy, deps.resourceSecurity, deps.readMemo);
-		AUTHZ_SERVICES.set(deps, service);
-	}
-	return service;
-}
+/**
+ * Guards share an authorization service within the same dependency bundle. Keyed on the
+ * request-scoped bundle, not the deployment, because the service captures `readMemo`.
+ */
+export const authorizationService = weakMemo(
+	(deps: AuthzDeps) => new AuthorizationService(deps.policy, deps.resourceSecurity, deps.readMemo),
+);
 
 /**
  * Authorize a project-scoped action against an already-loaded project, mapping

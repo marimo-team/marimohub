@@ -26,15 +26,9 @@ interface CachedCredentials {
 
 type CredentialCache = LazyMap<string, CachedCredentials>;
 
-function createCredentialCache(): CredentialCache {
-	return new LazyMap({ maxSize: MAX_CREDENTIAL_CACHE_ENTRIES });
-}
-
-let credentialCaches = new WeakMap<ApiDeps, CredentialCache>();
-
-function credentialCache(deps: ApiDeps): CredentialCache {
-	return deploymentState(deps, credentialCaches, createCredentialCache);
-}
+const credentialCache = deploymentState(
+	(): CredentialCache => new LazyMap({ maxSize: MAX_CREDENTIAL_CACHE_ENTRIES }),
+);
 
 export async function makeObjectBrowseContext(
 	deps: ApiDeps,
@@ -140,7 +134,7 @@ async function cachedFederatedCredentials(
 }
 
 export function clearObjectCredentialCacheForTests(): void {
-	credentialCaches = new WeakMap();
+	credentialCache.clear();
 }
 
 export async function runObjectBrowse<T>(operation: () => Promise<T>): Promise<T> {

@@ -20,6 +20,30 @@ export function ttlState(loadedAt: number, now: number, policy: TtlPolicy): TtlS
 	return 'expired';
 }
 
+export interface WeakMemo<K extends object, V> {
+	(key: K): V;
+	/** Forget every memoized value so tests can start from fresh shared state. */
+	clear(): void;
+}
+
+/**
+ * Memoize one value per owner object without retaining the owner. Holds caches and
+ * budgets that live as long as a dependency bundle, bucket, or config object does.
+ */
+export function weakMemo<K extends object, V>(create: (key: K) => V): WeakMemo<K, V> {
+	let values = new WeakMap<K, V>();
+	const memo = ((key: K): V => {
+		if (values.has(key)) return values.get(key) as V;
+		const value = create(key);
+		values.set(key, value);
+		return value;
+	}) as WeakMemo<K, V>;
+	memo.clear = () => {
+		values = new WeakMap();
+	};
+	return memo;
+}
+
 export interface LazyMapOptions {
 	maxSize: number;
 }

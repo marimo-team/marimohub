@@ -58,7 +58,6 @@ type CachedAdmission = { admission: Admission; expiresAt: number };
 type AdmissionCache = LazyMap<string, CachedAdmission>;
 type Session = Awaited<ReturnType<ApiDeps['services']['sessions']['getSession']>>;
 
-const ADMISSION_CACHES = new WeakMap<ApiDeps, AdmissionCache>();
 const ADMISSION_TTL_MS = 5_000;
 
 class AdmissionRejectedError extends Error {
@@ -68,13 +67,9 @@ class AdmissionRejectedError extends Error {
 	}
 }
 
-function admissionCache(deps: ApiDeps): AdmissionCache {
-	return deploymentState(
-		deps,
-		ADMISSION_CACHES,
-		() => new LazyMap<string, CachedAdmission>({ maxSize: 10_000 }),
-	);
-}
+const admissionCache = deploymentState(
+	(): AdmissionCache => new LazyMap<string, CachedAdmission>({ maxSize: 10_000 }),
+);
 
 function getFreshAdmission(
 	cache: AdmissionCache,

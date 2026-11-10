@@ -29,6 +29,7 @@ import {
 	paths,
 	ProjectIntegrationsStore,
 	ReconciliationService,
+	weakMemo,
 } from '@marimo-hub/core';
 import { JobRunner, JobScheduler } from '@marimo-hub/core/jobs';
 import type { AssignableRole, EditorSandboxSharing } from '@marimo-hub/core';
@@ -53,16 +54,7 @@ const R2_BINDING = 'NOTEBOOKS_BUCKET';
 const notebookBridge = notebookBridgeRuntime();
 let warnedAboutComputeProfiles = false;
 // The API's notebook CSS cache follows theme identity, not individual requests.
-const themes = new WeakMap<Env, ReturnType<typeof parseTheme>>();
-
-function deploymentTheme(env: Env): ReturnType<typeof parseTheme> {
-	let theme = themes.get(env);
-	if (!theme) {
-		theme = parseTheme(env);
-		themes.set(env, theme);
-	}
-	return theme;
-}
+const deploymentTheme = weakMemo((env: Env) => parseTheme(env));
 
 /**
  * Deps are built per request here, so a rejected KEK would otherwise surface as

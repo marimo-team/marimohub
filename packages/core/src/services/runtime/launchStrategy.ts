@@ -1,13 +1,13 @@
-import { BoundedLruMap } from '../../cache';
+import { BoundedLruMap, weakMemo } from '../../cache';
 import type { Bucket } from '../../ports/bucket';
 import { DEFAULT_LAUNCH_STRATEGY } from './marimoLaunch';
 import type { MarimoLaunchStrategyName } from './marimoLaunch';
 import { hasInlineScriptMetadata } from './pep723';
 
-const versionMetadata = new WeakMap<
-	Bucket,
-	BoundedLruMap<string, Promise<MarimoLaunchStrategyName | undefined>>
->();
+const versionMetadata = weakMemo(
+	(_bucket: Bucket) =>
+		new BoundedLruMap<string, Promise<MarimoLaunchStrategyName | undefined>>(10_000),
+);
 
 export interface ResolvedLaunchStrategy {
 	strategy: MarimoLaunchStrategyName;
@@ -30,11 +30,7 @@ export async function resolveLaunchStrategyForSession(opts: {
 	const immutable = /^projects\/[^/]+\/notebooks\/[^/]+\/versions\/[^/]+\//.test(
 		opts.entryNotebookKey,
 	);
-	let cache = immutable ? versionMetadata.get(opts.bucket) : undefined;
-	if (immutable && !cache) {
-		cache = new BoundedLruMap(10_000);
-		versionMetadata.set(opts.bucket, cache);
-	}
+	const cache = immutable ? versionMetadata(opts.bucket) : undefined;
 	let pending = cache?.get(opts.entryNotebookKey);
 	if (pending === undefined) {
 		pending = detectLaunchStrategy(opts.bucket, opts.entryNotebookKey).then((strategy) => {

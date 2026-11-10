@@ -318,15 +318,12 @@ interface IntegrationBrowseState {
 	budgets: Record<IntegrationBudgetName, SlidingWindowBudget<string>>;
 }
 
-function createIntegrationBrowseState(): IntegrationBrowseState {
-	return { cache: createBrowseCache(), budgets: createIntegrationBudgets() };
-}
-
-let integrationBrowseStates = new WeakMap<ApiDeps, IntegrationBrowseState>();
-
-function integrationBrowseState(deps: ApiDeps): IntegrationBrowseState {
-	return deploymentState(deps, integrationBrowseStates, createIntegrationBrowseState);
-}
+const integrationBrowseState = deploymentState(
+	(): IntegrationBrowseState => ({
+		cache: createBrowseCache(),
+		budgets: createIntegrationBudgets(),
+	}),
+);
 
 export function assertIntegrationBudget(
 	deps: ApiDeps,
@@ -347,7 +344,7 @@ export function consumeIntegrationBudget(
 }
 
 export function clearBrowseStateForTests(): void {
-	integrationBrowseStates = new WeakMap();
+	integrationBrowseState.clear();
 }
 
 export interface IntegrationBrowseContext {

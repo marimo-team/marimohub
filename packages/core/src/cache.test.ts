@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { BoundedLruMap, LazyMap, SingleFlight, StaleWhileRevalidateCache, ttlState } from './cache';
+import {
+	BoundedLruMap,
+	LazyMap,
+	SingleFlight,
+	StaleWhileRevalidateCache,
+	ttlState,
+	weakMemo,
+} from './cache';
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -10,6 +17,27 @@ function deferred<T>() {
 	});
 	return { promise, reject, resolve };
 }
+
+describe('weakMemo', () => {
+	it('creates one value per owner and keeps falsy values', () => {
+		const create = vi.fn((owner: { n: number }) => owner.n);
+		const memo = weakMemo(create);
+		const zero = { n: 0 };
+		const one = { n: 1 };
+		expect(memo(zero)).toBe(0);
+		expect(memo(zero)).toBe(0);
+		expect(memo(one)).toBe(1);
+		expect(create).toHaveBeenCalledTimes(2);
+	});
+
+	it('clear forgets every owner', () => {
+		const memo = weakMemo(() => ({}));
+		const owner = {};
+		const first = memo(owner);
+		memo.clear();
+		expect(memo(owner)).not.toBe(first);
+	});
+});
 
 describe('ttlState', () => {
 	it('classifies fresh, stale, and expired boundaries', () => {

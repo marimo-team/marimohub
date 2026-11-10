@@ -1,3 +1,4 @@
+import { weakMemo } from '../cache';
 import { logEvent } from '../logs';
 import { safeError } from '../operationalLog';
 import { noopMetrics } from './metrics';
@@ -23,14 +24,10 @@ export function backgroundWorkFrom(keep: (work: Promise<unknown>) => void): Back
 	return { defer: (_label, task) => keep(Promise.resolve().then(task)) };
 }
 
-const inFlight = new WeakMap<Metrics, Map<string, number>>();
+const inFlight = weakMemo((_metrics: Metrics) => new Map<string, number>());
 
 function recordInFlight(metrics: Metrics, label: string, delta: 1 | -1): void {
-	let counts = inFlight.get(metrics);
-	if (!counts) {
-		counts = new Map();
-		inFlight.set(metrics, counts);
-	}
+	const counts = inFlight(metrics);
 	const count = (counts.get(label) ?? 0) + delta;
 	if (count === 0) counts.delete(label);
 	else counts.set(label, count);

@@ -1,4 +1,4 @@
-import { UnavailableError } from '@marimo-hub/core';
+import { UnavailableError, weakMemo } from '@marimo-hub/core';
 import type { ThemeConfig } from '@marimo-hub/core/theme';
 
 const MAX_BYTES = 64 * 1024;
@@ -108,12 +108,4 @@ export function notebookCssUrl(href: string, appBaseUrl?: string): string {
 	}
 }
 
-const caches = new WeakMap<ThemeConfig, NotebookCssCache>();
-export function notebookCssCacheFor(theme: ThemeConfig): NotebookCssCache {
-	let cache = caches.get(theme);
-	if (!cache) {
-		cache = new NotebookCssCache();
-		caches.set(theme, cache);
-	}
-	return cache;
-}
+export const notebookCssCacheFor = weakMemo((_theme: ThemeConfig) => new NotebookCssCache());
