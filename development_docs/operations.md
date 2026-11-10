@@ -118,9 +118,11 @@ signals are documented for operators in
 [`docs/operations.md`](../docs/operations.md#background-loops); this section
 covers the guarantees.
 
-An attempt's deadline (`max(3 × interval, 10 min)`, so 15 minutes for
-maintenance) covers `shouldRun`, lease acquisition, the work, and lease
-release. On timeout the runner aborts the attempt's signal and logs
+The default attempt deadline is `max(3 × interval, 10 min)`: 15 minutes for
+maintenance. Each hourly `retention_*` loop overrides it to 15 minutes.
+Search indexing uses 30 seconds. The deadline covers `shouldRun`, lease
+acquisition, the work, and lease release. On timeout the runner aborts the
+attempt's signal and logs
 `<loop>_stalled`. `step()` checks the signal before and after each step but does
 not race it, so hung work keeps the attempt, and the in-flight guard, until it
 settles; no loop starts a second attempt over abandoned work. When the work
@@ -147,9 +149,12 @@ successes.
 when `MARIMOHUB_RUN_MAINTENANCE=true`). A loop is `stalled` while an attempt is
 past its deadline and unsettled, or when nothing has completed within one
 deadline plus one interval of registration or the last completion. Only
-`stalled` returns 503; `failing` (consecutive failures) reports `degraded` with
-200, because restarting cannot fix a dependency outage. Loops that do not start
-are absent.
+`stalled` returns 503. A `failing` loop reports `degraded` with HTTP 200 because
+restarts cannot fix a dependency outage. A successful `retention_*` loop also
+makes the response `degraded` when `last_duration_ms >= 0.8 × deadline_ms`.
+This means 12 minutes with the 15-minute retention deadline. Its per-loop status
+stays `ok`, and the response intentionally remains HTTP 200. Slow work that
+completes does not need a liveness restart. Loops that do not start are absent.
 
 ---
 

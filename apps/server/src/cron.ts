@@ -26,6 +26,8 @@ import type { LoopHandle } from './backgroundLoops';
 import type { WideEventMetrics } from './metrics';
 
 const FIVE_MINUTES_MS = Millis.minutes(5);
+const RETENTION_INTERVAL_MS = Millis.hours(1);
+const RETENTION_DEADLINE_MS = Millis.minutes(15);
 const APP_ALERT_CONTEXT_CONCURRENCY = 8;
 // Built per loop rather than at import: the wrapper's tracer pins the first
 // provider it resolves, which would outlive a re-registered provider.
@@ -95,15 +97,13 @@ async function scheduleUnavailableAppAlerts(
 }
 
 /**
- * Run on the dedicated maintenance replica; the bucket lease guards against
- * accidental duplicate replicas. Each cycle emits counts and loop heartbeats.
+ * Independent leases isolate hourly retention, app-pool sweeps, and maintenance.
  */
 export function startMaintenance(
 	deps: ApiDeps,
 	metrics: WideEventMetrics,
 	loops = new BackgroundLoops(),
 ): () => void {
-	const maintenanceSteps = tracedMaintenanceSteps();
 	const { sessions, maintenance, projects, notebooks, proposals, idempotency } = deps.services;
 	const reconciler = new ReconciliationService(
 		sessions,
@@ -121,91 +121,144 @@ export function startMaintenance(
 			metrics: deps.metrics ?? metrics,
 		},
 	);
-	const jobs = deps.jobs ? createJobScheduler(deps, metrics, deps.jobs) : undefined;
+	const stops = startRetention(deps, metrics, loops);
+	const maintenanceSteps = tracedMaintenanceSteps();
+	stops.push(
+		loops.start({
+			name: 'app_pools',
+			intervalMs: deps.sandbox.sessionLifetime?.sweepIntervalMs ?? Millis.minutes(1),
+			lock: maintenanceLock(deps, '_system/app-pool-maintenance-lock.json'),
+			run: () => maintenanceSteps.sweepAppPools(deps),
+		}).stop,
+	);
 	const lock = maintenanceLock(deps);
-	return loops.start({
-		name: 'maintenance',
-		drain: () => reconciler.drain(),
-		intervalMs: FIVE_MINUTES_MS,
-		lock,
-		overlapEvent: 'maintenance_cycle_overlap_skipped',
-		notLeaderEvent: 'maintenance_skipped_not_leader',
-		run: async ({ holder, step }) => {
-			await step(() => maintenanceSteps.sweepAppPools(deps));
-			await step(() => sweepPreviews(deps));
-			const sessionsExpired = await step(() => sessions.expireStale());
-			const reconcile = await step(() => reconciler.reconcile());
-			// deps.metrics wraps `metrics` (plus OTEL when enabled); bare test deps omit it.
-			const domainMetrics = deps.metrics ?? metrics;
-			domainMetrics.gauge('sessions.unreclaimed_terminal.count', reconcile.unreclaimedTerminal);
-			domainMetrics.gauge(
-				'sessions.unreclaimed_terminal.oldest_age_ms',
-				reconcile.oldestUnreclaimedAgeMs ?? 0,
-			);
-			await step(() => scheduleUnavailableAppAlerts(deps, reconcile.markedDeadSessions));
-			if (!reconcile.skipped && reconcile.orphanSandboxIds.length > 0) {
+	stops.push(
+		loops.start({
+			name: 'maintenance',
+			drain: () => reconciler.drain(),
+			intervalMs: FIVE_MINUTES_MS,
+			lock,
+			overlapEvent: 'maintenance_cycle_overlap_skipped',
+			notLeaderEvent: 'maintenance_skipped_not_leader',
+			run: async ({ holder, step }) => {
+				await step(() => sweepPreviews(deps));
+				const sessionsExpired = await step(() => sessions.expireStale());
+				const reconcile = await step(() => reconciler.reconcile());
+				// deps.metrics wraps `metrics` (plus OTEL when enabled); bare test deps omit it.
+				const domainMetrics = deps.metrics ?? metrics;
+				domainMetrics.gauge('sessions.unreclaimed_terminal.count', reconcile.unreclaimedTerminal);
+				domainMetrics.gauge(
+					'sessions.unreclaimed_terminal.oldest_age_ms',
+					reconcile.oldestUnreclaimedAgeMs ?? 0,
+				);
+				await step(() => scheduleUnavailableAppAlerts(deps, reconcile.markedDeadSessions));
+				if (!reconcile.skipped && reconcile.orphanSandboxIds.length > 0) {
+					logEvent({
+						level: 'warn',
+						event: 'orphan_sandboxes_reaped',
+						count: reconcile.orphansReaped,
+						sandbox_ids: reconcile.orphanSandboxIds.join(','),
+					});
+				}
+				const sessionsReaped = await step(() => sessions.reapTerminated());
+				const eventsPruned = await step(() => maintenance.pruneEvents());
+				const idempotencyPruned = await step(() => idempotency.prune());
+				const hostRetriesCompacted = await step(() => deps.services.hostRetries.compactExpired());
+				const proposalPayloadsPruned = await step(() => proposals.pruneExpiredPayloads());
+				const inviteRowsClaimed = await step(() => projects.claimPendingInvites());
+				return {
+					holder,
+					sessions_expired: sessionsExpired,
+					sessions_reaped: sessionsReaped,
+					sessions_reclaimed: reconcile.reclaimed,
+					events_pruned: eventsPruned,
+					idempotency_pruned: idempotencyPruned,
+					host_retries_compacted: hostRetriesCompacted,
+					proposal_payloads_pruned: proposalPayloadsPruned,
+					invite_rows_claimed: inviteRowsClaimed,
+					orphans_reaped: reconcile.skipped ? null : reconcile.orphansReaped,
+				};
+			},
+			onSuccess: (counts) => {
 				logEvent({
-					level: 'warn',
-					event: 'orphan_sandboxes_reaped',
-					count: reconcile.orphansReaped,
-					sandbox_ids: reconcile.orphanSandboxIds.join(','),
+					level: 'info',
+					event: 'maintenance_cycle',
+					...counts,
+					...metrics.collect(),
+					...loops.collect(),
 				});
-			}
-			const sessionsReaped = await step(() => sessions.reapTerminated());
-			const snapshotsPruned = await step(() => maintenance.expireSnapshots());
-			const eventsPruned = await step(() => maintenance.pruneEvents());
-			const idempotencyPruned = await step(() => idempotency.prune());
-			const hostRetriesCompacted = await step(() => deps.services.hostRetries.compactExpired());
-			const proposalPayloadsPruned = await step(() => proposals.pruneExpiredPayloads());
-			const inviteRowsClaimed = await step(() => projects.claimPendingInvites());
-			// Projects before notebooks: a swept project wipes its whole subtree, so
-			// its soft-deleted notebooks are reclaimed without per-notebook work.
-			const projectsSwept = await step(() => projects.sweepDeletedProjects());
-			const notebooksSwept = await step(() => notebooks.sweepDeletedNotebooks());
-			const jobsPruned = jobs
-				? await step(() => jobs.prune(deps.jobs!.runRetentionMs))
-				: { runsPruned: 0, markersPruned: 0 };
+			},
+		}).stop,
+	);
+	return () => {
+		for (const stop of stops) stop();
+	};
+}
 
-			// The purged notebooks' snapshot ids live in CoreWeave, not the bucket, so
-			// the subtree wipe above can't free them — reclaim them here.
-			const snapshotsReaped = await step(() =>
-				reapFilesystemSnapshots(deps.compute, notebooksSwept.orphanedSnapshots),
-			);
-
-			return {
-				holder,
-				sessions_expired: sessionsExpired,
-				sessions_reaped: sessionsReaped,
-				sessions_reclaimed: reconcile.reclaimed,
-				snapshots_pruned: snapshotsPruned,
-				events_pruned: eventsPruned,
-				idempotency_pruned: idempotencyPruned,
-				host_retries_compacted: hostRetriesCompacted,
-				proposal_payloads_pruned: proposalPayloadsPruned,
-				invite_rows_claimed: inviteRowsClaimed,
-				projects_swept: projectsSwept,
-				notebooks_swept: notebooksSwept.purged,
-				job_runs_pruned: jobsPruned.runsPruned,
-				job_run_markers_pruned: jobsPruned.markersPruned,
-				snapshots_reaped: snapshotsReaped,
-				orphans_reaped: reconcile.skipped ? null : reconcile.orphansReaped,
-			};
+function startRetention(
+	deps: ApiDeps,
+	metrics: WideEventMetrics,
+	loops: BackgroundLoops,
+): (() => void)[] {
+	const { maintenance, projects, notebooks } = deps.services;
+	const jobs = deps.jobs ? createJobScheduler(deps, metrics, deps.jobs) : undefined;
+	const tasks: {
+		name: string;
+		run(step: <T>(work: () => Promise<T>) => Promise<T>): Promise<Record<string, number>>;
+	}[] = [
+		{
+			name: 'notebook_gc',
+			run: async (step) => {
+				// Project cleanup owns its subtree; run it before per-notebook cleanup.
+				const projectsSwept = await step(() => projects.sweepDeletedProjects());
+				const { purged, snapshotsReaped } = await step(async () => {
+					const swept = await notebooks.sweepDeletedNotebooks();
+					// Finish provider cleanup even if GC returns after the loop deadline.
+					const snapshotsReaped = await reapFilesystemSnapshots(
+						deps.compute,
+						swept.orphanedSnapshots,
+					);
+					return { purged: swept.purged, snapshotsReaped };
+				});
+				return {
+					projects_swept: projectsSwept,
+					notebooks_swept: purged,
+					snapshots_reaped: snapshotsReaped,
+				};
+			},
 		},
-		onSuccess: (counts) => {
-			logEvent({
-				level: 'info',
-				event: 'maintenance_cycle',
-				...counts,
-				...metrics.collect(),
-				...loops.collect(),
-			});
+		{
+			name: 'snapshot_expiry',
+			run: async () => ({ snapshots_pruned: await maintenance.expireSnapshots() }),
 		},
-	}).stop;
+	];
+	if (jobs)
+		tasks.push({
+			name: 'jobs',
+			run: async () => {
+				const result = await jobs.prune(deps.jobs!.runRetentionMs);
+				return { job_runs_pruned: result.runsPruned, job_run_markers_pruned: result.markersPruned };
+			},
+		});
+	return tasks.map(
+		({ name, run }) =>
+			loops.start({
+				name: `retention_${name}`,
+				intervalMs: RETENTION_INTERVAL_MS,
+				deadlineMs: RETENTION_DEADLINE_MS,
+				lock: maintenanceLock(deps, `_system/retention-${name}-lock.json`),
+				run: ({ step }) => run(step),
+				onSuccess: (counts) => {
+					if (Object.values(counts).some((count) => count > 0)) {
+						logEvent({ level: 'info', event: 'retention_cycle', step: name, ...counts });
+					}
+				},
+			}).stop,
+	);
 }
 
 /**
- * Keep session teardown and snapshot cadence independent of the heavier prune
- * cycle. A separate lease lets both loops run on the maintenance replica.
+ * A separate lease keeps session teardown independent of retention and app-pool sweeps.
  */
 export function startSessionLifecycle(
 	deps: ApiDeps,
@@ -214,7 +267,6 @@ export function startSessionLifecycle(
 	const lifetime = deps.sandbox.sessionLifetime;
 	if (!lifetime) return undefined;
 
-	const maintenanceSteps = tracedMaintenanceSteps();
 	const { sessions, notebooks } = deps.services;
 	const svc = new SessionLifecycleService(sessions, notebooks, deps.compute, deps.bucket, {
 		...lifetime,
@@ -231,7 +283,6 @@ export function startSessionLifecycle(
 		intervalMs: lifetime.sweepIntervalMs,
 		lock,
 		run: async ({ holder, step }) => {
-			await step(() => maintenanceSteps.sweepAppPools(deps));
 			const r = await step(() => svc.sweep());
 			if (Object.values(r).some((n) => n > 0)) {
 				logEvent({ level: 'info', event: 'session_lifecycle_sweep', holder, ...r });

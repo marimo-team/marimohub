@@ -17,24 +17,16 @@ import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import type { Identity } from '../../schema';
 import { mutateObjectWithOutcome, withCasRetry } from '../catalog/cas';
-import { listAllKeys } from '../catalog/storage';
+import { listAllObjects } from '../catalog/storage';
 
 /**
- * User-identity directory: maps a stable user id (the auth `sub`) to its current
- * `{ email, name, picture_url? }`. Records are upserted on each authenticated
- * request so they stay fresh, and resolved at read time to render opaque
- * `author`/`user_id` foreign keys as a person.
- *
- * IdentityService is the sole writer for each record. Profile and suspension
- * changes use ETag compare-and-swap so concurrent profile refreshes cannot
- * overwrite security state.
+ * Maps auth subjects to current profiles. As the sole writer, this service uses
+ * ETag CAS so profile refreshes cannot overwrite suspension state.
  */
 export class IdentityService {
-	// Per-process write-coalescing cache: id → last-written signature. Skips the
-	// bucket PUT when an authenticated request carries an identity we've already
-	// persisted this process, so the on-every-request upsert stays cheap. A
-	// process restart simply re-writes once per user on their next request.
+	// Avoid repeated profile writes within this process. Restarts force one refresh per user.
 	private readonly written = new Map<string, string>();
+	private inviteDirectory = new Map<string, { etag: string; identity: Identity | null }>();
 
 	static readonly ACTIVE_SUSPENSION_FRESH_MS = 10_000;
 	static readonly ACTIVE_SUSPENSION_MAX_AGE_MS = 30_000;
@@ -48,7 +40,7 @@ export class IdentityService {
 
 	constructor(private bucket: Bucket) {
 		this.directory = new StaleWhileRevalidateCache({
-			load: () => this.scanDirectory(),
+			load: () => this.scanDirectory('search'),
 			maxSize: 1,
 			ttl: () => ({ freshForMs: IdentityService.DIRECTORY_TTL_MS, staleForMs: Infinity }),
 			onBackgroundError: (error) => {
@@ -196,27 +188,6 @@ export class IdentityService {
 		}
 	}
 
-	private async scanDirectory(): Promise<Identity[]> {
-		const keys = await listAllKeys(this.bucket, paths.identitiesPrefix);
-		const records = await mapWithConcurrency(keys, BUCKET_SCAN_CONCURRENCY, async (key) => {
-			const obj = await this.bucket.get(key);
-			if (!obj) return null;
-			// Tolerate corrupt records (like getMany): one bad object must not take
-			// down search for the whole directory.
-			try {
-				return await readStored(IdentitySchema, obj, key);
-			} catch (err) {
-				logOperationalError(
-					'stored_object_skipped',
-					{ operation: 'identity.directory_scan', object: key },
-					err,
-				);
-				return null;
-			}
-		});
-		return records.filter((record): record is Identity => record !== null);
-	}
-
 	/**
 	 * Case-insensitive substring search over email, name, and id, for the
 	 * add-member picker. Results are name-sorted for a stable UI.
@@ -255,19 +226,57 @@ export class IdentityService {
 	}
 
 	/**
-	 * Resolve only unambiguous emails from a fresh directory scan. Claiming an
-	 * invite is destructive, so the eventually consistent search cache is unsafe.
+	 * Invite claims require unique email matches from a fresh directory listing.
+	 * Listed ETags permit record reuse without the stale search cache.
 	 */
 	async getUniqueByEmails(emails: readonly string[]): Promise<ReadonlyMap<string, Identity>> {
 		const targets = new Set(emails.map(normalizeEmail).filter(Boolean));
 		if (targets.size === 0) return new Map();
 		const matches = new Map<string, Identity | null>();
-		for (const identity of await this.scanDirectory()) {
+		for (const identity of await this.scanDirectory('invites')) {
 			const email = normalizeEmail(identity.email);
 			if (!targets.has(email)) continue;
 			matches.set(email, matches.has(email) ? null : identity);
 		}
 		return new Map([...matches].filter((entry): entry is [string, Identity] => entry[1] !== null));
+	}
+
+	private async scanDirectory(purpose: 'search' | 'invites'): Promise<Identity[]> {
+		const objects = await listAllObjects(this.bucket, paths.identitiesPrefix);
+		const next = new Map<string, { etag: string; identity: Identity | null }>();
+		const records = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (listed) => {
+			const cached = purpose === 'invites' ? this.inviteDirectory.get(listed.key) : undefined;
+			if (listed.etag && cached?.etag === listed.etag) {
+				next.set(listed.key, cached);
+				return cached.identity ? structuredClone(cached.identity) : null;
+			}
+			const object = await this.bucket.get(listed.key);
+			if (!object) return null;
+			let identity: Identity | null;
+			try {
+				identity = await readStored(IdentitySchema, object, listed.key);
+			} catch (error) {
+				if (purpose === 'invites' && !(error instanceof StoredObjectError)) throw error;
+				logOperationalError(
+					'stored_object_skipped',
+					{
+						operation:
+							purpose === 'invites' ? 'identity.invite_directory' : 'identity.directory_scan',
+						object: listed.key,
+					},
+					error,
+				);
+				identity = null;
+			}
+			if (purpose === 'invites') {
+				next.set(listed.key, { etag: object.etag, identity });
+				return identity ? structuredClone(identity) : null;
+			}
+			return identity;
+		});
+		// Publish only a complete scan; deleted identities must leave the index too.
+		if (purpose === 'invites') this.inviteDirectory = next;
+		return records.filter((record): record is Identity => record !== null);
 	}
 
 	private async findByEmail(email: string): Promise<Identity[]> {

@@ -89,10 +89,13 @@ describe('maintenance tracing', () => {
 			}
 			await flushRun();
 			const spans = exporter.getFinishedSpans();
-			expect(run).toHaveBeenCalledOnce();
+			expect(run).toHaveBeenCalledTimes(loop === 'maintenance' ? 5 : 1);
 			const parent = span(spans, `loop.${loopName}`);
-			const acquire = span(spans, 'MaintenanceLock.acquire');
-			const release = span(spans, 'MaintenanceLock.release');
+			const children = spans.filter(
+				(child) => child.spanContext().traceId === parent.spanContext().traceId,
+			);
+			const acquire = span(children, 'MaintenanceLock.acquire');
+			const release = span(children, 'MaintenanceLock.release');
 			expectChildOf(acquire, parent);
 			expectChildOf(release, parent);
 			const key = paths[`${loop}Lock`];
@@ -111,7 +114,11 @@ describe('maintenance tracing', () => {
 		);
 		h.track(startMaintenance(deps, new WideEventMetrics()));
 		await flushRun();
-		const spans = exporter.getFinishedSpans();
+		const all = exporter.getFinishedSpans();
+		const parent = span(all, 'loop.maintenance');
+		const spans = all.filter(
+			(child) => child.spanContext().traceId === parent.spanContext().traceId,
+		);
 		expect(spans.map((span) => span.name).sort()).toEqual([
 			'MaintenanceLock.acquire',
 			'loop.maintenance',
@@ -124,24 +131,26 @@ describe('maintenance tracing', () => {
 		expect(await storedLease(deps, paths.maintenanceLock)).toBeGreaterThan(Date.now());
 	});
 
-	it('records a storage read failure during lease release', async () => {
-		const get = deps.bucket.get.bind(deps.bucket);
-		vi.spyOn(deps.bucket, 'get').mockImplementation((key) => {
-			if (key === paths.maintenanceLock) return Promise.reject(new Error('lease read failed'));
-			return get(key);
-		});
+	it('records a failure during lease release', async () => {
+		vi.spyOn(MaintenanceLock.prototype, 'release').mockRejectedValue(
+			new Error('lease release failed'),
+		);
 		h.track(startMaintenance(deps, new WideEventMetrics()));
 		await flushRun();
-		const release = span(exporter.getFinishedSpans(), 'MaintenanceLock.release');
+		const all = exporter.getFinishedSpans();
+		const parent = span(all, 'loop.maintenance');
+		const release = span(
+			all.filter((child) => child.spanContext().traceId === parent.spanContext().traceId),
+			'MaintenanceLock.release',
+		);
 		expect(release.status.code).toBe(SpanStatusCode.ERROR);
 		expect(release.attributes).toEqual({ 'bucket.key': paths.maintenanceLock });
 		expect(release.events).toContainEqual(
 			expect.objectContaining({
 				name: 'exception',
-				attributes: expect.objectContaining({ 'exception.message': 'lease read failed' }),
+				attributes: expect.objectContaining({ 'exception.message': 'lease release failed' }),
 			}),
 		);
-		vi.mocked(deps.bucket.get).mockRestore();
 		expect(await storedLease(deps, paths.maintenanceLock)).toBeGreaterThan(Date.now());
 		expect(console.log).toHaveBeenCalledWith(
 			expect.stringContaining('"event":"maintenance_release_failed"'),
@@ -156,17 +165,22 @@ describe('maintenance tracing', () => {
 		}
 		h.track(startMaintenance(deps, new WideEventMetrics()));
 		await flushRun();
-		const spans = exporter.getFinishedSpans();
+		const all = exporter.getFinishedSpans();
+		const parent = span(all, step === 'app_pool' ? 'loop.app_pools' : 'loop.maintenance');
+		const spans = all.filter(
+			(child) => child.spanContext().traceId === parent.spanContext().traceId,
+		);
 		const name = step === 'lock' ? 'MaintenanceLock.acquire' : 'Maintenance.sweepAppPools';
 		const failed = span(spans, name);
 		expect(failed.status.code).toBe(SpanStatusCode.ERROR);
 		expect(failed.events.some((event) => event.name === 'exception')).toBe(true);
-		const parent = span(spans, 'loop.maintenance');
 		expectChildOf(failed, parent);
 		expect(parent.status.code).toBe(SpanStatusCode.ERROR);
 		if (step === 'app_pool') {
 			expect(span(spans, 'MaintenanceLock.release').status.code).toBe(SpanStatusCode.UNSET);
-			expect(await storedLease(deps, paths.maintenanceLock)).toBeLessThanOrEqual(Date.now());
+			expect(await storedLease(deps, '_system/app-pool-maintenance-lock.json')).toBeLessThanOrEqual(
+				Date.now(),
+			);
 		} else {
 			expect(spans.map((span) => span.name).sort()).toEqual([
 				'MaintenanceLock.acquire',

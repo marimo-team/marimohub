@@ -575,6 +575,115 @@ describe('IdentityService', () => {
 		});
 	});
 
+	it('validates a 2k identity invite index without re-reading unchanged users', async () => {
+		for (let i = 0; i < 2000; i++) {
+			await identities.upsert({ id: uid(`user-${i}`), email: `user-${i}@x.io`, name: `User ${i}` });
+		}
+		const get = vi.spyOn(bucket, 'get');
+		expect((await identities.getUniqueByEmails(['pending@x.io'])).size).toBe(0);
+		expect(get).toHaveBeenCalledTimes(2000);
+		get.mockClear();
+		expect((await identities.getUniqueByEmails(['pending@x.io'])).size).toBe(0);
+		expect(get).not.toHaveBeenCalled();
+		const other = new IdentityService(bucket);
+		await other.upsert({ id: uid('user-1'), email: 'pending@x.io', name: 'Changed' });
+		get.mockClear();
+		expect((await identities.getUniqueByEmail('pending@x.io'))?.id).toBe(uid('user-1'));
+		expect(get).toHaveBeenCalledOnce();
+		await other.upsert({ id: uid('duplicate'), email: 'pending@x.io', name: 'Duplicate' });
+		expect(await identities.getUniqueByEmail('pending@x.io')).toBeNull();
+		await bucket.delete(paths.identity(uid('duplicate')));
+		get.mockClear();
+		expect((await identities.getUniqueByEmail('pending@x.io'))?.id).toBe(uid('user-1'));
+		expect(get).not.toHaveBeenCalled();
+	});
+
+	it.each(['list', 'get'] as const)(
+		'rejects a failed %s instead of using stale invite uniqueness',
+		async (operation) => {
+			await identities.upsert({ id: uid('one'), email: 'shared@x.io', name: 'One' });
+			expect((await identities.getUniqueByEmail('shared@x.io'))?.id).toBe(uid('one'));
+			await new IdentityService(bucket).upsert({
+				id: uid('two'),
+				email: 'shared@x.io',
+				name: 'Two',
+			});
+			const failure = vi
+				.spyOn(bucket, operation)
+				.mockRejectedValueOnce(new Error('directory unavailable'));
+			await expect(identities.getUniqueByEmail('shared@x.io')).rejects.toThrow(
+				'directory unavailable',
+			);
+			failure.mockRestore();
+			expect(await identities.getUniqueByEmail('shared@x.io')).toBeNull();
+		},
+	);
+
+	it('re-reads a repaired corrupt identity and detects the resulting ambiguity', async () => {
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			await identities.upsert({ id: uid('one'), email: 'shared@x.io', name: 'One' });
+			await bucket.put(paths.identity(uid('two')), 'corrupt');
+			expect((await identities.getUniqueByEmail('shared@x.io'))?.id).toBe(uid('one'));
+			await bucket.delete(paths.identity(uid('two')));
+			await new IdentityService(bucket).upsert({
+				id: uid('two'),
+				email: 'shared@x.io',
+				name: 'Two',
+			});
+			expect(await identities.getUniqueByEmail('shared@x.io')).toBeNull();
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it('uses the fetched ETag when an identity changes after listing', async () => {
+		const id = uid('changing');
+		await identities.upsert({ id, email: 'before@x.io', name: 'Before' });
+		const get = bucket.get.bind(bucket);
+		vi.spyOn(bucket, 'get').mockImplementationOnce(async (key) => {
+			await bucket.put(
+				key,
+				JSON.stringify({
+					id,
+					email: 'after@x.io',
+					name: 'After',
+					updated_at: new Date().toISOString(),
+				}),
+			);
+			return get(key);
+		});
+		expect((await identities.getUniqueByEmail('after@x.io'))?.id).toBe(id);
+		const reads = vi.mocked(bucket.get);
+		reads.mockClear();
+		expect(await identities.getUniqueByEmail('before@x.io')).toBeNull();
+		expect((await identities.getUniqueByEmail('after@x.io'))?.id).toBe(id);
+		expect(reads).not.toHaveBeenCalled();
+		reads.mockRestore();
+	});
+	it('isolates invite lookup results from the validated index', async () => {
+		await identities.upsert({ id: uid('only'), email: 'only@x.io', name: 'Only' });
+		const first = await identities.getUniqueByEmail('only@x.io');
+		first!.email = 'changed@x.io';
+		const get = vi.spyOn(bucket, 'get');
+		const second = await identities.getUniqueByEmail('only@x.io');
+		expect(second?.email).toBe('only@x.io');
+		second!.email = 'also-changed@x.io';
+		expect((await identities.getUniqueByEmail('only@x.io'))?.email).toBe('only@x.io');
+		expect(get).not.toHaveBeenCalled();
+	});
+	it('re-reads invite identities when a backend supplies no ETags', async () => {
+		await identities.upsert({ id: uid('only'), email: 'only@x.io', name: 'Only' });
+		const list = bucket.list.bind(bucket);
+		vi.spyOn(bucket, 'list').mockImplementation(async (...args) => {
+			const page = await list(...args);
+			return { ...page, objects: page.objects.map((object) => ({ ...object, etag: '' })) };
+		});
+		const get = vi.spyOn(bucket, 'get');
+		await identities.getUniqueByEmail('only@x.io');
+		await identities.getUniqueByEmail('only@x.io');
+		expect(get).toHaveBeenCalledTimes(2);
+	});
 	describe('getByEmail', () => {
 		it('resolves case-insensitively and misses cleanly', async () => {
 			await identities.upsert({ id: uid('a'), email: 'Ada@X.io', name: 'Ada' });

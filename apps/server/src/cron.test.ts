@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInitializedBucket, makeTestDeps, stubSourceControl } from '@marimo-hub/api/testing';
+import { createApi } from '@marimo-hub/api';
 import type { ApiDeps } from '@marimo-hub/api';
 import type * as CoreModule from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
@@ -26,6 +27,8 @@ import {
 	makeFakeSandbox,
 	makeNotebookMeta,
 	makeProject,
+	makeSnapshotProjectEntry,
+	makeSnapshotNotebookEntry,
 	makeSession,
 	queuedBackgroundWork,
 } from '@marimo-hub/core/testing';
@@ -130,8 +133,6 @@ describe('startMaintenance', () => {
 			event: 'maintenance_cycle',
 			sessions_expired: 0,
 			invite_rows_claimed: 0,
-			projects_swept: 0,
-			notebooks_swept: 0,
 			sessions_reclaimed: 0,
 			'counter.sessions_created': 1,
 		});
@@ -139,6 +140,88 @@ describe('startMaintenance', () => {
 		expect(events[0]).not.toHaveProperty('oldest_unreclaimed_session_age_ms');
 	});
 
+	it('keeps maintenance live for 200 projects and 10k notebooks while retention runs independently', async () => {
+		const projects = Array.from({ length: 200 }, () => {
+			const project = makeSnapshotProjectEntry({ notebook_count: 50 });
+			project.notebooks = Array.from({ length: 50 }, () => makeSnapshotNotebookEntry(project.id));
+			return project;
+		});
+		for (const project of projects) {
+			await bucket.put(
+				paths.project(project.id).meta,
+				JSON.stringify(makeProject({ id: project.id })),
+			);
+		}
+		await deps.services.catalog.mutateSnapshot('test.seed', ACTOR, (snapshot) => ({
+			...snapshot,
+			projects,
+		}));
+		const gc = vi
+			.spyOn(deps.services.notebooks, 'sweepDeletedNotebooks')
+			.mockImplementation(async () => {
+				const snapshot = await deps.services.catalog.getCurrentSnapshot();
+				const count = snapshot.projects.reduce((sum, project) => sum + project.notebooks.length, 0);
+				await new Promise((resolve) => setTimeout(resolve, count * 75));
+				return { purged: 0, orphanedSnapshots: [] };
+			});
+		const prune = vi.spyOn(JobScheduler.prototype, 'prune').mockImplementation(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 8 * 60_000));
+			return { runsPruned: 0, markersPruned: 0 };
+		});
+		const snapshots = vi.spyOn(deps.services.maintenance, 'expireSnapshots');
+		const loops = new BackgroundLoops();
+		deps.loopHealth = () => loops.health();
+		const api = createApi(deps);
+		h.track(startMaintenance(deps, metrics, loops));
+		await flushRun();
+		for (let minute = 0; minute < 16; minute++) {
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect((await api.request('/api/health/maintenance')).status).toBe(200);
+		}
+		expect(loops.health().loops.maintenance).toMatchObject({ status: 'ok', timeouts: 0 });
+		expect(loops.health().loops.retention_notebook_gc).toMatchObject({
+			last_duration_ms: 750_000,
+			timeouts: 0,
+		});
+		expect(await (await api.request('/api/health/maintenance')).json()).toMatchObject({
+			status: 'degraded',
+		});
+		expect(gc).toHaveBeenCalledOnce();
+		expect(prune).toHaveBeenCalledOnce();
+		expect(snapshots).toHaveBeenCalledOnce();
+		expect(h.events().filter((event) => event.event === 'maintenance_cycle')).toHaveLength(4);
+		await vi.advanceTimersByTimeAsync(44 * 60_000);
+		expect(gc).toHaveBeenCalledTimes(2);
+		expect(prune).toHaveBeenCalledTimes(2);
+		expect(snapshots).toHaveBeenCalledTimes(2);
+	}, 60_000);
+
+	it('runs a single app-pool sweep independently of session reaping', async () => {
+		const list = bucket.list.bind(bucket);
+		let poolScans = 0;
+		vi.spyOn(bucket, 'list').mockImplementation((options) => {
+			if (options?.prefix === paths.appPoolsPrefix) {
+				poolScans++;
+				return Promise.reject(new Error('pool listing unavailable'));
+			}
+			return list(options);
+		});
+		deps.sandbox.sessionLifetime = makeSessionLifetime();
+		const sweep = vi
+			.spyOn(SessionLifecycleService.prototype, 'sweep')
+			.mockResolvedValue(ZERO_SWEEP);
+		const reap = vi.spyOn(deps.services.sessions, 'reapTerminated');
+		h.track(startMaintenance(deps, metrics));
+		h.track(startSessionLifecycle(deps));
+		await flushRun();
+		expect(poolScans).toBe(1);
+		expect(sweep).toHaveBeenCalledOnce();
+		expect(reap).toHaveBeenCalledOnce();
+		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+		expect(poolScans).toBe(6);
+		expect(sweep).toHaveBeenCalledTimes(6);
+		expect(reap).toHaveBeenCalledTimes(2);
+	});
 	it('publishes unreclaimed terminal gauges to the metrics port and resets them after recovery', async () => {
 		const gauge = vi.fn();
 		deps.metrics = fanoutMetrics(metrics, { gauge, increment: vi.fn() });
@@ -296,7 +379,7 @@ describe('startMaintenance', () => {
 		expect(h.events()).toEqual([]);
 		await vi.advanceTimersByTimeAsync(10);
 		const [cycle] = h.events();
-		expect(Object.keys(cycle).filter((key) => key.includes('.loop.'))).toEqual([
+		expect(Object.keys(cycle).filter((key) => key.includes('.loop.maintenance.'))).toEqual([
 			'gauge.loop.maintenance.seconds_since_success',
 			'gauge.loop.maintenance.last_duration_ms',
 			'gauge.loop.maintenance.consecutive_failures',
@@ -314,13 +397,9 @@ describe('startMaintenance', () => {
 	});
 
 	it.each([false, true])(
-		'preserves the sweep result when the release read fails (failed: %s)',
+		'preserves the sweep result when release fails (failed: %s)',
 		async (failed) => {
-			const get = bucket.get.bind(bucket);
-			vi.spyOn(bucket, 'get').mockImplementation((key) => {
-				if (key === paths.maintenanceLock) return Promise.reject(new Error('release read failed'));
-				return get(key);
-			});
+			vi.spyOn(MaintenanceLock.prototype, 'release').mockRejectedValue(new Error('release failed'));
 			if (failed)
 				vi.spyOn(deps.services.sessions, 'expireStale').mockRejectedValueOnce(
 					new Error('sweep failed'),
@@ -328,12 +407,12 @@ describe('startMaintenance', () => {
 			const loops = new BackgroundLoops();
 			h.track(startMaintenance(deps, metrics, loops));
 			await flushRun();
-			const events = h.events();
+			const events = h.events().filter((event) => String(event.event).startsWith('maintenance_'));
 			expect(events.map((event) => event.event)).toEqual([
 				'maintenance_release_failed',
 				failed ? 'maintenance_failed' : 'maintenance_cycle',
 			]);
-			expect(events[0].error).toBe('release read failed');
+			expect(events[0].error).toBe('release failed');
 			if (failed) {
 				expect(events[1].error).toBe('sweep failed');
 				expect(loops.health().loops.maintenance.last_success_at).toBeNull();
@@ -353,7 +432,7 @@ describe('startMaintenance', () => {
 		expect(previews.mock.invocationCallOrder[0]).toBeLessThan(expire.mock.invocationCallOrder[0]);
 	});
 
-	it('prunes job history in the maintenance cycle and reports the counts', async () => {
+	it('prunes job history in the hourly retention loop and reports the counts', async () => {
 		const project = await deps.services.projects.createProject(
 			{ name: 'p', description: '' },
 			ACTOR,
@@ -374,8 +453,8 @@ describe('startMaintenance', () => {
 		h.track(startMaintenance(deps, metrics));
 		await flushRun();
 
-		expect(h.events()[0]).toMatchObject({
-			event: 'maintenance_cycle',
+		expect(h.events().find((event) => event.step === 'jobs')).toMatchObject({
+			event: 'retention_cycle',
 			job_runs_pruned: 1,
 			job_run_markers_pruned: 0,
 		});
@@ -390,8 +469,6 @@ describe('startMaintenance', () => {
 		expect(prune).not.toHaveBeenCalled();
 		expect(h.events()[0]).toMatchObject({
 			event: 'maintenance_cycle',
-			job_runs_pruned: 0,
-			job_run_markers_pruned: 0,
 		});
 	});
 
@@ -435,6 +512,73 @@ describe('startMaintenance', () => {
 		expect(events[0]).toMatchObject({ notebooks_swept: 1, snapshots_reaped: 1 });
 	});
 
+	it('does not overlap timed-out retention and still reaps snapshots returned late', async () => {
+		const late =
+			Promise.withResolvers<
+				Awaited<ReturnType<typeof deps.services.notebooks.sweepDeletedNotebooks>>
+			>();
+		const gc = vi
+			.spyOn(deps.services.notebooks, 'sweepDeletedNotebooks')
+			.mockReturnValueOnce(late.promise);
+		const jobs = vi.spyOn(JobScheduler.prototype, 'prune');
+		const snapshots = vi.spyOn(deps.services.maintenance, 'expireSnapshots');
+		const loops = new BackgroundLoops();
+		deps.loopHealth = () => loops.health();
+		const api = createApi(deps);
+		h.track(startMaintenance(deps, metrics, loops));
+		await flushRun();
+		await vi.advanceTimersByTimeAsync(60 * 60_000);
+		expect(gc).toHaveBeenCalledOnce();
+		expect(jobs).toHaveBeenCalledTimes(2);
+		expect(snapshots).toHaveBeenCalledTimes(2);
+		expect((await api.request('/api/health/maintenance')).status).toBe(503);
+		const orphaned = [{ snapshot_id: 'late-snapshot', captured_at: new Date().toISOString() }];
+		late.resolve({ purged: 1, orphanedSnapshots: orphaned });
+		await flushRun();
+		expect(reapFilesystemSnapshots).toHaveBeenCalledWith(deps.compute, orphaned);
+		expect(
+			h.events().some((event) => event.event === 'retention_cycle' && event.step === 'notebook_gc'),
+		).toBe(false);
+		expect((await api.request('/api/health/maintenance')).status).toBe(200);
+		await vi.advanceTimersByTimeAsync(60 * 60_000);
+		expect(gc).toHaveBeenCalledTimes(2);
+		expect(loops.health().loops.retention_notebook_gc.status).toBe('ok');
+	});
+
+	it('stops before notebook GC if shutdown occurs during project cleanup', async () => {
+		const pending = Promise.withResolvers<number>();
+		vi.spyOn(deps.services.projects, 'sweepDeletedProjects').mockReturnValueOnce(pending.promise);
+		const gc = vi.spyOn(deps.services.notebooks, 'sweepDeletedNotebooks');
+		const loops = new BackgroundLoops();
+		const stop = h.track(startMaintenance(deps, metrics, loops));
+		await flushRun();
+		stop();
+		pending.resolve(0);
+		await loops.drain();
+		await vi.advanceTimersByTimeAsync(60 * 60_000);
+		expect(gc).not.toHaveBeenCalled();
+	});
+
+	it('isolates a snapshot expiry failure and recovers on the next hourly tick', async () => {
+		const expire = vi
+			.spyOn(deps.services.maintenance, 'expireSnapshots')
+			.mockRejectedValueOnce(new Error('snapshot store unavailable'));
+		const gc = vi.spyOn(deps.services.notebooks, 'sweepDeletedNotebooks');
+		const jobs = vi.spyOn(JobScheduler.prototype, 'prune');
+		const loops = new BackgroundLoops();
+		deps.loopHealth = () => loops.health();
+		const api = createApi(deps);
+		h.track(startMaintenance(deps, metrics, loops));
+		await flushRun();
+		expect(gc).toHaveBeenCalledOnce();
+		expect(jobs).toHaveBeenCalledOnce();
+		const health = await api.request('/api/health/maintenance');
+		expect(health.status).toBe(200);
+		expect(await health.json()).toMatchObject({ status: 'degraded' });
+		await vi.advanceTimersByTimeAsync(60 * 60_000);
+		expect(expire).toHaveBeenCalledTimes(2);
+		expect(loops.health().loops.retention_snapshot_expiry.status).toBe('ok');
+	});
 	it('alerts once when reconciliation finds a running shared app without its sandbox', async () => {
 		const session = makeSession({ mode: 'app', sandbox_id: createSandboxId() });
 		const project = makeProject({ id: session.project_id });
@@ -582,7 +726,7 @@ describe('startSessionLifecycle', () => {
 	});
 
 	it.each(['acquire', 'release'] as const)(
-		'recovers when bucket.get hangs during %s',
+		'recovers when lease I/O hangs during %s',
 		async (phase) => {
 			if (phase === 'acquire') {
 				await bucket.put(
@@ -594,12 +738,22 @@ describe('startSessionLifecycle', () => {
 			const unhang = Promise.withResolvers<void>();
 			let hung = false;
 			vi.spyOn(bucket, 'get').mockImplementation((key) => {
-				if (key === paths.sessionLifecycleLock && !hung) {
+				if (phase === 'acquire' && key === paths.sessionLifecycleLock && !hung) {
 					hung = true;
 					return unhang.promise.then(() => get(key));
 				}
 				return get(key);
 			});
+			if (phase === 'release') {
+				const put = bucket.put.bind(bucket);
+				let writes = 0;
+				vi.spyOn(bucket, 'put').mockImplementation((key, ...args) => {
+					if (key === paths.sessionLifecycleLock && ++writes === 2)
+						return unhang.promise.then(() => put(key, ...args));
+					return put(key, ...args);
+				});
+			}
+
 			const loops = new BackgroundLoops();
 			h.track(startSessionLifecycle(deps, loops));
 			await flushRun();
