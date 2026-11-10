@@ -6402,6 +6402,10 @@ components:
               type: string
         sandbox_id:
           type: string
+        reconnect_reference:
+          type: string
+          minLength: 1
+          maxLength: 4096
         kernel_auth_token:
           type: string
           pattern: ^mhub_kernel_[A-Za-z0-9_-]{43}$

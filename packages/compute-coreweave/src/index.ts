@@ -640,6 +640,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	/** Blocking commands sent to this sandbox — one wide-event field per provision. */
 	private execCount = 0;
 	private counters = {
+		reconnect_by_reference: 0,
+		reconnect_by_lookup: 0,
 		file_writes: 0,
 		file_write_waves: 0,
 		env_writes: 0,
@@ -708,6 +710,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		// split because only that says whether the dominant startup cost is a real
 		// container start or time spent waiting on a poll.
 		const t0 = Date.now();
+		if (this.reconnectId) this.counters.reconnect_by_reference++;
+		else if (this.reuse) this.counters.reconnect_by_lookup++;
 		const cached = this.reconnectId || !this.reuse ? undefined : await this.fromCachedId();
 		const existing =
 			this.reconnectId || !this.reuse || cached ? undefined : await this.findByOurId();

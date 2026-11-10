@@ -250,6 +250,7 @@ export { kernelActiveConnections } from './runtime/kernelActiveConnections';
 export type { ConnectionProbe } from './runtime/kernelActiveConnections';
 export { SessionLifecycleService } from './runtime/sessionLifecycle';
 export { sessionOwner } from './runtime/sessionOwner';
+export { sessionConnectOptions, sessionSandbox } from './runtime/sessionSandbox';
 export type { SessionLifecycleConfig, SweepResult } from './runtime/sessionLifecycle';
 export {
 	bearerToken,

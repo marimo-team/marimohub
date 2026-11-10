@@ -2622,6 +2622,21 @@ describe('CoreWeave warm sandbox reconnect', () => {
 		expect(world.listCalls).toEqual([]);
 		expect(world.created).toHaveLength(1);
 		expect(sandbox.drainTimings!()).toMatchObject({ find: 0, boot: 0 });
+		expect(sandbox.drainCounters!()).toMatchObject({
+			reconnect_by_reference: 1,
+			reconnect_by_lookup: 0,
+		});
+		expect(sandbox.drainCounters!()).toMatchObject({
+			reconnect_by_reference: 0,
+			reconnect_by_lookup: 0,
+		});
+		const legacy = makeCompute(world).connectExisting(SANDBOX_ID);
+		await legacy.exec('true');
+		expect(world.listCalls).toHaveLength(1);
+		expect(legacy.drainCounters!()).toMatchObject({
+			reconnect_by_reference: 0,
+			reconnect_by_lookup: 1,
+		});
 	});
 
 	it('keeps the legacy path for injected clients without running-status metadata', async () => {
@@ -2980,6 +2995,8 @@ it('transfers a binary batch on stdin without flushing the session environment',
 	expect(fake.startCalls[0].slice(0, 2)).toEqual(['sh', '-c']);
 	expect(fake.startCalls[0][2]).not.toContain('not-in-argv');
 	expect(instance.drainCounters!()).toEqual({
+		reconnect_by_reference: 0,
+		reconnect_by_lookup: 0,
 		execs: 0,
 		file_writes: 0,
 		file_write_waves: 1,
@@ -3183,6 +3200,8 @@ it('counts environment and launch streams once on a cold start and drains a warm
 		startupTimeout: 1_000,
 	});
 	expect(instance.drainCounters!()).toEqual({
+		reconnect_by_reference: 0,
+		reconnect_by_lookup: 0,
 		execs: 1,
 		file_writes: 1,
 		file_write_waves: 1,
@@ -3191,6 +3210,8 @@ it('counts environment and launch streams once on a cold start and drains a warm
 		status_polls: 1,
 	});
 	expect(instance.drainCounters!()).toEqual({
+		reconnect_by_reference: 0,
+		reconnect_by_lookup: 0,
 		execs: 0,
 		file_writes: 0,
 		file_write_waves: 0,

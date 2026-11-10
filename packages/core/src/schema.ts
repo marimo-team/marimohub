@@ -877,6 +877,8 @@ export const PreviewSessionOriginSchema = z.object({
 	commit: z.string().regex(/^[a-fA-F0-9]{40}$/),
 });
 
+export const SandboxReconnectReferenceSchema = z.string().min(1).max(4096);
+
 // `looseObject` for the same rolling-deploy reason as TokenSchema: every status
 // change is a CAS read-modify-write of the whole record, so a strict parse on an
 // older replica would strip fields a newer replica wrote (e.g. the `integrations`
@@ -959,6 +961,8 @@ export const SessionSchema = z.looseObject({
 	connections_checked_at: utcTimestamp().optional(),
 	runtime: RuntimeSchema.optional(),
 	sandbox_id: SandboxIdSchema.optional(),
+	/** Adapter-owned reconnect data. API responses omit it. */
+	reconnect_reference: SandboxReconnectReferenceSchema.optional(),
 	/** Plaintext, session-scoped credential for marimo. Never expose it as a response field. */
 	kernel_auth_token: z.string().regex(KERNEL_AUTH_TOKEN_PATTERN).optional(),
 	sandbox_url: z.string().optional(),

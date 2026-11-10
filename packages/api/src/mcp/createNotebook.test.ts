@@ -751,8 +751,11 @@ describe('MCP session execution readiness', () => {
 		};
 		vi.mocked(bootstrapKernel).mockResolvedValue({ status, diagnostics });
 		const { instance } = makeFakeSandbox();
+		Object.defineProperty(instance, 'reconnectReference', { value: 'mcp-reference' });
+		const compute = fakeComputeFrom(instance);
+		const reconnect = vi.spyOn(compute, 'connectExisting');
 		const proxy = vi.fn(async () => Response.json([]));
-		const { deps, project } = await setup({ compute: { ...fakeComputeFrom(instance), proxy } });
+		const { deps, project } = await setup({ compute: { ...compute, proxy } });
 		deps.sandbox.notebookBridge = {
 			launcher: 'custom bridge.py',
 			files: [{ name: 'custom bridge.py', content: 'bridge' }],
@@ -778,6 +781,10 @@ describe('MCP session execution readiness', () => {
 			expect.objectContaining({ inspectOnly: true }),
 		);
 		expect(proxy).not.toHaveBeenCalled();
+		expect(reconnect).toHaveBeenCalledWith(expect.any(String), {
+			owner: { projectId: project.id, userId: USER_ID },
+			reconnectReference: 'mcp-reference',
+		});
 		const data = response.structuredContent as {
 			execution: unknown;
 			notebook_url: string;

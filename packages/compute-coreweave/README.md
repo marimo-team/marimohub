@@ -56,14 +56,16 @@ Ordinary workspaces use bounded file batches. Existing synced archives, snapshot
 
 `drainCounters()` returns and clears these counters:
 
-| Counter            | Meaning                                                                         |
-| ------------------ | ------------------------------------------------------------------------------- |
-| `execs`            | Blocking `exec` and `execInput` calls                                           |
-| `file_writes`      | SDK file writes, including retries                                              |
-| `file_write_waves` | Unary waves or packed batches, including packed retries                         |
-| `env_writes`       | Private environment-file writes                                                 |
-| `stream_execs`     | All command streams, including environment writes, packed transfers, and launch |
-| `status_polls`     | Readiness status requests                                                       |
+| Counter                  | Meaning                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------- |
+| `reconnect_by_reference` | Resolution attempts with a saved reference                                      |
+| `reconnect_by_lookup`    | Resolution attempts without a reference, including process-cache lookups        |
+| `execs`                  | Blocking `exec` and `execInput` calls                                           |
+| `file_writes`            | SDK file writes, including retries                                              |
+| `file_write_waves`       | Unary waves or packed batches, including packed retries                         |
+| `env_writes`             | Private environment-file writes                                                 |
+| `stream_execs`           | All command streams, including environment writes, packed transfers, and launch |
+| `status_polls`           | Readiness status requests                                                       |
 
 `drainTimings()` reports the first data-plane call duration once per instance as `first_dataplane`.
 The session event uses `provision_first_dataplane_ms`.
@@ -105,16 +107,24 @@ Core emits the provisioning phase timings for every backend. See
 On CoreWeave, the first command that needs the private environment file creates it.
 Its upload time counts toward that command, not toward `provision_inject_files_ms`.
 
-## Warm-pool references
+## Reconnect references
 
-A reference holds `kind: 'coreweave-v1'`, the Hub sandbox ID, and a provider container ID of 1–256 UTF-16 code units.
-Before any network request, the adapter rejects malformed references, extra fields, and mismatched Hub IDs.
-With a reference, a claim does a Get by container ID and a command probe.
-Without one, it does a List by Hub tag, a Get, and a probe.
-The Get result must have the expected container ID and `running` status.
-A handle without status metadata cannot satisfy a reference.
+Warm-pool members and running sessions store an opaque `reconnect_reference`.
+`SessionService.setRunning` saves the reference after sandbox readiness. It stays out of API responses and contains no credentials.
 
-On this path, `coreweave_ensure` reports `reconnect_by_reference=true` and `get_ms`, and zero for `find_ms`, `create_ms`, and `boot_ms`.
-Destroying a handle with a reference targets only its container ID.
+A reference contains `kind: 'coreweave-v1'`, the Hub sandbox ID, and the provider container ID.
+The container ID permits 1–256 UTF-16 code units. The complete reference permits up to 4,096 code units.
+The adapter rejects malformed references, extra fields, and mismatched Hub IDs before any network request.
+
+A saved reference lets any replica reconnect with one Get and no tag List.
+The Get result must match the container ID and have `running` status.
+A reference failure never falls back to discovery or creation.
+Records without a reference keep the lookup path, including the process-local cache.
+Warm-pool claims also run a command probe after reconnect.
+
+For a reference reconnect, `coreweave_ensure` reports `reconnect_by_reference=true` and `get_ms`.
+Its `find_ms`, `create_ms`, and `boot_ms` values are zero.
+
+Destruction with a reference targets only its container ID.
 A not-found response counts as deleted. Other errors propagate.
 Pool reclamation re-reads ownership and uses tag-based cleanup.

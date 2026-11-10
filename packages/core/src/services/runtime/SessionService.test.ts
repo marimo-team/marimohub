@@ -63,9 +63,11 @@ describe('SessionService', () => {
 			undefined,
 			undefined,
 			created,
+			'provider-reference',
 		);
 		expect(get).not.toHaveBeenCalled();
 		const known = await sessions.getSessionWithEtag(projectId, created.value.session_id);
+		expect(known.value.reconnect_reference).toBe('provider-reference');
 		const put = vi.spyOn(bucket, 'put');
 		expect(await sessions.heartbeat(projectId, created.value.session_id, known)).toEqual(
 			known.value,
@@ -74,7 +76,74 @@ describe('SessionService', () => {
 		expect(put).not.toHaveBeenCalled();
 	});
 
-	it.each(['terminating', 'terminated'] as const)(
+	it.each([0, 4097])(
+		'rejects a %i-character reference without changing storage',
+		async (length) => {
+			const created = await sessions.createSessionWithEtag({
+				project_id: projectId,
+				notebook_id: notebookId,
+				user_id: ACTOR,
+			});
+			const put = vi.spyOn(bucket, 'put');
+			await expect(
+				sessions.setRunning(
+					projectId,
+					created.value.session_id,
+					'https://kernel.test',
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					created,
+					'x'.repeat(length),
+				),
+			).rejects.toThrow();
+			expect(put).not.toHaveBeenCalled();
+			expect(await sessions.getSessionWithEtag(projectId, created.value.session_id)).toEqual(
+				created,
+			);
+		},
+	);
+
+	it('preserves concurrent metadata when saving a maximum-length reference after a CAS conflict', async () => {
+		const created = await sessions.createSessionWithEtag({
+			project_id: projectId,
+			notebook_id: notebookId,
+			user_id: ACTOR,
+		});
+		const sid = created.value.session_id;
+		const checkedAt = new Date().toISOString();
+		await sessions.markConnections(projectId, sid, 2, checkedAt);
+		const reference = 'x'.repeat(4096);
+		await sessions.setRunning(
+			projectId,
+			sid,
+			'https://kernel.test',
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			created,
+			reference,
+		);
+		expect(await sessions.getSession(projectId, sid)).toMatchObject({
+			status: 'running',
+			reconnect_reference: reference,
+			active_connections: 2,
+			connections_checked_at: checkedAt,
+		});
+		await sessions.setRunning(projectId, sid, 'https://kernel.test');
+		await sessions.beginTerminating(projectId, sid);
+		await sessions.markTerminated(projectId, sid);
+		expect(await sessions.getSession(projectId, sid)).toMatchObject({
+			status: 'terminated',
+			reconnect_reference: reference,
+		});
+	});
+
+	it.each(['terminating', 'terminated', 'failed'] as const)(
 		'does not promote a %s session using its stale creation snapshot',
 		async (status) => {
 			const known = await sessions.createSessionWithEtag({
@@ -83,7 +152,8 @@ describe('SessionService', () => {
 				user_id: ACTOR,
 			});
 			const sid = known.value.session_id;
-			await sessions.beginTerminating(projectId, sid);
+			if (status === 'failed') await sessions.markFailed(projectId, sid);
+			else await sessions.beginTerminating(projectId, sid);
 			if (status === 'terminated') await sessions.markTerminated(projectId, sid);
 			const result = await sessions.setRunning(
 				projectId,
@@ -95,9 +165,11 @@ describe('SessionService', () => {
 				undefined,
 				undefined,
 				known,
+				'late-reference',
 			);
 			expect(result.status).toBe(status);
 			expect(result.sandbox_url).toBeUndefined();
+			expect(result.reconnect_reference).toBeUndefined();
 			expect((await sessions.getSession(projectId, sid)).status).toBe(status);
 		},
 	);

@@ -79,7 +79,7 @@ import {
 	sandboxContextPath,
 	sandboxContextFile,
 	writeSandboxContext,
-	sessionOwner,
+	sessionSandbox,
 	sessionWorkspaceDir,
 	SubdomainExposure,
 	UnavailableError,
@@ -1069,7 +1069,7 @@ async function inspectEditorActivity(deps: ApiDeps, session: Session) {
 	}
 	const basePath = localKernelBasePath(session);
 	const active = await kernelActiveConnections(
-		deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) }),
+		sessionSandbox(deps.compute, session),
 		basePath,
 	).catch((error: unknown) => {
 		if (error instanceof NotFoundError) return null;
@@ -2428,6 +2428,7 @@ async function startNotebookSessionOnce(
 					integrationAttachments,
 					providerDeadline === undefined ? undefined : new Date(providerDeadline).toISOString(),
 					createdSession?.value === session ? createdSession : undefined,
+					provisionedSandbox.reconnectReference,
 				);
 			})
 			// Deletion can miss a starting sandbox. Rechecks after mark_running close that race.

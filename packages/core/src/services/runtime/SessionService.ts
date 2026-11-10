@@ -351,8 +351,7 @@ export class SessionService {
 		return { value: await readStored(SessionSchema, obj, key), etag: obj.etag };
 	}
 
-	/** Promote `starting` → `running` with the kernel URL. No-op if the session was
-	 * terminated/terminating/failed/expired while we were provisioning (a stop wins). */
+	/** Publish runtime details unless the session is stopping or terminal. */
 	async setRunning(
 		projectId: ProjectId,
 		id: SessionId,
@@ -363,7 +362,9 @@ export class SessionService {
 		integrations?: Session['integrations'],
 		sandboxDeadlineAt?: string,
 		known?: KnownObject<Session>,
+		reconnectReference?: string,
 	): Promise<Session> {
+		const reference = SessionSchema.shape.reconnect_reference.parse(reconnectReference);
 		return this.mutate(
 			projectId,
 			id,
@@ -372,6 +373,7 @@ export class SessionService {
 				return {
 					...session,
 					status: 'running',
+					...(reference === undefined ? {} : { reconnect_reference: reference }),
 					sandbox_url: sandboxUrl,
 					surfaces: {
 						...session.surfaces,
