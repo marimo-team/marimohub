@@ -635,6 +635,14 @@ export const GitSourceSchema = z.object({
 	current_version_id: VersionIdSchema.nullable(),
 	commit: z.string().nullable(),
 	last_synced_at: utcTimestamp().nullable(),
+	working_branch: z
+		.object({
+			id: z.string().regex(/^[a-f0-9]{64}$/),
+			base_branch: z.string().min(1),
+			fork_commit: z.string().min(1),
+			created_by: UserIdSchema,
+		})
+		.optional(),
 });
 
 export const SourceSchema = z.discriminatedUnion('type', [LocalSourceSchema, GitSourceSchema]);
@@ -952,6 +960,7 @@ export const SessionSchema = z.looseObject({
 	 * it with the current head for staleness; edit sessions use it as save provenance.
 	 */
 	source_version_id: VersionIdSchema.optional(),
+	working_branch_version_id: VersionIdSchema.optional(),
 	app_pool: z.literal(true).optional(),
 	/**
 	 * Connection count for shared app/editor sessions from the lifecycle sweep's

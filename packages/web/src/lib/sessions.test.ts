@@ -54,6 +54,11 @@ describe('rankSession', () => {
 });
 
 describe('isSessionStale', () => {
+	it('uses the acknowledged working-branch save while preserving launch provenance', () => {
+		const session = { source_version_id: 'a', working_branch_version_id: 'b' };
+		expect(isSessionStale(session, 'b')).toBe(false);
+		expect(isSessionStale(session, 'c')).toBe(true);
+	});
 	it('is stale only when both versions are known and the notebook head is newer', () => {
 		expect(isSessionStale({ source_version_id: 'a' }, 'b')).toBe(true);
 		expect(isSessionStale({ source_version_id: 'a' }, 'a')).toBe(false);

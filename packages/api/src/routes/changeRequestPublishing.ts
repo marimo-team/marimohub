@@ -111,6 +111,9 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 	if (notebook.source.type !== 'git') {
 		throw new ConflictError('Only git-synced notebooks can open change requests');
 	}
+	if (notebook.source.working_branch) {
+		throw new ConflictError('Save to the working branch and use its notebook change request');
+	}
 	if (!session.sandbox_id) throw new ConflictError('The session has no sandbox');
 	if (!session.source_version_id) {
 		throw new ConflictError('The session has no synced source revision');

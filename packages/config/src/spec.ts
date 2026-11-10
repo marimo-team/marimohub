@@ -2042,6 +2042,22 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 			'Connect to GitHub, GitLab, and Azure DevOps Services. Editors can create pull sources and use **Sync now**. Managers can publish session edits as draft change requests. Provider credentials stay on the server. See [Syncing from external sources](./syncing.md) for modes and limits.',
 		backends: [
 			{
+				name: 'Working branches',
+				description:
+					'Requires GitHub publishing and pull-source credentials. Editors publish through the server identity under existing repository/project policies. See [Working notebooks](syncing.md#working-notebooks) for usage, limits, and recovery.',
+				vars: [
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED',
+						name: 'Enable working branches',
+						description:
+							'Allow editors to create working notebooks, save source changes, and open draft PRs. Does not enable automatic saves.',
+						default: 'false',
+						example: 'true',
+						optIn: true,
+					},
+				],
+			},
+			{
 				name: 'GitHub App',
 				description:
 					'Create a GitHub App with Contents and Pull requests read/write permissions. Install it on the allowed repositories, then set its numeric id and private key below. No webhook is required. For GHES, follow [Enterprise setup](syncing.md#github-enterprise-server).',

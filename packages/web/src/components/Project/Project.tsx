@@ -238,6 +238,8 @@ function useProjectContent() {
 	const { data: capabilities } = useCapabilitiesQuery();
 	const canManage = canManageProject(project.your_role);
 	const canEdit = canEditProject(project.your_role);
+	const canCreateWorkingBranch =
+		canEdit && !!capabilities?.source_control?.working_branch_providers?.length;
 	const sandboxImages = capabilities?.sandbox_images ?? [];
 	const offersImageChoice = sandboxImages.length > 1;
 	const computeProfiles = capabilities?.compute_profiles ?? [];
@@ -687,11 +689,11 @@ function useProjectContent() {
 									label: 'Import notebooks',
 									icon: <Upload className="size-4" />,
 								},
-								...(canManage
+								...(canManage || canCreateWorkingBranch
 									? [
 											{
 												id: 'synced',
-												label: 'Sync from git repo',
+												label: canManage ? 'Sync from git repo' : 'New working branch',
 												icon: <GitBranch className="size-4" />,
 											},
 										]
@@ -1049,8 +1051,9 @@ function useProjectContent() {
 				/>
 			)}
 
-			{canManage ? (
+			{canManage || canCreateWorkingBranch ? (
 				<SyncedNotebookDialog
+					canManage={canManage}
 					isOpen={syncedCreateModal.isOpen}
 					onClose={syncedCreateModal.close}
 					projectId={pid!}

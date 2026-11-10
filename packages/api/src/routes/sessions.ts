@@ -573,6 +573,7 @@ export function toSessionResponse(
 		// records predating the field omit it).
 		mode: sessionMode(s),
 		source_version_id: appReadOnly || s.origin ? undefined : s.source_version_id,
+		working_branch_version_id: appReadOnly || s.origin ? undefined : s.working_branch_version_id,
 		active_connections: appReadOnly ? undefined : s.active_connections,
 		connections_checked_at: appReadOnly ? undefined : s.connections_checked_at,
 		compute_profile: appReadOnly ? undefined : s.compute_profile,

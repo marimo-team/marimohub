@@ -127,6 +127,9 @@ app.openapi(capabilitiesRoute, (c) => {
 		},
 		integrations: { available: Boolean(deps.integrations) },
 		source_control: {
+			...(deps.sourceControl?.workingBranchesEnabled
+				? { working_branch_providers: [...(deps.sourceControl.workingBranchProviders?.() ?? [])] }
+				: {}),
 			preview_providers: previewReader?.previews && previewReader.resolveCommit ? ['github'] : [],
 			change_request_providers: [...(deps.sourceControl?.publisherProviders() ?? [])],
 			sync_providers: [...(deps.sourceControl?.readerProviders() ?? [])],

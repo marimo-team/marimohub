@@ -12,6 +12,12 @@ import { MetadataCache } from './metadataCache';
 import type { ReadConsistency } from './metadataCache';
 import { NotebookImportService } from './NotebookImportService';
 import { PreviewStore } from './PreviewStore';
+import {
+	WorkingBranchStore,
+	workingBranchPaths,
+	WorkingBranchSaveSchema,
+	WorkingBranchRecordSchema,
+} from './workingBranchRecords';
 import { previewAvailable, previewKey, PreviewRecordSchema } from './notebookPreviews';
 import type { GitProviderHosts } from '../../integrations/gitRepo';
 import { ThumbnailService } from './ThumbnailService';
@@ -1351,6 +1357,7 @@ export class NotebookService {
 				)
 			: null;
 
+		await new WorkingBranchStore(this.bucket).retire(projectId, notebookId);
 		await new AppPoolStore(this.bucket, this.metrics).retireForDeletion(projectId, notebookId);
 		await this.thumbnails.retire(projectId, notebookId);
 
@@ -1524,6 +1531,22 @@ export class NotebookService {
 				const protectedVersionIds = new Set(
 					await this.sessions.listProtectedVersionIds(projectId, notebookId),
 				);
+				const branchObject = await this.bucket.get(workingBranchPaths(projectId, notebookId).head);
+				if (branchObject) {
+					const branch = await readStored(
+						WorkingBranchRecordSchema,
+						branchObject,
+						workingBranchPaths(projectId, notebookId).head,
+					);
+					if (branch.active_save) {
+						const key = workingBranchPaths(projectId, notebookId).save(branch.active_save);
+						const receipt = await this.bucket.get(key);
+						if (receipt)
+							protectedVersionIds.add(
+								(await readStored(WorkingBranchSaveSchema, receipt, key)).base_version_id,
+							);
+					}
+				}
 				const current =
 					keep ?? (await this.getNotebookSource(projectId, notebookId)).current_version_id;
 				if (current) protectedVersionIds.add(current);
@@ -1610,6 +1633,7 @@ export class NotebookService {
 				`Refusing to hard-delete notebook ${notebookId}: status is "${meta.status}", expected "deleted"`,
 			);
 		}
+		await new WorkingBranchStore(this.bucket).retire(projectId, notebookId);
 		await new AppPoolStore(this.bucket, this.metrics).retireForDeletion(projectId, notebookId);
 
 		await this.deepLinks.releaseNotebook(projectId, notebookId);

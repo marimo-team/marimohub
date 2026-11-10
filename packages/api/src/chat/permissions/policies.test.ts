@@ -92,6 +92,30 @@ describe('consent policies', () => {
 		expect(run.details.map((d) => d.label)).toEqual(['Job', 'Parameters']);
 	});
 
+	it('shows the repository subtree and complete PR body before approval', () => {
+		const create = permissionRequest(
+			{ name: 'create_branch_notebook' },
+			{
+				repo: 'owner/repo',
+				base_branch: 'main',
+				root_path: 'apps/finance',
+				entry_notebook: 'app.py',
+			},
+		)!;
+		expect(create.details).toContainEqual({ label: 'Root path', value: 'apps/finance' });
+		const body = 'x'.repeat(CHAT_LIMITS.consentDetailCharacters);
+		const tool = { name: 'open_change_request' };
+		expect(permissionRequest(tool, { body })!.details).toContainEqual({
+			label: 'Body',
+			value: body,
+		});
+		expect(oversizedDetail(tool, { body })).toBeUndefined();
+		expect(oversizedDetail(tool, { body: `${body}x` })).toEqual({
+			label: 'Body',
+			limit: CHAT_LIMITS.consentDetailCharacters,
+		});
+	});
+
 	it('never remembers destructive actions and remembers routine ones', () => {
 		expect(
 			permissionRequest(

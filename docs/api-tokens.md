@@ -32,7 +32,7 @@ create the token. Full stores the `"*"` action wildcard instead.
 | -------------- | ---------------------------------------------------------------------------------- |
 | Read           | Read projects and integrations                                                     |
 | Run notebooks  | Read access, use integrations, and start, attach, stop, surface, or proxy sessions |
-| Edit notebooks | Run access, write notebooks, and publish change requests                           |
+| Edit notebooks | Run access, write notebooks, save working branches, and publish change requests    |
 | Full           | Every PAT-accessible action, including actions added in later releases             |
 
 Use **Advanced** to select individual actions. An explicit list excludes

@@ -64,9 +64,10 @@ export async function syncNotebookSource(
 			status: session.status,
 			source_version_id: session.source_version_id ?? null,
 			restart_needed:
-				currentVersionId === null || session.source_version_id === undefined
+				currentVersionId === null ||
+				(session.working_branch_version_id ?? session.source_version_id) === undefined
 					? null
-					: session.source_version_id !== currentVersionId,
+					: (session.working_branch_version_id ?? session.source_version_id) !== currentVersionId,
 		}));
 	return {
 		project_id: project.id,

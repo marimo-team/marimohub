@@ -60,6 +60,7 @@ export const PROJECT_ACTIONS = [
 	'integration.manage',
 	/** Publish a change request (PR/MR) from a notebook session. */
 	'change-request.publish',
+	'working-branch.write',
 	/** Add security labels or provably increase them (compartment superset). */
 	'security-labels.raise',
 	/** Lower, remove, or otherwise change security labels non-monotonically. */
@@ -150,6 +151,7 @@ export const ACTION_RULES: {
 	'integration.write': project('manager', 'forbidden'),
 	'integration.manage': project('manager', 'forbidden'),
 	'change-request.publish': project('manager', 'forbidden'),
+	'working-branch.write': project('editor', 'forbidden'),
 	'security-labels.raise': {
 		scope: 'project',
 		min: 'viewer',

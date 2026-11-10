@@ -17,6 +17,7 @@ import { loadVisibleProject } from '../shared';
 import { assertChatPrincipalCurrent } from './access';
 import { checkPermission } from './permissions/gate';
 import { oversizedDetail } from './permissions/policies';
+import { workingBranchConsentInput } from '../mcp/workingBranches';
 import type { GatedTool } from './permissions/policies';
 import { boundedOutput, MODEL_OUTPUT_ITEMS, redactSecrets } from './toolPreview';
 
@@ -155,6 +156,7 @@ export async function openToolSession(
 		}
 		const definitions: ToolDefinition[] = exposed.map((tool) => ({
 			name: tool.name,
+			consentInput: workingBranchConsentInput(deps, principal, project.id, tool.name),
 			description: tool.description ?? tool.name,
 			inputSchema: modelSchema(tool.inputSchema as Record<string, unknown>),
 			annotations: tool.annotations,

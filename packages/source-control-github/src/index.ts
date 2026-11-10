@@ -13,6 +13,7 @@ import type {
 	UpdateChangeRequestInput,
 } from '@marimo-hub/core/ports/source-control';
 import { GitHubClient } from './githubClient';
+import { GitHubWorkingBranches } from './githubWorkingBranches';
 import type { GitHubAppPublisherOptions, GitHubAppPublisherRuntime } from './githubClient';
 import { GitHubPullRequests } from './githubPullRequests';
 import type { PullRequestCandidate } from './githubPullRequests';
@@ -39,11 +40,13 @@ interface GitHubPublicationContext {
 export class GitHubAppPublisher implements SourceControlPublisher, SourceControlReader {
 	readonly provider = 'github' as const;
 	readonly previews = true;
+	readonly workingBranches: GitHubWorkingBranches;
 	private readonly client: GitHubClient;
 	private readonly fetcher: NonNullable<GitHubAppPublisherRuntime['fetcher']>;
 
 	constructor(options: GitHubAppPublisherOptions, runtime: GitHubAppPublisherRuntime = {}) {
 		this.client = new GitHubClient(options, runtime);
+		this.workingBranches = new GitHubWorkingBranches(this.client);
 		this.fetcher = runtime.fetcher ?? fetch;
 	}
 

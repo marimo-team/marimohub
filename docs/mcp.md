@@ -143,8 +143,10 @@ Results include `project_id`, `notebook_id`, `commit`, `synced` (whether this ca
   `null` means the session lookup failed after sync; `restart_needed` is then `null`.
 - `restart_needed`: `true` if any session is stale, otherwise `null` if any per-session `restart_needed` is `null`, otherwise `false`.
 
-Per-session `restart_needed` is `true` for a different source version, `false` for a match,
-and `null` if either version is missing. Active sessions have status `starting`, `running`, or `terminating`.
+Per-session `restart_needed` compares the current notebook version with the session's latest acknowledged working-branch save, when one exists.
+Otherwise, it uses `source_version_id`, which records the session's launch version and does not change after saves.
+The result is `true` for different versions, `false` for a match, and `null` if either version is missing.
+Active sessions have status `starting`, `running`, or `terminating`.
 To restart one, use `stop_session` then `start_session` with the same notebook and mode, subject to session permissions.
 
 ### Source format

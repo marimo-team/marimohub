@@ -28,6 +28,7 @@ export async function resolveProject(
 	action:
 		| 'project.read'
 		| 'notebook.write'
+		| 'working-branch.write'
 		| 'integration.read'
 		| 'integration.use' = 'project.read',
 	appAccess = false,
@@ -127,9 +128,13 @@ export async function resolveAuthorizedNotebook(
 	principal: AuthenticatedPrincipal,
 	projectRef: string,
 	notebookRef: string,
-	action: 'project.read' | 'notebook.write',
+	action: 'project.read' | 'notebook.write' | 'working-branch.write',
 ) {
 	const project = await resolveProject(deps, principal, projectRef, action);
+	if (NotebookId.is(notebookRef)) {
+		const detail = await loadAuthorizedNotebookMeta(deps, project, notebookRef, principal, action);
+		return { project, notebook: detail, detail };
+	}
 	const notebook = await resolveNotebook(deps, principal, project, notebookRef);
 	const detail = await loadAuthorizedNotebookMeta(deps, project, notebook.id, principal, action);
 	return { project, notebook, detail };

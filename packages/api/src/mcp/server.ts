@@ -35,6 +35,7 @@ import {
 } from './selectors';
 import { registerJobTools } from './jobs';
 import { registerIntegrationTools } from './integrations';
+import { registerWorkingBranchTools } from './workingBranches';
 import { syncNotebookSource, SyncNotebookSourceInputSchema } from './sourceSync';
 import { deleteNotebookAndRetire } from '../routes/notebookDelete';
 import {
@@ -580,5 +581,7 @@ export function createMcpServer(
 	}
 	if (deps.jobs) registerJobTools(server, deps, principal, request);
 	if (deps.integrations) registerIntegrationTools(server, deps, principal, request);
+	if (deps.sourceControl?.workingBranchesEnabled)
+		registerWorkingBranchTools(server, deps, principal, request);
 	return server;
 }

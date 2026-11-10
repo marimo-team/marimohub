@@ -61,7 +61,7 @@ const RUN_TOKEN_ACTIONS = [
 export const TOKEN_GRANT_PRESETS = {
 	read: READ_TOKEN_ACTIONS,
 	run: RUN_TOKEN_ACTIONS,
-	edit: [...RUN_TOKEN_ACTIONS, 'notebook.write', 'change-request.publish'],
+	edit: [...RUN_TOKEN_ACTIONS, 'notebook.write', 'change-request.publish', 'working-branch.write'],
 	full: '*',
 } as const satisfies Record<string, '*' | readonly AuthorizationAction[]>;
 

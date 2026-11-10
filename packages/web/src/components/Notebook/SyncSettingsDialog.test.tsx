@@ -34,6 +34,7 @@ function setup(options: {
 	driftNotConfigured?: boolean;
 	syncError?: boolean;
 	syncMode?: 'push' | 'pull';
+	workingBranch?: boolean;
 }) {
 	const calls: { method: string; url: string; body?: unknown }[] = [];
 	const base = {
@@ -41,6 +42,16 @@ function setup(options: {
 		provider: options.provider ?? activeSource.provider,
 		sync_mode: options.syncMode ?? activeSource.sync_mode,
 		root_path: activeSource.root_path,
+		...(options.workingBranch
+			? {
+					working_branch: {
+						id: 'b'.repeat(64),
+						base_branch: 'main',
+						fork_commit: 'abcdef1234567890',
+						created_by: 'user',
+					},
+				}
+			: {}),
 	};
 	const source = options.pending
 		? {
@@ -237,20 +248,29 @@ describe('SyncSettingsDialog', () => {
 	it('renders read-only settings for a viewer without operational controls', async () => {
 		setup({ canManage: false, canOperate: false });
 
-		const repo = await screen.findByLabelText('Repository');
-		await waitFor(() => expect(repo).toHaveValue('acme/analytics'));
-		expect(repo).toHaveAttribute('readonly');
+		await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue('acme/analytics'));
+		expect(screen.getByLabelText('Repository')).toHaveAttribute('readonly');
 		expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: 'Rotate token' })).not.toBeInTheDocument();
+	});
+
+	it('keeps working-branch settings read-only even for a manager', async () => {
+		const { calls } = setup({ canManage: true, workingBranch: true, syncMode: 'pull' });
+		await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue('acme/analytics'));
+		expect(screen.getByLabelText('Repository')).toHaveAttribute('readonly');
+		expect(screen.getByLabelText('Branch')).toHaveAttribute('readonly');
+		expect(screen.getByLabelText('Folder in repo')).toHaveAttribute('readonly');
+		expect(screen.getByLabelText('Notebook file')).toHaveAttribute('readonly');
+		expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+		expect(calls.some((call) => call.method === 'PATCH')).toBe(false);
 	});
 
 	it('allows editors to sync without managing settings or rotating credentials', async () => {
 		const user = userEvent.setup();
 		const { calls } = setup({ canManage: false, canOperate: true, syncProviders: ['github'] });
 
-		const repo = await screen.findByLabelText('Repository');
-		await waitFor(() => expect(repo).toHaveValue('acme/analytics'));
-		expect(repo).toHaveAttribute('readonly');
+		await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue('acme/analytics'));
+		expect(screen.getByLabelText('Repository')).toHaveAttribute('readonly');
 		expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: 'Rotate token' })).not.toBeInTheDocument();
 		expect(screen.queryByText(/Rotate it to mint a new one/)).not.toBeInTheDocument();

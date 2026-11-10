@@ -2,6 +2,7 @@ import type {
 	SourceControlPublisher,
 	SourceControlReader,
 	SourceControlRegistry,
+	WorkingBranchWriter,
 } from '@marimo-hub/core/ports/source-control';
 import type { ProjectId } from '@marimo-hub/core/ids';
 import type { GitProvider, GitProviderHosts } from '@marimo-hub/core/git-repo';
@@ -27,8 +28,13 @@ export class ConfiguredSourceControlRegistry implements SourceControlRegistry {
 		SourceControlRegistration & { reader: SourceControlReader }
 	>();
 	readonly repositoryHosts: GitProviderHosts;
+	readonly workingBranchesEnabled: boolean;
+	private readonly workingBranchProviderIds: readonly string[];
 
-	constructor(registrations: readonly SourceControlRegistration[]) {
+	constructor(
+		registrations: readonly SourceControlRegistration[],
+		options: { workingBranchesEnabled?: boolean } = {},
+	) {
 		const hosts: Record<string, GitProvider> = Object.create(null);
 		for (const registration of registrations) {
 			const { reader, publisher } = registration;
@@ -49,6 +55,15 @@ export class ConfiguredSourceControlRegistry implements SourceControlRegistry {
 			}
 		}
 		this.repositoryHosts = hosts;
+		this.workingBranchProviderIds = [...this.publishers.values()]
+			.filter(
+				({ publisher }) =>
+					publisher.workingBranches &&
+					this.readers.get(publisher.provider)?.reader.fetchGitDirectory,
+			)
+			.map(({ publisher }) => publisher.provider);
+		this.workingBranchesEnabled =
+			(options.workingBranchesEnabled ?? false) && this.workingBranchProviderIds.length > 0;
 	}
 
 	assertRepositoryAllowed(provider: string, repository: string, projectId: ProjectId): void {
@@ -97,19 +112,45 @@ export class ConfiguredSourceControlRegistry implements SourceControlRegistry {
 		const registration = this.publishers.get(provider);
 		if (!registration) return undefined;
 		const { publisher, authorize } = registration;
-		if (!authorize) return publisher;
+		const workingBranches =
+			this.workingBranchesEnabled && this.readers.get(provider)?.reader.fetchGitDirectory
+				? publisher.workingBranches
+				: undefined;
+		if (!authorize && workingBranches === publisher.workingBranches) return publisher;
+		const check = authorize ?? (() => {});
 		const updateChangeRequest = publisher.updateChangeRequest?.bind(publisher);
 		return {
 			provider,
-			openChangeRequest: this.guard(
-				publisher.openChangeRequest.bind(publisher),
+			openChangeRequest: this.guard(publisher.openChangeRequest.bind(publisher), check, projectId),
+			...(updateChangeRequest
+				? { updateChangeRequest: this.guard(updateChangeRequest, check, projectId) }
+				: {}),
+			...(workingBranches
+				? { workingBranches: this.guardWorkingBranches(workingBranches, check, projectId) }
+				: {}),
+		};
+	}
+
+	private guardWorkingBranches(
+		writer: WorkingBranchWriter,
+		authorize: AuthorizeRepository,
+		projectId?: ProjectId,
+	): WorkingBranchWriter {
+		return {
+			createBranch: this.guard(writer.createBranch.bind(writer), authorize, projectId),
+			prepareCommit: this.guard(writer.prepareCommit.bind(writer), authorize, projectId),
+			advanceBranch: this.guard(writer.advanceBranch.bind(writer), authorize, projectId),
+			openBranchChangeRequest: this.guard(
+				writer.openBranchChangeRequest.bind(writer),
 				authorize,
 				projectId,
 			),
-			...(updateChangeRequest
-				? { updateChangeRequest: this.guard(updateChangeRequest, authorize, projectId) }
-				: {}),
+			inspectBranch: this.guard(writer.inspectBranch.bind(writer), authorize, projectId),
 		};
+	}
+
+	workingBranchProviders(): readonly string[] {
+		return this.workingBranchesEnabled ? this.workingBranchProviderIds : [];
 	}
 
 	publisherProviders(): readonly string[] {

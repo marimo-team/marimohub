@@ -7,6 +7,8 @@ import { Toaster } from 'sonner';
 import { SyncedNotebookDialog } from './SyncedNotebookDialog';
 
 interface ResourceOptions {
+	workingBranchProviders?: string[];
+	canManage?: boolean;
 	pullProviders?: string[];
 	sandboxImages?: string[];
 	computeProfiles?: { name: string; cpu?: number; memory_bytes?: number }[];
@@ -28,6 +30,7 @@ function renderDialog(
 						success: true,
 						data: {
 							source_control: {
+								working_branch_providers: resources.workingBranchProviders,
 								pull_source_providers: resources.pullProviders ?? (available ? ['github'] : []),
 							},
 							sandbox_images: resources.sandboxImages ?? [],
@@ -51,7 +54,13 @@ function renderDialog(
 		</QueryClientProvider>
 	);
 	render(
-		<SyncedNotebookDialog isOpen onClose={onClose} projectId="proj-x" onCreated={onCreated} />,
+		<SyncedNotebookDialog
+			isOpen
+			onClose={onClose}
+			projectId="proj-x"
+			onCreated={onCreated}
+			canManage={resources.canManage}
+		/>,
 		{ wrapper },
 	);
 	return { onClose, onCreated };
@@ -319,4 +328,32 @@ it('offers Azure pull mode without GitHub configuration', async () => {
 	);
 	await user.type(screen.getByLabelText('Notebook file'), 'app.py');
 	expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
+});
+
+it('lets editors create a working notebook without offering existing-branch tracking', async () => {
+	const fetchImpl = vi.fn(
+		async (_url: RequestInfo | URL, _init?: RequestInit) =>
+			new Response(
+				JSON.stringify({
+					success: true,
+					data: { notebook: { id: 'nb-working', title: 'Working' } },
+				}),
+				{ headers: { 'content-type': 'application/json' } },
+			),
+	);
+	renderDialog(fetchImpl, true, { workingBranchProviders: ['github'], canManage: false });
+	const user = userEvent.setup();
+	await user.type(screen.getByLabelText('Notebook name'), 'Working');
+	await user.type(screen.getByLabelText('Repository'), 'owner/repo');
+	await user.type(screen.getByLabelText('Notebook file'), 'app.py');
+	expect(screen.getByLabelText('New branch from')).toHaveValue('main');
+	expect(screen.queryByRole('radio', { name: 'Track an existing branch' })).toBeNull();
+	await user.click(screen.getByRole('button', { name: 'Create' }));
+	const [, init] = fetchImpl.mock.calls[0];
+	expect(JSON.parse(init!.body as string)).toMatchObject({
+		fork: { base_branch: 'main' },
+		sync_mode: 'pull',
+	});
+	expect(JSON.parse(init!.body as string)).not.toHaveProperty('branch');
+	expect(new Headers(init?.headers).get('idempotency-key')).toBeTruthy();
 });

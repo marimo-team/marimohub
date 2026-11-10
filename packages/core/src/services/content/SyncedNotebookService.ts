@@ -1,6 +1,11 @@
 import type { GitProviderHosts } from '../../integrations/gitRepo';
 import type { Bucket } from '../../ports/bucket';
-import { BadRequestError, ConflictError, NotFoundError } from '../../errors';
+import {
+	BadRequestError,
+	ConflictError,
+	NotFoundError,
+	PreconditionFailedError,
+} from '../../errors';
 import { createNotebookId, createVersionId, SYSTEM_ACTOR } from '../../ids';
 import type { NotebookId, ProjectId, UserId, VersionId } from '../../ids';
 import {
@@ -36,6 +41,8 @@ import { listAllKeys } from '../catalog/storage';
 import type { GitSource, NotebookMeta, Source } from '../../schema';
 import { loadNotebookCatalogPatch } from './catalogProjection';
 import { toSyncedWorkspaceFileMap } from '../../integrations/remoteWorkspace';
+import { WorkingBranchStore } from './workingBranchRecords';
+import { workspaceManifest } from './workspaceManifest';
 import {
 	createPackedWorkspaceArchive,
 	isPackedWorkspaceInputWithinLimit,
@@ -70,10 +77,12 @@ export class SyncedNotebookService {
 		projectId: ProjectId,
 		input: CreateSyncedNotebookInput,
 		actor: UserId,
+		claimed?: { notebookId: NotebookId; workingBranch: NonNullable<GitSource['working_branch']> },
 	): Promise<{ meta: NotebookMeta; sync_token?: string }> {
-		const notebookId = createNotebookId();
+		const notebookId = claimed?.notebookId ?? createNotebookId();
 		const now = new Date().toISOString();
 		const source = createGitSource(input, this.hooks.repositoryHosts);
+		if (claimed) source.working_branch = claimed.workingBranch;
 		const syncToken = source.sync_mode === 'push' ? createSyncToken() : undefined;
 
 		const meta = buildNotebookMeta({
@@ -94,6 +103,35 @@ export class SyncedNotebookService {
 		const tokenRecord = syncToken ? await createSyncTokenRecord(syncToken, now) : undefined;
 
 		const nb = paths.project(projectId).notebook(notebookId);
+		if (claimed) {
+			for (const [key, value] of [
+				[nb.meta, JSON.stringify(meta)],
+				[nb.source, JSON.stringify(source)],
+				[nb.readme, input.readme ?? `# ${input.title}\n\n${input.description}\n`],
+			]) {
+				try {
+					await this.bucket.put(key, value, { onlyIfNotExists: true });
+				} catch (error) {
+					if (!(error instanceof PreconditionFailedError)) throw error;
+				}
+			}
+			const stored = await this.hooks.getNotebook(projectId, notebookId);
+			if (
+				stored.meta.status === 'deleted' ||
+				stored.source.type !== 'git' ||
+				stored.source.working_branch?.id !== claimed.workingBranch.id
+			) {
+				throw new ConflictError('Working notebook creation no longer owns this notebook');
+			}
+			await this.catalog.appendNotebookEntry(
+				'notebook.synced.create',
+				actor,
+				projectId,
+				buildNotebookEntry(stored.meta, 'git', nb.base, actor),
+				{ ifAbsent: true },
+			);
+			return { meta: stored.meta };
+		}
 		const contentKeys = [nb.meta, nb.readme, nb.source];
 		if (tokenRecord) contentKeys.push(nb.integrationSyncToken);
 
@@ -146,6 +184,7 @@ export class SyncedNotebookService {
 		await this.bucket.delete([
 			versionPaths.meta,
 			versionPaths.workspaceArchive,
+			versionPaths.workspaceManifest,
 			...workspaceKeys,
 			...gitKeys,
 		]);
@@ -235,11 +274,40 @@ export class SyncedNotebookService {
 		input: SyncNotebookInput,
 		actor: UserId = SYSTEM_ACTOR,
 	): Promise<{ meta: NotebookMeta; versionId: VersionId | null }> {
+		const { source } = await this.hooks.getNotebook(projectId, notebookId);
+		if (source.type === 'git' && source.working_branch && !input.working_branch_fence?.check) {
+			return new WorkingBranchStore(this.bucket).withLease(projectId, notebookId, (check) =>
+				this.syncUnderFence(
+					projectId,
+					notebookId,
+					{ ...input, working_branch_fence: { check } },
+					actor,
+				),
+			);
+		}
+		return this.syncUnderFence(projectId, notebookId, input, actor);
+	}
+
+	private async syncUnderFence(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		input: SyncNotebookInput,
+		actor: UserId,
+	): Promise<{ meta: NotebookMeta; versionId: VersionId | null }> {
+		await input.working_branch_fence?.check();
 		const { meta: existing, source } = await this.hooks.getNotebook(projectId, notebookId);
 		if (existing.status === 'deleted') {
 			throw new NotFoundError(`Notebook ${notebookId} not found`);
 		}
 		const syncedSource = assertSyncedSource(source);
+		if (syncedSource.working_branch) {
+			await new WorkingBranchStore(this.bucket).assertSyncAllowed(
+				projectId,
+				notebookId,
+				input.working_branch_fence?.operation,
+				input.working_branch_fence?.creation,
+			);
+		}
 		const prepared = prepareSync(syncedSource, input, this.hooks.repositoryHosts);
 		if (input.git_files) assertGitDirectoryLimits(input.git_files);
 		const gitFiles = input.git_files ? toSyncedWorkspaceFileMap(input.git_files) : undefined;
@@ -249,7 +317,28 @@ export class SyncedNotebookService {
 
 		// Re-syncing the same commit (a retried CI run) is a genuine no-op, not a conflict.
 		if (isAtBranchHead(syncedSource, prepared.commit)) {
-			return { meta: existing, versionId: null };
+			let meta = existing;
+			if (syncedSource.working_branch) {
+				const nb = paths.project(projectId).notebook(notebookId);
+				meta = await mutateObject(
+					this.bucket,
+					nb.meta,
+					(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
+					(meta) => {
+						assertNotMoving(meta, notebookId);
+						if (meta.status === 'deleted') throw new NotFoundError('Notebook was deleted');
+						return meta.status === 'active' ? null : { ...meta, status: 'active' as const };
+					},
+				);
+				await this.catalog.updateNotebookEntry(
+					'notebook.synced.sync',
+					actor,
+					projectId,
+					notebookId,
+					(entry) => loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry),
+				);
+			}
+			return { meta, versionId: null };
 		}
 		// Fast-fail before writing any version files; the CAS callback re-checks.
 		assertSyncSourcePrecondition(syncedSource, input);
@@ -301,6 +390,7 @@ export class SyncedNotebookService {
 			...prepared.config,
 			commit: prepared.commit,
 		};
+		const manifest = await workspaceManifest(prepared.files);
 		let versionToKeep = versionId;
 
 		await saga(metricsObserver(this.metrics, 'saga.synced_notebook_sync'))
@@ -310,6 +400,7 @@ export class SyncedNotebookService {
 				compensableWrite(
 					[
 						() => this.bucket.put(versionPaths.meta, JSON.stringify(version)),
+						() => this.bucket.put(versionPaths.workspaceManifest, JSON.stringify(manifest)),
 						...(workspaceArchive
 							? [
 									async () => {
@@ -352,7 +443,15 @@ export class SyncedNotebookService {
 			// `mutateObject` returns the concurrent winner when this commit already won.
 			// Pruning must protect that pointer rather than this request's orphan.
 			.step('advance_source', async () => {
+				await input.working_branch_fence?.check();
 				await this.assertNotFenced(nb.meta, notebookId);
+				if (syncedSource.working_branch)
+					await new WorkingBranchStore(this.bucket).assertSyncAllowed(
+						projectId,
+						notebookId,
+						input.working_branch_fence?.operation,
+						input.working_branch_fence?.creation,
+					);
 				const advancedSource = await mutateObject(
 					this.bucket,
 					nb.source,

@@ -227,6 +227,7 @@ s3-bucket/
                         ├── workspace/          ← Git sources only: complete synced tree
                         ├── git/                ← pull-mode Git sources only: credential-free `.git` payload
                         ├── workspace.zip       ← optional packed startup copy of workspace + `.git`
+                        ├── workspace-manifest.json ← synced file sizes and SHA-256 digests
                         ├── notebook.html       ← optional snapshot (see below)
                         └── session.json        ← optional snapshot (see below)
 ```
@@ -250,6 +251,12 @@ Each synced version keeps a best-effort `workspace.zip` copy of the final sandbo
 tree. Provisioning prefers this single object and falls back to the canonical
 `workspace/` and `git/` objects when it is absent or invalid. The packed copy is
 created for combined workspace and Git inputs up to 32 MiB.
+
+`SyncedNotebookService` also writes an immutable `workspace-manifest.json` beside
+new synced versions. It lists each workspace path, byte size, and SHA-256 digest.
+Working-branch capture compares live file digests with this manifest and reads only
+changed payloads. Older versions without this file use baseline byte comparisons.
+Version rollback and pruning remove the manifest with the rest of the version.
 
 ### 3.2 Complete Path Reference
 
@@ -310,6 +317,7 @@ created for combined workspace and Git inputs up to 32 MiB.
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/version.json`              | JSON     | Version metadata: saved_at, author, message, parent_id, optional snapshot descriptors.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/workspace/`                | any      | Complete immutable tree from one Git sync. Present only for a `git` source version.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/git/`                      | any      | Immutable credential-free `.git` payload for a pull-mode source version. Restored into the sandbox workdir at provision and pruned with the enclosing version. With a `root_path`, `.git` is restored to the Git root (the configured workdir) and the workspace to `<workdir>/<root_path>`.                                                                                                                                                                                                                                                       |
+| `projects/{pid}/notebooks/{nid}/versions/{vid}/workspace-manifest.json`   | JSON     | Immutable workspace paths, byte sizes, and SHA-256 digests written by SyncedNotebookService. Older versions can omit it.                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/workspace.zip`             | ZIP      | Optional duplicate of the final synced sandbox tree used only as a startup fast path. Pull-mode Git metadata is stored under `.git/`. Canonical reads and fallback restores continue to use `workspace/` and `git/`.                                                                                                                                                                                                                                                                                                                               |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.html`             | HTML     | **Optional.** Rendered HTML snapshot, copied from `__marimo__/notebook.html` on session teardown. Immutable once written.                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/session.json`              | JSON     | **Optional.** marimo session state (cell outputs), copied from `__marimo__/session/{notebook}.py.json` on teardown. Immutable.                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -1913,3 +1921,27 @@ crawl to an empty checkpoint after publishing the tombstone. Retain both records
 to fence delayed writers; reclaim detached pages and snapshots after the grace period.
 See the [search design](./search.md) for consistency assumptions, budgets, tradeoffs, scaling limits,
 and performance evidence. The [search guide](../docs/search.md) covers configuration.
+
+## Working branches
+
+`WorkingBranchService` owns `_system/working-branches/`:
+
+| Object                                          | Write rule                                                                 | Retention                                                      |
+| ----------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `creations/{pid}/{id}.json`                     | Create once; pins request fingerprint, notebook ID, source and fork SHA    | Retained for idempotent creation                               |
+| `notebooks/{pid}/{nid}/head.json`               | CAS; identity, lease, active save, PR association and cached remote status | Retain deletion tombstone                                      |
+| `notebooks/{pid}/{nid}/saves/{id}/receipt.json` | CAS; monotonic save stages and commit/version acknowledgment               | Retain after payload cleanup                                   |
+| `notebooks/{pid}/{nid}/saves/{id}/capture.json` | Create once; manifest plus source bytes                                    | 24 hours plus one-hour grace; unresolved dispatched work stays |
+| `cleanup.json`                                  | CAS; bounded scan cursor                                                   | Retained                                                       |
+
+Notebook and project deletion retire heads through `WorkingBranchStore`.
+Remote branches, deletion tombstones, and replay receipts remain. The generated bucket schema describes
+all fields. Captures are separate from catalog versions and never update the
+catalog pointer directly.
+
+Maintenance scans at most 100 objects per pass with a CAS cursor. It expires abandoned
+pre-dispatch saves and deletes eligible terminal captures after the retention period.
+Failed captures release admission. New saves can retire abandoned empty claims under the branch lease.
+Dispatched operations with unresolved outcomes retain their receipts and captures.
+See the [publication protocol](source_control_publishing.md#working-branch-publication)
+for save ordering and source synchronization.

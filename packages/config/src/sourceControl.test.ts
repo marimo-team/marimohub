@@ -17,6 +17,30 @@ describe('makeSourceControl', () => {
 		expect(makeSourceControl({})).toEqual({});
 	});
 
+	it('requires an explicit opt-in before exposing working-branch writes', () => {
+		const env = {
+			MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID: '123',
+			MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: privateKey(),
+		};
+		const disabled = makeSourceControl(env).sourceControl!;
+		expect(disabled.workingBranchesEnabled).toBe(false);
+		expect(disabled.workingBranchProviders?.()).toEqual([]);
+		expect(disabled.getPublisher('github')?.workingBranches).toBeUndefined();
+		const enabled = makeSourceControl({
+			...env,
+			MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED: 'true',
+		}).sourceControl!;
+		expect(enabled.workingBranchesEnabled).toBe(true);
+		expect(enabled.workingBranchProviders?.()).toEqual(['github']);
+		expect(enabled.getPublisher('github')?.workingBranches).toBeDefined();
+	});
+
+	it('validates the working-branch opt-in even without provider credentials', () => {
+		expect(() =>
+			makeSourceControl({ MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED: 'on' }),
+		).toThrow('expected true or false');
+	});
+
 	it('treats whitespace-only credentials as absent', () => {
 		expect(
 			makeSourceControl({
@@ -123,7 +147,8 @@ describe('GitHub repository policies', () => {
 			for (const pid of [undefined, projectId, ProjectId.parse('proj-1111111111111111')]) {
 				const reader = sources.getReader('github', pid)!;
 				expect(reader).toBeInstanceOf(GitHubAppPublisher);
-				expect(sources.getPublisher('github', pid)).toBe(reader);
+				expect(sources.getPublisher('github', pid)?.provider).toBe(reader.provider);
+				expect(sources.getPublisher('github', pid)?.workingBranches).toBeUndefined();
 				await expect(reader.getBranchHead('other/unlisted-repo', 'main')).resolves.toEqual({
 					commit: 'abc',
 				});
@@ -338,6 +363,15 @@ describe('GitLab source control', () => {
 		expect(
 			registry.getReader('gitlab')?.supportsRepository('https://gitlab.com/Group/Sub/Project'),
 		).toBe(false);
+	});
+	it('does not enable working-branch tools for a GitLab-only deployment', () => {
+		const registry = makeSourceControl({
+			...env,
+			MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED: 'true',
+		}).sourceControl!;
+		expect(registry.workingBranchesEnabled).toBe(false);
+		expect(registry.workingBranchProviders?.()).toEqual([]);
+		expect(registry.getPublisher('gitlab')?.workingBranches).toBeUndefined();
 	});
 	it('defaults to GitLab.com', () => {
 		const registry = makeSourceControl({

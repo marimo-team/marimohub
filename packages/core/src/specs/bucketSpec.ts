@@ -1,3 +1,13 @@
+import { WorkspaceManifestSchema } from '../services/content/workspaceManifest';
+import {
+	WorkingBranchRecordSchema,
+	WorkingBranchSaveSchema,
+	WorkingBranchCreationSchema,
+	WorkingBranchCaptureSchema,
+	WorkingBranchCleanupSchema,
+	workingBranchPaths,
+	WORKING_BRANCH_CLEANUP_KEY,
+} from '../services/content/workingBranchRecords';
 import { HostRetryCleanupSchema, HostRetryRecordSchema } from '../services/runtime/HostRetryStore';
 import {
 	SearchHeadSchema,
@@ -373,6 +383,14 @@ const OBJECTS: BucketObject[] = [
 		tag: 'notebook',
 	},
 	{
+		name: 'WorkspaceManifest',
+		key: notebook.version(VID).workspaceManifest,
+		schema: WorkspaceManifestSchema,
+		summary: 'Immutable synced workspace paths, byte sizes, and SHA-256 digests.',
+		mutability: 'immutable',
+		tag: 'notebook',
+	},
+	{
 		name: 'NotebookProposal',
 		key: proposal.meta,
 		schema: NotebookProposalSchema,
@@ -387,6 +405,50 @@ const OBJECTS: BucketObject[] = [
 		summary: 'CAS-managed publication state for a synced-session proposal.',
 		mutability: 'cas',
 		owner: 'NotebookProposalService',
+		tag: 'notebook',
+	},
+	{
+		name: 'WorkingBranch',
+		key: workingBranchPaths(PID, NID).head,
+		schema: WorkingBranchRecordSchema,
+		summary:
+			'Claimed branch identity, publication lease, save and PR association; retain deletion tombstones.',
+		mutability: 'cas',
+		owner: 'WorkingBranchService',
+		tag: 'notebook',
+	},
+	{
+		name: 'WorkingBranchSave',
+		key: workingBranchPaths(PID, NID).save('{save_id}'),
+		schema: WorkingBranchSaveSchema,
+		summary: 'Resumable save receipt; retain after payload expiry to prevent replay.',
+		mutability: 'cas',
+		owner: 'WorkingBranchService',
+		tag: 'notebook',
+	},
+	{
+		name: 'WorkingBranchCreation',
+		key: '_system/working-branches/creations/{pid}/{creation_id}.json',
+		schema: WorkingBranchCreationSchema,
+		summary: 'Immutable idempotency receipt pinning notebook identity and fork commit.',
+		mutability: 'immutable',
+		tag: 'notebook',
+	},
+	{
+		name: 'WorkingBranchCapture',
+		key: workingBranchPaths(PID, NID).capture('{save_id}'),
+		schema: WorkingBranchCaptureSchema,
+		summary: 'Immutable captured source changes with base64 content; bounded recovery retention.',
+		mutability: 'immutable',
+		tag: 'notebook',
+	},
+	{
+		name: 'WorkingBranchCleanup',
+		key: WORKING_BRANCH_CLEANUP_KEY,
+		schema: WorkingBranchCleanupSchema,
+		summary: 'Bounded working-branch recovery cleanup cursor.',
+		mutability: 'cas',
+		owner: 'WorkingBranchService',
 		tag: 'notebook',
 	},
 	{

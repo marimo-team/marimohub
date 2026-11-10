@@ -158,6 +158,20 @@ describe('GET /api/v1/capabilities', () => {
 		});
 	});
 
+	it.each([false, true])('advertises working branches only when enabled (%s)', async (enabled) => {
+		const deps = makeTestDeps(new MemoryBucket(), {
+			authenticator: authed,
+			sourceControl: {
+				...stubSourceControl(),
+				workingBranchesEnabled: enabled,
+				workingBranchProviders: () => ['github'],
+			},
+		});
+		const data = await expectOk(await createApi(deps).request('/api/v1/capabilities'));
+		if (enabled) expect(data.source_control.working_branch_providers).toEqual(['github']);
+		else expect(data.source_control).not.toHaveProperty('working_branch_providers');
+	});
+
 	it.each([
 		{ previews: undefined, resolveCommit: vi.fn(), expected: [] },
 		{ previews: false, resolveCommit: vi.fn(), expected: [] },

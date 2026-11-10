@@ -7,7 +7,9 @@ export function decodeProposalContent(content: string, encoding: unknown): Uint8
 	if (encoding !== 'base64') throw new ConflictError('The changed file has an invalid encoding');
 	try {
 		const binary = atob(content);
-		return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+		const bytes = new Uint8Array(binary.length);
+		for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+		return bytes;
 	} catch (error) {
 		throw new ConflictError('The changed file has invalid base64 content', { cause: error });
 	}

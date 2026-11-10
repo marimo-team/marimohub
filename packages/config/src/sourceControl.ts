@@ -14,6 +14,7 @@ import {
 	validateOrganization,
 } from '@marimo-hub/source-control-azure-devops';
 import type { Env } from './env';
+import { parseBool } from './env';
 import {
 	GitLabSourceControl,
 	gitLabOrigin,
@@ -195,10 +196,15 @@ const SOURCE_CONTROL_FACTORIES = {
 } satisfies Record<GitProvider, ((env: Env) => SourceControlRegistration | undefined) | null>;
 
 export function makeSourceControl(env: Env): SourceControlConfig {
+	const workingBranchesEnabled = parseBool(env, 'MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED');
 	const registrations = Object.values(SOURCE_CONTROL_FACTORIES).flatMap(
 		(factory) => factory?.(env) ?? [],
 	);
 	return registrations.length === 0
 		? {}
-		: { sourceControl: new ConfiguredSourceControlRegistry(registrations) };
+		: {
+				sourceControl: new ConfiguredSourceControlRegistry(registrations, {
+					workingBranchesEnabled,
+				}),
+			};
 }

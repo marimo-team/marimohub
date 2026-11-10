@@ -1,5 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
+import { ConflictError, UnavailableError } from '@marimo-hub/core/errors';
 import { sourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import { GitHubAppPublisher } from './index';
 import { parseApiRequest, response, testPrivateKey } from './testing/fakeGitHub';
@@ -361,77 +362,87 @@ describe('GitHubAppPublisher', () => {
 		);
 	});
 
-	it('does not report success when the conditional force update loses its race', async () => {
-		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-			const parsed = new URL(url);
-			const method = init?.method ?? 'GET';
-			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
-			if (parsed.pathname.endsWith('/access_tokens')) {
-				return response({ token: 'installation-token' });
-			}
-			if (parsed.pathname.endsWith('/pulls')) {
-				return response([
-					{
-						number: 17,
-						state: 'open',
-						html_url: updateInput.changeRequest.url,
-						head: { sha: 'existing-head' },
-					},
-				]);
-			}
-			if (parsed.pathname.includes('/git/ref/heads/') && method === 'GET') {
-				return response({ object: { sha: 'existing-head' } });
-			}
-			if (parsed.pathname.endsWith('/git/commits/existing-head')) {
-				return response({ tree: { sha: 'incompatible-tree' } });
-			}
-			if (parsed.pathname.endsWith('/git/trees/incompatible-tree')) {
-				return response({ truncated: false, tree: [] });
-			}
-			if (parsed.pathname.endsWith('/git/commits/base-sha')) {
-				return response({ tree: { sha: 'base-tree' } });
-			}
-			if (parsed.pathname.endsWith('/git/trees/base-tree')) {
-				return response({
-					truncated: false,
-					tree: [
+	it.each([true, false])(
+		'classifies conditional force update rejection (explicit=%s)',
+		async (explicit) => {
+			const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+				const parsed = new URL(url);
+				const method = init?.method ?? 'GET';
+				if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+				if (parsed.pathname.endsWith('/access_tokens')) {
+					return response({ token: 'installation-token' });
+				}
+				if (parsed.pathname.endsWith('/pulls')) {
+					return response([
 						{
-							path: 'apps/dashboard.py',
-							mode: '100644',
-							type: 'blob',
-							sha: 'base-blob',
+							number: 17,
+							state: 'open',
+							html_url: updateInput.changeRequest.url,
+							head: { sha: 'existing-head' },
 						},
-					],
-				});
-			}
-			if (parsed.pathname.endsWith('/git/blobs')) return response({ sha: 'new-blob' }, 201);
-			if (parsed.pathname.endsWith('/git/trees') && method === 'POST') {
-				return response({ sha: 'replacement-tree' }, 201);
-			}
-			if (parsed.pathname.endsWith('/git/commits') && method === 'POST') {
-				return response({ sha: 'replacement-head' }, 201);
-			}
-			if (parsed.pathname === '/repos/owner/repo') return response({ node_id: 'repo-node' });
-			if (parsed.pathname === '/graphql') {
-				return response({
-					data: { updateRefs: null },
-					errors: [{ message: 'beforeOid does not match' }],
-				});
-			}
-			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
-		});
+					]);
+				}
+				if (parsed.pathname.includes('/git/ref/heads/') && method === 'GET') {
+					return response({ object: { sha: 'existing-head' } });
+				}
+				if (parsed.pathname.endsWith('/git/commits/existing-head')) {
+					return response({ tree: { sha: 'incompatible-tree' } });
+				}
+				if (parsed.pathname.endsWith('/git/trees/incompatible-tree')) {
+					return response({ truncated: false, tree: [] });
+				}
+				if (parsed.pathname.endsWith('/git/commits/base-sha')) {
+					return response({ tree: { sha: 'base-tree' } });
+				}
+				if (parsed.pathname.endsWith('/git/trees/base-tree')) {
+					return response({
+						truncated: false,
+						tree: [
+							{
+								path: 'apps/dashboard.py',
+								mode: '100644',
+								type: 'blob',
+								sha: 'base-blob',
+							},
+						],
+					});
+				}
+				if (parsed.pathname.endsWith('/git/blobs')) return response({ sha: 'new-blob' }, 201);
+				if (parsed.pathname.endsWith('/git/trees') && method === 'POST') {
+					return response({ sha: 'replacement-tree' }, 201);
+				}
+				if (parsed.pathname.endsWith('/git/commits') && method === 'POST') {
+					return response({ sha: 'replacement-head' }, 201);
+				}
+				if (parsed.pathname === '/repos/owner/repo') return response({ node_id: 'repo-node' });
+				if (parsed.pathname === '/graphql') {
+					return response({
+						data: { updateRefs: null },
+						errors: [
+							{
+								message: 'beforeOid does not match',
+								...(explicit ? { type: 'UNPROCESSABLE', path: ['updateRefs'] } : {}),
+							},
+						],
+					});
+				}
+				throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
+			});
 
-		const error = await publisher(fetcher)
-			.updateChangeRequest(updateInput)
-			.catch((failure) => failure);
-		expect(error).toBeInstanceOf(Error);
-		expect((error as Error).message).toContain('branch changed while updating');
-		expect(sourceControlPublishFailure(error)).toEqual({
-			provider: 'github',
-			stage: 'branch',
-			condition: 'branch_changed',
-		});
-	});
+			const error = await publisher(fetcher)
+				.updateChangeRequest(updateInput)
+				.catch((failure) => failure);
+			expect(error).toBeInstanceOf(explicit ? ConflictError : UnavailableError);
+			expect((error as Error).message).toContain(
+				explicit ? 'rejected the branch update' : 'Could not confirm',
+			);
+			expect(sourceControlPublishFailure(error)).toEqual({
+				provider: 'github',
+				stage: 'branch',
+				...(explicit ? { condition: 'branch_changed' } : {}),
+			});
+		},
+	);
 
 	it('recovers an appended update after its publication record failed', async () => {
 		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {

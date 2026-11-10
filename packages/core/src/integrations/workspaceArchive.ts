@@ -21,7 +21,7 @@ export interface ParseWorkspaceArchiveOptions {
 
 /** Guard against a decompression bomb: cap the inflated tar before we parse it. */
 export const MAX_DECOMPRESSED_ARCHIVE_BYTES = 100 * 1024 * 1024;
-const MAX_ARCHIVE_FILES = 1000;
+const MAX_ARCHIVE_FILES = 1_000;
 
 interface ArchiveLimitState {
 	fileCount: number;

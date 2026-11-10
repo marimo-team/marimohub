@@ -76,6 +76,7 @@ import type { HonoEnv } from '../context';
 import { NotebookListQuery, pageSchema, paginate, PaginationQuery } from '../pagination';
 import { deleteNotebookAndRetire } from './notebookDelete';
 import { TagsBodySchema } from '../tagNamespace';
+import { auditWorkingBranch, authorizeWorkingBranchCreation } from '../workingBranches';
 
 // --- Request body schemas ---
 
@@ -102,7 +103,8 @@ const CreateGitNotebookBody = z.object({
 	}),
 	// `owner/repo` (GitHub shorthand) or a repository URL.
 	repo: z.string().min(1).openapi({ example: 'marimo-team/marimohub' }),
-	branch: z.string().min(1).openapi({ example: 'main' }),
+	branch: z.string().min(1).optional().openapi({ example: 'main' }),
+	fork: z.object({ base_branch: z.string().min(1) }).optional(),
 	// Repo subdirectory whose tree is mirrored; `entry_notebook` is relative to it.
 	root_path: z.string().optional().openapi({ example: 'apps' }),
 	entry_notebook: z.string().min(1).openapi({ example: 'my_app.py' }),
@@ -362,8 +364,13 @@ const createGitNotebook = createRoute({
 	operationId: 'notebooks.create-git',
 	tags: ['Notebooks'],
 	summary: 'Create a git-synced workspace notebook',
-	description: 'Requires project manager access because this selects a server-side repository.',
-	request: { params: ProjectIdParam, body: jsonBody(CreateGitNotebookBody) },
+	description:
+		'Ordinary Git sources require manager access. With fork, editors can create a working branch when enabled; Idempotency-Key is required and the head branch is generated.',
+	request: {
+		params: ProjectIdParam,
+		headers: IdempotencyKeyHeader,
+		body: jsonBody(CreateGitNotebookBody),
+	},
 	responses: {
 		201: jsonContent(
 			z.object({ success: z.literal(true), data: GitNotebookCreateResponseSchema }),
@@ -1400,13 +1407,58 @@ app.openapi(createGitNotebook, async (c) => {
 	const { notebooks, projects } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	const project = await assertProjectRole(projects, pid, user, 'notebook.manage', deps);
 	const body = c.req.valid('json');
+	if (body.fork && body.branch !== undefined) {
+		throw new BadRequestError('Specify either branch or fork, not both');
+	}
+	const project = await assertProjectRole(
+		projects,
+		pid,
+		user,
+		body.fork ? 'working-branch.write' : 'notebook.manage',
+		deps,
+	);
 	const base_image = checkBaseImage(deps.sandbox.images, body.base_image) ?? undefined;
 	const compute_profile = checkComputeProfile(deps.sandbox, body.compute_profile) ?? undefined;
 	const app_compute_profile =
 		checkComputeProfile(deps.sandbox, body.app_compute_profile, 'app') ?? undefined;
-	const input = { ...body, base_image, compute_profile, app_compute_profile };
+	const { fork, ...settings } = body;
+	if (!fork && !body.branch) throw new BadRequestError('A branch is required');
+	const input = {
+		...settings,
+		branch: body.branch ?? fork!.base_branch,
+		base_image,
+		compute_profile,
+		app_compute_profile,
+	};
+	if (fork) {
+		const key = c.req.valid('header')['idempotency-key'];
+		if (!key)
+			throw new BadRequestError('Idempotency-Key is required when creating a working branch');
+		const { branch: _branch, ...workingInput } = input;
+		const detail = await deps.services.workingBranches.create(
+			pid,
+			user.id,
+			key,
+			{
+				...workingInput,
+				base_branch: fork.base_branch,
+				sync_mode: 'pull',
+			},
+			async (notebook) => {
+				await authorizeWorkingBranchCreation(deps, user, pid, notebook);
+			},
+		);
+		await auditWorkingBranch(
+			deps,
+			user,
+			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path },
+			'notebook.working_branch.create',
+			pid,
+			detail.meta.id,
+		);
+		return c.json({ success: true, data: { notebook: toPublicNotebookMeta(detail.meta) } }, 201);
+	}
 	const prospectiveSource = createGitSource(input, deps.sourceControl?.repositoryHosts);
 	if (prospectiveSource.sync_mode === 'pull') {
 		assertPullSourceSupported(deps, prospectiveSource, pid);

@@ -70,6 +70,14 @@ export function GitSourceDetails({
 						<span className="text-foreground">{source.branch}</span>
 					)}
 				</dd>
+				{source.working_branch && (
+					<>
+						<dt>Base branch</dt>
+						<dd className="min-w-0 truncate">{source.working_branch.base_branch}</dd>
+						<dt>Saving</dt>
+						<dd>Explicit commits to the working branch</dd>
+					</>
+				)}
 				<dt>File</dt>
 				<dd className="min-w-0 truncate">
 					{coords ? (

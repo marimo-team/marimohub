@@ -1,5 +1,5 @@
 ---
-description: Sync read-only notebooks into marimohub from external Git repositories.
+description: Sync Git notebooks into marimohub and save edits to working branches.
 ---
 
 # Syncing from external sources
@@ -22,13 +22,87 @@ updates the files but does not add Git metadata to the version.
 Each successful sync creates an immutable version of the repository files under
 `root_path`. Each session starts with a fresh copy of the latest version. Optional
 [source-control publishing](configuration.md#source-control-publishing) can send
-session edits to the provider without changing these stored versions.
+session edits to a separate proposal branch. Working notebooks also support explicit
+saves that update their own stored versions.
 With the GitHub App configured, managers can also publish a branch or commit as a
 [notebook preview](notebook-previews.md) without changing the synced versions.
 
 GitHub, GitLab, and Azure DevOps Services support pull sources, **Sync now**, and draft change requests.
 Each provider uses separate server credentials and [repository policies](#repository-project-policies).
 A deployment can configure multiple providers.
+
+## Working notebooks
+
+Working notebooks use dedicated GitHub branches. They require the
+[working-branch opt-in](configuration.md#working-branches) and existing provider credentials.
+Editors use **New working branch** in the project creation menu. Managers select
+this workflow in the **Sync from git repo** dialog.
+
+1. Choose a repository, base branch, folder, and existing notebook file.
+2. Start an edit session.
+3. Select **Save to branch** to capture and commit source changes.
+4. Select **Open PR** to create a draft PR against the base branch.
+5. Continue editing and saving to update the same PR.
+
+The server pins the base commit and creates `marimohub/{project-id}/{notebook-id}`.
+Each successful save updates the stored version and the next capture baseline.
+The live files, Git index, and Git HEAD stay unchanged. New sessions use the latest
+synchronized commit.
+
+**Save before you stop a session.** Session termination does not preserve uncaptured edits.
+Captures include local commits, staged edits, and eligible untracked files under the
+notebook folder. `.gitignore` applies to new files. Captures exclude Git metadata,
+environment/cache directories, and marimo runtime state.
+
+Captures allow at most 1,000 changed files, 2,000 candidate paths, and 10 MiB of changed content.
+Unchanged imported files do not count toward the content limit. Before publication,
+the resulting workspace must fit the import limits: 1,000 files, 25 MiB per file, and 100 MiB total.
+Symlinks, special files, and deletion of the entry notebook are rejected.
+Working notebooks cannot change source configuration or move between projects.
+Deleting a notebook leaves its remote branch and PR intact.
+
+### Recovery
+
+| Save result                                | Action                                                                                                           |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| Commit succeeded, hub sync pending         | Select **Retry save** to import the exact commit without another capture.                                        |
+| Remote outcome unknown                     | Select **Retry save**. If the head still matches the recorded base, the hub retries the same conditional update. |
+| Branch moved or outcome remains unresolved | Download recovery before restarting. Resolve the conflict outside the hub or create a new working notebook.      |
+
+A failed capture releases the save slot. Start a new save after correcting the cause.
+A workspace-limit violation or definite rejection of the first remote update also releases the slot.
+Correct the files or repository rules, then start a new save. Any stored capture remains available for recovery.
+A rejected retry of an earlier uncertain update stays pending until reconciliation.
+
+Only the save author can retry. A captured operation can resume after its session ends.
+Recovery ZIPs contain captured files and a manifest of deletions. Ordinary captures
+have a 24-hour recovery horizon plus a one-hour cleanup grace. Unresolved dispatched
+saves retain their captures. Maintenance deletes eligible captures, but never publishes them.
+
+A closed, merged, or retargeted PR ends publication. An observed branch deletion also
+ends publication, even if someone recreates the branch. These cases require a new
+working notebook. The hub never force-pushes, merges, or rebases.
+
+### API and tools
+
+Create through `POST /api/v1/projects/{pid}/notebooks/git` with
+`"fork": {"base_branch": "main"}` and an `Idempotency-Key` header.
+Save through `POST …/notebooks/{nid}/sessions/{sid}/saves` with a separate stable key.
+After a timeout, reuse the same key.
+
+The remaining routes share `/api/v1/projects/{pid}/notebooks/{nid}`:
+
+| Operation     | Route                           |
+| ------------- | ------------------------------- |
+| Branch status | `GET /working-branch`           |
+| Save receipt  | `GET /saves/{save_id}`          |
+| Retry         | `POST /saves/{save_id}/retry`   |
+| Recovery ZIP  | `GET /saves/{save_id}/recovery` |
+| Open PR       | `POST /change-requests`         |
+
+The generated OpenAPI schema defines complete requests and responses.
+MCP and project chat expose the same operations with separate consent for remote writes.
+Branch status is cached for one minute. The web refreshes on focus and after mutations, without timer polling.
 
 ## How it works
 

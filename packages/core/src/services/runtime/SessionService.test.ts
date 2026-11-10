@@ -1268,6 +1268,59 @@ describe('SessionService', () => {
 		});
 	});
 
+	it.each(['running', 'terminating'] as const)(
+		'acknowledges working-branch saves idempotently while %s and fences stale baselines',
+		async (status) => {
+			const launchVersion = createVersionId();
+			const savedVersion = createVersionId();
+			const created = await sessions.createSession({
+				project_id: projectId,
+				notebook_id: notebookId,
+				user_id: ACTOR,
+				source_version_id: launchVersion,
+			});
+			await sessions.setRunning(projectId, created.session_id, 'https://sandbox.example');
+			if (status === 'terminating') await sessions.beginTerminating(projectId, created.session_id);
+
+			const acknowledged = await sessions.acknowledgeWorkingBranchSave(
+				projectId,
+				created.session_id,
+				notebookId,
+				launchVersion,
+				savedVersion,
+			);
+			expect(acknowledged).toMatchObject({
+				status,
+				source_version_id: launchVersion,
+				working_branch_version_id: savedVersion,
+			});
+			const put = vi.spyOn(bucket, 'put');
+			await expect(
+				sessions.acknowledgeWorkingBranchSave(
+					projectId,
+					created.session_id,
+					notebookId,
+					launchVersion,
+					savedVersion,
+				),
+			).resolves.toEqual(acknowledged);
+			await expect(
+				sessions.acknowledgeWorkingBranchSave(
+					projectId,
+					created.session_id,
+					notebookId,
+					launchVersion,
+					createVersionId(),
+				),
+			).rejects.toThrow(ConflictError);
+			expect(put).not.toHaveBeenCalled();
+			expect(await sessions.getSession(projectId, created.session_id)).toEqual(acknowledged);
+			expect(await sessions.listProtectedVersionIds(projectId, notebookId)).toEqual(
+				new Set([launchVersion, savedVersion]),
+			);
+		},
+	);
+
 	describe('terminating lifecycle + failure', () => {
 		it('beginTerminating → markTerminated moves through the visible stopping state', async () => {
 			const created = await sessions.createSession({

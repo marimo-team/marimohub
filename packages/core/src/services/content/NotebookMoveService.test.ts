@@ -1,4 +1,9 @@
-import { ForbiddenError, ResourceExhaustedError, UnavailableError } from '../../errors';
+import {
+	ConflictError,
+	ForbiddenError,
+	ResourceExhaustedError,
+	UnavailableError,
+} from '../../errors';
 import { PreviewRecordSchema } from './notebookPreviews';
 import { PREVIEW_LIMITS, previewProjectKey } from './PreviewStore';
 import { thumbnailPng } from '../../testing/thumbnail';
@@ -110,6 +115,40 @@ function previewIntent(pid: ProjectId, nid: NotebookId) {
 }
 
 describe('NotebookMoveService', () => {
+	it('rejects working-branch notebooks before claiming or changing a move', async () => {
+		const { bucket, services, from, to, notebook, input } = await setup();
+		const key = paths.project(from.id).notebook(notebook.id).source;
+		const source = await (await bucket.get(key))!.json<Record<string, unknown>>();
+		await bucket.put(
+			key,
+			JSON.stringify({
+				...source,
+				type: 'git',
+				provider: 'github',
+				repo: 'owner/repo',
+				branch: `marimohub/${from.id}/${notebook.id}`,
+				root_path: '',
+				sync_mode: 'pull',
+				commit: 'base',
+				last_synced_at: null,
+				working_branch: {
+					id: 'a'.repeat(64),
+					base_branch: 'main',
+					fork_commit: 'base',
+					created_by: ACTOR,
+				},
+			}),
+		);
+		const before = await services.catalog.getCurrentSnapshot();
+		const put = vi.spyOn(bucket, 'put');
+
+		await expect(services.moves.move(input)).rejects.toThrow(ConflictError);
+		expect(await moveRecord(bucket, notebook.id)).toBeNull();
+		expect(put).not.toHaveBeenCalled();
+		expect(await services.catalog.getCurrentSnapshot()).toEqual(before);
+		expect(await services.notebooks.listNotebooks(to.id)).toEqual([]);
+	});
+
 	it.each([false, true])(
 		'prunes copied history after queued source work, including chained moves (%s)',
 		async (chained) => {

@@ -624,27 +624,30 @@ describe('SyncedNotebookService', () => {
 			);
 		});
 
-		it('removes the packed archive when a canonical workspace write fails', async () => {
-			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
-			const realPut = bucket.put.bind(bucket);
-			const put = vi.spyOn(bucket, 'put').mockImplementation((key, value, options) => {
-				if (key.includes('/versions/') && key.endsWith('/workspace/app.py')) {
-					throw new Error('canonical storage unavailable');
-				}
-				return realPut(key, value, options);
-			});
+		it.each(['/workspace/app.py', '/workspace-manifest.json'])(
+			'removes all version objects when %s fails to write',
+			async (failedPath) => {
+				const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+				const realPut = bucket.put.bind(bucket);
+				const put = vi.spyOn(bucket, 'put').mockImplementation((key, value, options) => {
+					if (key.includes('/versions/') && key.endsWith(failedPath)) {
+						throw new Error('canonical storage unavailable');
+					}
+					return realPut(key, value, options);
+				});
 
-			try {
-				await expect(
-					notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa')),
-				).rejects.toThrow('canonical storage unavailable');
-				const versionsPrefix = `${paths.project(projectId).notebook(meta.id).base}/versions/`;
-				expect((await bucket.list({ prefix: versionsPrefix })).objects).toHaveLength(0);
-				expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(0);
-			} finally {
-				put.mockRestore();
-			}
-		});
+				try {
+					await expect(
+						notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa')),
+					).rejects.toThrow('canonical storage unavailable');
+					const versionsPrefix = `${paths.project(projectId).notebook(meta.id).base}/versions/`;
+					expect((await bucket.list({ prefix: versionsPrefix })).objects).toHaveLength(0);
+					expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(0);
+				} finally {
+					put.mockRestore();
+				}
+			},
+		);
 
 		it('rejects a pull sync without Git metadata', async () => {
 			const { meta } = await notebooks.synced.create(

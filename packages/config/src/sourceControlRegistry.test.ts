@@ -4,6 +4,7 @@ import type {
 	OpenChangeRequestInput,
 	SourceControlPublisher,
 	SourceControlReader,
+	WorkingBranchWriter,
 	UpdateChangeRequestInput,
 } from '@marimo-hub/core/ports/source-control';
 import { ConfiguredSourceControlRegistry } from './sourceControlRegistry';
@@ -53,6 +54,74 @@ class Provider implements SourceControlReader, SourceControlPublisher {
 }
 
 describe('ConfiguredSourceControlRegistry', () => {
+	it('guards every working-branch operation and preserves its receiver', async () => {
+		const adapter = new Provider();
+		const writer: WorkingBranchWriter = {
+			createBranch: vi.fn(async function (this: WorkingBranchWriter) {
+				expect(this).toBe(writer);
+				return { commit: 'abc' };
+			}),
+			prepareCommit: vi.fn(async () => ({ commit: 'abc' })),
+			advanceBranch: vi.fn(async () => ({ commit: 'abc' })),
+			openBranchChangeRequest: vi.fn(async () => adapter.publication),
+			inspectBranch: vi.fn(async () => ({ headCommit: 'abc', containsCommit: true })),
+		};
+		const operations = Object.values(writer);
+		const methods = Object.keys(writer);
+		Object.defineProperty(writer, 'client', { value: { secret: 'private' }, enumerable: true });
+		const publisher = Object.assign(adapter, { workingBranches: writer });
+		const authorize = vi.fn((repository: string) => {
+			if (repository === 'denied/repo') throw new Error('Denied');
+		});
+		const registry = new ConfiguredSourceControlRegistry(
+			[{ reader: adapter, publisher, authorize }],
+			{ workingBranchesEnabled: true },
+		);
+		const guarded = registry.getPublisher('test', projectId)!.workingBranches!;
+		expect(Object.keys(guarded)).toEqual(methods);
+		expect(guarded).not.toHaveProperty('client');
+		const invoke = (repository: string) => [
+			() => guarded.createBranch({ repository, branch: 'change', fromCommit: 'abc' }),
+			() =>
+				guarded.prepareCommit({ repository, parentCommit: 'abc', message: 'Save', changes: [] }),
+			() =>
+				guarded.advanceBranch({ repository, branch: 'change', expectedHead: 'abc', commit: 'def' }),
+			() =>
+				guarded.openBranchChangeRequest({
+					repository,
+					headBranch: 'change',
+					baseBranch: 'main',
+					title: 'Save',
+					body: '',
+					draft: true,
+				}),
+			() => guarded.inspectBranch({ repository, branch: 'change' }),
+		];
+		for (const operation of invoke('team/repo')) await operation();
+		for (const operation of invoke('denied/repo'))
+			await expect(operation()).rejects.toThrow('Denied');
+		for (const operation of operations) expect(operation).toHaveBeenCalledTimes(1);
+		expect(authorize.mock.calls).toEqual([
+			...Array.from({ length: 5 }, () => ['team/repo', projectId]),
+			...Array.from({ length: 5 }, () => ['denied/repo', projectId]),
+		]);
+		expect(registry.workingBranchProviders()).toEqual(['test']);
+	});
+
+	it('omits working-branch writes when disabled or missing a Git-capable reader', () => {
+		const publisher = Object.assign(new Provider(), { workingBranches: {} as WorkingBranchWriter });
+		const disabled = new ConfiguredSourceControlRegistry([{ reader: publisher, publisher }]);
+		expect(disabled.getPublisher('test')?.workingBranches).toBeUndefined();
+		expect(disabled.workingBranchProviders()).toEqual([]);
+		expect(disabled.workingBranchesEnabled).toBe(false);
+		const unreadable = new ConfiguredSourceControlRegistry([{ publisher }], {
+			workingBranchesEnabled: true,
+		});
+		expect(unreadable.getPublisher('test')?.workingBranches).toBeUndefined();
+		expect(unreadable.workingBranchProviders()).toEqual([]);
+		expect(unreadable.workingBranchesEnabled).toBe(false);
+	});
+
 	it('checks reader and publisher repository policy without external calls', () => {
 		const adapter = new Provider();
 		const readPolicy = vi.fn();

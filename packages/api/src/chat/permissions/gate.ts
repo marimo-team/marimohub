@@ -50,7 +50,8 @@ export async function checkPermission(
 	ctx: GateContext,
 	input: Record<string, unknown>,
 ): Promise<GateDecision> {
-	const request = permissionRequest(ctx.tool, input);
+	const consentInput = ctx.tool.consentInput ? await ctx.tool.consentInput(input) : input;
+	const request = permissionRequest(ctx.tool, consentInput);
 	if (!request) return { allowed: true };
 	const timeoutMs =
 		(ctx.deps.ai?.chat?.permissionTimeoutSeconds ?? DEFAULT_CHAT_CONFIG.permissionTimeoutSeconds) *

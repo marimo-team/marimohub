@@ -34,6 +34,7 @@ export interface SyncedNotebookDialogProps {
 	isOpen: boolean;
 	onClose: () => void;
 	projectId: string;
+	canManage?: boolean;
 	onCreated: (result: SyncedNotebookCreated) => void;
 }
 
@@ -41,6 +42,7 @@ const syncedSchema = (pullInput: ReturnType<typeof pullRepositoryInput>) =>
 	z
 		.object({
 			syncMode: z.enum(['push', 'pull']),
+			newBranch: z.enum(['no', 'yes']),
 			title: requiredText('Notebook name'),
 			repo: requiredText('Repository').refine(isRepoInput, REPO_INPUT_HINT),
 			branch: requiredText('Branch'),
@@ -62,8 +64,9 @@ const syncedSchema = (pullInput: ReturnType<typeof pullRepositoryInput>) =>
 			}
 		});
 
-const emptyValues = (syncMode: 'push' | 'pull') => ({
+const emptyValues = (syncMode: 'push' | 'pull', canManage: boolean) => ({
 	syncMode,
+	newBranch: canManage ? ('no' as const) : ('yes' as const),
 	title: '',
 	repo: '',
 	branch: 'main',
@@ -77,9 +80,12 @@ export function SyncedNotebookDialog({
 	isOpen,
 	onClose,
 	projectId,
+	canManage = true,
 	onCreated,
 }: SyncedNotebookDialogProps) {
 	const { data: capabilities } = useCapabilitiesQuery();
+	const branchProviders = capabilities?.source_control?.working_branch_providers ?? [];
+	const branchInput = pullRepositoryInput(branchProviders);
 	const pullProviders = capabilities?.source_control?.pull_source_providers ?? [];
 	const pullInput = pullRepositoryInput(pullProviders);
 	const pullAvailable = pullInput.available;
@@ -89,21 +95,27 @@ export function SyncedNotebookDialog({
 	const computeProfiles = capabilities?.compute_profiles ?? [];
 	const offersComputeChoice =
 		capabilities?.compute_profile_override === 'editors' && computeProfiles.length > 1;
-	const initialValues = emptyValues(pullAvailable ? 'pull' : 'push');
+	const initialValues = emptyValues(pullAvailable ? 'pull' : 'push', canManage);
 	const createSynced = useCreateSyncedNotebook(projectId);
 	const form = useAppForm({
 		defaultValues: initialValues,
 		validators: schemaValidators(syncedSchema(pullInput)),
 		onSubmit: async ({ value }) => {
 			try {
+				if (value.newBranch === 'yes' && !branchInput.validate(value.repo)) {
+					toast.error('Working branch publishing is unavailable for this repository');
+					return;
+				}
 				const data = await createSynced.mutateAsync({
 					title: value.title.trim(),
 					description: value.title.trim(),
 					repo: value.repo.trim(),
-					branch: value.branch.trim(),
 					root_path: normalizeRootPathInput(value.rootPath) || undefined,
 					entry_notebook: value.entryNotebook.trim(),
-					sync_mode: value.syncMode,
+					sync_mode: value.newBranch === 'yes' ? 'pull' : value.syncMode,
+					...(value.newBranch === 'yes'
+						? { fork: { base_branch: value.branch.trim() } }
+						: { branch: value.branch.trim() }),
 					...(value.baseImage !== DEFAULT_BASE_IMAGE ? { base_image: value.baseImage } : {}),
 					...(value.computeProfile !== DEFAULT_COMPUTE_PROFILE
 						? { compute_profile: value.computeProfile }
@@ -121,7 +133,7 @@ export function SyncedNotebookDialog({
 					title: data.notebook.title,
 					syncUrl: data.sync_url,
 					token: data.sync_token,
-					syncMode: value.syncMode,
+					syncMode: value.newBranch === 'yes' ? 'pull' : value.syncMode,
 				});
 			} catch {
 				return;
@@ -133,6 +145,7 @@ export function SyncedNotebookDialog({
 		if (isOpen && pullAvailable) form.setFieldValue('syncMode', 'pull');
 	}, [form, isOpen, pullAvailable]);
 	const syncMode = useSelector(form.store, (state) => state.values.syncMode);
+	const newBranch = useSelector(form.store, (state) => state.values.newBranch === 'yes');
 
 	return (
 		<FormDialog
@@ -145,7 +158,7 @@ export function SyncedNotebookDialog({
 			submitLabel="Create"
 			pendingLabel="Creating..."
 		>
-			{pullAvailable && (
+			{pullAvailable && canManage && !newBranch && (
 				<form.AppField name="syncMode">
 					{(f) => (
 						<f.RadioGroupField
@@ -165,6 +178,33 @@ export function SyncedNotebookDialog({
 						/>
 					)}
 				</form.AppField>
+			)}
+			{branchInput.available && canManage && (
+				<form.AppField name="newBranch">
+					{(f) => (
+						<f.RadioGroupField
+							label="Repository workflow"
+							options={[
+								{
+									value: 'no',
+									label: 'Track an existing branch',
+									description: 'Import source changes from the repository.',
+								},
+								{
+									value: 'yes',
+									label: 'New working branch',
+									description: 'Commit edits to a new branch and open a pull request.',
+								},
+							]}
+						/>
+					)}
+				</form.AppField>
+			)}
+			{newBranch && (
+				<p className="text-xs text-muted-foreground">
+					Start from an existing notebook file. Edits are committed only when you choose Save to
+					branch.
+				</p>
 			)}
 			<form.AppField name="title">
 				{(f) => <f.TextField label="Notebook name" placeholder="my_dashboard" autoFocus />}
@@ -196,7 +236,7 @@ export function SyncedNotebookDialog({
 				)}
 			</form.AppField>
 			<form.AppField name="branch">
-				{(f) => <f.TextField label="Branch" placeholder="main" />}
+				{(f) => <f.TextField label={newBranch ? 'New branch from' : 'Branch'} placeholder="main" />}
 			</form.AppField>
 			<form.AppField name="rootPath">
 				{(f) => <f.TextField label="Folder in repo (optional)" placeholder="apps" />}

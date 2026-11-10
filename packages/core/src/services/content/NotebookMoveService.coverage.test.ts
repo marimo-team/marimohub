@@ -15,6 +15,7 @@ const TRANSFERRED: Record<string, string> = {
 	'preview-runtime.json': 'NotebookService.copyForMove',
 	'source.json': 'NotebookService.copyForMove',
 	'versions/{vid}/version.json': 'NotebookService.copyForMove',
+	'versions/{vid}/workspace-manifest.json': 'NotebookService.copyForMove',
 	'versions/{vid}/git/{relative_path}': 'NotebookService.copyForMove',
 	'thumbnail.json': 'ThumbnailService.copyForMove',
 	'thumbnails/{image_id}.png': 'ThumbnailService.copyForMove',

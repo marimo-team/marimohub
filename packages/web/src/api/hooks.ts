@@ -1580,25 +1580,36 @@ export function useDuplicateNotebook(projectId: string) {
 }
 
 export function useCreateSyncedNotebook(projectId: string) {
+	const attempt = useRef<{ signature: string; key: string } | undefined>(undefined);
 	return useApiMutation(
 		(body: {
 			title: string;
 			description: string;
 			repo: string;
-			branch: string;
+			branch?: string;
 			root_path?: string;
 			entry_notebook: string;
 			sync_mode?: 'push' | 'pull';
+			fork?: { base_branch: string };
 			base_image?: string;
 			compute_profile?: string;
 			app_compute_profile?: string;
-		}) =>
-			apiData(
+		}) => {
+			const signature = JSON.stringify([projectId, body]);
+			if (attempt.current?.signature !== signature)
+				attempt.current = { signature, key: crypto.randomUUID() };
+			const key = attempt.current.key;
+			return apiData(
 				apiClient.POST('/api/v1/projects/{pid}/notebooks/git', {
 					params: { path: { pid: projectId } },
+					headers: body.fork ? { 'Idempotency-Key': key } : undefined,
 					body,
 				}),
-			),
+			).then((data) => {
+				if (attempt.current?.key === key) attempt.current = undefined;
+				return data;
+			});
+		},
 		() => [notebookKeys.list(projectId)],
 	);
 }

@@ -478,6 +478,42 @@ describe('startMaintenance', () => {
 		});
 	});
 
+	it('includes pruned working-branch captures in the maintenance event', async () => {
+		const prune = vi
+			.spyOn(deps.services.workingBranches, 'pruneExpiredPayloads')
+			.mockResolvedValue(3);
+		h.track(startMaintenance(deps, metrics));
+		await flushRun();
+
+		expect(prune).toHaveBeenCalledOnce();
+		expect(h.events().find((event) => event.event === 'maintenance_cycle')).toMatchObject({
+			working_branch_payloads_pruned: 3,
+		});
+	});
+
+	it('logs working-branch cleanup failures and continues claiming invites', async () => {
+		vi.spyOn(deps.services.workingBranches, 'pruneExpiredPayloads').mockRejectedValue(
+			new Error('Bucket unavailable'),
+		);
+		const claim = vi.spyOn(deps.services.projects, 'claimPendingInvites').mockResolvedValue(2);
+		const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+		h.track(startMaintenance(deps, metrics));
+		await flushRun();
+
+		expect(claim).toHaveBeenCalledOnce();
+		expect(h.events().find((event) => event.event === 'maintenance_cycle')).toMatchObject({
+			working_branch_payloads_pruned: null,
+			invite_rows_claimed: 2,
+		});
+		expect(errors.mock.calls.map(([line]) => JSON.parse(String(line)))).toContainEqual(
+			expect.objectContaining({
+				event: 'working_branch.maintenance_failed',
+				error: { name: 'Error' },
+			}),
+		);
+		expect(h.events().some((event) => event.event === 'maintenance_failed')).toBe(false);
+	});
+
 	it('claims pending invite rows during the maintenance cycle', async () => {
 		const claimSpy = vi.spyOn(deps.services.projects, 'claimPendingInvites').mockResolvedValue(2);
 

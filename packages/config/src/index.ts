@@ -727,6 +727,7 @@ export function createFromEnv(
 		backgroundWork: options?.backgroundWork,
 		tracing: options?.tracing,
 		repositoryHosts: sourceControlConfig.sourceControl?.repositoryHosts,
+		sourceControl: sourceControlConfig.sourceControl,
 	});
 	const projectAlerts = makeProjectAlerts(env, bucket, metrics);
 	const surfaces = surfacesFromEnv(env);
