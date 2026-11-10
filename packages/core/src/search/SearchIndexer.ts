@@ -49,6 +49,7 @@ const CrawlCursorSchema = SearchCursorSchema.extend({
 });
 const MAX_TICK_STEPS = 32;
 const TICK_BUDGET_MS = 100;
+const CLEANUP_DELETE_BATCH_SIZE = 10;
 
 export class SearchIndexer {
 	constructor(
@@ -383,6 +384,7 @@ export class SearchIndexer {
 				}
 			}
 		}
+		const cleanupCursor = failure ? cursor.cleanup : cleanup.cursor;
 		const started = performance.now();
 		for (let steps = 0; position < tasks.length && steps < MAX_TICK_STEPS; steps++) {
 			signal.throwIfAborted();
@@ -404,7 +406,7 @@ export class SearchIndexer {
 		}
 		const next = {
 			after: position === tasks.length ? '' : after,
-			cleanup: cleanup.cursor,
+			cleanup: cleanupCursor,
 			schedule,
 			next_run_at:
 				!failure && position === tasks.length ? Date.now() + this.minRecrawlIntervalMs : undefined,
@@ -426,13 +428,17 @@ export class SearchIndexer {
 	private async pruneScope(projectId: ProjectId, source: string, signal: AbortSignal) {
 		const scope = { projectId, source };
 		const paths = searchPaths.scope(scope);
+		signal.throwIfAborted();
 		const object = await this.bucket.get(paths.checkpoint);
+		signal.throwIfAborted();
 		if (object && object.size > MAX_SEARCH_CHECKPOINT_BYTES) return;
 		const state = object ? SearchCheckpointSchema.parse(await object.json()) : null;
 		if (state && state.pages.length > 0) return;
 		await this.index.prune?.(scope, signal);
+		signal.throwIfAborted();
 		if (!object || !state) return;
 		const pages = await this.bucket.list({ prefix: paths.pages, limit: 100 });
+		signal.throwIfAborted();
 		const expired = pages.objects.filter(
 			(page) =>
 				Date.now() - page.uploaded.getTime() > 24 * 3600_000 &&
@@ -450,8 +456,13 @@ export class SearchIndexer {
 			if (error instanceof PreconditionFailedError) return;
 			throw error;
 		}
+		for (let offset = 0; offset < expired.length; offset += CLEANUP_DELETE_BATCH_SIZE) {
+			signal.throwIfAborted();
+			await this.bucket.delete(
+				expired.slice(offset, offset + CLEANUP_DELETE_BATCH_SIZE).map((page) => page.key),
+			);
+		}
 		signal.throwIfAborted();
-		await this.bucket.delete(expired.map((page) => page.key));
 	}
 }
 

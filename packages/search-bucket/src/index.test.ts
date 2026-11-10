@@ -56,6 +56,80 @@ describe('bucket search index', () => {
 		expect(remove.mock.calls[0][0]).toHaveLength(3);
 		expect((await index.read(scope, signal())).snapshot?.documents).toHaveLength(4);
 	});
+	it('does not list snapshots after cancellation while decoding the head', async () => {
+		const bucket = new MemoryBucket();
+		const index = new BucketSearchIndex(bucket);
+		await index.publish(scope, snapshot(), null, signal());
+		const controller = new AbortController();
+		const head = (await bucket.get(searchPaths.scope(scope).head))!;
+		const json = head.json.bind(head);
+		vi.spyOn(head, 'json').mockImplementationOnce(async <T>() => {
+			const value = await json<T>();
+			controller.abort();
+			return value;
+		});
+		vi.spyOn(bucket, 'get').mockResolvedValueOnce(head);
+		const list = vi.spyOn(bucket, 'list');
+		await expect(index.prune(scope, controller.signal)).rejects.toMatchObject({
+			name: 'AbortError',
+		});
+		expect(list).not.toHaveBeenCalled();
+	});
+	it.each([false, true])(
+		'rejects cancellation during snapshot listing before cleanup writes (expired: %s)',
+		async (expired) => {
+			const bucket = new MemoryBucket();
+			const index = new BucketSearchIndex(bucket);
+			await index.publish(scope, snapshot(), null, signal());
+			await bucket.put(searchPaths.scope(scope).snapshot(crypto.randomUUID()), '{}');
+			if (expired) vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2 * 24 * 3600_000);
+			const controller = new AbortController();
+			const list = bucket.list.bind(bucket);
+			vi.spyOn(bucket, 'list').mockImplementationOnce(async (options) => {
+				const result = await list(options);
+				controller.abort();
+				return result;
+			});
+			const put = vi.spyOn(bucket, 'put');
+			const remove = vi.spyOn(bucket, 'delete');
+			await expect(index.prune(scope, controller.signal)).rejects.toMatchObject({
+				name: 'AbortError',
+			});
+			expect(put).not.toHaveBeenCalled();
+			expect(remove).not.toHaveBeenCalled();
+		},
+	);
+	it.each([3, 25])(
+		'stops after an in-flight deletion batch and retries remaining snapshots (%i expired)',
+		async (count) => {
+			const bucket = new MemoryBucket();
+			const index = new BucketSearchIndex(bucket);
+			await index.publish(scope, snapshot(), null, signal());
+			const paths = searchPaths.scope(scope);
+			for (let i = 0; i < count; i++) await bucket.put(paths.snapshot(crypto.randomUUID()), '{}');
+			vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2 * 24 * 3600_000);
+			const controller = new AbortController();
+			const remove = bucket.delete.bind(bucket);
+			const deletions = vi.spyOn(bucket, 'delete').mockImplementationOnce(async (keys) => {
+				await remove(keys);
+				controller.abort();
+			});
+			await expect(index.prune(scope, controller.signal)).rejects.toMatchObject({
+				name: 'AbortError',
+			});
+			expect(deletions).toHaveBeenCalledOnce();
+			expect(deletions.mock.calls[0][0]).toHaveLength(Math.min(10, count));
+			expect((await bucket.list({ prefix: paths.snapshots })).objects).toHaveLength(
+				Math.max(0, count - 10) + 1,
+			);
+			await index.prune(scope, signal());
+			expect((await bucket.list({ prefix: paths.snapshots })).objects).toHaveLength(1);
+			expect(deletions.mock.calls.every(([keys]) => Array.isArray(keys) && keys.length <= 10)).toBe(
+				true,
+			);
+			expect((await index.read(scope, signal())).snapshot?.documents).toHaveLength(1);
+		},
+	);
 	it('does not delete after a publisher wins the cleanup fence race', async () => {
 		const bucket = new MemoryBucket();
 		const index = new BucketSearchIndex(bucket);

@@ -329,25 +329,94 @@ it('resumes after cancellation partway through a batch without repeating complet
 	for (const project of f.entries) expect(await f.snapshot(project.id)).not.toBeNull();
 });
 
-it('keeps indexing other projects and retries failed cleanup deletion', async () => {
-	vi.useFakeTimers({ toFake: ['Date'] });
-	vi.spyOn(performance, 'now').mockReturnValue(0);
-	const f = await seed(2, 1);
-	f.entries.sort((a, b) => a.id.localeCompare(b.id));
-	const scope = { projectId: f.entries[0].id, source: f.source.id };
-	await f.indexer().step(scope.projectId, f.source, signal());
-	const published = await f.snapshot(scope.projectId);
-	const pages = searchPaths.scope(scope).pages;
-	const expired = (await f.bucket.list({ prefix: pages })).objects.map((object) => object.key);
-	vi.setSystemTime(Date.now() + 2 * 24 * 3600_000);
-	vi.spyOn(f.bucket, 'delete').mockRejectedValueOnce(new Error('delete failed'));
-	await expect(f.indexer().tick(signal())).rejects.toThrow('delete failed');
-	expect(await f.snapshot(scope.projectId)).toEqual(published);
-	expect(await f.snapshot(f.entries[1].id)).not.toBeNull();
-	await f.indexer().tick(signal());
-	for (const key of expired) expect(await f.bucket.head(key)).toBeNull();
-	expect(await f.snapshot(scope.projectId)).toEqual(published);
-});
+it.each([0, 1])(
+	'retries a failed cleanup page at cursor position %s before going idle',
+	async (position) => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.spyOn(performance, 'now').mockReturnValue(0);
+		const f = await seed(3, 1);
+		f.entries.sort((a, b) => a.id.localeCompare(b.id));
+		for (const project of f.entries) await f.indexer().step(project.id, f.source, signal());
+		const previousCursor = position === 0 ? undefined : 'previous-cleanup-page';
+		const nextCursor = 'next-cleanup-page';
+		const list = f.bucket.list.bind(f.bucket);
+		// Storage cursors are opaque and must survive concurrent crawl writes.
+		vi.spyOn(f.bucket, 'list').mockImplementation((options) => {
+			if (options?.prefix !== searchPaths.projects) return list(options);
+			const entry = f.entries[options.cursor === previousCursor ? position : position + 1];
+			return Promise.resolve({
+				objects: [],
+				delimitedPrefixes: [`${searchPaths.projects}${entry.id}/`],
+				cursor: nextCursor,
+				truncated: true,
+			});
+		});
+		await f.bucket.put(searchPaths.cursor, JSON.stringify({ after: '', cleanup: previousCursor }));
+		const projectId = f.entries[position].id;
+		const pages = searchPaths.scope({ projectId, source: f.source.id }).pages;
+		const expired = (await f.bucket.list({ prefix: pages })).objects.map((object) => object.key);
+		vi.setSystemTime(Date.now() + 2 * 24 * 3600_000);
+		const page = vi.spyOn(f.source, 'page');
+		vi.spyOn(f.bucket, 'delete').mockRejectedValueOnce(new Error('delete failed'));
+		await expect(f.indexer().tick(signal())).rejects.toThrow('delete failed');
+		expect(page).toHaveBeenCalledTimes(3);
+		const failed = await (await f.bucket.get(searchPaths.cursor))!.json<{
+			cleanup?: string;
+			next_run_at?: number;
+		}>();
+		expect(failed.cleanup).toBe(previousCursor);
+		expect(failed.next_run_at).toBeUndefined();
+		await f.indexer().tick(signal());
+		for (const key of expired) expect(await f.bucket.head(key)).toBeNull();
+		const recovered = await (await f.bucket.get(searchPaths.cursor))!.json<{
+			cleanup?: string;
+			next_run_at?: number;
+		}>();
+		expect(recovered.cleanup).toBe(nextCursor);
+		expect(recovered.next_run_at).toBeGreaterThan(Date.now());
+	},
+);
+
+it.each(['list', 'delete'] as const)(
+	'cancels crawl-page cleanup during %s and resumes remaining work',
+	async (stage) => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		const f = await seed(1, 1);
+		const indexer = f.indexer();
+		await indexer.step(f.entries[0].id, f.source, signal());
+		const scope = searchPaths.scope({ projectId: f.entries[0].id, source: f.source.id });
+		if (stage === 'delete') {
+			for (let i = 0; i < 20; i++) await f.bucket.put(scope.page(crypto.randomUUID()), '{}');
+			vi.setSystemTime(Date.now() + 2 * 24 * 3600_000);
+		}
+		const controller = new AbortController();
+		const list = f.bucket.list.bind(f.bucket);
+		vi.spyOn(f.bucket, 'list').mockImplementation(async (options) => {
+			const page = await list(options);
+			if (stage === 'list' && options?.prefix === scope.pages) controller.abort();
+			return page;
+		});
+		const remove = f.bucket.delete.bind(f.bucket);
+		const deletes = vi.spyOn(f.bucket, 'delete').mockImplementation(async (keys) => {
+			await remove(keys);
+			controller.abort();
+		});
+		const put = vi.spyOn(f.bucket, 'put');
+		await expect(indexer.tick(controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+		expect(await f.bucket.get(searchPaths.cursor)).toBeNull();
+		if (stage === 'list') {
+			expect(put).not.toHaveBeenCalled();
+			expect(deletes).not.toHaveBeenCalled();
+		} else {
+			expect(deletes).toHaveBeenCalledOnce();
+			expect(deletes.mock.calls[0][0]).toHaveLength(10);
+			const remaining = (await list({ prefix: scope.pages })).objects;
+			expect(remaining).toHaveLength(11);
+			await indexer.tick(signal());
+			for (const object of remaining) expect(await f.bucket.head(object.key)).toBeNull();
+		}
+	},
+);
 
 it('propagates cancellation during an idle catalog check', async () => {
 	const f = await seed(1, 1);

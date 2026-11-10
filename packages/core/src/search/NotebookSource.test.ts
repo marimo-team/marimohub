@@ -1,7 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { createSearchFixture } from '../testing/search';
+import { createSearchFixture, searchOwner } from '../testing/search';
 import { paths } from '../paths';
 import { createVersionId } from '../ids';
+import { sha256Hex } from '../internal/sha256';
 import { savedOutputText } from './NotebookSource';
 
 afterEach(() => vi.restoreAllMocks());
@@ -60,6 +61,48 @@ it('intentionally skips deleted notebooks even when their source has been remove
 		documents: [],
 		partial: false,
 	});
+});
+
+it('rejects move-fenced notebooks even when the indexed fingerprint matches and recovers after unfencing', async () => {
+	const f = await setup();
+	const scope = { projectId: f.project.id, source: f.source.id };
+	const meta = await (await f.bucket.get(f.keys.meta))!.json<Record<string, unknown>>();
+	const fenced = await f.bucket.put(
+		f.keys.meta,
+		JSON.stringify({ ...meta, move_id: 'pending-move' }),
+	);
+	const source = await f.bucket.head(f.keys.source);
+	const code = await f.bucket.head(f.keys.code);
+	const snapshot = await f.snapshot();
+	// An older crawler could have published documents while the metadata was fenced.
+	const content = await sha256Hex(
+		JSON.stringify([fenced.etag, source!.etag, code!.key, code!.etag, null, null]),
+	);
+	const { revision } = await f.index.head(scope);
+	await f.index.publish(
+		scope,
+		{
+			...snapshot,
+			documents: snapshot.documents.map((document) => ({
+				...document,
+				fingerprint: `${content}:${snapshot.documents.length}:complete`,
+			})),
+		},
+		revision,
+	);
+	const get = vi.spyOn(f.bucket, 'get');
+	const head = vi.spyOn(f.bucket, 'head');
+	const result = await f.search.search(searchOwner, f.query);
+	expect(result.items).toEqual([]);
+	expect(result.partial).toBe(true);
+	expect(get.mock.calls.filter(([key]) => key === f.keys.meta)).toHaveLength(1);
+	expect(head).not.toHaveBeenCalled();
+	expect(await f.page()).toMatchObject({ documents: [], partial: true });
+	await f.bucket.put(f.keys.meta, JSON.stringify(meta));
+	await f.crawl();
+	const recovered = await f.search.search(searchOwner, f.query);
+	expect(recovered.items).toHaveLength(1);
+	expect(recovered.partial).toBe(false);
 });
 
 it.each([false, true])(

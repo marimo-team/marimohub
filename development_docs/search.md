@@ -119,20 +119,23 @@ Both records remain: a delayed writer cannot recreate a first checkpoint or publ
 Live checks filter deleted resources until the next snapshot excludes them.
 
 Cleanup lists objects before writing a CAS fence. Empty deletion batches write no fence.
-A successful fence permits one batch deletion of the expired objects. A lost CAS deletes nothing.
+A successful fence permits deletion in batches of at most 10 objects. A lost CAS deletes nothing.
+Cancellation checks run before listing, after listing, and between deletion batches. An in-flight storage call can still finish.
 Cleanup preserves current snapshots, active crawl pages, objects younger than 24 hours, and deletion heads.
 Each pass examines at most 100 snapshots and 100 pages per source.
 Storage failures or maintenance downtime delay reclamation.
 
 Maintenance uses a lease and visits project/source pairs in round-robin order.
-Attempts run every five seconds with a 30-second deadline. Each attempt starts at most 32 crawl steps.
-After 100 ms, the crawler starts no further steps. One step includes page assembly and publication, so it can exceed this budget.
+Attempts run every five seconds with a 30-second deadline. Cleanup runs first and can retire deleted scopes.
+The scheduled crawl loop then starts at most 32 steps, with no new steps after 100 ms of that loop.
+These two limits exclude cleanup work. One step includes page assembly and publication, so it can exceed the time budget.
 A completed round pauses for five minutes. During this pause, ticks read only the cursor and catalog.
 Adding or removing projects wakes the crawler. Changes to refresh tokens, source revisions, source configuration, or embedding identity also wake it.
 The cursor persists the schedule identity and pause deadline across process restarts. Unchanged cursor state requires no write.
 
 A failed scope advances the cursor before the error propagates, so later scopes can proceed on the next tick.
-Cleanup failures also permit indexing to continue. Failed work remains eligible for retry, and errors prevent the tick from entering an idle pause.
+Cleanup failures also permit indexing to continue, but preserve the cleanup cursor for retry on the next tick.
+Errors prevent the tick from entering an idle pause.
 Cancellation rejects the tick without advancing the cursor. Checkpoints preserve completed work.
 Final assembly reads at most eight pages concurrently, preserves page order, and stops scheduling after a failure.
 The ready checkpoint preserves discovery progress, but assembly restarts on each retry.

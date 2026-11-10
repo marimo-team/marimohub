@@ -4,6 +4,7 @@ import { htmlText } from './text';
 import type { Bucket } from '../ports/bucket';
 import type { CatalogService } from '../services/catalog/CatalogService';
 import type { NotebookService } from '../services/content/NotebookService';
+import { assertNotMoving } from '../services/content/notebookMoveRecord';
 import type { AuthorizationService } from '../services/authorization/AuthorizationService';
 import type { AuthenticatedPrincipal } from '../ports/auth';
 import type { Project } from '../schema';
@@ -45,6 +46,7 @@ export class NotebookSource implements SearchSource {
 		const meta = NotebookMetaSchema.parse(await metaObject.json());
 		if (meta.id !== notebookId || meta.project_id !== project.id)
 			throw new Error('Notebook identity mismatch');
+		assertNotMoving(meta, notebookId);
 		if (meta.status === 'deleted' || meta.preview) return null;
 		if (!sourceObject || sourceObject.size > MAX_ARTIFACT_BYTES)
 			throw new Error('Notebook source is missing or exceeds the read budget');
