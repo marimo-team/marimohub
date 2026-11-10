@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { sha256Hex } from '../../internal/sha256';
 import { deferOrAwait } from '../../ports/backgroundWork';
 import type { BackgroundWork } from '../../ports/backgroundWork';
 import { copyMoveObject, copyMovePrefix, moveJson } from './moveObjects';
@@ -37,6 +39,7 @@ import { logOperationalError } from '../../operationalLog';
 import { compensableWrite, metricsObserver, saga } from '../../saga';
 import {
 	FsSnapshotSchema,
+	SnapshotDescriptorSchema,
 	JobRunMarkerSchema,
 	NotebookMetaSchema,
 	PreviewRuntimeMetaSchema,
@@ -97,6 +100,22 @@ export const MAX_VERSIONS = 50;
 
 /** Grace period before a soft-deleted notebook's storage is purged by the GC sweep. */
 export const DEFAULT_DELETED_NOTEBOOK_RETENTION_MS = Millis.days(30);
+
+const NOTEBOOK_GC_CURSOR_KEY = '_system/notebook-gc-cursor.json';
+const NotebookGcCursorSchema = z.object({
+	after: z.string(),
+	next_at: z.number(),
+});
+const GC_CYCLES_PER_DAY = 288;
+
+type SessionArtifact = {
+	key: string;
+	field: 'html_snapshot' | 'session_snapshot';
+	content: string;
+	contentType: string;
+	hash: string;
+	descriptor: SnapshotDescriptor;
+};
 
 export interface CreateNotebookInput {
 	title: string;
@@ -1080,22 +1099,31 @@ export class NotebookService {
 		const curDeps = curDepsObj ? await curDepsObj.text() : '';
 		const changed = input.code !== curCode || deps !== curDeps;
 
-		const htmlDescriptor: SnapshotDescriptor | undefined =
-			input.html !== undefined
-				? { captured_at: now, size_bytes: byteLength(input.html) }
-				: undefined;
-		const sessionDescriptor: SnapshotDescriptor | undefined =
-			input.session !== undefined
-				? { captured_at: now, size_bytes: byteLength(input.session) }
-				: undefined;
-
-		let versionId = source.current_version_id;
-		let newVersion = false;
+		const versionId = changed ? createVersionId() : source.current_version_id;
+		const ver = nb.version(versionId);
+		const artifacts: SessionArtifact[] = await Promise.all(
+			(
+				[
+					{ key: ver.html, field: 'html_snapshot', content: input.html, contentType: 'text/html' },
+					{
+						key: ver.session,
+						field: 'session_snapshot',
+						content: input.session,
+						contentType: 'application/json',
+					},
+				] as const
+			)
+				.flatMap((artifact) =>
+					artifact.content === undefined ? [] : [{ ...artifact, content: artifact.content }],
+				)
+				.map(async (artifact) => ({
+					...artifact,
+					hash: await sha256Hex(artifact.content),
+					descriptor: { captured_at: now, size_bytes: byteLength(artifact.content) },
+				})),
+		);
 
 		if (changed) {
-			versionId = createVersionId();
-			newVersion = true;
-
 			const version: Version = {
 				...buildVersion({
 					versionId,
@@ -1105,13 +1133,11 @@ export class NotebookService {
 					message: 'Session edits',
 					parentId: source.current_version_id,
 				}),
-				...(htmlDescriptor ? { html_snapshot: htmlDescriptor } : {}),
-				...(sessionDescriptor ? { session_snapshot: sessionDescriptor } : {}),
+				...artifactDescriptors(artifacts),
 			};
 
 			const newSource = localSource(versionId, source.entry_notebook);
 
-			const ver = nb.version(versionId);
 			await Promise.all([
 				// Live notebook files reflect the session's final state.
 				this.bucket.put(nb.workspaceFile(workspaceSourcePolicy(source).entryNotebook), input.code),
@@ -1121,16 +1147,7 @@ export class NotebookService {
 				this.bucket.put(ver.code, input.code),
 				this.bucket.put(ver.deps, deps),
 				this.bucket.put(ver.meta, JSON.stringify(version)),
-				...(input.html !== undefined
-					? [this.bucket.put(ver.html, input.html, { httpMetadata: { contentType: 'text/html' } })]
-					: []),
-				...(input.session !== undefined
-					? [
-							this.bucket.put(ver.session, input.session, {
-								httpMetadata: { contentType: 'application/json' },
-							}),
-						]
-					: []),
+				...artifacts.map((artifact) => this.writeArtifact(artifact)),
 			]);
 
 			// Invalidate reads made before the editor's final save, including same-millisecond saves.
@@ -1156,57 +1173,36 @@ export class NotebookService {
 			);
 
 			await this.pruneVersions(projectId, notebookId, MAX_VERSIONS, versionId);
-		} else if (htmlDescriptor || sessionDescriptor) {
-			// Unchanged code: attach the fresh snapshots to the existing current version.
-			// This additively patches that version.json (adds optional descriptor
-			// fields) and writes the sidecar artifacts — a newer render replaces an
-			// older one for the same code.
-			//
-			// Read version.json FIRST: if it is somehow missing (it should never be —
-			// the current version is always retained by pruning), skip the whole attach
-			// rather than write sidecar files we can never record a descriptor for.
-			const ver = nb.version(versionId);
+		} else if (artifacts.length > 0) {
+			// A missing descriptor record must not leave untracked sidecars.
 			const metaObj = await this.bucket.get(ver.meta);
 			if (metaObj) {
-				await Promise.all([
-					...(input.html !== undefined
-						? [
-								this.bucket.put(ver.html, input.html, {
-									httpMetadata: { contentType: 'text/html' },
-								}),
-							]
-						: []),
-					...(input.session !== undefined
-						? [
-								this.bucket.put(ver.session, input.session, {
-									httpMetadata: { contentType: 'application/json' },
-								}),
-							]
-						: []),
-				]);
+				const version = await readStored(VersionSchema, metaObj, ver.meta);
+				const updates = (
+					await Promise.all(
+						artifacts.map((artifact) => this.artifactUpdate(artifact, version[artifact.field])),
+					)
+				).filter((update) => update !== undefined);
+				const uploads = updates.filter((update) => update.write).map((update) => update.artifact);
+				await Promise.all(uploads.map((artifact) => this.writeArtifact(artifact)));
+				const descriptors = artifactDescriptors(updates.map((update) => update.artifact));
 				// CAS the descriptor patch so two concurrent teardowns of the same
 				// notebook cannot drop each other's descriptor.
 				try {
-					await mutateObject(
-						this.bucket,
-						ver.meta,
-						(raw) => parseStored(VersionSchema, raw, ver.meta),
-						(current): Version => ({
-							...current,
-							...(htmlDescriptor ? { html_snapshot: htmlDescriptor } : {}),
-							...(sessionDescriptor ? { session_snapshot: sessionDescriptor } : {}),
-						}),
-					);
+					if (updates.length > 0)
+						await mutateObject(
+							this.bucket,
+							ver.meta,
+							(raw) => parseStored(VersionSchema, raw, ver.meta),
+							(current): Version => ({
+								...current,
+								...descriptors,
+							}),
+						);
 				} catch (err) {
-					// version.json deleted between the read above and the CAS write
-					// (e.g. concurrent notebook purge). Best-effort remove the sidecars we
-					// just wrote so we don't leak untracked artifacts no descriptor points
-					// at — matching the read-first "skip the whole attach" contract.
+					// Concurrent purge removed version.json; discard only the sidecars this save wrote.
 					if (!(err instanceof NotFoundError)) throw err;
-					const orphans = [
-						input.html !== undefined ? ver.html : undefined,
-						input.session !== undefined ? ver.session : undefined,
-					].filter((k): k is string => k !== undefined);
+					const orphans = uploads.map((artifact) => artifact.key);
 					if (orphans.length > 0) await this.bucket.delete(orphans).catch(() => {});
 				}
 			}
@@ -1214,10 +1210,57 @@ export class NotebookService {
 
 		return {
 			versionId,
-			newVersion,
+			newVersion: changed,
 			capturedHtml: input.html !== undefined,
 			capturedSession: input.session !== undefined,
 		};
+	}
+
+	private writeArtifact(artifact: SessionArtifact) {
+		return this.bucket.put(artifact.key, artifact.content, {
+			httpMetadata: { contentType: artifact.contentType },
+			customMetadata: { sha256: artifact.hash, captured_at: artifact.descriptor.captured_at },
+		});
+	}
+
+	private async artifactUpdate(
+		artifact: SessionArtifact,
+		previous?: SnapshotDescriptor,
+	): Promise<{ write: boolean; artifact: SessionArtifact } | undefined> {
+		const { key, hash } = artifact;
+		const object = await this.bucket.head(key);
+		let matches =
+			object?.size === artifact.descriptor.size_bytes && object.customMetadata?.sha256 === hash;
+		if (object && !object.customMetadata?.sha256) {
+			// Legacy objects and filesystem storage have no custom metadata.
+			const body = await this.bucket.get(key);
+			matches = !!body && (await sha256Hex(decodeUtf8PreservingBom(await body.bytes()))) === hash;
+		}
+		let descriptor = artifact.descriptor;
+		if (matches) {
+			// The upload can succeed before version.json fails. Its capture time lets a retry repair the descriptor.
+			const stored = SnapshotDescriptorSchema.safeParse({
+				captured_at: object?.customMetadata?.captured_at,
+				size_bytes: descriptor.size_bytes,
+			});
+			descriptor = {
+				...descriptor,
+				captured_at: stored.success
+					? stored.data.captured_at
+					: (previous?.captured_at ?? descriptor.captured_at),
+			};
+			if (
+				previous?.captured_at === descriptor.captured_at &&
+				previous.size_bytes === descriptor.size_bytes
+			)
+				return;
+		} else if (previous) {
+			descriptor = {
+				...descriptor,
+				captured_at: nextIsoTimestamp(previous.captured_at, descriptor.captured_at),
+			};
+		}
+		return { write: !matches, artifact: { ...artifact, descriptor } };
 	}
 
 	async deleteNotebook(
@@ -1566,6 +1609,62 @@ export class NotebookService {
 		await deleteByPrefix(this.bucket, `${nb.base}/`);
 	}
 
+	private async sweepNotebookArtifacts(projects: Snapshot['projects']): Promise<void> {
+		const cursorObject = await this.bucket.get(NOTEBOOK_GC_CURSOR_KEY);
+		const cursor = cursorObject
+			? await readStored(NotebookGcCursorSchema, cursorObject, NOTEBOOK_GC_CURSOR_KEY)
+			: undefined;
+		const now = Date.now();
+		if (cursor && cursor.next_at > now) return;
+		const notebooks = projects
+			.flatMap((project) =>
+				project.notebooks.map((notebook) => ({
+					projectId: project.id,
+					notebookId: notebook.id,
+					key: `${project.id}/${notebook.id}`,
+				})),
+			)
+			.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+		if (notebooks.length === 0) return;
+		const batchSize = Math.ceil(notebooks.length / GC_CYCLES_PER_DAY);
+		const start = Math.max(
+			0,
+			notebooks.findIndex((notebook) => notebook.key > (cursor?.after ?? '')),
+		);
+		const batch = notebooks.slice(start, start + batchSize);
+		await mapWithConcurrency(batch, BUCKET_SCAN_CONCURRENCY, async ({ projectId, notebookId }) => {
+			await this.workspace.sweepUploads(projectId, notebookId).catch((error) => {
+				logOperationalError(
+					'workspace_uploads.cleanup_failed',
+					{ operation: 'prune', project_id: projectId, notebook_id: notebookId },
+					error,
+				);
+			});
+			await this.thumbnails.prune(projectId, notebookId).catch((error) => {
+				logOperationalError(
+					'thumbnails.cleanup_failed',
+					{ operation: 'prune', project_id: projectId, notebook_id: notebookId },
+					error,
+				);
+			});
+		});
+		try {
+			await this.bucket.put(
+				NOTEBOOK_GC_CURSOR_KEY,
+				JSON.stringify({
+					after: batch.at(-1)!.key,
+					next_at:
+						Math.max(cursor?.next_at ?? now, now - Millis.minutes(5)) +
+						(Millis.days(1) * batch.length) / notebooks.length,
+				}),
+				cursorObject ? { onlyIfEtagMatches: cursorObject.etag } : { onlyIfNotExists: true },
+			);
+		} catch (error) {
+			// Another maintenance worker progressed; do not move its cursor backwards.
+			if (!(error instanceof PreconditionFailedError)) throw error;
+		}
+	}
+
 	/**
 	 * GC sweep: hard-delete soft-deleted notebooks whose grace period has elapsed
 	 * (deletion time = `updated_at`), then drop them from the snapshot. Returns the
@@ -1585,9 +1684,8 @@ export class NotebookService {
 		const snapshot = await this.catalog.getCurrentSnapshot();
 		const now = Date.now();
 
-		const stale: { projectId: ProjectId; notebookId: NotebookId }[] = [];
-		for (const project of snapshot.projects) {
-			if (project.status === 'deleted') continue; // owned by sweepDeletedProjects
+		const projects = snapshot.projects.filter((project) => project.status !== 'deleted');
+		await mapWithConcurrency(projects, BUCKET_SCAN_CONCURRENCY, async (project) => {
 			await new ResumableUploads(this.bucket, paths.project(project.id).objectUploadsPrefix)
 				.sweep()
 				.catch((error) =>
@@ -1604,26 +1702,13 @@ export class NotebookService {
 					error,
 				);
 			});
-			for (const nb of project.notebooks) {
-				await this.workspace.sweepUploads(project.id, nb.id).catch((error) => {
-					logOperationalError(
-						'workspace_uploads.cleanup_failed',
-						{ operation: 'prune', project_id: project.id, notebook_id: nb.id },
-						error,
-					);
-				});
-				await this.thumbnails.prune(project.id, nb.id).catch((error) => {
-					logOperationalError(
-						'thumbnails.cleanup_failed',
-						{ operation: 'prune', project_id: project.id, notebook_id: nb.id },
-						error,
-					);
-				});
-				if (nb.status === 'deleted' && now - Date.parse(nb.updated_at) >= retentionMs) {
-					stale.push({ projectId: project.id, notebookId: nb.id });
-				}
-			}
-		}
+		});
+		await this.sweepNotebookArtifacts(projects);
+		const stale = projects.flatMap((project) =>
+			project.notebooks
+				.filter((nb) => nb.status === 'deleted' && now - Date.parse(nb.updated_at) >= retentionMs)
+				.map((nb) => ({ projectId: project.id, notebookId: nb.id })),
+		);
 		if (stale.length === 0) return { purged: 0, orphanedSnapshots: [] };
 
 		const orphanedSnapshots: FsSnapshot[] = [];
@@ -1668,4 +1753,10 @@ export class NotebookService {
 /** UTF-8 byte length of a string, for snapshot `size_bytes` descriptors. */
 function byteLength(s: string): number {
 	return new TextEncoder().encode(s).length;
+}
+
+function artifactDescriptors(
+	artifacts: SessionArtifact[],
+): Partial<Pick<Version, SessionArtifact['field']>> {
+	return Object.fromEntries(artifacts.map(({ field, descriptor }) => [field, descriptor]));
 }

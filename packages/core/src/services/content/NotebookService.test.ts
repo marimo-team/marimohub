@@ -11,6 +11,7 @@ import {
 import { createJobId, createNotebookId, createRunId, createVersionId } from '../../ids';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
+import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { ACTOR, localResourceSecurity, makeSubjectContext, setupTestEnv } from '../../testing';
 import type { CatalogService } from '../catalog/CatalogService';
 import { MAX_VERSIONS, NotebookService } from './NotebookService';
@@ -2136,6 +2137,224 @@ describe('NotebookService', () => {
 	});
 
 	describe('commitSession', () => {
+		async function artifactFixture() {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'N', description: '', code: 'v1' },
+				ACTOR,
+			);
+			const input = { code: 'v1', html: '<p>1</p>', session: '{"value":1}' };
+			const first = (await notebooks.commitSession(projectId, created.id, input, ACTOR))!;
+			const ver = paths.project(projectId).notebook(created.id).version(first.versionId);
+			return { created, input, ver };
+		}
+
+		it('distinguishes empty artifacts from omitted artifacts and deduplicates empty bytes', async () => {
+			const { created, ver } = await artifactFixture();
+			await expect(
+				notebooks.commitSession(
+					projectId,
+					created.id,
+					{ code: 'v1', html: '', session: '' },
+					ACTOR,
+				),
+			).resolves.toMatchObject({ capturedHtml: true, capturedSession: true, newVersion: false });
+			expect(await (await bucket.get(ver.html))!.text()).toBe('');
+			expect(await (await bucket.get(ver.session))!.text()).toBe('');
+			const put = vi.spyOn(bucket, 'put');
+			await notebooks.commitSession(
+				projectId,
+				created.id,
+				{ code: 'v1', html: '', session: '' },
+				ACTOR,
+			);
+			await notebooks.commitSession(projectId, created.id, { code: 'v1' }, ACTOR);
+			expect(put).not.toHaveBeenCalled();
+		});
+
+		it.each(['head', 'legacy read'] as const)(
+			'fails closed when the artifact %s fails',
+			async (stage) => {
+				const { created, input, ver } = await artifactFixture();
+				const before = await (await bucket.get(ver.meta))!.text();
+				if (stage === 'head') {
+					const head = bucket.head.bind(bucket);
+					vi.spyOn(bucket, 'head').mockImplementation((key) =>
+						key === ver.html ? Promise.reject(new Error('unavailable')) : head(key),
+					);
+				} else {
+					await bucket.put(ver.html, input.html);
+					const get = bucket.get.bind(bucket);
+					vi.spyOn(bucket, 'get').mockImplementation((key) =>
+						key === ver.html ? Promise.reject(new Error('unavailable')) : get(key),
+					);
+				}
+				const put = vi.spyOn(bucket, 'put');
+				await expect(notebooks.commitSession(projectId, created.id, input, ACTOR)).rejects.toThrow(
+					'unavailable',
+				);
+				expect(put).not.toHaveBeenCalled();
+				expect(await (await bucket.get(ver.meta))!.text()).toBe(before);
+			},
+		);
+
+		it.each(['artifact', 'descriptor'] as const)(
+			'repairs a partial %s failure without reuploading completed artifacts',
+			async (stage) => {
+				const { created, input, ver } = await artifactFixture();
+				const original = await (await bucket.get(ver.meta))!.json<Record<string, unknown>>();
+				const oldCapture = '2000-01-01T00:00:00.000Z';
+				await bucket.put(
+					ver.meta,
+					JSON.stringify({
+						...original,
+						html_snapshot: { captured_at: oldCapture, size_bytes: input.html.length },
+						session_snapshot: { captured_at: oldCapture, size_bytes: input.session.length },
+					}),
+				);
+				const next = { ...input, html: '<p>2</p>', session: '{"value":2}' };
+				const realPut = bucket.put.bind(bucket);
+				const put = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+					if (key === (stage === 'artifact' ? ver.session : ver.meta))
+						throw new Error('unavailable');
+					return realPut(key, value, options);
+				});
+				await expect(notebooks.commitSession(projectId, created.id, next, ACTOR)).rejects.toThrow(
+					'unavailable',
+				);
+				expect(await (await bucket.get(ver.html))!.text()).toBe(next.html);
+				put.mockImplementation(realPut).mockClear();
+				await notebooks.commitSession(projectId, created.id, next, ACTOR);
+				expect(put.mock.calls.map(([key]) => key)).toEqual(
+					stage === 'artifact' ? [ver.session, ver.meta] : [ver.meta],
+				);
+				const repaired = await (await bucket.get(ver.meta))!.json<{
+					html_snapshot: { captured_at: string };
+					session_snapshot: { captured_at: string };
+				}>();
+				expect(repaired.html_snapshot.captured_at).not.toBe(oldCapture);
+				expect(repaired.session_snapshot.captured_at).not.toBe(oldCapture);
+				put.mockClear();
+				await notebooks.commitSession(projectId, created.id, next, ACTOR);
+				expect(put).not.toHaveBeenCalled();
+			},
+		);
+
+		it('advances capture timestamps for same-millisecond changes and then deduplicates', async () => {
+			vi.useFakeTimers({ toFake: ['Date'] });
+			try {
+				const { created, input, ver } = await artifactFixture();
+				const initial = await (await bucket.get(ver.meta))!.json<{
+					html_snapshot: { captured_at: string };
+				}>();
+				const next = { ...input, html: '<p>2</p>' };
+				await notebooks.commitSession(projectId, created.id, next, ACTOR);
+				const updated = await (await bucket.get(ver.meta))!.json<{
+					html_snapshot: { captured_at: string };
+				}>();
+				expect(updated.html_snapshot.captured_at).toBe(
+					new Date(Date.parse(initial.html_snapshot.captured_at) + 1).toISOString(),
+				);
+				const put = vi.spyOn(bucket, 'put');
+				await notebooks.commitSession(projectId, created.id, next, ACTOR);
+				expect(put).not.toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('repairs a missing descriptor without reuploading the matching artifact', async () => {
+			const { created, input, ver } = await artifactFixture();
+			const original = await (await bucket.get(ver.meta))!.json<Record<string, unknown>>();
+			delete original.html_snapshot;
+			await bucket.put(ver.meta, JSON.stringify(original));
+			const put = vi.spyOn(bucket, 'put');
+			await notebooks.commitSession(projectId, created.id, input, ACTOR);
+			expect(put.mock.calls.map(([key]) => key)).toEqual([ver.meta]);
+			expect(await (await bucket.get(ver.meta))!.json()).toMatchObject({
+				html_snapshot: { size_bytes: input.html.length },
+			});
+		});
+
+		it.each([
+			{ legacy: false, notebookCount: 10_000 },
+			{ legacy: true, notebookCount: 1 },
+		])(
+			'unchanged autosave has zero PUTs ($notebookCount notebooks, legacy metadata=$legacy)',
+			async ({ legacy, notebookCount }) => {
+				const created = await notebooks.createNotebook(
+					projectId,
+					{ title: 'N', description: '', code: 'v1' },
+					ACTOR,
+				);
+				if (notebookCount > 1) {
+					await catalog.mutateSnapshot('test.seed', ACTOR, (snapshot) => {
+						const project = snapshot.projects[0];
+						const entry = project.notebooks[0];
+						project.notebooks.push(
+							...Array.from({ length: notebookCount - 1 }, () => ({
+								...entry,
+								id: createNotebookId(),
+							})),
+						);
+						return snapshot;
+					});
+				}
+				const input = { code: 'v1', html: '\ufeff<p>café 🐍</p>', session: '{"value":1}' };
+				const first = (await notebooks.commitSession(projectId, created.id, input, ACTOR))!;
+				const ver = paths.project(projectId).notebook(created.id).version(first.versionId);
+				if (legacy) {
+					await bucket.put(ver.html, input.html);
+					await bucket.put(ver.session, input.session);
+				}
+				const before = await (await bucket.get(ver.meta))!.text();
+				const put = vi.spyOn(bucket, 'put');
+				const get = vi.spyOn(bucket, 'get');
+				await expect(
+					notebooks.commitSession(projectId, created.id, input, ACTOR),
+				).resolves.toMatchObject({
+					newVersion: false,
+					capturedHtml: true,
+					capturedSession: true,
+				});
+				expect(put).not.toHaveBeenCalled();
+				if (!legacy) {
+					expect(get.mock.calls.map(([key]) => key)).not.toContain(ver.html);
+					expect(get.mock.calls.map(([key]) => key)).not.toContain(ver.session);
+				}
+				expect(await (await bucket.get(ver.meta))!.text()).toBe(before);
+				put.mockClear();
+				await notebooks.commitSession(projectId, created.id, { ...input, code: 'v2' }, ACTOR);
+				expect(put.mock.calls.filter(([key]) => key === paths.catalog)).toHaveLength(1);
+				expect(
+					put.mock.calls.filter(([key]) => key.startsWith(paths.snapshotsPrefix)),
+				).toHaveLength(1);
+			},
+		);
+
+		it('uploads only the changed artifact and repairs missing artifacts', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'N', description: '', code: 'v1' },
+				ACTOR,
+			);
+			const input = { code: 'v1', html: '<p>1</p>', session: '{"value":1}' };
+			const first = (await notebooks.commitSession(projectId, created.id, input, ACTOR))!;
+			const ver = paths.project(projectId).notebook(created.id).version(first.versionId);
+			const put = vi.spyOn(bucket, 'put');
+			await notebooks.commitSession(projectId, created.id, { ...input, html: '<p>2</p>' }, ACTOR);
+			expect(put.mock.calls.map(([key]) => key)).toEqual([ver.html, ver.meta]);
+			await bucket.delete(ver.session);
+			put.mockClear();
+			await notebooks.commitSession(
+				projectId,
+				created.id,
+				{ code: input.code, session: input.session },
+				ACTOR,
+			);
+			expect(put.mock.calls.map(([key]) => key)).toEqual([ver.session, ver.meta]);
+		});
+
 		it.each([
 			{
 				name: 'unchanged BOM',
@@ -2788,6 +3007,185 @@ describe('NotebookService', () => {
 	});
 
 	describe('sweepDeletedNotebooks', () => {
+		async function gcFixture(count = 2) {
+			const ids: NotebookId[] = [];
+			for (let i = 0; i < count; i++) {
+				ids.push(
+					(
+						await notebooks.createNotebook(
+							projectId,
+							{ title: `N${i}`, description: '', code: 'v1' },
+							ACTOR,
+						)
+					).id,
+				);
+			}
+			ids.sort();
+			const uploads = vi.spyOn(notebooks.workspace, 'sweepUploads').mockResolvedValue(undefined);
+			const thumbnails = vi.spyOn(notebooks.thumbnails, 'prune').mockResolvedValue(undefined);
+			return { ids, uploads, thumbnails };
+		}
+
+		it('bounds concurrent cleanup when a batch exceeds the worker limit', async () => {
+			const { uploads } = await gcFixture(1);
+			const notebookCount = (BUCKET_SCAN_CONCURRENCY + 1) * 288;
+			await catalog.mutateSnapshot('test.seed', ACTOR, (snapshot) => {
+				const project = snapshot.projects[0];
+				project.notebooks = Array.from({ length: notebookCount }, () => ({
+					...project.notebooks[0],
+					id: createNotebookId(),
+				}));
+				return snapshot;
+			});
+			let active = 0;
+			let peak = 0;
+			uploads.mockImplementation(async () => {
+				active++;
+				peak = Math.max(peak, active);
+				await Promise.resolve();
+				active--;
+			});
+			await notebooks.sweepDeletedNotebooks();
+			expect(uploads).toHaveBeenCalledTimes(BUCKET_SCAN_CONCURRENCY + 1);
+			expect(peak).toBe(BUCKET_SCAN_CONCURRENCY);
+			expect(active).toBe(0);
+		});
+
+		it('revisits the completed batch after a failed cursor checkpoint and restart', async () => {
+			const { ids, uploads, thumbnails } = await gcFixture();
+			const key = '_system/notebook-gc-cursor.json';
+			const realPut = bucket.put.bind(bucket);
+			const put = vi
+				.spyOn(bucket, 'put')
+				.mockImplementation((path, value, options) =>
+					path === key
+						? Promise.reject(new Error('checkpoint unavailable'))
+						: realPut(path, value, options),
+				);
+			await expect(notebooks.sweepDeletedNotebooks()).rejects.toThrow('checkpoint unavailable');
+			expect(await bucket.head(key)).toBeNull();
+			put.mockRestore();
+			const restarted = new NotebookService(bucket, catalog);
+			vi.spyOn(restarted.workspace, 'sweepUploads').mockImplementation(uploads);
+			vi.spyOn(restarted.thumbnails, 'prune').mockImplementation(thumbnails);
+			await restarted.sweepDeletedNotebooks();
+			expect(uploads.mock.calls.map(([, id]) => id)).toEqual([ids[0], ids[0]]);
+			await restarted.sweepDeletedNotebooks();
+			expect(uploads).toHaveBeenCalledTimes(2);
+		});
+
+		it('preserves a competing cursor when its checkpoint loses the CAS', async () => {
+			const { ids, uploads } = await gcFixture();
+			const key = '_system/notebook-gc-cursor.json';
+			const winner = { after: `${projectId}/${ids[1]}`, next_at: Date.now() + 86_400_000 };
+			const realPut = bucket.put.bind(bucket);
+			vi.spyOn(bucket, 'put').mockImplementation(async (path, value, options) => {
+				if (path === key) await realPut(key, JSON.stringify(winner), { onlyIfNotExists: true });
+				return realPut(path, value, options);
+			});
+			await expect(notebooks.sweepDeletedNotebooks()).resolves.toEqual({
+				purged: 0,
+				orphanedSnapshots: [],
+			});
+			expect(await (await bucket.get(key))!.json()).toEqual(winner);
+			await notebooks.sweepDeletedNotebooks();
+			expect(uploads).toHaveBeenCalledTimes(1);
+		});
+
+		it('continues after cleanup failures and retries the failed notebook on the next rotation', async () => {
+			const { ids, uploads, thumbnails } = await gcFixture();
+			uploads.mockRejectedValueOnce(new Error('uploads unavailable'));
+			thumbnails.mockRejectedValueOnce(new Error('thumbnails unavailable'));
+			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+			const clock = vi.spyOn(Date, 'now');
+			try {
+				for (let visit = 0; visit < 3; visit++) {
+					await notebooks.sweepDeletedNotebooks();
+					const cursor = await (await bucket.get('_system/notebook-gc-cursor.json'))!.json<{
+						next_at: number;
+					}>();
+					clock.mockReturnValue(cursor.next_at);
+				}
+				expect(uploads.mock.calls.map(([, id]) => id)).toEqual([ids[0], ids[1], ids[0]]);
+				expect(thumbnails.mock.calls.map(([, id]) => id)).toEqual([ids[0], ids[1], ids[0]]);
+			} finally {
+				clock.mockRestore();
+				log.mockRestore();
+			}
+		});
+
+		it('resumes after its notebook disappears and wraps to entries before the cursor', async () => {
+			const { ids, uploads } = await gcFixture(3);
+			await bucket.put(
+				'_system/notebook-gc-cursor.json',
+				JSON.stringify({ after: `${projectId}/${ids[1]}`, next_at: 0 }),
+			);
+			await catalog.updateProjectEntry('test.remove', ACTOR, projectId, (entry) => ({
+				notebooks: entry.notebooks.filter((notebook) => notebook.id !== ids[1]),
+			}));
+			await notebooks.sweepDeletedNotebooks();
+			const cursor = await (await bucket.get('_system/notebook-gc-cursor.json'))!.json<{
+				next_at: number;
+			}>();
+			const clock = vi.spyOn(Date, 'now').mockReturnValue(cursor.next_at);
+			try {
+				await notebooks.sweepDeletedNotebooks();
+				expect(uploads.mock.calls.map(([, id]) => id)).toEqual([ids[2], ids[0]]);
+			} finally {
+				clock.mockRestore();
+			}
+		});
+
+		it('rotates bounded concurrent cleanup across restarts and paces a full scan over a day', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'N', description: '', code: 'v1' },
+				ACTOR,
+			);
+			await catalog.mutateSnapshot('test.seed', ACTOR, (snapshot) => {
+				const project = snapshot.projects[0];
+				project.notebooks = Array.from({ length: 1000 }, () => ({
+					...project.notebooks[0],
+					id: createNotebookId(),
+				}));
+				return snapshot;
+			});
+			let active = 0;
+			let peak = 0;
+			const upload = vi.spyOn(notebooks.workspace, 'sweepUploads').mockImplementation(async () => {
+				active++;
+				peak = Math.max(peak, active);
+				await Promise.resolve();
+				active--;
+			});
+			const prune = vi.spyOn(notebooks.thumbnails, 'prune').mockResolvedValue(undefined);
+			const clock = vi.spyOn(Date, 'now');
+			const start = Date.now();
+			try {
+				clock.mockReturnValue(start);
+				await notebooks.sweepDeletedNotebooks();
+				expect(upload).toHaveBeenCalledTimes(4);
+				expect(peak).toBeGreaterThan(1);
+				await notebooks.sweepDeletedNotebooks();
+				expect(upload).toHaveBeenCalledTimes(4);
+				const visited = new Set(upload.mock.calls.map(([, id]) => id));
+				const restarted = new NotebookService(bucket, catalog);
+				vi.spyOn(restarted.workspace, 'sweepUploads').mockImplementation(upload);
+				vi.spyOn(restarted.thumbnails, 'prune').mockImplementation(prune);
+				for (let tick = 1; tick < 288; tick++) {
+					clock.mockReturnValue(start + tick * 5 * 60 * 1000);
+					await restarted.sweepDeletedNotebooks();
+				}
+				expect(new Set(upload.mock.calls.map(([, id]) => id)).size).toBe(1000);
+				expect(upload).toHaveBeenCalledTimes(1000);
+				expect(prune).toHaveBeenCalledTimes(1000);
+				expect(visited.size).toBe(4);
+				expect(visited.has(created.id)).toBe(false);
+			} finally {
+				clock.mockRestore();
+			}
+		});
+
 		it('purges only soft-deleted notebooks past the grace period', async () => {
 			const doomed = await notebooks.createNotebook(
 				projectId,

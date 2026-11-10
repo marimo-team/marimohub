@@ -460,18 +460,36 @@ export class CatalogService {
 		patch: (project: SnapshotProjectEntry) => Awaitable<Partial<SnapshotProjectEntry> | undefined>,
 		context: Record<string, unknown> = { project_id: projectId },
 	): Promise<Snapshot> {
+		return this.mutateProjectEntry(
+			operation,
+			actor,
+			projectId,
+			async (project) => {
+				const projectPatch = (await patch(project)) ?? {};
+				return patchChangesEntry(project, projectPatch) ? { ...project, ...projectPatch } : project;
+			},
+			context,
+		);
+	}
+
+	private mutateProjectEntry(
+		operation: string,
+		actor: UserId,
+		projectId: ProjectId,
+		mutate: (project: SnapshotProjectEntry) => Awaitable<SnapshotProjectEntry>,
+		context: Record<string, unknown>,
+	): Promise<Snapshot> {
 		return this.mutateSnapshot(
 			operation,
 			actor,
 			async (snap) => {
 				const project = projectsById(snap).get(projectId);
 				if (project === undefined) return snap;
-				const projectPatch = (await patch(project)) ?? {};
+				const updated = await mutate(project);
+				if (updated === project) return snap;
 				return {
 					...snap,
-					projects: snap.projects.map((entry) =>
-						entry.id === projectId ? { ...entry, ...projectPatch } : entry,
-					),
+					projects: snap.projects.map((entry) => (entry.id === projectId ? updated : entry)),
 				};
 			},
 			context,
@@ -550,7 +568,7 @@ export class CatalogService {
 		) => Awaitable<Partial<SnapshotProjectEntry> | undefined>,
 		context: Record<string, unknown> = { project_id: projectId, notebook_id: notebookId },
 	): Promise<Snapshot> {
-		return this.updateProjectEntry(
+		return this.mutateProjectEntry(
 			operation,
 			actor,
 			projectId,
@@ -562,18 +580,58 @@ export class CatalogService {
 				for (const candidate of [notebookPatch?.updated_at, resolvedProjectPatch?.updated_at]) {
 					if (candidate !== undefined && candidate > updatedAt) updatedAt = candidate;
 				}
-				return {
+				const notebookChanged =
+					notebook !== undefined &&
+					notebookPatch !== undefined &&
+					patchChangesEntry(notebook, notebookPatch);
+				const projectUpdate = {
 					...resolvedProjectPatch,
 					updated_at: updatedAt,
-					notebooks:
-						notebookPatch === undefined
-							? p.notebooks
-							: p.notebooks.map((entry) =>
-									entry.id === notebookId ? { ...entry, ...notebookPatch } : entry,
-								),
+					notebooks: p.notebooks,
+				};
+				if (!notebookChanged && !patchChangesEntry(p, projectUpdate)) return p;
+				return {
+					...p,
+					...projectUpdate,
+					notebooks: notebookChanged
+						? p.notebooks.map((entry) =>
+								entry.id === notebookId ? { ...entry, ...notebookPatch } : entry,
+							)
+						: p.notebooks,
 				};
 			},
 			context,
 		);
 	}
+}
+
+function patchChangesEntry<T extends object>(entry: T, patch: Partial<T>): boolean {
+	return (Object.keys(patch) as (keyof T)[]).some(
+		(key) => !equalJsonValues(entry[key], patch[key]),
+	);
+}
+
+function equalJsonValues(left: unknown, right: unknown): boolean {
+	if (left === right) return true;
+	if (Array.isArray(left) || Array.isArray(right)) {
+		if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+		for (let index = 0; index < left.length; index++) {
+			if (!equalJsonValues(left[index] ?? null, right[index] ?? null)) return false;
+		}
+		return true;
+	}
+	if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object')
+		return false;
+	const leftObject = left as Record<string, unknown>;
+	const rightObject = right as Record<string, unknown>;
+	// JSON omits undefined object properties, including optional projection fields.
+	const keys = Object.keys(leftObject).filter((key) => leftObject[key] !== undefined);
+	return (
+		keys.length ===
+			Object.keys(rightObject).filter((key) => rightObject[key] !== undefined).length &&
+		keys.every(
+			(key) =>
+				Object.hasOwn(rightObject, key) && equalJsonValues(leftObject[key], rightObject[key]),
+		)
+	);
 }
