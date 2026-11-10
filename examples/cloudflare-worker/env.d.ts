@@ -26,7 +26,6 @@ declare global {
 		R2_SECRET_ACCESS_KEY?: string;
 		SANDBOX_HOSTNAME?: string;
 		SANDBOX_WORKDIR?: string;
-		MARIMOHUB_COMPUTE_ASSET_URL?: string;
 		MARIMOHUB_COMPUTE_PROFILES?: string;
 		MARIMOHUB_COMPUTE_PROFILE_OVERRIDE?: 'none' | 'editors';
 		// Opt-in E2B compute (see src/e2b.ts). E2B_API_KEY is a wrangler secret.

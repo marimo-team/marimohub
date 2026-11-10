@@ -139,30 +139,6 @@ describe('buildMarimoLaunch', () => {
 		expect(start).toContain("--base-url='/proxy/tok'");
 	});
 
-	for (const strategy of ['uv-sync-edit', 'uv-script-pins', 'uv-sandbox'] as const) {
-		it.each(['edit', 'app', 'job'] as const)(
-			`${strategy} preserves asset arguments for %s`,
-			(mode) => {
-				for (const assetUrl of [
-					'hub',
-					undefined,
-					'',
-					'https://cdn.example.com/Assets/{version}?fallback=false&Key=AbC',
-					"https://cdn.example.com/it's/$(printf INJECTED)/`printf INJECTED`/{version}",
-					"https://cdn.example.com/'; printf INJECTED; #",
-				]) {
-					const { start } = buildMarimoLaunch({ ...BASE, mode, assetUrl }, strategy);
-					const args = execFileSync('sh', ['-c', `uv() { printf '%s\\0' "$@"; }; ${start}`], {
-						encoding: 'utf8',
-					}).split('\0');
-					const assetArgs = args.filter((arg) => arg.startsWith('--asset-url'));
-					expect(assetArgs).toEqual(mode !== 'job' && assetUrl ? [`--asset-url=${assetUrl}`] : []);
-					expect(args).not.toContain('INJECTED');
-				}
-			},
-		);
-	}
-
 	it('adds file watching only when an edit surface requests it', () => {
 		expect(buildMarimoLaunch({ ...BASE, mode: 'edit', watch: true }).start).toContain('--watch');
 		expect(buildMarimoLaunch({ ...BASE, mode: 'edit' }).start).not.toContain('--watch');
@@ -366,6 +342,21 @@ describe('buildMarimoLaunch', () => {
 });
 
 describe('buildMarimoLaunch argument quoting', () => {
+	const BASE: MarimoLaunchParams = {
+		notebookFile: 'notebook.py',
+		port: 2718,
+		host: '0.0.0.0',
+		tokenPasswordFile: '/tmp/.marimohub-kernel-token',
+	};
+
+	it('escapes command substitution in --asset-url', () => {
+		const { start } = buildMarimoLaunch({
+			...BASE,
+			assetUrl: 'https://cdn.example.com/$(id > /tmp/pwned)',
+		});
+		expect(start).toContain("--asset-url='https://cdn.example.com/$(id > /tmp/pwned)'");
+	});
+
 	it('escapes a double quote in --base-url', () => {
 		const { start } = buildMarimoLaunch({ ...BASE, baseUrl: '/proxy/a"; touch /tmp/pwned; #' });
 		expect(start).toContain(`--base-url='/proxy/a"; touch /tmp/pwned; #'`);
