@@ -13,7 +13,7 @@
 		"check": "vp check",
 		"typecheck": "vp run -r typecheck",
 		"test": "vp run test:root && vp run -r test --configLoader=runner --pool=threads --silent=passed-only --hideSkippedTests",
-		"test:root": "node --test actions/preview/preview.test.mjs && vp test tools/oxlint/anti-slop/index.test.ts scripts/sea/launcher.test.ts scripts/sea/payload.test.ts --silent=passed-only --hideSkippedTests",
+		"test:root": "node --test actions/preview/preview.test.mjs && vp run test:root:vitest",
 		"test:release-scripts": "bash scripts/release-helpers.test.sh",
 		"test:external-adapter": "node --test examples/external-adapter/oidc-login-policy.test.mjs",
 		"test:coverage": "pnpm test:coverage:root && pnpm test:coverage:web",

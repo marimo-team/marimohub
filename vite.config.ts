@@ -425,6 +425,9 @@ export default defineConfig({
 		exclude: [
 			'**/node_modules/**',
 			'**/dist/**',
+			'**/test-results/**',
+			'**/playwright-report/**',
+			'.context/**',
 			'packages/web/**',
 			'apps/e2e/**',
 			// These suites run with Playwright via test:browser.
@@ -450,5 +453,16 @@ export default defineConfig({
 	},
 	run: {
 		cache: true,
+		tasks: {
+			'test:root:vitest': {
+				command:
+					'vp test tools/oxlint/anti-slop/index.test.ts scripts/sea/launcher.test.ts scripts/sea/payload.test.ts --silent=passed-only --hideSkippedTests',
+				cache: {
+					// Launcher fixtures must live outside world-writable temp directories.
+					input: [{ auto: true }, '!node_modules/.cache/sea-launcher-*/**'],
+					output: [{ auto: true }, '!node_modules/.cache/sea-launcher-*/**'],
+				},
+			},
+		},
 	},
 });

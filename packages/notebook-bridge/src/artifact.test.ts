@@ -42,7 +42,7 @@ describe('runtime artifact', () => {
 	});
 	it('keeps runtime discovery, installation and fallback isolated', () => {
 		expect(() =>
-			execFileSync('python3', ['python/test_runtime.py'], {
+			execFileSync('python3', ['-B', 'python/test_runtime.py'], {
 				stdio: 'pipe',
 				cwd: new URL('../', import.meta.url),
 			}),
