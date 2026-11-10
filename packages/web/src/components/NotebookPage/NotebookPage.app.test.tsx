@@ -324,18 +324,19 @@ describe('NotebookPage app variant', () => {
 
 describe('app polling', () => {
 	it('uses heartbeat freshness without polling notebook details or project sessions', async () => {
-		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 		try {
 			const session = runningSession({ mode: 'app', source_version_id: 'ver-1' });
 			const fetch = makeFetch({ role: 'editor', session, headVersion: 'ver-2' });
 			const { container, unmount } = renderPage('app');
-			await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+			await act(() => vi.advanceTimersByTimeAsync(100));
+			expect(container.querySelector('iframe')).not.toBeNull();
 			expect(screen.queryByText(/serves an older version/)).not.toBeInTheDocument();
 			Object.assign(session, { head_version_id: 'ver-2', edit_active: false });
 			await act(async () => {
 				await vi.advanceTimersByTimeAsync(30_000);
 			});
-			await screen.findByText(/serves an older version/);
+			expect(screen.getByText(/serves an older version/)).toBeInTheDocument();
 			expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/heartbeat'))).toHaveLength(
 				1,
 			);

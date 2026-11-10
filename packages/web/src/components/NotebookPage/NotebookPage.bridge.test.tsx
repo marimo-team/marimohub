@@ -178,7 +178,7 @@ describe('notebook URL mirroring', () => {
 		}
 	});
 	it('disposes on revoked access and rejects late messages', async () => {
-		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 		try {
 			const options: Parameters<typeof makeFetch>[0] = {
 				role: 'editor',
@@ -186,7 +186,8 @@ describe('notebook URL mirroring', () => {
 			};
 			makeFetch(options);
 			renderPage('app', { search: '?id=123', controls: <Controls /> });
-			await screen.findByTitle('Forecast');
+			await act(() => vi.advanceTimersByTimeAsync(100));
+			screen.getByTitle('Forecast');
 			const connection = connections.at(-1)!;
 			options.session = runningSession({
 				mode: 'app',
@@ -242,7 +243,7 @@ describe('notebook URL mirroring', () => {
 		);
 	});
 	it('preserves mirrored parameters when the user re-enters through app admission', async () => {
-		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 		try {
 			const options: Parameters<typeof makeFetch>[0] = {
 				role: 'editor',
@@ -253,7 +254,8 @@ describe('notebook URL mirroring', () => {
 			};
 			const impl = makeFetch(options);
 			renderPage('app', { search: '?id=123', controls: <Controls /> });
-			const initial = await screen.findByTitle('Forecast');
+			await act(() => vi.advanceTimersByTimeAsync(100));
+			const initial = screen.getByTitle('Forecast');
 			const connection = connections.at(-1)!;
 			act(() => {
 				connection.options.onQuery({
@@ -289,7 +291,8 @@ describe('notebook URL mirroring', () => {
 				sandbox_url: 'https://new.example/?access_token=new&provider=new',
 			});
 			fireEvent.click(screen.getByRole('button', { name: 'Restart app' }));
-			const replacement = await screen.findByTitle('Forecast');
+			await act(() => vi.advanceTimersByTimeAsync(100));
+			const replacement = screen.getByTitle('Forecast');
 			expect(sessionPosts(impl)).toHaveLength(2);
 			expect(replacement).not.toBe(initial);
 			const url = new URL(replacement.getAttribute('src')!);
