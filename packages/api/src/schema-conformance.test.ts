@@ -194,6 +194,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 			'runtime',
 			'sandbox_id',
 			'kernel_auth_token',
+			'reconnect_reference',
 			'sandbox_origin_url',
 			'used_fallback',
 			'expires_at',

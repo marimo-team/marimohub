@@ -11,7 +11,7 @@ import { mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
 import type { NotebookId, SessionId } from '../../ids';
 import type { SandboxProvider } from '../../ports/sandbox';
-import { sessionOwner } from './sessionOwner';
+import { sessionConnectOptions, sessionSandbox } from './sessionSandbox';
 import { createSlidingWindowBudget } from '../../rateLimit';
 import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
@@ -133,9 +133,9 @@ export class SessionLifecycleService {
 			try {
 				const sandbox =
 					s.status === 'running'
-						? this.compute.create(s.sandbox_id!, { owner: sessionOwner(s) })
+						? sessionSandbox(this.compute, s)
 						: s.status === 'expired' && !isPastAuthorizationDeadline(s, now)
-							? this.compute.connectExisting?.(s.sandbox_id!, { owner: sessionOwner(s) })
+							? this.compute.connectExisting?.(s.sandbox_id!, sessionConnectOptions(s))
 							: undefined;
 
 				const pool = sessionMode(s) === 'app' ? await readPool(s.project_id, s.notebook_id) : null;

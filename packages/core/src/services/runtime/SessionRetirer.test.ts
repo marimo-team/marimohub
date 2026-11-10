@@ -112,6 +112,22 @@ describe('SessionRetirer', () => {
 		});
 	}
 
+	it('uses the persisted reference for capture and destruction', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession({ reconnect_reference: 'teardown-reference' });
+		const provider = fakeComputeFrom(instance);
+		const create = vi.spyOn(provider, 'create');
+		const connect = vi.spyOn(provider, 'connectExisting');
+		await sessions.beginTerminating(projectId, session.session_id);
+		await retirer(provider).retire(session, { thumbnail: 'skip' });
+		expect(connect).toHaveBeenCalledExactlyOnceWith(session.sandbox_id, {
+			owner: { projectId, userId: session.user_id },
+			reconnectReference: 'teardown-reference',
+		});
+		expect(create).not.toHaveBeenCalled();
+		expect(calls.destroy).toBe(1);
+	});
+
 	it.each(['skip', 'bounded', 'full'] as const)(
 		'applies the %s thumbnail policy before destruction',
 		async (thumbnail) => {

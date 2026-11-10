@@ -7,7 +7,7 @@ import { sessionResourceNotebookId } from '../../sessionOrigin';
 import { captureThumbnail, THUMBNAIL_MAINTENANCE_BUDGET_MS } from './captureThumbnail';
 import type { Bucket } from '../../ports/bucket';
 import type { SandboxProvider } from '../../ports/sandbox';
-import { sessionOwner } from './sessionOwner';
+import { sessionConnectOptions, sessionSandbox } from './sessionSandbox';
 import { readStored, VersionSchema } from '../../schema';
 import type { GitSource, Session } from '../../schema';
 import { paths } from '../../paths';
@@ -346,7 +346,7 @@ export class SessionRetirer {
 		thumbnail: ThumbnailPolicy = 'skip',
 	): Promise<void> {
 		if (!session.sandbox_id || session.sandbox_reclaimed_at) return;
-		const sandbox = this.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) });
+		const sandbox = sessionSandbox(this.deps.compute, session);
 		await this.stopSecondarySurfaces(sandbox, session);
 		if (!session.takeover_capture_completed_at) {
 			const persisted = await this.provisioner.captureSession(
@@ -433,9 +433,10 @@ export class SessionRetirer {
 		if ((capture || probe) && session.sandbox_id) {
 			// create().read/exec may launch a replacement when the original is gone.
 			try {
-				existing = this.deps.compute.connectExisting!(session.sandbox_id, {
-					owner: sessionOwner(session),
-				});
+				existing = this.deps.compute.connectExisting!(
+					session.sandbox_id,
+					sessionConnectOptions(session),
+				);
 			} catch (error) {
 				if (error instanceof NotFoundError) {
 					await this.finishReclaim(session);
@@ -533,8 +534,7 @@ export class SessionRetirer {
 		existing?: ReturnType<SandboxProvider['create']>,
 	): Promise<{ destroyed: boolean; saved: boolean }> {
 		if (!session.sandbox_id) return { destroyed: true, saved: false };
-		const sandbox =
-			existing ?? this.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) });
+		const sandbox = existing ?? sessionSandbox(this.deps.compute, session);
 		let canCapture = captureBeforeDestroy;
 		try {
 			await this.stopSecondarySurfaces(sandbox, session);
@@ -590,8 +590,7 @@ export class SessionRetirer {
 	): Promise<boolean> {
 		if (!session.sandbox_id) return true;
 		try {
-			const sandbox =
-				existing ?? this.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) });
+			const sandbox = existing ?? sessionSandbox(this.deps.compute, session);
 			await sandbox.destroy();
 			return true;
 		} catch (err) {

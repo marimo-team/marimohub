@@ -2126,6 +2126,31 @@ describe('Session routes', () => {
 		expect(notifier.attempts).toBe(attemptsBeforeTakeover);
 	});
 
+	it('persists the reference privately and reconnects editor activity on another replica', async () => {
+		const { instance } = makeFakeSandbox();
+		Object.defineProperty(instance, 'reconnectReference', { value: 'provider-reference' });
+		const started = await expectOk<ApiSession>(
+			await exclusiveApi(ACTOR, fakeComputeFrom(instance))('POST', sessionsPath()),
+		);
+		expect(started.reconnect_reference).toBeUndefined();
+		const stored = await createServices(bucket).sessions.getSession(pid, started.session_id);
+		expect(stored.reconnect_reference).toBe('provider-reference');
+		const activity = makeFakeSandbox();
+		activity.instance.exec = vi.fn().mockResolvedValue({ success: true, stdout: '2', stderr: '' });
+		const replica = fakeComputeFrom(activity.instance);
+		const connect = vi.spyOn(replica, 'connectExisting');
+		const create = vi.spyOn(replica, 'create');
+		const state = await expectOk<EditorState>(
+			await exclusiveApi(STRANGER, replica)('GET', editorSessionPath()),
+		);
+		expect(state.holder?.activity).toMatchObject({ state: 'active', active_connections: 2 });
+		expect(connect).toHaveBeenCalledExactlyOnceWith(stored.sandbox_id, {
+			owner: { projectId: pid, userId: ACTOR },
+			reconnectReference: 'provider-reference',
+		});
+		expect(create).not.toHaveBeenCalled();
+	});
+
 	it('names the holder as owner when reconnecting to inspect editor activity', async () => {
 		const otherCompute = makeFakeCompute();
 		const exclusiveOwner = exclusiveApi(ACTOR);

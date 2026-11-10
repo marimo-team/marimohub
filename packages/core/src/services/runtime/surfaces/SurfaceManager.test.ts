@@ -59,6 +59,34 @@ function options() {
 }
 
 describe('SurfaceManager', () => {
+	it('reuses the saved reference when starting and stopping a surface', async () => {
+		const { compute, manager, session, sessions } = await setup();
+		const running = await sessions.setRunning(
+			session.project_id,
+			session.session_id,
+			session.sandbox_url!,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			'surface-reference',
+		);
+		const connect = vi.spyOn(compute, 'connectExisting');
+		const create = vi.spyOn(compute, 'create');
+		await manager.ensure(running, 'vscode', options());
+		await manager.stop(running, 'vscode');
+		expect(connect).toHaveBeenCalledTimes(2);
+		const expectedOptions = {
+			owner: { projectId: session.project_id, userId: session.user_id },
+			reconnectReference: 'surface-reference',
+		};
+		expect(connect).toHaveBeenNthCalledWith(1, session.sandbox_id, expectedOptions);
+		expect(connect).toHaveBeenNthCalledWith(2, session.sandbox_id, expectedOptions);
+		expect(create).not.toHaveBeenCalled();
+	});
+
 	it('loads agent files alongside the OpenCode probe without an environment lookup', async () => {
 		const probe = Promise.withResolvers<SurfaceProbe>();
 		const probing = vi.fn(() => probe.promise);

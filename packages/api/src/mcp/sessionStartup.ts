@@ -4,7 +4,7 @@ import {
 	DomainError,
 	SessionId,
 	sessionMode,
-	sessionOwner,
+	sessionSandbox,
 	sleep,
 	withAbortSignal,
 	withDeadline,
@@ -172,15 +172,12 @@ export async function startMcpSession(input: {
 					);
 					try {
 						const outcome = session.sandbox_id
-							? await bootstrapKernel(
-									deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) }),
-									{
-										timeoutMs,
-										inspectOnly: waitSeconds === 0,
-										signal,
-										bridge: notebookBridgeFor(deps, session.sandbox_id),
-									},
-								)
+							? await bootstrapKernel(sessionSandbox(deps.compute, session), {
+									timeoutMs,
+									inspectOnly: waitSeconds === 0,
+									signal,
+									bridge: notebookBridgeFor(deps, session.sandbox_id),
+								})
 							: { status: 'unavailable' as const };
 						bootstrapDiagnostics = outcome.diagnostics;
 						return bootstrapReadiness(outcome.status, notebookUrl);
