@@ -162,6 +162,7 @@ if __name__ == "__main__":
 	}
 
 	test('starts a session, sends a heartbeat, and stops the kernel', async ({ page }) => {
+		await page.clock.install();
 		const project = uniqueName('proj');
 		const notebook = uniqueName('nb');
 
@@ -176,10 +177,12 @@ if __name__ == "__main__":
 		await expect(iframe).toBeVisible({ timeout: 240_000 });
 		await expect(iframe).toHaveAttribute('src', /^http:\/\/localhost:\d+\//);
 
-		await page.waitForRequest(
-			(request) => request.method() === 'POST' && request.url().includes('/heartbeat'),
-			{ timeout: 150_000 },
+		// Exercise the production heartbeat interval without waiting two wall-clock minutes.
+		const heartbeat = page.waitForResponse(
+			(response) => response.request().method() === 'POST' && response.url().endsWith('/heartbeat'),
 		);
+		await page.clock.fastForward(120_000);
+		expect((await heartbeat).ok()).toBe(true);
 
 		await page.getByRole('button', { name: 'Session Running · Shared — details' }).click();
 		await page

@@ -20,8 +20,6 @@ jobs:
       fail-fast: false
       matrix:
         suite: [backend, web]
-    # Pinned: the AppArmor userns profile below and Playwright 1.58's install-deps package list
-    # target Ubuntu 24.04; ubuntu-latest moves to 26.04 on 2026-10-19.
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -47,16 +45,16 @@ jobs:
 
       # Keep the package graph sequential so child processes cannot exhaust the
       # runner's process limit under a cold cache.
-      # Vitest's result cache is ephemeral on runners; only Vite Task results are restored.
+      # Vitest's mutable caches prevent Vite Task from caching test results.
       - name: Test backend
         if: matrix.suite == 'backend'
         run: |
-          vp run test:root --configLoader=runner --pool=threads --no-cache
-          vp run --filter '@marimo-hub/*' --filter '!@marimo-hub/web' --concurrency-limit 1 test --configLoader=runner --pool=threads --no-cache
+          vp run --verbose test:root --configLoader=runner --pool=threads --no-cache --no-fsModuleCache
+          vp run --filter '@marimo-hub/*' --filter '!@marimo-hub/web' --concurrency-limit 1 --verbose test --configLoader=runner --pool=threads --no-cache --no-fsModuleCache
 
       - name: Test web
         if: matrix.suite == 'web'
-        run: vp run --filter @marimo-hub/web test --configLoader=runner --pool=threads --no-cache
+        run: vp run --filter @marimo-hub/web --verbose test --configLoader=runner --pool=threads --no-cache --no-fsModuleCache
 
       - name: Test Fargate Python agent
         if: matrix.suite == 'backend'
@@ -64,8 +62,34 @@ jobs:
           python3 --version
           vp run --filter @marimo-hub/compute-fargate test:agent
 
-      - name: Test inline dependencies with pinned uv
+      - name: Test external adapter example
         if: matrix.suite == 'backend'
+        run: vp run test:external-adapter
+
+      - name: Save Vite Task cache
+        if: success() && github.event_name == 'push'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: node_modules/.vite/task-cache
+          key: ${{ steps.vite-task-cache.outputs.cache-primary-key }}
+
+  runtime-integrations:
+    name: Runtime integrations
+    # The Chromium AppArmor profile and Playwright install-deps target Ubuntu 24.04.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          version: 1.3.0
+          node-version-file: '.node-version'
+          sfw: true
+          cache: true
+          run-install: |
+            - args: ['--frozen-lockfile']
+
+      - name: Test inline dependencies with pinned uv
         env:
           # Keep in sync with examples/sandbox-image/Dockerfile and
           # examples/docker-compose/local-compute/Dockerfile; custom images may differ.
@@ -77,7 +101,6 @@ jobs:
 
       # An apt mirror stall here once consumed the whole job budget; fail fast instead.
       - name: Install Chromium for thumbnail rendering
-        if: matrix.suite == 'backend'
         timeout-minutes: 8
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/thumbnail-browsers
@@ -106,7 +129,6 @@ jobs:
       # Logging integration environments, so those tests never reach PyPI. The pins live in
       # these fixture files, which the tests also read when creating environments locally.
       - name: Prepare logging integration environments
-        if: matrix.suite == 'backend'
         timeout-minutes: 8
         run: |
           MARIMO_INTEGRATION_VERSION="$(sed -n 's/^ARG MARIMO_VERSION=//p' images/marimo-sandbox/Dockerfile)"
@@ -119,7 +141,6 @@ jobs:
           "$RUNNER_TEMP/thumbnail-python/bin/pip" download -d "$RUNNER_TEMP/logging-sandbox-wheels" "marimo==$MARIMO_INTEGRATION_VERSION" -r "$LOGGING_FIXTURES/logging_sandbox_requirements.txt"
 
       - name: Test marimo runtime integrations (kernel, logging, thumbnails)
-        if: matrix.suite == 'backend'
         timeout-minutes: 12
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/thumbnail-browsers
@@ -141,26 +162,16 @@ jobs:
           PATH="$RUNNER_TEMP/uv-python/bin:$PATH" MARIMO_INTEGRATION_PYTHON="$RUNNER_TEMP/thumbnail-python/bin/python" MARIMOHUB_TEST_LOGGING_ENV_MISSING="$RUNNER_TEMP/logging-env-missing" MARIMOHUB_TEST_LOGGING_ENV_CONFLICTING="$RUNNER_TEMP/logging-env-conflicting" MARIMOHUB_TEST_LOGGING_SANDBOX_WHEELS="$RUNNER_TEMP/logging-sandbox-wheels" vp test packages/core/src/services/runtime/kernelBootstrap.integration.test.ts packages/core/src/services/runtime/presentation.integration.test.ts packages/core/src/services/runtime/logging.integration.test.ts packages/core/src/services/runtime/loggingSandbox.integration.test.ts --configLoader=runner --pool=threads
           MARIMOHUB_THUMBNAIL_TEST_PYTHON="$RUNNER_TEMP/thumbnail-python/bin/python" vp test packages/core/src/services/runtime/thumbnailProgram.live.test.ts --configLoader=runner --pool=threads
 
-      - name: Test external adapter example
-        if: matrix.suite == 'backend'
-        run: vp run test:external-adapter
-
-      - name: Save Vite Task cache
-        if: success() && github.event_name == 'push'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: node_modules/.vite/task-cache
-          key: ${{ steps.vite-task-cache.outputs.cache-primary-key }}
-
   # Preserve the required check name and propagate suite failures.
   test:
-    needs: test-suites
+    needs: [test-suites, runtime-integrations]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      - run: test "$RESULT" = success || test "$RESULT" = skipped
+      - run: test "$SUITES" = success && test "$RUNTIME" = success
         env:
-          RESULT: ${{ needs.test-suites.result }}
+          SUITES: ${{ needs.test-suites.result }}
+          RUNTIME: ${{ needs.runtime-integrations.result }}
 
   verify:
     runs-on: ubuntu-24.04
