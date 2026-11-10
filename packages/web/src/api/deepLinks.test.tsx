@@ -1,15 +1,42 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
-import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
+import { createTestQueryClient, jsonError, jsonOk, renderHookWithClient } from '@/test/render';
 import { deferred } from '@/test/deferred';
-import { useDeepLinkQuery } from './deepLinks';
-import { appKeys } from './queryKeys';
+import { prefetchAppLink, useDeepLinkQuery } from './deepLinks';
+import { appKeys, projectKeys } from './queryKeys';
 
 afterEach(() => vi.unstubAllGlobals());
 
 const target = { kind: 'app', project_id: 'project', notebook_id: 'notebook' };
 const appKey = appKeys.detail(target.project_id, target.notebook_id);
 const summary = { ...target, title: 'App', your_role: 'app-user', can: { run: true } };
+
+describe.each([false, true])('project-read authority (boot=%s)', (boot) => {
+	it.each([
+		{ role: 'viewer', canRun: false },
+		{ role: 'editor', canRun: false },
+		{ role: 'manager', canRun: false },
+		{ role: null, canRun: false },
+		{ role: 'viewer', canRun: true },
+	])('does not infer project.read from role=$role or can.run=$canRun', async ({ role, canRun }) => {
+		const app = { ...summary, your_role: role, can: { run: canRun } };
+		const fetch = vi.fn(async () => jsonOk({ target, app }));
+		vi.stubGlobal('fetch', fetch);
+		const client = createTestQueryClient();
+		if (boot) {
+			await prefetchAppLink(client, 'sales');
+		} else {
+			const { result } = renderHookWithClient(() => useDeepLinkQuery('sales'), {
+				client,
+				toaster: false,
+			});
+			await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		}
+		expect(client.getQueryData(appKey)).toEqual(app);
+		expect(client.getQueryState(projectKeys.detail(target.project_id))).toBeUndefined();
+		expect(fetch).toHaveBeenCalledTimes(1);
+	});
+});
 
 it('replaces a cached run permission with the freshly resolved permission', async () => {
 	const pending = deferred<Response>();

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
+import type { InitialRoutes } from './lib/initialRoute';
 
 const theme = vi.hoisted(() => ({
 	getInitialTheme: vi.fn(() => 'dark'),
@@ -9,6 +10,7 @@ const theme = vi.hoisted(() => ({
 	applyThemeConfig: vi.fn(),
 }));
 const render = vi.hoisted(() => vi.fn());
+const appProps = vi.hoisted(() => vi.fn());
 const preloadInitialRoute = vi.hoisted(() => vi.fn());
 const fetch = vi.hoisted(() => vi.fn<(input: RequestInfo | URL) => Promise<Response>>());
 const pendingFetches: ((response: Response) => void)[] = [];
@@ -22,7 +24,8 @@ beforeEach(() => {
 	vi.resetModules();
 	vi.doMock('./App.tsx', async () => {
 		const { useBranding } = await import('./context/BrandingContext');
-		function App() {
+		function App(props: { initialRoutes: InitialRoutes }) {
+			appProps(props);
 			const branding = useBranding();
 			return (
 				<div>
@@ -73,8 +76,11 @@ describe('app bootstrap', () => {
 		await vi.waitFor(() => expect(theme.applyThemeConfig).toHaveBeenCalledOnce());
 		expect(preloadInitialRoute).toHaveBeenCalledBefore(theme.loadThemeConfig);
 		expect(render).not.toHaveBeenCalled();
-		resolve({});
+		const routes: InitialRoutes = { Home: () => <p>Home route</p> };
+		resolve(routes);
 		await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
+		renderToStaticMarkup(render.mock.calls[0][0]);
+		expect(appProps.mock.lastCall?.[0].initialRoutes).toBe(routes);
 	});
 
 	it('renders the lazy routes when initial route loading fails', async () => {
@@ -82,6 +88,7 @@ describe('app bootstrap', () => {
 		await import('./main');
 		await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
 		expect(renderToStaticMarkup(render.mock.calls[0][0])).toContain('marimohub:user');
+		expect(appProps).toHaveBeenLastCalledWith({ initialRoutes: {} });
 	});
 
 	it('requests the user and capabilities while the theme is still loading', async () => {

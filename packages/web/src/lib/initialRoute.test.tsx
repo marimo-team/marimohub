@@ -86,7 +86,7 @@ describe('initial route prefetch', () => {
 		expect(client.getQueryData(appKeys.list('p'))).toBeUndefined();
 		expect([...responses.keys()].some((url) => url.includes('/apps'))).toBe(false);
 		expect(client.getQueryData(projectKeys.detail('p'))).toMatchObject({ id: 'p' });
-		expect(client.getQueryData(sessionKeys.listByProject('p'))).toEqual([]);
+		await vi.waitFor(() => expect(client.getQueryData(sessionKeys.listByProject('p'))).toEqual([]));
 		expect(
 			client.getQueryData(
 				notebookKeys.filteredList('p', { q: 'forecast', status: 'draft', tag: 'team' }),

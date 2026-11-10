@@ -15,7 +15,7 @@ function fetchAppsPage(
 	projectId: string | undefined,
 	search: string,
 	cursor: string | undefined,
-	signal?: AbortSignal,
+	signal: AbortSignal,
 ) {
 	return apiData(
 		apiClient.GET('/api/v1/apps', {
@@ -49,10 +49,13 @@ export function useProjectAppsQuery(projectId: string) {
 		// A cached apps grant must not override a newer project access denial.
 		refetchOnMount: 'always',
 		throwOnError: true,
-		// Leave the request running across StrictMode's temporary unmount.
-		queryFn: async ({ pageParam }): Promise<ProjectAccessPage> => {
+		queryFn: async ({ pageParam, signal }): Promise<ProjectAccessPage> => {
+			// Let StrictMode cancel its temporary mount before dispatching the request.
+			await Promise.resolve();
+			signal.throwIfAborted();
 			try {
-				const page = await fetchAppsPage(projectId, '', pageParam);
+				const page = await fetchAppsPage(projectId, '', pageParam, signal);
+				signal.throwIfAborted();
 				// An app-user redirect can reuse the authorized list, but never the missing sentinel.
 				if (pageParam === undefined && client.getQueryData(appKeys.list(projectId)) === undefined)
 					client.setQueryData(appKeys.list(projectId), { pages: [page], pageParams: [undefined] });

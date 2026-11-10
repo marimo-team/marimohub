@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react
 import { ThemeProvider } from '@/context/ThemeContext';
 import userEvent from '@testing-library/user-event';
 import { deepLinkKeys, prefetchAppLink } from '@/api/deepLinks';
+import { deferred } from '@/test/deferred';
 import { AppLinkPage } from './AppLinkPage';
 import { makeFetch, runningSession, PID, NID, sessionPosts } from './NotebookPage.testWorld';
 
@@ -98,6 +99,29 @@ function linkFetch(
 }
 
 describe('AppLinkPage', () => {
+	it('keeps the boot-resolved alias mounted while project metadata loads in StrictMode', async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { fetch, existing } = linkFetch();
+		const project = deferred<Response>();
+		const projectPath = `/api/v1/projects/${PID}`;
+		const requests = vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+			String(input).endsWith(projectPath) ? project.promise : fetch(input, init),
+		);
+		vi.stubGlobal('fetch', requests);
+		await prefetchAppLink(client, 'sales');
+		renderLink('/app/sales', '/', client, undefined, true);
+		await waitFor(() =>
+			expect(requests.mock.calls.some(([input]) => String(input).endsWith(projectPath))).toBe(true),
+		);
+		expect(screen.getByText('Opening app…')).toBeVisible();
+		expect(sessionPosts(existing)).toHaveLength(0);
+		await act(async () => project.resolve(await existing(projectPath)));
+		await waitFor(() => expect(sessionPosts(existing)).toHaveLength(1));
+		expect(
+			fetch.mock.calls.filter(([input]) => String(input).includes('/deep-links/')),
+		).toHaveLength(1);
+	});
+
 	it('does not reuse a boot-resolved app after its alias is removed', async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const options = { missing: false };

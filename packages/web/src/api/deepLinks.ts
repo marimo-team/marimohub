@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import { projectQueryOptions } from './hooks';
 import { apiClient, apiData } from './client';
 import { appKeys } from './queryKeys';
 
@@ -18,8 +17,6 @@ function resolveAppLink(client: QueryClient, slug: string, signal?: AbortSignal)
 				appKeys.detail(link.target.project_id, link.target.notebook_id),
 				link.app,
 			);
-			if (link.app.your_role !== 'app-user')
-				void client.prefetchQuery(projectQueryOptions(link.target.project_id));
 		}
 		return link;
 	});
