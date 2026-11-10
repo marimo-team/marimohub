@@ -1,6 +1,13 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { CoreWeaveCompute } from '@marimo-hub/compute-coreweave';
-import { NotFoundError, SandboxId, UnavailableError, UserId } from '@marimo-hub/core';
+import {
+	NotFoundError,
+	paths,
+	SandboxId,
+	SessionRetirer,
+	UnavailableError,
+	UserId,
+} from '@marimo-hub/core';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import { createInitializedBucket, makeTestDeps } from '@marimo-hub/api/testing';
 import { callRuntime } from '../../api/src/host/runtime';
@@ -194,5 +201,66 @@ it.each(['missing', 'stopped', 'unavailable', 'malformed', 'mismatched'] as cons
 			expect(gets).toHaveBeenCalledExactlyOnceWith('cw-1');
 			expect(world.created).toHaveLength(1);
 		}
+	},
+);
+
+it.each(
+	['malformed', 'provider-mismatched'].flatMap((reference) => [
+		{ reference, mode: 'save', options: { save: true }, reason: 'destroy_failed' },
+		{ reference, mode: 'destroy-only', options: { save: false }, reason: 'destroy_failed' },
+		{
+			reference,
+			mode: 'idle probe',
+			options: { save: true, requireIdle: true },
+			reason: 'kernel_unreachable',
+		},
+	]),
+)(
+	'retains ownership when $mode reclaim rejects a $reference reference',
+	async ({ reference, options, reason }) => {
+		const { world, gets, lists, deps, session } = await setup();
+		const expired = {
+			...session,
+			status: 'expired' as const,
+			reconnect_reference:
+				reference === 'malformed'
+					? 'not-json'
+					: JSON.stringify({
+							kind: 'other-provider-v1',
+							hubId: session.sandbox_id,
+							sandboxId: 'cw-1',
+						}),
+		};
+		await deps.bucket.put(
+			paths.session(session.project_id, session.session_id),
+			JSON.stringify(expired),
+		);
+		const claim = await deps.services.sessions.getEditorClaim(
+			session.project_id,
+			session.notebook_id,
+		);
+		const remove = vi.spyOn(world.client, 'delete');
+		const create = vi.spyOn(world.client, 'create');
+		const retirer = new SessionRetirer({
+			sessions: deps.services.sessions,
+			notebooks: deps.services.notebooks,
+			compute: new CoreWeaveCompute({ apiKey: 'test', image: 'test' }, world.client),
+			bucket: deps.bucket,
+			persistWorkspace: 'source',
+		});
+
+		expect(await retirer.reclaim(expired, options)).toEqual({ reclaimed: false, reason });
+		expect(lists).not.toHaveBeenCalled();
+		expect(gets).not.toHaveBeenCalled();
+		expect(remove).not.toHaveBeenCalled();
+		expect(create).not.toHaveBeenCalled();
+		expect(world.created).toHaveLength(1);
+		expect(await deps.services.sessions.getSession(session.project_id, session.session_id)).toEqual(
+			expired,
+		);
+		expect(
+			await deps.services.sessions.getEditorClaim(session.project_id, session.notebook_id),
+		).toEqual(claim);
+		expect(claim?.session_id).toBe(session.session_id);
 	},
 );
