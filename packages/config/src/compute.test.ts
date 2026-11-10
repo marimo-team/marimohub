@@ -1188,6 +1188,65 @@ describe('optional compute configuration', () => {
 			).toThrow(/requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE/);
 		});
 
+		it.each([
+			[undefined, 'sandboxes-compress@kubernetescrd'],
+			[
+				'sandboxes-auth@kubernetescrd',
+				'sandboxes-auth@kubernetescrd,sandboxes-compress@kubernetescrd',
+			],
+			[
+				' sandboxes-auth@kubernetescrd, sandboxes-compress@kubernetescrd ',
+				'sandboxes-auth@kubernetescrd,sandboxes-compress@kubernetescrd',
+			],
+		])('merges chart middlewares with existing annotations: %s', (existing, expected) => {
+			const createPublisher = vi.spyOn(coreweave, 'createKernelIngressPublisher');
+			const annotation = 'traefik.ingress.kubernetes.io/router.middlewares';
+			try {
+				makeCompute({
+					...env,
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: 'sandboxes',
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: JSON.stringify({
+						'example.com/annotation': 'preserved',
+						[annotation]: existing,
+					}),
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES:
+						' sandboxes-compress@kubernetescrd, sandboxes-compress@kubernetescrd ',
+				});
+				expect(createPublisher).toHaveBeenCalledExactlyOnceWith({
+					namespace: 'sandboxes',
+					ingressClassName: 'traefik',
+					ingressAnnotations: {
+						'example.com/annotation': 'preserved',
+						[annotation]: expected,
+					},
+				});
+			} finally {
+				createPublisher.mockRestore();
+			}
+		});
+
+		it('rejects middleware references without an ingress namespace', () => {
+			expect(() =>
+				makeCompute({
+					...env,
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES: 'sandboxes-compress@kubernetescrd',
+				}),
+			).toThrow(/INGRESS_MIDDLEWARES requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE/);
+		});
+
+		it('checks the annotation size after appending middleware references', () => {
+			expect(() =>
+				makeCompute({
+					...env,
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: 'sandboxes',
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: JSON.stringify({
+						a: 'x'.repeat(256 * 1024 - 1),
+					}),
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES: 'sandboxes-compress@kubernetescrd',
+				}),
+			).toThrow(/Invalid MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES/);
+		});
+
 		it('treats an empty MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION as unset', () => {
 			expect(() =>
 				makeCompute({

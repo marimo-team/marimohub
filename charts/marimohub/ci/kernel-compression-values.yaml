@@ -3,6 +3,5 @@ sandboxIngress:
   namespace: sandboxes
   compression:
     enabled: true
-config:
-  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: sandboxes
-  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: '{"traefik.ingress.kubernetes.io/router.middlewares":"sandboxes-custom-hub-kernel-compress@kubernetescrd"}'
+secrets:
+  existingSecret: external-config

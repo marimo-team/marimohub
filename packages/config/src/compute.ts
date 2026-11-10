@@ -444,10 +444,31 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 					},
 				);
 			}
-			const ingressAnnotations = kubernetesIngressAnnotations(
+			let ingressAnnotations = kubernetesIngressAnnotations(
 				env,
 				'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS',
 			);
+			const middlewares = parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES) ?? [];
+			if (middlewares.length > 0) {
+				if (!env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE?.trim()) {
+					throw new ConfigError(
+						'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE',
+						{ variable: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES' },
+					);
+				}
+				const annotation = 'traefik.ingress.kubernetes.io/router.middlewares';
+				const merged = {
+					...ingressAnnotations,
+					[annotation]: [
+						...new Set([...(parseList(ingressAnnotations?.[annotation]) ?? []), ...middlewares]),
+					].join(','),
+				};
+				// Validate the combined size, including annotations supplied through an external Secret.
+				ingressAnnotations = kubernetesIngressAnnotations(
+					{ MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES: JSON.stringify(merged) },
+					'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES',
+				);
+			}
 			if (ingressAnnotations && !env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE?.trim()) {
 				throw new ConfigError(
 					'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE',

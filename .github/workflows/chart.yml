@@ -141,15 +141,14 @@ jobs:
           curl -sSfL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
             | tar -xz -C /usr/local/bin kubeconform
 
-      # Render with the defaults and with the example values, then validate the
-      # manifests against the upstream Kubernetes JSON schemas. Treats a missing
-      # schema (none of our kinds are CRDs) as an error.
+      # The compression script checks Traefik's Middleware CRD; kubeconform
+      # validates the remaining resources against Kubernetes schemas.
       - name: Render & validate manifests
         run: |
-          for values in "" "-f charts/marimohub/ci/example-values.yaml" "-f charts/marimohub/ci/kubernetes-secrets-values.yaml" "-f charts/marimohub/ci/sandbox-prepuller-values.yaml"; do
+          for values in "" "-f charts/marimohub/ci/example-values.yaml" "-f charts/marimohub/ci/kubernetes-secrets-values.yaml" "-f charts/marimohub/ci/sandbox-prepuller-values.yaml" "-f charts/marimohub/ci/kernel-compression-values.yaml"; do
             echo "::group::helm template ${values:-(defaults)}"
             helm template test charts/marimohub $values \
-              | kubeconform -strict -summary -verbose \
+              | kubeconform -strict -summary -verbose -skip Middleware \
                   -kubernetes-version 1.29.0 \
                   -schema-location default
             echo "::endgroup::"
