@@ -1235,7 +1235,7 @@ describe('optional compute configuration', () => {
 		});
 
 		it('checks the annotation size after appending middleware references', () => {
-			expect(() =>
+			const error = getConfigError(() =>
 				makeCompute({
 					...env,
 					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: 'sandboxes',
@@ -1244,7 +1244,10 @@ describe('optional compute configuration', () => {
 					}),
 					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES: 'sandboxes-compress@kubernetescrd',
 				}),
-			).toThrow(/Invalid MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES/);
+			);
+			expect(error.message).toMatch(/Invalid combined CoreWeave ingress annotations.*256 KiB/);
+			expect(error.opts.remediation).toContain('MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS');
+			expect(error.opts.remediation).toContain('MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES');
 		});
 
 		it('treats an empty MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION as unset', () => {
