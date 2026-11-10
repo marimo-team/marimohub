@@ -1,3 +1,4 @@
+import { configureLogLevel } from '@marimo-hub/core/logs';
 import { context, SpanStatusCode, trace } from '@opentelemetry/api';
 import { InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
@@ -6,6 +7,9 @@ import { MaintenanceLock } from '@marimo-hub/core';
 import type { Metrics } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { BackgroundLoops } from './backgroundLoops';
+
+beforeEach(() => configureLogLevel('debug'));
+afterEach(() => configureLogLevel());
 
 type LoopOptions = Parameters<BackgroundLoops['start']>[0];
 

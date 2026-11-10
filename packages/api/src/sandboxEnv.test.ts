@@ -1,3 +1,4 @@
+import { configureLogLevel } from '@marimo-hub/core/logs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRunId, createSessionId, UnavailableError, ValidationError } from '@marimo-hub/core';
 import type {
@@ -190,6 +191,7 @@ describe('resolveFederatedVars', () => {
 		});
 
 		it('still returns the endpoint env when priming fails', async () => {
+			configureLogLevel('debug');
 			const logs = vi.spyOn(console, 'log').mockImplementation(() => {});
 			try {
 				const exchange = vi.fn(async () => {
@@ -206,6 +208,7 @@ describe('resolveFederatedVars', () => {
 				expect(exchange).toHaveBeenCalledOnce();
 			} finally {
 				logs.mockRestore();
+				configureLogLevel();
 			}
 		});
 	});

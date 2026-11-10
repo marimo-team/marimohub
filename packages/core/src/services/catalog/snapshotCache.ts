@@ -1,3 +1,5 @@
+import { noopMetrics } from '../../ports/metrics';
+import type { Metrics } from '../../ports/metrics';
 import { LazyMap, weakMemo } from '../../cache';
 import type { ProjectId, UserId } from '../../ids';
 import { normalizeEmail } from '../../identityMatch';
@@ -171,7 +173,13 @@ class SnapshotCache {
 	readonly pointer = new EtagRecordCache<Catalog>(1);
 	private readonly entries = new LazyMap<string, SnapshotCacheEntry>({ maxSize: 2 });
 
-	read(key: string, load: () => Promise<Snapshot>): Promise<SnapshotCacheEntry> {
+	read(
+		key: string,
+		load: () => Promise<Snapshot>,
+		metrics: Metrics = noopMetrics,
+	): Promise<SnapshotCacheEntry> {
+		const hit = this.entries.getIfPresent(key) !== undefined || this.entries.hasPending(key);
+		metrics.increment('cache.snapshot.reads', 1, { result: hit ? 'hit' : 'miss' });
 		// Only immutable objects share in-flight loads; every pointer read reaches storage.
 		return this.entries.getOrLoad(key, async () => new SnapshotCacheEntry(await load()));
 	}

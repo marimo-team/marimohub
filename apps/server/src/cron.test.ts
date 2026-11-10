@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { configureLogLevel } from '@marimo-hub/core/logs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInitializedBucket, makeTestDeps, stubSourceControl } from '@marimo-hub/api/testing';
 import { createApi } from '@marimo-hub/api';
 import type { ApiDeps } from '@marimo-hub/api';
@@ -48,6 +49,9 @@ import {
 	SESSION_SWEEP_INTERVAL_MS,
 	useLoopHarness,
 } from './test/loopHarness';
+
+beforeEach(() => configureLogLevel('debug'));
+afterEach(() => configureLogLevel());
 
 vi.mock('@marimo-hub/core', async (importOriginal) => {
 	const actual = await importOriginal<typeof CoreModule>();
@@ -304,7 +308,9 @@ describe('startMaintenance', () => {
 			expect(background.pending()).toBe(1);
 			await expect(background.runAll()).resolves.toBeUndefined();
 			expect(compute.deleteSnapshot).toHaveBeenCalledWith('previous');
-			expect(metrics.collect()).toMatchObject({ 'counter.background.failed': 1 });
+			expect(metrics.collect()).toMatchObject({
+				'counter.background.failed{"label":"filesystem_snapshot.delete"}': 1,
+			});
 			if (configured) {
 				expect(increment).toHaveBeenCalledExactlyOnceWith('background.failed', 1, {
 					label: 'filesystem_snapshot.delete',

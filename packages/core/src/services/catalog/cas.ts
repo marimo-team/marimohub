@@ -8,13 +8,14 @@ import { readStoredJson } from '../../schema';
 // the catalog pointer and session records.
 
 const DEFAULT_RETRIES = 5;
-/** Linear backoff: 50ms, 100ms, 150ms, … */
-const DEFAULT_BACKOFF = (attempt: number) => 50 * (attempt + 1);
+// Equal jitter keeps a minimum delay while desynchronizing competing writers.
+const DEFAULT_BACKOFF = (attempt: number) =>
+	Math.floor(50 * (attempt + 1) * (0.5 + Math.random() / 2));
 
 export interface CasRetryOptions {
 	/** Max attempts before giving up (default 5). */
 	retries?: number;
-	/** Backoff before the next attempt, in ms (default `50·(n+1)`). */
+	/** Retry delay in ms for zero-based attempt n. Default range: [25·(n+1), 50·(n+1)). */
 	backoffMs?: (attempt: number) => number;
 	/** Run at the start of each attempt (e.g. bump a metrics counter). */
 	onAttempt?: (attempt: number) => void;
@@ -78,7 +79,7 @@ export async function withCasRetry<T>(
 			if (err instanceof CasWriteConflictError) {
 				lastConflict = err.precondition;
 				onConflict?.(i, err.precondition);
-				await sleep(backoffMs(i));
+				if (i + 1 < retries) await sleep(backoffMs(i));
 				continue;
 			}
 			throw err;

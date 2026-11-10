@@ -242,7 +242,7 @@ export class ProjectService {
 		private deepLinks = new DeepLinkService(bucket, metrics),
 		private accessGeneration?: string,
 	) {
-		this.projectCache = new MetadataCache(bucket, METADATA_CACHE_MAX_ENTRIES);
+		this.projectCache = new MetadataCache(bucket, METADATA_CACHE_MAX_ENTRIES, undefined, metrics);
 	}
 
 	/** Apply role, token, and label restrictions before the caller paginates. */

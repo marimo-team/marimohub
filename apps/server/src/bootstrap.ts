@@ -6,8 +6,9 @@ import { Hono } from 'hono';
 import type { ApiDeps } from '@marimo-hub/api';
 import { createApi, SANDBOX_PROXY_PREFIXES } from '@marimo-hub/api';
 import { createFromEnvAsync, isConfigError } from '@marimo-hub/config';
-import { disposeNotifier, InFlightWork } from '@marimo-hub/core';
-import { backgroundWorkFrom } from '@marimo-hub/core/ports/background-work';
+import { disposeNotifier } from '@marimo-hub/core';
+import { configureLogLevel } from '@marimo-hub/core/logs';
+import { DeferredWorkQueue } from './backgroundWork';
 import {
 	startPreviewPreparation,
 	startJobScheduler,
@@ -63,24 +64,17 @@ export async function bootstrap(
 			return () => process.off(signal, handler);
 		});
 
-	const backgroundTasks = new InFlightWork();
-	const backgroundWork = backgroundWorkFrom((task) => {
-		void backgroundTasks.track(task).catch(() => {});
-	});
+	configureLogLevel(env.LOG_LEVEL);
 	let thumbnailDeadline: number | undefined;
-	// Telemetry sink: services emit CAS/reaper/snapshot signals here; the maintenance
-	// loop flushes them as one wide event per cycle (and request-path CAS contention
-	// surfaces at the next flush).
 	const wideEvents = new WideEventMetrics();
 
 	// Tracing + metrics (standard OTEL_* env vars); the global providers must
 	// register before requests are served.
 	const otel = startOtelFn(buildVersion(env));
 
-	// Fan domain metrics out to OTEL when its metrics pillar is on; the maintenance
-	// loop below still flushes `wideEvents` directly.
 	const otelMetrics = otel?.metrics ? new OtelMetrics() : undefined;
 	const metrics = otelMetrics ? fanoutMetrics(wideEvents, otelMetrics) : wideEvents;
+	const backgroundWork = new DeferredWorkQueue(metrics);
 
 	// Config errors are deterministic — a restart can't fix them — so print a readable
 	// remediation block to stderr and exit. (Transient backend problems go through the
@@ -112,9 +106,7 @@ export async function bootstrap(
 	// Installed for metrics-only mode too: RED metrics still record, spans don't.
 	if (otel)
 		deps.tracingMiddleware = httpInstrumentationMiddleware({ disableTracing: !otel.tracing });
-	// OTel only: the wide-event sink drops tags, and `loops.collect()` already puts
-	// per-loop fields on the maintenance event.
-	const loops = new BackgroundLoops(otelMetrics);
+	const loops = new BackgroundLoops(metrics);
 	if (validatedEnv.MARIMOHUB_RUN_MAINTENANCE === 'true') deps.loopHealth = () => loops.health();
 	const app = createApi(deps);
 
@@ -177,11 +169,12 @@ export async function bootstrap(
 	app.use('/*', serveStaticWithCache({ root: staticRoot }));
 	app.get('*', spaFallback);
 
-	// Maintenance + session-lifecycle loops — run on a single replica (the
-	// marimohub-maintenance Deployment). The bucket-CAS leases inside are
-	// defense-in-depth guards.
-	const stops: (() => void)[] = [];
+	const flushMetrics = () => logEvent({ level: 'info', event: 'metrics', ...wideEvents.collect() });
+	const metricsTimer = setInterval(flushMetrics, 60_000);
+	metricsTimer.unref();
+	const stops: (() => void)[] = [() => clearInterval(metricsTimer)];
 	const runtimeDrains: (() => Promise<void>)[] = [];
+	// Maintenance loops run on one replica. Metrics flush on every replica.
 	if (validatedEnv.MARIMOHUB_RUN_MAINTENANCE === 'true') {
 		// `loops.drain()` already awaits the warm-pool attempt.
 		const warmPools = startWarmPools(deps, loops);
@@ -246,12 +239,15 @@ export async function bootstrap(
 
 	const unregisterSignals: (() => void)[] = [];
 	let drainPromise: Promise<void> | undefined;
-	const waitForBackgroundTasks = (): Promise<void> => backgroundTasks.drain();
+	const waitForBackgroundTasks = (): Promise<void> => backgroundWork.drain();
 	const closeNotifier = onceAsync(() =>
 		deps.notifier ? disposeNotifier(deps.notifier) : undefined,
 	);
 	const closeDataBrowser = onceAsync(() => deps.dataBrowser?.close?.());
-	const shutdownOtel = onceAsync(() => otel?.shutdown());
+	const shutdownOtel = onceAsync(() => {
+		flushMetrics();
+		return otel?.shutdown();
+	});
 	const drain = (): Promise<void> => {
 		drainPromise ??= (async () => {
 			thumbnailDeadline = Date.now() + drainTimeoutMs - 1000;
