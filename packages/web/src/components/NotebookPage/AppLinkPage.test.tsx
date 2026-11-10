@@ -6,7 +6,7 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-rou
 import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { ThemeProvider } from '@/context/ThemeContext';
 import userEvent from '@testing-library/user-event';
-import { deepLinkKeys } from '@/api/deepLinks';
+import { deepLinkKeys, prefetchAppLink } from '@/api/deepLinks';
 import { AppLinkPage } from './AppLinkPage';
 import { makeFetch, runningSession, PID, NID, sessionPosts } from './NotebookPage.testWorld';
 
@@ -29,6 +29,7 @@ function renderLink(
 	basename = '/',
 	client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
 	controls?: ReactNode,
+	reactStrictMode = false,
 ) {
 	return render(
 		<QueryClientProvider client={client}>
@@ -44,6 +45,7 @@ function renderLink(
 				</ThemeProvider>
 			</MemoryRouter>
 		</QueryClientProvider>,
+		{ reactStrictMode },
 	);
 }
 
@@ -96,6 +98,38 @@ function linkFetch(
 }
 
 describe('AppLinkPage', () => {
+	it('does not reuse a boot-resolved app after its alias is removed', async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = { missing: false };
+		const { fetch, existing } = linkFetch(options);
+		await prefetchAppLink(client, 'sales');
+		const first = renderLink('/app/sales', '/', client);
+		await waitFor(() => expect(sessionPosts(existing)).toHaveLength(1));
+		first.unmount();
+		options.missing = true;
+		renderLink('/app/sales', '/', client);
+		expect(await screen.findByRole('alert')).toHaveTextContent('App link not found');
+		expect(sessionPosts(existing)).toHaveLength(1);
+		expect(screen.queryByTitle(notebookFrame)).not.toBeInTheDocument();
+		expect(
+			fetch.mock.calls.filter(([input]) => String(input).includes('/deep-links/')),
+		).toHaveLength(2);
+	});
+
+	it('consumes the boot lookup without repeating it after mount', async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { fetch, existing } = linkFetch();
+		await prefetchAppLink(client, 'sales');
+		const first = renderLink('/app/sales', '/', client, undefined, true);
+		await waitFor(() => expect(sessionPosts(existing)).toHaveLength(1));
+		const lookups = () =>
+			fetch.mock.calls.filter(([input]) => String(input).includes('/deep-links/'));
+		expect(lookups()).toHaveLength(1);
+		first.unmount();
+		renderLink('/app/sales', '/', client);
+		await waitFor(() => expect(lookups()).toHaveLength(2));
+	});
+
 	it('starts from the resolved summary without requesting app details', async () => {
 		const { fetch, existing } = linkFetch();
 		renderLink();
@@ -262,36 +296,50 @@ describe('AppLinkPage', () => {
 		}
 	});
 
-	it('recovers from a resolver outage through Try again without starting an app early', async () => {
-		const user = userEvent.setup();
-		let unavailable = true;
-		const { existing } = linkFetch({
-			resolve: async () =>
-				new Response(
-					JSON.stringify(
-						unavailable
-							? {
-									success: false,
-									error: { code: 'SERVICE_UNAVAILABLE', message: 'Temporarily unavailable' },
-								}
-							: {
-									success: true,
-									data: { target: { kind: 'app', project_id: PID, notebook_id: NID } },
-								},
+	it.each([false, true])(
+		'recovers from a resolver outage without starting an app early (boot=%s)',
+		async (boot) => {
+			const user = userEvent.setup();
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			let unavailable = true;
+			const { existing, fetch } = linkFetch({
+				resolve: async () =>
+					new Response(
+						JSON.stringify(
+							unavailable
+								? {
+										success: false,
+										error: { code: 'SERVICE_UNAVAILABLE', message: 'Temporarily unavailable' },
+									}
+								: {
+										success: true,
+										data: { target: { kind: 'app', project_id: PID, notebook_id: NID } },
+									},
+						),
+						{ status: unavailable ? 503 : 200, headers: { 'content-type': 'application/json' } },
 					),
-					{ status: unavailable ? 503 : 200, headers: { 'content-type': 'application/json' } },
-				),
-		});
-		renderLink();
-		expect(await screen.findByRole('heading', { name: 'Unable to open app' })).toBeInTheDocument();
-		expect(sessionPosts(existing)).toHaveLength(0);
-		unavailable = false;
-		await user.click(screen.getByRole('button', { name: 'Try again' }));
-		expect(await screen.findByTitle(notebookFrame)).toBeInTheDocument();
-		expect(screen.getByTestId('location')).toHaveTextContent('/app/sales?filter=2026#chart');
-		expect(
-			new URL(screen.getByTitle(notebookFrame).getAttribute('src')!).searchParams.get('filter'),
-		).toBe('2026');
-		expect(sessionPosts(existing)).toHaveLength(1);
-	});
+			});
+			if (boot)
+				await expect(prefetchAppLink(client, 'sales')).rejects.toThrow('Temporarily unavailable');
+			renderLink('/app/sales?filter=2026#chart', '/', client);
+			expect(
+				await screen.findByRole('heading', { name: 'Unable to open app' }),
+			).toBeInTheDocument();
+			expect(sessionPosts(existing)).toHaveLength(0);
+			expect(
+				fetch.mock.calls.filter(([input]) => String(input).includes('/deep-links/')),
+			).toHaveLength(1);
+			unavailable = false;
+			await user.click(screen.getByRole('button', { name: 'Try again' }));
+			expect(await screen.findByTitle(notebookFrame)).toBeInTheDocument();
+			expect(screen.getByTestId('location')).toHaveTextContent('/app/sales?filter=2026#chart');
+			expect(
+				new URL(screen.getByTitle(notebookFrame).getAttribute('src')!).searchParams.get('filter'),
+			).toBe('2026');
+			expect(sessionPosts(existing)).toHaveLength(1);
+			expect(
+				fetch.mock.calls.filter(([input]) => String(input).includes('/deep-links/')),
+			).toHaveLength(2);
+		},
+	);
 });

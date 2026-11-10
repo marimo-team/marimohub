@@ -425,11 +425,8 @@ export function useEvaluatePolicySuite() {
 }
 
 // Projects
-export function useProjectsQuery(
-	filters: ProjectListFilters = {},
-	options: { enabled?: boolean; throwOnError?: boolean } = {},
-) {
-	return useQuery({
+export function projectsQueryOptions(filters: ProjectListFilters = {}) {
+	return queryOptions({
 		queryKey: projectKeys.filteredList({ ...filters, status: filters.status ?? 'active' }),
 		staleTime: 60_000,
 		queryFn: () =>
@@ -443,6 +440,15 @@ export function useProjectsQuery(
 				'Project listing did not advance; refusing a partial roster.',
 			),
 		placeholderData: keepPreviousData,
+	});
+}
+
+export function useProjectsQuery(
+	filters: ProjectListFilters = {},
+	options: { enabled?: boolean; throwOnError?: boolean } = {},
+) {
+	return useQuery({
+		...projectsQueryOptions(filters),
 		enabled: options.enabled,
 		throwOnError: options.throwOnError ?? true,
 	});
@@ -1471,7 +1477,7 @@ function uniqueNotebooks(data: { pages: { items: NotebookEntry[] }[] }): Noteboo
 	return [...notebooks.values()];
 }
 
-function notebooksQueryOptions(projectId: string, filters: NotebookListFilters) {
+export function notebooksQueryOptions(projectId: string, filters: NotebookListFilters) {
 	return infiniteQueryOptions({
 		queryKey: notebookKeys.filteredList(projectId, filters),
 		initialPageParam: null as string | null,

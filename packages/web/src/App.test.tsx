@@ -46,7 +46,7 @@ describe('App routes', () => {
 		window.history.replaceState({}, '', '/projects/p1');
 		renderWithClient(<App />, { toaster: false });
 		await vi.waitFor(() => expect(loadedChunks).toEqual(['layout', 'project']));
-		expect(pending.some((url) => url.startsWith('/api/v1/apps?'))).toBe(true);
+		await vi.waitFor(() => expect(pending.some((url) => url === '/api/v1/projects/p1')).toBe(true));
 	});
 
 	it.each([true, false])('selects the landing page from app_only=%s', async (appOnly) => {

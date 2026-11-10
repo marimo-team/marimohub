@@ -1,3 +1,4 @@
+import type { InitialRoutes } from '@/lib/initialRoute';
 import { useSearchAccess } from '@/hooks/useSearchAccess';
 import { SEARCH_ROUTE, PROJECT_SEARCH_ROUTE } from '@/lib/workspaceSearch';
 import { useWorkspaceSearchShortcut } from '@/hooks/useWorkspaceSearchShortcut';
@@ -197,14 +198,18 @@ function PageFallback() {
 	);
 }
 
-function StandardLayout() {
+function StandardLayout({ initialRoutes }: { initialRoutes: InitialRoutes }) {
+	const Layout = initialRoutes.Layout ?? WorkspaceLayout;
+	const Home = initialRoutes.Home ?? WorkspaceHome;
+	const Project = initialRoutes.Project ?? ProjectRoute;
+	const Projects = initialRoutes.Projects ?? ProjectList;
 	const { user } = useAuth();
 	return (
-		<WorkspaceLayout>
+		<Layout>
 			<AppErrorBoundary>
 				<Suspense fallback={<PageFallback />}>
 					<Routes>
-						<Route path="/" element={<WorkspaceHome />} />
+						<Route path="/" element={<Home />} />
 						<Route path={SEARCH_ROUTE} element={<SearchPage />} />
 						<Route path={PROJECT_SEARCH_ROUTE} element={<SearchPage />} />
 						<Route path="/apps" element={<AppsPage />} />
@@ -214,12 +219,12 @@ function StandardLayout() {
 								user?.app_only && !user.can_create_projects ? (
 									<Navigate to="/apps" replace />
 								) : (
-									<ProjectList />
+									<Projects />
 								)
 							}
 						/>
 						<Route path="/projects/:pid" element={<ProjectSourceGate />}>
-							<Route index element={<ProjectRoute />} />
+							<Route index element={<Project />} />
 							<Route path="members" element={<ProjectSettingsPage section="members" />} />
 							<Route path="integrations" element={<ProjectSettingsPage section="integrations" />} />
 							<Route path="alerts" element={<ProjectAlertsPage />} />
@@ -243,11 +248,11 @@ function StandardLayout() {
 					</Routes>
 				</Suspense>
 			</AppErrorBoundary>
-		</WorkspaceLayout>
+		</Layout>
 	);
 }
 
-function AppContent() {
+function AppContent({ initialRoutes }: { initialRoutes: InitialRoutes }) {
 	const { available } = useSearchAccess();
 	useWorkspaceSearchShortcut(available);
 	return (
@@ -258,7 +263,7 @@ function AppContent() {
 						{fullScreenRoutes.map(({ path, element }) => (
 							<Route key={path} path={path} element={element} />
 						))}
-						<Route path="*" element={<StandardLayout />} />
+						<Route path="*" element={<StandardLayout initialRoutes={initialRoutes} />} />
 					</Routes>
 				</Suspense>
 			</AppErrorBoundary>
@@ -268,14 +273,14 @@ function AppContent() {
 	);
 }
 
-function App() {
+function App({ initialRoutes = {} }: { initialRoutes?: InitialRoutes }) {
 	return (
 		<AppErrorBoundary>
 			<BrowserRouter basename={appBasePath()}>
 				<ThemeProvider>
 					<AuthProvider>
 						<AuthGate>
-							<AppContent />
+							<AppContent initialRoutes={initialRoutes} />
 						</AuthGate>
 					</AuthProvider>
 				</ThemeProvider>

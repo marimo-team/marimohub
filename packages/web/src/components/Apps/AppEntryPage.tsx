@@ -95,8 +95,14 @@ export function AppEntryPage({
 				user={user}
 			/>
 		);
-	if (!query.data) return <p className="p-6">Opening app…</p>;
-	return <NotebookPage variant={variant} target={{ projectId: pid, notebookId: nid }} />;
+	if (!query.data)
+		return <p className="p-6">{variant === 'edit' ? 'Opening notebook…' : 'Opening app…'}</p>;
+	return (
+		<NotebookPage
+			variant={variant}
+			target={{ projectId: pid, notebookId: nid, title: query.data.title }}
+		/>
+	);
 }
 
 function isMoveInProgress(error: Error | null): boolean {

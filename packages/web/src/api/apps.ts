@@ -2,10 +2,10 @@ import { useEffect } from 'react';
 import type { InfiniteData } from '@tanstack/react-query';
 import {
 	infiniteQueryOptions,
+	queryOptions,
 	useInfiniteQuery,
 	useQuery,
 	useQueryClient,
-	useSuspenseInfiniteQuery,
 } from '@tanstack/react-query';
 import { apiClient, apiData } from './client';
 import { isNotFoundError } from './request';
@@ -15,7 +15,7 @@ function fetchAppsPage(
 	projectId: string | undefined,
 	search: string,
 	cursor: string | undefined,
-	signal: AbortSignal,
+	signal?: AbortSignal,
 ) {
 	return apiData(
 		apiClient.GET('/api/v1/apps', {
@@ -42,19 +42,19 @@ type ProjectAccessPage = Awaited<ReturnType<typeof fetchAppsPage>> & { missing: 
 
 export function useProjectAppsQuery(projectId: string) {
 	const client = useQueryClient();
-	const query = useSuspenseInfiniteQuery({
+	const query = useInfiniteQuery({
 		queryKey: appKeys.projectAccess(projectId),
 		initialPageParam: undefined as string | undefined,
 		staleTime: 60_000,
-		queryFn: async ({ pageParam, signal }): Promise<ProjectAccessPage> => {
+		// A cached apps grant must not override a newer project access denial.
+		refetchOnMount: 'always',
+		throwOnError: true,
+		// Leave the request running across StrictMode's temporary unmount.
+		queryFn: async ({ pageParam }): Promise<ProjectAccessPage> => {
 			try {
-				const page = await fetchAppsPage(projectId, '', pageParam, signal);
+				const page = await fetchAppsPage(projectId, '', pageParam);
 				// An app-user redirect can reuse the authorized list, but never the missing sentinel.
-				if (
-					!signal.aborted &&
-					pageParam === undefined &&
-					client.getQueryData(appKeys.list(projectId)) === undefined
-				)
+				if (pageParam === undefined && client.getQueryData(appKeys.list(projectId)) === undefined)
 					client.setQueryData(appKeys.list(projectId), { pages: [page], pageParams: [undefined] });
 				return { ...page, missing: false };
 			} catch (error) {
@@ -81,6 +81,20 @@ export function useProjectAppsQuery(projectId: string) {
 	return query;
 }
 
+export function appQueryOptions(pid: string, nid: string) {
+	return queryOptions({
+		queryKey: appKeys.detail(pid, nid),
+		queryFn: ({ signal }) =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/app', {
+					params: { path: { pid, nid } },
+					signal,
+				}),
+			),
+		staleTime: 30_000,
+	});
+}
+
 export function useAppQuery(
 	pid: string,
 	nid: string,
@@ -90,17 +104,7 @@ export function useAppQuery(
 ) {
 	const { refetchIntervalMs } = options;
 	return useQuery({
-		queryKey: appKeys.detail(pid, nid),
-		queryFn: ({ signal }) =>
-			apiData(
-				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/app', {
-					params: { path: { pid, nid } },
-					signal,
-				}),
-			),
-		// Short enough that role changes surface on a later visit, without refetching on
-		// every focus and remount.
-		staleTime: 30_000,
-		refetchInterval: refetchIntervalMs && ((query) => refetchIntervalMs(query.state.error)),
+		...appQueryOptions(pid, nid),
+		refetchInterval: (query) => refetchIntervalMs?.(query.state.error),
 	});
 }

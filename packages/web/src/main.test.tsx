@@ -9,10 +9,12 @@ const theme = vi.hoisted(() => ({
 	applyThemeConfig: vi.fn(),
 }));
 const render = vi.hoisted(() => vi.fn());
+const preloadInitialRoute = vi.hoisted(() => vi.fn());
 const fetch = vi.hoisted(() => vi.fn<(input: RequestInfo | URL) => Promise<Response>>());
 const pendingFetches: ((response: Response) => void)[] = [];
 
 vi.mock('@/lib/theme', () => theme);
+vi.mock('@/lib/initialRoute', () => ({ preloadInitialRoute }));
 vi.mock('react-dom/client', () => ({ createRoot: () => ({ render }) }));
 vi.mock('@tanstack/react-query-devtools', () => ({ ReactQueryDevtools: () => null }));
 
@@ -31,6 +33,7 @@ beforeEach(() => {
 		return { default: App };
 	});
 	vi.resetAllMocks();
+	preloadInitialRoute.mockResolvedValue({});
 	theme.getInitialTheme.mockReturnValue('dark');
 	theme.loadThemeConfig.mockResolvedValue(DEFAULT_THEME_CONFIG);
 	document.body.innerHTML = '<div id="root"></div>';
@@ -59,6 +62,28 @@ function requestedPaths(): string[] {
 }
 
 describe('app bootstrap', () => {
+	it('starts route loading before the theme and waits for it before rendering', async () => {
+		let resolve!: (routes: object) => void;
+		preloadInitialRoute.mockReturnValue(
+			new Promise((complete) => {
+				resolve = complete;
+			}),
+		);
+		await import('./main');
+		await vi.waitFor(() => expect(theme.applyThemeConfig).toHaveBeenCalledOnce());
+		expect(preloadInitialRoute).toHaveBeenCalledBefore(theme.loadThemeConfig);
+		expect(render).not.toHaveBeenCalled();
+		resolve({});
+		await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
+	});
+
+	it('renders the lazy routes when initial route loading fails', async () => {
+		preloadInitialRoute.mockRejectedValue(new Error('Chunk unavailable'));
+		await import('./main');
+		await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
+		expect(renderToStaticMarkup(render.mock.calls[0][0])).toContain('marimohub:user');
+	});
+
 	it('requests the user and capabilities while the theme is still loading', async () => {
 		let resolve!: (value: typeof DEFAULT_THEME_CONFIG) => void;
 		theme.loadThemeConfig.mockReturnValue(

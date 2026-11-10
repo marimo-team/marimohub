@@ -20,7 +20,7 @@ describe('project access cache', () => {
 			'/api/v1/apps': () => (missing ? jsonError('NOT_FOUND', 'Not found', 404) : page),
 		});
 		const gate = renderHookWithClient(() => useProjectAppsQuery('p'), { toaster: false });
-		await waitFor(() => expect(gate.result.current.data.pages[0].missing).toBe(true));
+		await waitFor(() => expect(gate.result.current.data?.pages[0].missing).toBe(true));
 		expect(gate.client.getQueryData(appKeys.list('p'))).toBeUndefined();
 		gate.unmount();
 		const list = renderHookWithClient(() => useAppsQuery('p'), {
@@ -35,14 +35,14 @@ describe('project access cache', () => {
 			toaster: false,
 			client: gate.client,
 		});
-		await waitFor(() => expect(restored.result.current.data.pages[0].missing).toBe(false));
+		await waitFor(() => expect(restored.result.current.data?.pages[0].missing).toBe(false));
 		expect(requests).toHaveLength(3);
 	});
 
 	it('reuses a successful gate response after an app-user redirect', async () => {
 		const { requests } = stubApi({ '/api/v1/apps': page });
 		const gate = renderHookWithClient(() => useProjectAppsQuery('p'), { toaster: false });
-		await waitFor(() => expect(gate.result.current.data.pages[0].missing).toBe(false));
+		await waitFor(() => expect(gate.result.current.data?.pages[0].missing).toBe(false));
 		gate.unmount();
 		const list = renderHookWithClient(() => useAppsQuery('p'), {
 			toaster: false,
@@ -55,7 +55,7 @@ describe('project access cache', () => {
 	it('refreshes the gate when app lists are invalidated', async () => {
 		const { requests } = stubApi({ '/api/v1/apps': page });
 		const gate = renderHookWithClient(() => useProjectAppsQuery('p'), { toaster: false });
-		await waitFor(() => expect(gate.result.current.data.pages[0].missing).toBe(false));
+		await waitFor(() => expect(gate.result.current.data?.pages[0].missing).toBe(false));
 		await act(async () => {
 			await gate.client.invalidateQueries({ queryKey: appKeys.lists() });
 		});

@@ -69,7 +69,7 @@ describe('theme bootstrap', () => {
 		expect(await loadThemeConfig()).toEqual(branding);
 		expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
 			'/hub/api/v1/theme',
-			expect.objectContaining({ cache: 'no-store', signal: expect.any(AbortSignal) }),
+			expect.objectContaining({ credentials: 'include', signal: expect.any(AbortSignal) }),
 		);
 	});
 

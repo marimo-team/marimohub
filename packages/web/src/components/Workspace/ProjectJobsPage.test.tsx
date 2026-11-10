@@ -95,7 +95,7 @@ describe('Project jobs navigation', () => {
 		const { requests } = setup({ role: 'app-user' });
 		await screen.findByRole('heading', { name: 'Apps' });
 		expect(requests).toContain('/api/v1/apps?project_id=p');
-		expect(requests).not.toContain('/api/v1/projects/p');
+		expect(requests.filter((url) => url === '/api/v1/projects/p')).toHaveLength(1);
 		expect(requests.some((url) => url.includes('/notebooks'))).toBe(false);
 	});
 
