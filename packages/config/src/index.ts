@@ -768,6 +768,7 @@ export function createFromEnv(
 		metrics,
 	);
 	const dataQuery = dataQueryFromEnv(env, duckdbHttpSessionFactory, metrics);
+	const assetUrl = env.MARIMOHUB_COMPUTE_ASSET_URL?.trim() ?? 'hub';
 	const deps: ApiDeps = {
 		workspaceLimits,
 		warmPool: warmPool
@@ -808,7 +809,7 @@ export function createFromEnv(
 			bucket: makeSandboxBucketConfig(env),
 			hostname: env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME ?? '',
 			workdir: env.MARIMOHUB_COMPUTE_WORKDIR ?? '/workspace',
-			assetUrl: env.MARIMOHUB_COMPUTE_ASSET_URL,
+			assetUrl: assetUrl.toLowerCase() === 'false' ? undefined : assetUrl || undefined,
 			notebookBridge: notebookBridgeRuntime(),
 			// Unset defers to the core default (2 min); served on /api/v1/capabilities.
 			startupTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS'),
