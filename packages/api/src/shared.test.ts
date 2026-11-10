@@ -551,7 +551,8 @@ describe('notebook metadata authorization', () => {
 			expect(full).toHaveBeenCalledTimes(1);
 			expect(meta).toHaveBeenCalledWith(project.id, notebook.id, { consistency: 'validated' });
 			const keys = [...get.mock.calls, ...head.mock.calls].map(([key]) => key);
-			expect(keys).toContain(nb.meta);
+			expect(keys).toContain(state === 'preview' ? nb.previewMeta : nb.meta);
+			if (state === 'preview') expect(keys).not.toContain(nb.meta);
 			expect(keys).not.toContain(nb.source);
 			expect(keys).not.toContain(nb.readme);
 		},

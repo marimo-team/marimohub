@@ -42,6 +42,9 @@ function setup({
 	prepareStatus = 200,
 	canPrepare = true,
 	queueOnPrepare = false,
+	detailStatus = 200,
+	sourceType = 'branch',
+	managed = false,
 } = {}) {
 	let heartbeatResponse = heartbeat;
 	let preparationStatus = prepareStatus;
@@ -63,12 +66,14 @@ function setup({
 				});
 			if (url === '/api/v1/me') return jsonOk({ id: userId, email: `${userId}@example.com` });
 			if (url === endpoint) {
+				if (detailStatus !== 200) return jsonError('ERROR', 'Preview unavailable', detailStatus);
 				return jsonOk({
 					id: 'preview',
 					name: 'Review preview',
 					preparation,
 					eager: !lazy,
-					source_type: 'branch',
+					source_type: sourceType,
+					managed,
 					commit: pending ? null : version === 'first-version' ? 'a'.repeat(40) : 'b'.repeat(40),
 					version_id: version,
 					url: `https://hub.example.com${route}`,
@@ -363,33 +368,96 @@ describe('PreviewPage', () => {
 		},
 	);
 
-	it('backs off editor startup checks and settles on the status cadence once running', async () => {
-		vi.useFakeTimers();
-		const { setHeartbeatResponse } = setup({ heartbeat: 'starting' });
-		const inner = globalThis.fetch;
-		const checks: number[] = [];
-		vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
-			if (String(input).includes('/sessions/alice-session')) checks.push(Date.now());
-			return inner(input, init);
-		});
-		await vi.waitFor(() =>
-			expect(screen.getByRole('button', { name: 'Open temporary editor' })).toBeInTheDocument(),
-		);
-		await act(async () => {
-			fireEvent.click(screen.getByRole('button', { name: 'Open temporary editor' }));
-			await vi.advanceTimersByTimeAsync(1);
-		});
-		await vi.waitFor(() => expect(checks).toHaveLength(1));
-		await act(() => vi.advanceTimersByTimeAsync(5_800));
-		expect(checks.slice(1).map((at, i) => at - checks[i])).toEqual([250, 500, 1_000, 2_000, 2_000]);
+	it.each([false, true])(
+		'backs off startup checks and settles on the running cadence (app: %s)',
+		async (appUser) => {
+			vi.useFakeTimers();
+			const { setHeartbeatResponse } = setup({ heartbeat: 'starting', appUser });
+			const inner = globalThis.fetch;
+			const checks: number[] = [];
+			vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+				if (String(input).includes('/sessions/alice-')) checks.push(Date.now());
+				return inner(input, init);
+			});
+			await vi.waitFor(() =>
+				expect(
+					screen.getByRole('button', { name: appUser ? 'Open app' : 'Open temporary editor' }),
+				).toBeInTheDocument(),
+			);
+			await act(async () => {
+				fireEvent.click(
+					screen.getByRole('button', { name: appUser ? 'Open app' : 'Open temporary editor' }),
+				);
+				await vi.advanceTimersByTimeAsync(1);
+			});
+			await vi.waitFor(() => expect(checks).toHaveLength(1));
+			await act(() => vi.advanceTimersByTimeAsync(5_800));
+			expect(checks.slice(1).map((at, i) => at - checks[i])).toEqual([
+				250, 500, 1_000, 2_000, 2_000,
+			]);
 
-		setHeartbeatResponse('running');
-		await act(() => vi.advanceTimersByTimeAsync(2_000));
-		expect(screen.getByTitle('Review preview')).toBeInTheDocument();
-		const running = checks.length;
-		await act(() => vi.advanceTimersByTimeAsync(29_000));
-		expect(checks).toHaveLength(running);
-	});
+			setHeartbeatResponse('running');
+			await act(() => vi.advanceTimersByTimeAsync(2_000));
+			expect(screen.getByTitle('Review preview')).toBeInTheDocument();
+			const running = checks.length;
+			await act(() => vi.advanceTimersByTimeAsync(29_000));
+			expect(checks).toHaveLength(running);
+		},
+	);
+
+	it.each([503, 'network'] as const)(
+		'recovers app startup from %s using the startup backoff',
+		async (heartbeat) => {
+			vi.useFakeTimers();
+			const { calls, setHeartbeatResponse } = setup({ appUser: true, heartbeat });
+			await vi.waitFor(() =>
+				expect(screen.getByRole('button', { name: 'Open app' })).toBeInTheDocument(),
+			);
+			await act(async () => {
+				fireEvent.click(screen.getByRole('button', { name: 'Open app' }));
+				await vi.advanceTimersByTimeAsync(1);
+			});
+			await vi.waitFor(() =>
+				expect(calls.filter((call) => call.url.endsWith('/heartbeat'))).toHaveLength(1),
+			);
+			setHeartbeatResponse('running');
+			await act(() => vi.advanceTimersByTimeAsync(250));
+			expect(screen.getByTitle('Review preview')).toBeInTheDocument();
+			expect(calls.filter((call) => call.url.endsWith('/heartbeat'))).toHaveLength(2);
+			await act(() => vi.advanceTimersByTimeAsync(29_000));
+			expect(calls.filter((call) => call.url.endsWith('/heartbeat'))).toHaveLength(2);
+		},
+	);
+
+	it.each([403, 404, 410, 503])(
+		'stops detail polling only for terminal errors (%s)',
+		async (detailStatus) => {
+			vi.useFakeTimers();
+			const { calls } = setup({ detailStatus });
+			await act(() => vi.advanceTimersByTimeAsync(1));
+			await vi.waitFor(() => expect(calls.some((call) => call.url === endpoint)).toBe(true));
+			await act(() => vi.advanceTimersByTimeAsync(60_000));
+			const count = calls.filter((call) => call.url === endpoint).length;
+			expect(count).toBe(detailStatus === 503 ? 5 : 1);
+		},
+	);
+
+	it.each([
+		{ sourceType: 'commit', managed: false, pending: false, polls: false },
+		{ sourceType: 'commit', managed: false, pending: true, polls: true },
+		{ sourceType: 'commit', managed: true, pending: false, polls: true },
+		{ sourceType: 'branch', managed: false, pending: false, polls: true },
+	])(
+		'polls details only while they can change: $sourceType, managed=$managed, pending=$pending',
+		async ({ polls, ...options }) => {
+			vi.useFakeTimers();
+			const { calls } = setup(options);
+			await act(() => vi.advanceTimersByTimeAsync(1));
+			await vi.waitFor(() => expect(calls.some((call) => call.url === endpoint)).toBe(true));
+			await act(() => vi.advanceTimersByTimeAsync(30_000));
+			expect(calls.filter((call) => call.url === endpoint)).toHaveLength(polls ? 3 : 1);
+		},
+	);
 
 	it('cancels the startup deadline once the runtime is running', async () => {
 		vi.useFakeTimers();

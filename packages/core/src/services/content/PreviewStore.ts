@@ -1,3 +1,4 @@
+import type { PromiseMemo } from '../../cache';
 import { utcTimestamp } from '../../stringFormats';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
@@ -21,6 +22,7 @@ import type { PreviewAutomationGroup, PreviewReconcile } from './previewAutomati
 
 export const PREVIEW_LIMITS = {
 	projectsPerTick: 4,
+	pendingProjects: 1000,
 	workPagesPerTick: 16,
 	creationMs: 60_000,
 	perProject: 25,
@@ -70,6 +72,7 @@ export const PreviewReceiptsSchema = z.object({
 });
 export const PreviewWorkSchema = z.object({
 	cursor: z.string().optional(),
+	pending: z.array(ProjectIdSchema).optional(),
 	claims: z.array(
 		z.object({
 			project_id: ProjectIdSchema,
@@ -489,10 +492,13 @@ export class PreviewStore {
 		return removed;
 	}
 
-	async project(pid: ProjectId): Promise<z.infer<typeof PreviewProjectSchema>> {
+	async project(pid: ProjectId, memo?: PromiseMemo): Promise<PreviewProject> {
 		const key = previewProjectKey(pid);
-		const object = await this.bucket.get(key);
-		return object ? readStored(PreviewProjectSchema, object, key) : { entries: [] };
+		const read = async (): Promise<PreviewProject> => {
+			const object = await this.bucket.get(key);
+			return object ? readStored(PreviewProjectSchema, object, key) : { entries: [] };
+		};
+		return memo ? memo.read([this.bucket, key], read) : read();
 	}
 
 	async receipt(pid: ProjectId, key: string, fingerprint: string) {
@@ -614,14 +620,14 @@ export class PreviewStore {
 		if (workId) await this.removeInactiveWork(record.project_id, workId);
 	}
 
-	async projectPage(startAfter?: string) {
+	async projectPage(startAfter?: string, limit: number = PREVIEW_LIMITS.projectsPerTick) {
 		let cursor = startAfter;
 		const projects: ProjectId[] = [];
 		for (let scanned = 0; scanned < PREVIEW_LIMITS.workPagesPerTick; scanned++) {
 			const page = await this.bucket.list({
 				prefix: previewActiveProjectPrefix,
 				startAfter: cursor,
-				limit: PREVIEW_LIMITS.projectsPerTick - projects.length,
+				limit: limit - projects.length,
 			});
 			for (const object of page.objects) {
 				try {
@@ -640,9 +646,17 @@ export class PreviewStore {
 				}
 			}
 			cursor = page.truncated ? page.objects.at(-1)?.key : undefined;
-			if (!cursor || projects.length === PREVIEW_LIMITS.projectsPerTick) break;
+			if (!cursor || projects.length === limit) break;
 		}
 		return { projects, cursor };
+	}
+
+	async prioritize(pid: ProjectId): Promise<void> {
+		await this.change(previewWorkKey, PreviewWorkSchema, { claims: [] }, (record) => {
+			const pending = (record.pending ??= []);
+			if (!pending.includes(pid) && pending.length < PREVIEW_LIMITS.pendingProjects)
+				pending.push(pid);
+		});
 	}
 
 	async nextProjects(lane: 'prepare' | 'cleanup'): Promise<ProjectId[]> {
@@ -652,7 +666,16 @@ export class PreviewStore {
 			return page.projects;
 		};
 		return lane === 'prepare'
-			? this.change(previewWorkKey, PreviewWorkSchema, { claims: [] }, advance)
+			? this.change(previewWorkKey, PreviewWorkSchema, { claims: [] }, async (record) => {
+					// Keep one rotating slot so queued requests cannot starve branch and PR checks.
+					const pending = record.pending?.splice(0, PREVIEW_LIMITS.projectsPerTick - 1) ?? [];
+					const page = await this.projectPage(
+						record.cursor,
+						PREVIEW_LIMITS.projectsPerTick - pending.length,
+					);
+					record.cursor = page.cursor;
+					return [...new Set([...pending, ...page.projects])];
+				})
 			: this.change(previewCleanupCursorKey, PreviewCursorSchema, {}, advance);
 	}
 

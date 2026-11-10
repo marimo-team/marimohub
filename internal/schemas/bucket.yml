@@ -4223,6 +4223,10 @@ components:
       properties:
         cursor:
           type: string
+        pending:
+          type: array
+          items:
+            type: string
         claims:
           type: array
           items:

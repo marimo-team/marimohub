@@ -249,19 +249,21 @@ export async function assertTokenGrantProjectsVisible(
 }
 
 export async function loadAuthorizedNotebook(
-	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity'>,
+	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity' | 'readMemo'>,
 	project: Project,
 	nid: NotebookId,
 	subject: AuthSubject,
 	action: ProjectAction,
 ): Promise<NotebookDetail> {
-	const detail = await deps.services.notebooks.getNotebook(project.id, nid);
+	const detail = await deps.services.notebooks.getNotebook(project.id, nid, {
+		readMemo: deps.readMemo,
+	});
 	await authorizeNotebookMeta(deps, project, detail.meta, subject, action);
 	return detail;
 }
 
 export async function loadAuthorizedNotebookMeta(
-	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity'>,
+	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity' | 'readMemo'>,
 	project: Project,
 	nid: NotebookId,
 	subject: AuthSubject,
@@ -269,6 +271,7 @@ export async function loadAuthorizedNotebookMeta(
 ): Promise<NotebookMeta> {
 	const meta = await deps.services.notebooks.getNotebookMeta(project.id, nid, {
 		consistency: 'validated',
+		readMemo: deps.readMemo,
 	});
 	await authorizeNotebookMeta(deps, project, meta, subject, action);
 	return meta;
@@ -306,7 +309,7 @@ async function authorizeNotebookMeta(
 }
 
 export async function assertSessionPreviewActive(
-	deps: Pick<ApiDeps, 'services'>,
+	deps: Pick<ApiDeps, 'services' | 'readMemo'>,
 	projectId: ProjectId,
 	session: Pick<Session, 'notebook_id' | 'origin'>,
 ): Promise<void> {
@@ -316,6 +319,7 @@ export async function assertSessionPreviewActive(
 		projectId,
 		origin.notebook_id,
 		origin.preview_id,
+		deps.readMemo,
 	);
 	if (
 		!previewAvailable(preview) ||
@@ -333,7 +337,7 @@ export async function assertSessionPreviewActive(
  * the labels so the follow-up session gate can carry them too.
  */
 export async function assertSessionNotebookVisible(
-	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity'>,
+	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity' | 'readMemo'>,
 	project: Project,
 	session: SessionAdmissionRecord & Pick<Session, 'notebook_id' | 'origin'>,
 	subject: AuthSubject,
@@ -352,7 +356,7 @@ export async function assertSessionNotebookVisible(
 	const labels = await deps.services.notebooks.getSecurityLabels(
 		project.id,
 		sessionResourceNotebookId(session),
-		{ consistency: 'validated' },
+		{ consistency: 'validated', ...(session.origin ? { readMemo: deps.readMemo } : {}) },
 	);
 	if (options.requireActivePreview !== false)
 		await assertSessionPreviewActive(deps, project.id, session);

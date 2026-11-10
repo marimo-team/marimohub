@@ -1,3 +1,4 @@
+import { PromiseMemo } from '@marimo-hub/core/cache';
 import { thumbnailPng } from '@marimo-hub/core/testing/thumbnail';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -125,6 +126,259 @@ async function userApi(role: 'app-user' | 'viewer' | 'editor' | 'manager', name:
 }
 
 describe('Notebook previews', () => {
+	it('shares preview resolution reads within a request and revalidates on the next request', async () => {
+		const record = await create();
+		const runtime = record.current!.notebook_id;
+		const { notebooks, previews } = api.deps.services;
+		const get = vi.spyOn(api.bucket, 'get');
+		const readMemo = new PromiseMemo();
+		const meta = await notebooks.getNotebookMeta(pid, runtime, { readMemo });
+		expect(meta.preview?.preview_id).toBe(record.id);
+		expect(get).toHaveBeenCalledTimes(5);
+		await Promise.all([
+			notebooks.getNotebookMeta(pid, runtime, { readMemo }),
+			previews.get(pid, nid, record.id, readMemo),
+			notebooks.getSecurityLabels(pid, nid, { consistency: 'validated', readMemo }),
+		]);
+		expect(get).toHaveBeenCalledTimes(8);
+		expect(get.mock.calls.filter(([key]) => key === paths.previewProject(pid))).toHaveLength(1);
+		expect(
+			get.mock.calls.filter(([key]) => key === paths.preview(pid, nid, record.id)),
+		).toHaveLength(1);
+		get.mockClear();
+		await notebooks.getNotebookMeta(pid, runtime, { readMemo: new PromiseMemo() });
+		expect(get).toHaveBeenCalledTimes(4);
+		expect(get.mock.calls[0][0]).toBe(paths.project(pid).notebook(runtime).previewMeta);
+		expect(get.mock.calls.some(([key]) => key === paths.project(pid).notebook(runtime).meta)).toBe(
+			false,
+		);
+		await previews.retire(record);
+		await expect(
+			notebooks.getNotebookMeta(pid, runtime, { readMemo: new PromiseMemo() }),
+		).rejects.toThrow(NotFoundError);
+	});
+
+	it.each(['project', 'record'] as const)(
+		'retries a transient %s read failure within the same request memo',
+		async (target) => {
+			const record = await create();
+			const readMemo = new PromiseMemo();
+			const key =
+				target === 'project' ? paths.previewProject(pid) : paths.preview(pid, nid, record.id);
+			const get = api.bucket.get.bind(api.bucket);
+			let failed = false;
+			vi.spyOn(api.bucket, 'get').mockImplementation((path, options) => {
+				if (path === key && !failed) {
+					failed = true;
+					return Promise.reject(new Error('storage unavailable'));
+				}
+				return get(path, options);
+			});
+			const read = () => api.deps.services.previews.get(pid, nid, record.id, readMemo);
+			await expect(read()).rejects.toThrow('storage unavailable');
+			await expect(read()).resolves.toEqual(record);
+			await expect(
+				api.deps.services.notebooks.getNotebookMeta(pid, record.current!.notebook_id, { readMemo }),
+			).resolves.toMatchObject({ title: record.name });
+		},
+	);
+
+	it('keeps parent labels and deletion fresh while preview reads are memoized', async () => {
+		const record = await create();
+		const readMemo = new PromiseMemo();
+		const notebooks = api.deps.services.notebooks;
+		const read = () => notebooks.getNotebookMeta(pid, record.current!.notebook_id, { readMemo });
+		await read();
+		const labels = { classification: 'SECRET', compartments: [] };
+		await notebooks.setSecurityLabels(pid, nid, labels, ACTOR);
+		expect((await read()).security_labels).toEqual(labels);
+		await notebooks.deleteNotebook(pid, nid, ACTOR);
+		await expect(read()).rejects.toThrow(NotFoundError);
+	});
+
+	it('rejects a preview that expires after its record was memoized', async () => {
+		const record = await create();
+		const readMemo = new PromiseMemo();
+		const read = () =>
+			api.deps.services.notebooks.getNotebookMeta(pid, record.current!.notebook_id, { readMemo });
+		await read();
+		vi.spyOn(Date, 'now').mockReturnValue(Date.parse(record.expires_at!));
+		await expect(read()).rejects.toThrow(NotFoundError);
+	});
+
+	it.each(['app', 'edit'] as const)('bounds %s preview heartbeat reads', async (mode) => {
+		const record = await create();
+		const session = await expectOk<Session>(
+			await api.request('POST', `${base}/${record.id}/sessions`, { mode }),
+		);
+		const get = vi.spyOn(api.bucket, 'get');
+		await expectOk(
+			await api.request(
+				'POST',
+				`/projects/${pid}/notebooks/${session.notebook_id}/sessions/${session.session_id}/heartbeat`,
+			),
+		);
+		expect(get).toHaveBeenCalledTimes(mode === 'app' ? 7 : 6);
+		const projectKey = paths.previewProject(pid);
+		const recordKey = paths.preview(pid, nid, record.id);
+		expect(get.mock.calls.filter(([key]) => key === projectKey)).toHaveLength(1);
+		expect(get.mock.calls.filter(([key]) => key === recordKey)).toHaveLength(1);
+		get.mockClear();
+		await expectOk(
+			await api.request(
+				'GET',
+				`/projects/${pid}/notebooks/${session.notebook_id}/sessions/${session.session_id}`,
+			),
+		);
+		expect(get.mock.calls.filter(([key]) => key === projectKey)).toHaveLength(1);
+		expect(get.mock.calls.filter(([key]) => key === recordKey)).toHaveLength(1);
+		await api.deps.services.previews.retire(record);
+		await expectError(
+			await api.request(
+				'POST',
+				`/projects/${pid}/notebooks/${session.notebook_id}/sessions/${session.session_id}/heartbeat`,
+			),
+			404,
+		);
+	});
+
+	it('prepares 200 files in under one second with 30 ms workspace writes', async () => {
+		const files = Array.from({ length: 200 }, (_, i) => ({
+			path: i === 0 ? 'notebook.py' : `data/${i}.txt`,
+			bytes: new TextEncoder().encode(String(i)),
+		}));
+		vi.mocked(reader.fetchWorkspace).mockResolvedValue(files);
+		const record = await api.deps.services.previews.create(
+			pid,
+			nid,
+			body,
+			ACTOR,
+			api.deps.sourceControl,
+		);
+		const put = api.bucket.put.bind(api.bucket);
+		let active = 0;
+		let peak = 0;
+		vi.spyOn(api.bucket, 'put').mockImplementation(async (key, data, options) => {
+			if (!key.includes('/workspace/')) return put(key, data, options);
+			active++;
+			peak = Math.max(peak, active);
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			try {
+				return await put(key, data, options);
+			} finally {
+				active--;
+			}
+		});
+		const start = performance.now();
+		const prepared = await api.deps.services.previews.prepare(record, api.deps.sourceControl);
+		expect(performance.now() - start).toBeLessThan(1000);
+		expect(prepared.preparation).toBe('ready');
+		expect(active).toBe(0);
+		expect(peak).toBe(16);
+		const version = paths
+			.project(pid)
+			.notebook(prepared.current!.notebook_id)
+			.version(prepared.current!.version_id);
+		for (const file of files)
+			expect(await (await api.bucket.get(version.workspaceFile(file.path)))!.text()).toBe(
+				new TextDecoder().decode(file.bytes),
+			);
+	});
+
+	it('does not publish late parallel writes after preparation is cancelled', async () => {
+		const service = api.deps.services.previews;
+		vi.mocked(reader.fetchWorkspace).mockResolvedValue(
+			Array.from({ length: 20 }, (_, i) => ({
+				path: i === 0 ? 'notebook.py' : `${i}.txt`,
+				bytes: new Uint8Array([i]),
+			})),
+		);
+		const record = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+		const put = api.bucket.put.bind(api.bucket);
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const drained = Promise.withResolvers<void>();
+		let started = 0;
+		let completed = 0;
+		vi.spyOn(api.bucket, 'put').mockImplementation(async (key, data, options) => {
+			if (!key.includes('/workspace/')) return put(key, data, options);
+			if (++started === 16) reached.resolve();
+			await release.promise;
+			const result = await put(key, data, options);
+			if (++completed === started) drained.resolve();
+			return result;
+		});
+		const controller = new AbortController();
+		const preparing = service.prepare(record, api.deps.sourceControl, false, controller.signal);
+		try {
+			await reached.promise;
+			controller.abort();
+			const cancelled = await preparing;
+			expect(cancelled.preparation).toBe('pending');
+			expect(cancelled.current).toBeUndefined();
+			expect(cancelled.lease).toBeUndefined();
+			expect(cancelled.preparation_failures).toBe(0);
+			release.resolve();
+			await drained.promise;
+			expect(started).toBe(16);
+			expect((await service.get(pid, nid, record.id)).current).toBeUndefined();
+			expect(
+				await api.bucket.get(
+					paths.project(pid).notebook(cancelled.revisions[0].notebook_id).source,
+				),
+			).toBeNull();
+			expect((await service.store.project(pid)).entries[0].artifacts).toEqual([
+				expect.objectContaining({ notebook_id: cancelled.revisions[0].notebook_id }),
+			]);
+		} finally {
+			controller.abort();
+			release.resolve();
+			await preparing;
+		}
+	});
+
+	it('settles started workspace writes before failing preparation and does not publish partial files', async () => {
+		vi.mocked(reader.fetchWorkspace).mockResolvedValue(
+			Array.from({ length: 200 }, (_, i) => ({
+				path: i === 0 ? 'notebook.py' : `data/${i}.txt`,
+				bytes: new Uint8Array([i]),
+			})),
+		);
+		const record = await api.deps.services.previews.create(
+			pid,
+			nid,
+			body,
+			ACTOR,
+			api.deps.sourceControl,
+		);
+		const put = api.bucket.put.bind(api.bucket);
+		let active = 0;
+		let started = 0;
+		vi.spyOn(api.bucket, 'put').mockImplementation(async (key, data, options) => {
+			if (!key.includes('/workspace/')) return put(key, data, options);
+			started++;
+			if (key.endsWith('/notebook.py')) throw new Error('write failed');
+			active++;
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			try {
+				return await put(key, data, options);
+			} finally {
+				active--;
+			}
+		});
+		const failed = await api.deps.services.previews.prepare(record, api.deps.sourceControl);
+		expect(failed.preparation).toBe('failed');
+		expect(failed.current).toBeUndefined();
+		expect(failed.lease).toBeUndefined();
+		expect(active).toBe(0);
+		expect(started).toBeLessThanOrEqual(16);
+		expect(failed.revisions).toHaveLength(1);
+		expect(failed.revisions[0].state).toBe('preparing');
+		expect(
+			await api.bucket.get(paths.project(pid).notebook(failed.revisions[0].notebook_id).source),
+		).toBeNull();
+	});
+
 	it.each(['branch', 'commit'] as const)('reports unsupported %s suggestions', async (type) => {
 		delete reader.listBranches;
 		delete reader.listCommits;
@@ -1668,6 +1922,51 @@ describe('Preview source and compute boundaries', () => {
 });
 
 describe('asynchronous preview preparation', () => {
+	it.each(['capacity', 'shutdown'] as const)(
+		'retains preparation priority after %s prevents progress',
+		async (reason) => {
+			const service = api.deps.services.previews;
+			const record = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+			// At the end of the rotating scan, only the priority queue can supply this project.
+			vi.spyOn(service.store, 'projectPage').mockResolvedValue({ projects: [], cursor: undefined });
+			const claim = reason === 'capacity' ? await service.store.claim(pid, record.id) : undefined;
+			const reached = Promise.withResolvers<void>();
+			const controller = new AbortController();
+			if (reason === 'shutdown')
+				vi.mocked(reader.getBranchHead).mockImplementation(() => {
+					reached.resolve();
+					return new Promise(() => {});
+				});
+			const preparing = service.preparePending(api.deps.sourceControl!, controller.signal);
+			if (reason === 'shutdown') {
+				await reached.promise;
+				controller.abort();
+			}
+			await preparing;
+			expect((await service.get(pid, nid, record.id)).preparation).toBe('pending');
+			if (claim) await service.store.release(claim.token);
+			vi.mocked(reader.getBranchHead).mockResolvedValue({ commit: SHA });
+			await service.preparePending(api.deps.sourceControl!);
+			expect((await service.get(pid, nid, record.id)).preparation).toBe('ready');
+		},
+	);
+
+	it('retains priority when shutdown happens immediately after dequeue', async () => {
+		const service = api.deps.services.previews;
+		const record = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+		const controller = new AbortController();
+		vi.spyOn(service.store, 'projectPage')
+			.mockResolvedValue({ projects: [], cursor: undefined })
+			.mockImplementationOnce(async () => {
+				controller.abort();
+				return { projects: [], cursor: undefined };
+			});
+		await service.preparePending(api.deps.sourceControl!, controller.signal);
+		expect(reader.getBranchHead).not.toHaveBeenCalled();
+		await service.preparePending(api.deps.sourceControl!);
+		expect((await service.get(pid, nid, record.id)).preparation).toBe('ready');
+	});
+
 	it('does not consume scheduled work when already cancelled', async () => {
 		const service = api.deps.services.previews;
 		const scan = vi.spyOn(service.store, 'nextProjects');

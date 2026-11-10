@@ -1,11 +1,16 @@
 import { repoHost, reposMatch } from '../../integrations/gitRepo';
 import { copyMovePrefix, moveJson } from './moveObjects';
-import { withAbortSignal } from '../../async';
+import { forEachConcurrentUntilFailure, withAbortSignal } from '../../async';
+import type { PromiseMemo } from '../../cache';
 import { logOperationalError } from '../../operationalLog';
 import type { Bucket } from '../../ports/bucket';
 import type { SourceControlReader, SourceControlRegistry } from '../../ports/sourceControl';
 import type { NotebookId, PreviewId, ProjectId, SessionId, UserId } from '../../ids';
-import { BUCKET_SCAN_CONCURRENCY, MAX_WORKSPACE_BYTES } from '../../constants';
+import {
+	BUCKET_SCAN_CONCURRENCY,
+	BUCKET_WRITE_CONCURRENCY,
+	MAX_WORKSPACE_BYTES,
+} from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { PreviewStore, PREVIEW_LIMITS } from './PreviewStore';
 import type { PreviewProject } from './PreviewStore';
@@ -159,22 +164,30 @@ export class NotebookPreviewService {
 		this.store = new PreviewStore(bucket);
 	}
 
-	async get(pid: ProjectId, nid: NotebookId, id: PreviewId): Promise<NotebookPreview> {
-		const intent = (await this.store.project(pid)).entries.find(
+	async get(
+		pid: ProjectId,
+		nid: NotebookId,
+		id: PreviewId,
+		memo?: PromiseMemo,
+	): Promise<NotebookPreview> {
+		const intent = (await this.store.project(pid, memo)).entries.find(
 			(entry) =>
 				entry.intent.id === id &&
 				entry.intent.notebook_id === nid &&
 				entry.intent.state !== 'deleted',
 		)?.intent;
 		if (!intent) throw new NotFoundError('Preview not found');
-		return this.readRecord(intent);
+		return this.readRecord(intent, memo);
 	}
 
-	private async readRecord(intent: PreviewIntent): Promise<NotebookPreview> {
+	private async readRecord(intent: PreviewIntent, memo?: PromiseMemo): Promise<NotebookPreview> {
 		const key = previewKey(intent.project_id, intent.notebook_id, intent.id);
-		const object = await this.bucket.get(key);
-		if (!object) throw new NotFoundError('Preview not found');
-		const record = await readStored(PreviewRecordSchema, object, key);
+		const read = async () => {
+			const object = await this.bucket.get(key);
+			if (!object) throw new NotFoundError('Preview not found');
+			return readStored(PreviewRecordSchema, object, key);
+		};
+		const record = await (memo ? memo.read([this.bucket, key], read) : read());
 		if (!intent.automation) return record;
 		return applyAutomationIntent(record, intent) ?? record;
 	}
@@ -392,6 +405,7 @@ export class NotebookPreviewService {
 		// Re-check membership: cleanup may have forgotten the preview after reservation.
 		const saved = await this.get(pid, nid, intent.id);
 		if (saved.state !== 'active') throw new ConflictError('This preview has been deleted');
+		await this.store.prioritize(pid);
 		return saved;
 	}
 
@@ -440,6 +454,7 @@ export class NotebookPreviewService {
 			automation: { key, revision: 0, commit: input.commit },
 		});
 		await this.store.reconcileAutomation(template, input, pr.branch, await sha256Hex(pr.branch));
+		await this.store.prioritize(pid);
 		const records = await this.projectRecords(pid, nid);
 		const group = (await this.store.getAutomation(pid, key))!;
 		return {
@@ -456,7 +471,7 @@ export class NotebookPreviewService {
 
 	async requestPreparation(record: NotebookPreview): Promise<NotebookPreview> {
 		if (!previewAvailable(record)) throw new NotFoundError('Preview not found');
-		return this.mutate(record, (persisted) => {
+		const requested = await this.mutate(record, (persisted) => {
 			const applied = applyAutomationIntent(persisted, record);
 			const current = applied ?? persisted;
 			if (!previewAvailable(current)) throw new NotFoundError('Preview not found');
@@ -510,6 +525,8 @@ export class NotebookPreviewService {
 				preparation: current.preparation === 'deferred' ? 'pending' : current.preparation,
 			};
 		});
+		if (preparationDue(requested)) await this.store.prioritize(record.project_id);
+		return requested;
 	}
 
 	/** Returns `project` when it is still current, so callers can skip another read. */
@@ -823,11 +840,14 @@ export class NotebookPreviewService {
 					{ onlyIfNotExists: true },
 				),
 			);
-			for (const [path, bytes] of files) {
-				await bounded(() =>
-					this.bucket.put(version.workspaceFile(path), bytes, { onlyIfNotExists: true }),
-				);
-			}
+			await forEachConcurrentUntilFailure({
+				items: [...files],
+				concurrency: BUCKET_WRITE_CONCURRENCY,
+				run: ([path, bytes]) =>
+					bounded(async () => {
+						await this.bucket.put(version.workspaceFile(path), bytes, { onlyIfNotExists: true });
+					}),
+			});
 			await bounded(() =>
 				this.bucket.put(
 					version.meta,
@@ -1105,7 +1125,10 @@ export class NotebookPreviewService {
 		const projects = await this.store.nextProjects('prepare');
 		// One candidate per project prevents a busy repository from monopolizing workers.
 		for (let offset = 0; offset < projects.length; offset += PREVIEW_LIMITS.concurrency) {
-			if (signal?.aborted) return;
+			if (signal?.aborted) {
+				for (const pid of projects.slice(offset)) await this.store.prioritize(pid);
+				return;
+			}
 			await Promise.allSettled(
 				projects.slice(offset, offset + PREVIEW_LIMITS.concurrency).map(async (pid) => {
 					try {
@@ -1123,7 +1146,11 @@ export class NotebookPreviewService {
 								(a.next_attempt_at ?? 0) - (b.next_attempt_at ?? 0) ||
 								a.created_at.localeCompare(b.created_at),
 						);
-						if (records[0]) await this.prepare(records[0], registry, false, signal);
+						if (records[0]) records[0] = await this.prepare(records[0], registry, false, signal);
+						if (
+							records.some((record) => record.preparation === 'pending' && preparationDue(record))
+						)
+							await this.store.prioritize(pid);
 					} catch (error) {
 						logOperationalError('preview_preparation_failed', { project_id: pid }, error);
 					}
