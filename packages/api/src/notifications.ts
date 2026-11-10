@@ -37,7 +37,12 @@ interface NotificationMutationOptions {
 	consumeActor?: boolean;
 }
 
-const mutationBudgets = new WeakMap<ApiDeps, NotificationMutationBudgets>();
+const mutationBudgets = deploymentState(
+	(): NotificationMutationBudgets => ({
+		actor: createSlidingWindowBudget({ limit: 20, windowMs: 60_000 }),
+		recipient: createSlidingWindowBudget({ limit: 5, windowMs: 10 * 60_000 }),
+	}),
+);
 
 export function assertNotificationMutationAllowed(
 	deps: ApiDeps,
@@ -54,10 +59,7 @@ export function assertNotificationMutationAllowed(
 				? projectAlertsEnabled
 				: notifierEnabled || projectAlertsEnabled;
 	if (!deliveryEnabled) return;
-	const budgets = deploymentState(deps, mutationBudgets, () => ({
-		actor: createSlidingWindowBudget({ limit: 20, windowMs: 60_000 }),
-		recipient: createSlidingWindowBudget({ limit: 5, windowMs: 10 * 60_000 }),
-	}));
+	const budgets = mutationBudgets(deps);
 	if (options.consumeActor !== false && !budgets.actor.consume(actor)) {
 		throw new ResourceExhaustedError('Too many notification-triggering changes; try again later.');
 	}

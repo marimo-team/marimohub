@@ -1,4 +1,4 @@
-import { LazyMap } from '../../cache';
+import { LazyMap, weakMemo } from '../../cache';
 import type { ProjectId, UserId } from '../../ids';
 import { normalizeEmail } from '../../identityMatch';
 import type { Bucket } from '../../ports/bucket';
@@ -15,16 +15,10 @@ type ProjectInvolvement = {
 	defaultAccess: ProjectId[];
 };
 
-const projectIndexes = new WeakMap<Snapshot, ReadonlyMap<ProjectId, SnapshotProjectEntry>>();
-
-export function projectsById(snapshot: Snapshot): ReadonlyMap<ProjectId, SnapshotProjectEntry> {
-	let index = projectIndexes.get(snapshot);
-	if (!index) {
-		index = new Map(snapshot.projects.map((project) => [project.id, project]));
-		projectIndexes.set(snapshot, index);
-	}
-	return index;
-}
+export const projectsById = weakMemo(
+	(snapshot: Snapshot): ReadonlyMap<ProjectId, SnapshotProjectEntry> =>
+		new Map(snapshot.projects.map((project) => [project.id, project])),
+);
 
 const serializations = new WeakMap<Snapshot, string>();
 
@@ -117,13 +111,4 @@ class SnapshotCache {
 	}
 }
 
-const caches = new WeakMap<Bucket, SnapshotCache>();
-
-export function snapshotCache(bucket: Bucket): SnapshotCache {
-	let cache = caches.get(bucket);
-	if (!cache) {
-		cache = new SnapshotCache();
-		caches.set(bucket, cache);
-	}
-	return cache;
-}
+export const snapshotCache = weakMemo((_bucket: Bucket) => new SnapshotCache());

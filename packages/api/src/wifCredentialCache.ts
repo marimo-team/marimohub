@@ -1,4 +1,4 @@
-import { BoundedLruMap, UnavailableError } from '@marimo-hub/core';
+import { BoundedLruMap, UnavailableError, weakMemo } from '@marimo-hub/core';
 import type { TempS3Creds } from '@marimo-hub/core';
 import type { WifConfig } from './context';
 
@@ -73,13 +73,4 @@ export class WifCredentialCache {
 
 // Keyed by the config object so every createApi() over the same deps (and the
 // session launch path that primes it) shares one cache.
-const caches = new WeakMap<WifConfig, WifCredentialCache>();
-
-export function wifCredentialCacheFor(wif: WifConfig): WifCredentialCache {
-	let cache = caches.get(wif);
-	if (!cache) {
-		cache = new WifCredentialCache();
-		caches.set(wif, cache);
-	}
-	return cache;
-}
+export const wifCredentialCacheFor = weakMemo((_wif: WifConfig) => new WifCredentialCache());

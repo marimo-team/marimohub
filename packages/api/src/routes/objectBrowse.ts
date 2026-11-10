@@ -4,6 +4,7 @@ import {
 	noopMetrics,
 	NotFoundError,
 	ResourceExhaustedError,
+	weakMemo,
 } from '@marimo-hub/core';
 import type { ObjectBody } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
@@ -14,7 +15,17 @@ export {
 	runObjectBrowse,
 } from '../integrations/objectBrowseContext';
 
-const downloadGates = new WeakMap<object, KeyedAdmission<string>>();
+type DownloadLimits = NonNullable<NonNullable<ApiDeps['dataBrowser']>['objectBrowser']>;
+
+const downloadGate = weakMemo((limits: DownloadLimits) => {
+	const exhausted = () =>
+		new ResourceExhaustedError('Too many object downloads are active — try again later.');
+	return new KeyedAdmission<string>(
+		limits.maxConcurrentDownloads,
+		limits.maxConcurrentDownloadsPerUser,
+		{ global: exhausted, perKey: exhausted },
+	);
+});
 
 export function acquireDownload(
 	deps: ApiDeps,
@@ -23,18 +34,9 @@ export function acquireDownload(
 ): () => void {
 	const limits = deps.dataBrowser?.objectBrowser;
 	if (!limits) throw new NotFoundError('Object downloads are not enabled on this deployment.');
-	let gate = downloadGates.get(limits);
-	if (!gate) {
-		const exhausted = () =>
-			new ResourceExhaustedError('Too many object downloads are active — try again later.');
-		gate = new KeyedAdmission(limits.maxConcurrentDownloads, limits.maxConcurrentDownloadsPerUser, {
-			global: exhausted,
-			perKey: exhausted,
-		});
-		downloadGates.set(limits, gate);
-	} else {
-		gate.reconfigure(limits.maxConcurrentDownloads, limits.maxConcurrentDownloadsPerUser);
-	}
+	const gate = downloadGate(limits);
+	// The limits object is edited in place after the gate exists, so apply the current values.
+	gate.reconfigure(limits.maxConcurrentDownloads, limits.maxConcurrentDownloadsPerUser);
 	const tags = { operation };
 	const emitter = deps.metrics ?? noopMetrics;
 	let release: () => void;
