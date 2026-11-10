@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { components } from '@marimo-hub/client';
-import { apiClient, apiData } from './client';
+import { apiClient, apiData, ApiRequestError } from './client';
 import { previewKeys } from './queryKeys';
 
 export type NotebookPreview = components['schemas']['NotebookPreview'];
@@ -42,7 +42,15 @@ export function usePreviewQuery(pid: string, nid: string, prid: string) {
 					signal,
 				}),
 			),
-		refetchInterval: 15_000,
+		refetchInterval: (query) => {
+			const error = query.state.error;
+			if (error instanceof ApiRequestError && [403, 404, 410].includes(error.status ?? 0))
+				return false;
+			const preview = query.state.data;
+			if (preview?.source_type === 'commit' && !preview.managed && preview.preparation === 'ready')
+				return false;
+			return 15_000;
+		},
 		retry: false,
 		gcTime: 0,
 	});

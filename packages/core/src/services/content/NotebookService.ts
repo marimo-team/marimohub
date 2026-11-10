@@ -1,3 +1,5 @@
+import { BoundedLruMap } from '../../cache';
+import type { PromiseMemo } from '../../cache';
 import { z } from 'zod';
 import { sha256Hex } from '../../internal/sha256';
 import { deferOrAwait } from '../../ports/backgroundWork';
@@ -187,6 +189,11 @@ export interface CommitSessionResult {
  * before the fence would otherwise retry onto the fenced record and keep its stamp.
  */
 export class NotebookService {
+	// This caches only the storage path; every request still validates the runtime metadata.
+	private readonly previewMetadata = new BoundedLruMap<string, true>(
+		NOTEBOOK_META_CACHE_MAX_ENTRIES,
+	);
+
 	private readonly metaCache: MetadataCache<NotebookMeta>;
 
 	readonly synced: SyncedNotebookService;
@@ -347,7 +354,11 @@ export class NotebookService {
 		).map(toPublicNotebookEntry);
 	}
 
-	async getNotebook(projectId: ProjectId, notebookId: NotebookId): Promise<NotebookDetail> {
+	async getNotebook(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		options: { readMemo?: PromiseMemo } = {},
+	): Promise<NotebookDetail> {
 		const nb = paths.project(projectId).notebook(notebookId);
 		const [storedMeta, ownReadmeObj, sourceObj] = await Promise.all([
 			this.readNotebookMeta(projectId, notebookId),
@@ -361,7 +372,7 @@ export class NotebookService {
 
 		// Preview runtimes have no README of their own; they show the parent's.
 		const [meta, readmeObj] = await Promise.all([
-			this.resolvePreviewMeta(projectId, storedMeta),
+			this.resolvePreviewMeta(projectId, storedMeta, options.readMemo),
 			storedMeta.preview
 				? this.bucket.get(paths.project(projectId).notebook(storedMeta.preview.notebook_id).readme)
 				: ownReadmeObj,
@@ -380,7 +391,9 @@ export class NotebookService {
 		const nb = paths.project(projectId).notebook(notebookId);
 		// Separate preview metadata keeps old replicas from stripping the preview marker.
 		const meta = await this.metaCache.read(
-			[nb.meta, nb.previewMeta],
+			this.previewMetadata.has(nb.previewMeta)
+				? [nb.previewMeta, nb.meta]
+				: [nb.meta, nb.previewMeta],
 			(object) =>
 				object.key === nb.meta
 					? readStored(NotebookMetaSchema, object, nb.meta)
@@ -389,28 +402,32 @@ export class NotebookService {
 		);
 		if (!meta) throw new NotFoundError(`Notebook ${notebookId} not found`);
 		assertNotMoving(meta, notebookId);
+		if (meta.preview) this.previewMetadata.set(nb.previewMeta, true);
+		else this.previewMetadata.delete(nb.previewMeta);
 		return meta;
 	}
 
 	async getNotebookMeta(
 		projectId: ProjectId,
 		notebookId: NotebookId,
-		options: { consistency?: ReadConsistency } = {},
+		options: { consistency?: ReadConsistency; readMemo?: PromiseMemo } = {},
 	): Promise<NotebookMeta> {
 		return this.resolvePreviewMeta(
 			projectId,
 			await this.readNotebookMeta(projectId, notebookId, options),
+			options.readMemo,
 		);
 	}
 
 	private async resolvePreviewMeta(
 		projectId: ProjectId,
 		meta: NotebookMeta,
+		memo?: PromiseMemo,
 	): Promise<NotebookMeta> {
 		const notebookId = meta.id;
 		if (!meta.preview) return meta;
 		if (
-			!(await new PreviewStore(this.bucket).project(projectId)).entries.some(
+			!(await new PreviewStore(this.bucket).project(projectId, memo)).entries.some(
 				(entry) =>
 					entry.intent.state === 'active' &&
 					entry.intent.id === meta.preview!.preview_id &&
@@ -418,12 +435,17 @@ export class NotebookService {
 			)
 		)
 			throw new NotFoundError('Preview not found');
-		const parent = await this.getNotebookMeta(projectId, meta.preview.notebook_id);
 		const recordKey = previewKey(projectId, meta.preview.notebook_id, meta.preview.preview_id);
-		const object = await this.bucket.get(recordKey);
-		if (!object || parent.preview || parent.status === 'deleted')
-			throw new NotFoundError('Preview not found');
-		const record = await readStored(PreviewRecordSchema, object, recordKey);
+		const readRecord = async () => {
+			const object = await this.bucket.get(recordKey);
+			if (!object) throw new NotFoundError('Preview not found');
+			return readStored(PreviewRecordSchema, object, recordKey);
+		};
+		const [parent, record] = await Promise.all([
+			this.getNotebookMeta(projectId, meta.preview.notebook_id, { readMemo: memo }),
+			memo ? memo.read([this.bucket, recordKey], readRecord) : readRecord(),
+		]);
+		if (parent.preview || parent.status === 'deleted') throw new NotFoundError('Preview not found');
 		if (
 			!previewAvailable(record) ||
 			!record.revisions.some(
@@ -456,7 +478,11 @@ export class NotebookService {
 	async getSecurityLabels(
 		projectId: ProjectId,
 		notebookId: NotebookId,
-		options: { includeDeleted?: boolean; consistency?: ReadConsistency } = {},
+		options: {
+			includeDeleted?: boolean;
+			consistency?: ReadConsistency;
+			readMemo?: PromiseMemo;
+		} = {},
 	): Promise<ResourceSecurityLabels | null> {
 		const meta = await this.getNotebookMeta(projectId, notebookId, options);
 		if (meta.status === 'deleted' && !options.includeDeleted) {

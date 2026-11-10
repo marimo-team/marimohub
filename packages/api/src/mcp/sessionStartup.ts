@@ -18,6 +18,7 @@ import type {
 } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
 import { errorMetadataChain, logEvent } from '../log';
+import { withRequestMemo } from '../requestMemo';
 import { assertSessionNotebookVisible, sessionGrantsFor } from '../shared';
 import { startNotebookSession, toSessionResponse } from '../routes/sessionStart';
 import { notebookBridgeFor } from './bridge';
@@ -211,10 +212,16 @@ export async function startMcpSession(input: {
 			});
 		}
 	}
-	const currentLabels = await assertSessionNotebookVisible(deps, project, session, principal);
+	const currentDeps = withRequestMemo(deps);
+	const currentLabels = await assertSessionNotebookVisible(
+		currentDeps,
+		project,
+		session,
+		principal,
+	);
 	const projected = toSessionResponse(
 		session,
-		await sessionGrantsFor(project, principal, session, deps, currentLabels),
+		await sessionGrantsFor(project, principal, session, currentDeps, currentLabels),
 	);
 	return {
 		project_id: project.id,

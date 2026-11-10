@@ -179,16 +179,16 @@ export function usePreviewSession(pid: string, nid: string, previewId: string, u
 		refetchInterval: (query) =>
 			isTerminalSessionError(query.state.error) || isEndedSession(query.state.data)
 				? false
-				: runtime?.mode === 'app'
-					? heartbeatInterval
-					: query.state.data?.status === 'running'
-						? SESSION_STATUS_INTERVAL_MS
-						: // Counts restart with each runtime because the key is per session; a 0 ms
-							// interval would disable polling, hence the floor of one attempt.
-							sessionStartPollDelayMs(
-								Math.max(1, query.state.dataUpdateCount + query.state.errorUpdateCount),
-								runtime ? Date.now() - runtime.startedAt : 0,
-							),
+				: query.state.data?.status === 'running'
+					? runtime?.mode === 'app'
+						? heartbeatInterval
+						: SESSION_STATUS_INTERVAL_MS
+					: // Counts restart with each runtime because the key is per session; a 0 ms
+						// interval would disable polling, hence the floor of one attempt.
+						sessionStartPollDelayMs(
+							Math.max(1, query.state.dataUpdateCount + query.state.errorUpdateCount),
+							runtime ? Date.now() - runtime.startedAt : 0,
+						),
 		refetchIntervalInBackground: true,
 		retry: false,
 		gcTime: 0,

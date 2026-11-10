@@ -7,6 +7,7 @@ import {
 	PreviewStore,
 	PREVIEW_LIMITS,
 	previewProjectKey,
+	previewWorkKey,
 	previewReceiptsKey,
 	previewActiveProjectPrefix,
 	previewActiveProjectKey,
@@ -723,6 +724,67 @@ describe('PreviewStore scheduling', () => {
 		expect(await store.claim(pid, id)).toBeUndefined();
 		await store.release(replacement.token);
 		expect(await store.claim(pid, id)).toBeDefined();
+	});
+
+	it('prioritizes queued projects across store instances without starving rotation', async () => {
+		const { bucket, store, intent } = fixture();
+		const projects = [];
+		for (let i = 0; i < 8; i++) {
+			const record = { ...intent(), project_id: createProjectId() };
+			await store.reserve(record);
+			projects.push(record.project_id);
+		}
+		projects.sort();
+		const pending = projects.slice(-3);
+		await Promise.all(pending.map((pid) => store.prioritize(pid)));
+		await store.prioritize(pending[0]);
+		const restarted = new PreviewStore(bucket);
+		const first = await restarted.nextProjects('prepare');
+		expect(first.slice(0, 3).sort()).toEqual(pending);
+		expect(first[3]).toBe(projects[0]);
+		for (const pid of pending) await store.prioritize(pid);
+		const next = await restarted.nextProjects('prepare');
+		expect(next.slice(0, 3)).toEqual(pending);
+		expect(next[3]).toBe(projects[1]);
+		expect(await restarted.nextProjects('cleanup')).toEqual(projects.slice(0, 4));
+	});
+
+	it.each([
+		{ position: 'first', indexes: [0, 1, 2] },
+		{ position: 'interleaved', indexes: [1, 3, 5] },
+		{ position: 'last', indexes: [5, 6, 7] },
+	])(
+		'preserves a distinct rotating slot with pending projects $position in the scan',
+		async ({ indexes }) => {
+			const { store, intent } = fixture();
+			const projects = Array.from({ length: 8 }, () => createProjectId()).sort();
+			for (const project_id of projects) await store.reserve({ ...intent(), project_id });
+			const pending = indexes.map((index) => projects[index]);
+			const rotating = projects.filter((pid) => !pending.includes(pid));
+			for (const expected of rotating) {
+				for (const pid of pending) await store.prioritize(pid);
+				expect(await store.nextProjects('prepare')).toEqual([...pending, expected]);
+			}
+		},
+	);
+
+	it('does not lose a priority request racing with the preparation cursor CAS', async () => {
+		const { bucket, store, pid } = fixture();
+		const next = createProjectId();
+		await store.prioritize(pid);
+		vi.spyOn(store, 'projectPage').mockResolvedValue({ projects: [], cursor: undefined });
+		const put = bucket.put.bind(bucket);
+		let raced = false;
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, data, options) => {
+			if (key === previewWorkKey && !raced) {
+				raced = true;
+				await new PreviewStore(bucket).prioritize(next);
+			}
+			return put(key, data, options);
+		});
+		const first = await store.nextProjects('prepare');
+		const second = await store.nextProjects('prepare');
+		expect([...first, ...second].sort()).toEqual([pid, next].sort());
 	});
 
 	it('rotates bounded project pages independently for preparation and cleanup', async () => {
