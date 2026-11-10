@@ -80,6 +80,7 @@ interface ClaimRequest {
 }
 
 export class WarmPoolService {
+	private lastCapacityLogAt = -Infinity;
 	constructor(
 		readonly store: WarmPoolStore,
 		private readonly compute: SandboxProvider,
@@ -160,6 +161,7 @@ export class WarmPoolService {
 
 	async handoff(claim: WarmPoolClaim): Promise<void> {
 		const destination = claim.member.destination!;
+		// The probe can outlive a stop or sandbox replacement after session publication.
 		const session = await this.sessions.getSession(destination.project_id, destination.session_id);
 		if (
 			session.session_id !== destination.session_id ||
@@ -276,16 +278,19 @@ export class WarmPoolService {
 			);
 		}
 		const current = await this.store.read();
-		for (const profile of this.config.profiles) {
-			const members = current.pools.find((pool) => pool.key === profile.key)?.members ?? [];
-			if (!this.config.enabled && members.length === 0) continue;
-			logEvent({
-				event: 'warm_pool_capacity',
-				profile: profile.name ?? 'default',
-				ready: members.filter((member) => member.state === 'ready').length,
-				creating: members.filter((member) => member.state === 'creating').length,
-				target: this.config.enabled ? this.config.size : 0,
-			});
+		if (this.now() - this.lastCapacityLogAt >= 60_000) {
+			this.lastCapacityLogAt = this.now();
+			for (const profile of this.config.profiles) {
+				const members = current.pools.find((pool) => pool.key === profile.key)?.members ?? [];
+				if (!this.config.enabled && members.length === 0) continue;
+				logEvent({
+					event: 'warm_pool_capacity',
+					profile: profile.name ?? 'default',
+					ready: members.filter((member) => member.state === 'ready').length,
+					creating: members.filter((member) => member.state === 'creating').length,
+					target: this.config.enabled ? this.config.size : 0,
+				});
+			}
 		}
 		for (const state of ['ready', 'creating'] as const) {
 			this.metrics.gauge(

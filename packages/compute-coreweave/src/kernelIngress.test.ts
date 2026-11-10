@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { setTimeout as sleep } from 'node:timers/promises';
+
+vi.mock('node:timers/promises', () => ({ setTimeout: vi.fn(async () => {}) }));
 import { createKernelIngressPublisher } from './kernelIngress';
 import type { KubernetesApi } from './kernelIngress';
 
@@ -31,6 +34,19 @@ function fakeApi(handlers: {
 const target = { sandboxId: 'abc-123', host: 'abc-123.sandbox.example.com', port: 2718 };
 
 describe('createKernelIngressPublisher', () => {
+	it('polls at 100 ms while retaining a ten-second retry budget', async () => {
+		vi.mocked(sleep).mockClear();
+		const { api, calls } = fakeApi({});
+		const publisher = createKernelIngressPublisher({
+			namespace: 'sandboxes',
+			ingressClassName: 'nginx',
+			api,
+		});
+		await expect(publisher.publish(target)).rejects.toThrow('after 100 retries');
+		expect(vi.mocked(sleep).mock.calls).toEqual(Array.from({ length: 100 }, () => [100]));
+		expect(calls).toHaveLength(101);
+	});
+
 	it.each([403, 500])(
 		'propagates Ingress publication failure without retrying: %i',
 		async (ingressStatus) => {

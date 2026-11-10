@@ -1563,7 +1563,10 @@ describe('warm pool failure boundaries', () => {
 				await w.sessions.markFailed(
 					request.destination.project_id,
 					request.destination.session_id,
-					{ code: 'STARTUP_FAILED', message: 'failed' },
+					{
+						code: 'STARTUP_FAILED',
+						message: 'failed',
+					},
 				);
 			}
 			if (reason === 'stale token') claim.member.token = 'stale';
@@ -1731,3 +1734,22 @@ it.each(['resolve', 'reject'] as const)(
 		}
 	},
 );
+
+it('logs pool capacity at most once a minute', async () => {
+	const w = setup();
+	const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+	const capacity = () =>
+		log.mock.calls
+			.map(([line]) => JSON.parse(line) as Record<string, unknown>)
+			.filter((event) => event.event === 'warm_pool_capacity');
+	await w.service.sweep();
+	expect(capacity()).toHaveLength(1);
+	for (let tick = 0; tick < 11; tick++) {
+		w.advance(5000);
+		await w.service.sweep();
+	}
+	expect(capacity()).toHaveLength(1);
+	w.advance(5000);
+	await w.service.sweep();
+	expect(capacity()).toHaveLength(2);
+});

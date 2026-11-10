@@ -177,8 +177,8 @@ client uses root-relative paths.
 **Lifecycle (provider-independent):**
 
 ```
-provision: capacity → warm reservation + probe, or per-user cap + cold boot
-           → publish session → concurrent admission checks
+provision: project cap → warm reservation + probe, or cold boot
+           → publish session → concurrent user cap scan + admission checks
            → await boot or probe + warm handoff → restore workspace + inject credentials
            → reserve URL → start marimo → wait for port → confirm URL
 teardown:  read notebook back → cut a new version (if code changed)
@@ -187,8 +187,8 @@ teardown:  read notebook back → cut a new version (if code changed)
 ```
 
 Boot or a warm probe overlaps session publication and admission.
-A start at the per-user cap is rejected before any cold boot.
-The cap recheck, preview commit, and editor claim run concurrently. Cap errors take precedence.
+A single user cap scan runs after publication so it can rank concurrent starts.
+The scan, preview commit, and editor claim run concurrently. Cap errors take precedence.
 Workspace writes and credential injection wait for admission and [warm handoff](./warm_pools.md#ownership-and-lifecycle).
 On Node, a rejected cold start returns at once and destroys the speculative sandbox in background work.
 Workers destroy it inline. `provision_boot_overlap_ms` records the time until the booted sandbox is reachable.
@@ -509,7 +509,8 @@ It then defers teardown and returns `202`.
 Restart clients send `wait=true`, which keeps teardown synchronous and returns `200`.
 Content and filesystem capture stay synchronous during restart, replacement, and takeover.
 Editor claims are released only after confirmed destruction.
-Interactive teardown skips thumbnails. Plain stops render thumbnails within a three-second budget.
+Stop, restart, replacement, and takeover skip thumbnails.
+Idle and expiry teardown can render thumbnails within a three-second budget.
 `ThumbnailService` checks thumbnail freshness. Session starts do not render thumbnails.
 
 Notebook and project deletion commit first, then schedule app retirement concurrently.

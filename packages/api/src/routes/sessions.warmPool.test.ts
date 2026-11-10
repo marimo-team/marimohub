@@ -15,6 +15,7 @@ import { ACTOR, makeFakeSandbox, makeSession } from '@marimo-hub/core/testing';
 import type { SandboxConfig } from '../context';
 import type { FakeSandboxOptions } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
+import { captureLogEvents } from '../testing/logs';
 import { failSandboxContextPublication } from '../testing/sandboxContext';
 
 async function setup(
@@ -193,7 +194,7 @@ describe('session warm sandbox assignment', () => {
 				},
 			});
 			const claim = vi.spyOn(w.warmPool, 'reserve');
-			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+			const log = captureLogEvents('session_provision');
 			w.create.mockClear();
 			vi.useFakeTimers();
 			try {
@@ -210,10 +211,7 @@ describe('session warm sandbox assignment', () => {
 			expect(metrics.increment).toHaveBeenCalledWith('sessions.editor_claim.lost', 1, {
 				phase: 'preflight',
 			});
-			const provisionEvents = log.mock.calls
-				.filter(([line]) => typeof line === 'string' && line.startsWith('{'))
-				.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
-				.filter((event) => event.event === 'session_provision');
+			const provisionEvents = log.events();
 			expect(provisionEvents).toEqual([
 				expect.objectContaining({
 					project_id: w.project.id,
@@ -545,6 +543,84 @@ describe('session warm sandbox assignment', () => {
 			}
 		},
 	);
+
+	it.each(['stopping', 'failed', 'replaced'] as const)(
+		'rejects warm handoff when the published session is %s during the probe',
+		async (change) => {
+			const w = await setup();
+			await w.warmPool.sweep();
+			const probeGate = Promise.withResolvers<void>();
+			const probe = w.warmPool.probe.bind(w.warmPool);
+			vi.spyOn(w.warmPool, 'probe').mockImplementationOnce(async (claim) => {
+				await probe(claim);
+				await probeGate.promise;
+			});
+			const published = vi.spyOn(w.api.deps.services.sessions, 'createSessionWithEtag');
+			const pending = w.api.request('POST', w.path);
+			try {
+				await vi.waitFor(() => expect(published).toHaveBeenCalledOnce());
+				const { value: session } = await published.mock.results[0].value;
+				switch (change) {
+					case 'stopping':
+						await w.services.sessions.beginTerminating(w.project.id, session.session_id);
+						break;
+					case 'failed':
+						await w.services.sessions.markFailed(w.project.id, session.session_id);
+						break;
+					case 'replaced':
+						await w.services.sessions.replaceStartingSandbox(
+							w.project.id,
+							session.session_id,
+							session.sandbox_id,
+							createSandboxId(),
+						);
+						break;
+				}
+			} finally {
+				probeGate.resolve();
+			}
+			await expectError(await pending, 409, 'CONFLICT');
+			expect(w.fake.calls.writeFiles).toEqual([]);
+			expect(w.fake.calls.setEnvVars).toEqual([]);
+			expect(w.fake.calls.startProcess).toEqual([]);
+			expect(w.fake.calls.destroy).toBe(1);
+			expect((await w.warmPool.store.read()).pools[0].members).toEqual([]);
+		},
+	);
+
+	it('rereads the published session before handoff and records warm probe time', async () => {
+		const w = await setup();
+		await w.warmPool.sweep();
+		const get = vi.spyOn(w.services.sessions, 'getSession');
+		const handoff = vi.spyOn(w.warmPool, 'handoff');
+		const log = captureLogEvents('session_provision');
+		let now = Date.now();
+		vi.spyOn(Date, 'now').mockImplementation(() => now);
+		const projects = w.api.deps.services.projects;
+		const getProject = projects.getProject.bind(projects);
+		vi.spyOn(projects, 'getProject').mockImplementationOnce(async (...args) => {
+			const project = await getProject(...args);
+			now += 25;
+			return project;
+		});
+		const probe = w.warmPool.probe.bind(w.warmPool);
+		vi.spyOn(w.warmPool, 'probe').mockImplementationOnce(async (claim) => {
+			await probe(claim);
+			now += 75;
+		});
+		const response = await expectOk<Session>(await w.api.request('POST', w.path));
+		expect(handoff).toHaveBeenCalledExactlyOnceWith(expect.anything());
+		expect(get).toHaveBeenCalledExactlyOnceWith(w.project.id, response.session_id);
+		const events = log.events();
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			warm_probe_ms: 75,
+			total_ms: 100,
+			auth_reuse_ms: 25,
+			stop_wait_ms: 0,
+			success: true,
+		});
+	});
 
 	it('overlaps exposure preparation with handoff and prepares again after expiry', async () => {
 		const w = await setupWarmReplacement();
@@ -879,6 +955,41 @@ describe('session warm sandbox assignment', () => {
 			expect(w.fake.calls.writeFiles).toEqual([]);
 			expect(w.fake.calls.destroy).toBeGreaterThan(0);
 			expect((await w.warmPool.store.read()).pools[0].members).toEqual([]);
+		},
+	);
+
+	it.each(['cold', 'warm'] as const)(
+		'reclaims a %s sandbox when ingress publication fails after launch',
+		async (runtime) => {
+			const w = await setup();
+			if (runtime === 'warm') await w.warmPool.sweep();
+			else w.api.deps.warmPool = undefined;
+			const publication = Promise.withResolvers<void>();
+			const url = 'https://kernel.example';
+			w.fake.instance.prepareExposure = async () => ({ url });
+			w.fake.instance.exposePort = async () => {
+				await publication.promise;
+				return { url };
+			};
+			let responded = false;
+			const pending = Promise.resolve(w.api.request('POST', w.path)).then((response) => {
+				responded = true;
+				return response;
+			});
+			try {
+				await vi.waitFor(() => expect(w.fake.calls.startProcess).toHaveLength(1));
+				expect(responded).toBe(false);
+			} finally {
+				publication.reject(new Error('ingress unavailable'));
+			}
+			await expectError(await pending, 503, 'SERVICE_UNAVAILABLE');
+			expect(w.fake.calls.destroy).toBe(1);
+			const [failed] = await w.services.sessions.listSessions(w.notebook.id);
+			expect(failed).toMatchObject({ status: 'failed', sandbox_reclaimed_at: expect.any(String) });
+			expect(
+				(await w.services.sessions.getEditorClaim(w.project.id, w.notebook.id))?.session_id,
+			).toBeNull();
+			if (runtime === 'warm') expect((await w.warmPool.store.read()).pools[0].members).toEqual([]);
 		},
 	);
 

@@ -378,7 +378,8 @@ OpenTelemetry, so they outlive the pod after a redeploy.
 ### Session provision events
 
 The server emits `session_provision` when a provisioning attempt finishes, including failed attempts.
-Requests that reuse an existing session or fail before provisioning do not emit this event.
+Retiring-editor conflicts also emit it, including any wait and retry.
+Other requests that reuse a session or fail before provisioning do not emit this event.
 The `client` field groups requests by route and authentication:
 
 | `client` | Meaning                                                                                 |
@@ -393,7 +394,19 @@ Phase timings such as `provision_files_ms` overlap. When the workspace is copied
 into the sandbox, bounded workspace reads start while the sandbox boots, so
 `provision_files_ms` includes the readiness wait as well as the copy. Mounted
 workspaces, and reads over the prefetch budget, wait for readiness first. Do not
-sum phase timings; use `provision_total_ms` for the total.
+sum phase timings; use `total_ms` for the full start request.
+
+| Field                | Measures                                                               |
+| -------------------- | ---------------------------------------------------------------------- |
+| `total_ms`           | Full session start, including a stop wait and retry.                   |
+| `auth_reuse_ms`      | Pre-saga admission, authorization, and reuse work across all attempts. |
+| `stop_wait_ms`       | Wait for the same user’s retiring editor; zero when no wait occurs.    |
+| `warm_probe_ms`      | Warm sandbox probe, when attempted.                                    |
+| `ingress_publish_ms` | CoreWeave ingress publication, which overlaps sandbox setup.           |
+| `provision_total_ms` | Sandbox provisioning only.                                             |
+
+When CoreWeave uses `kernelIngress` without `resolveExposedUrl`, it starts ingress publication during URL preparation and waits for it before returning the live URL.
+That publisher allows 100 service-discovery retries, with a 100 ms delay between attempts.
 
 On every compute backend, these fields split the file and injection phases:
 
