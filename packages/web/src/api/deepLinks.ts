@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import { apiClient, apiData } from './client';
 import { appKeys } from './queryKeys';
 
@@ -7,21 +8,48 @@ export const deepLinkKeys = {
 	list: (pid: string, nid: string) => ['deep-links', 'list', pid, nid] as const,
 };
 
+function resolveAppLink(client: QueryClient, slug: string, signal?: AbortSignal) {
+	return apiData(
+		apiClient.GET('/api/v1/deep-links/{slug}', { params: { path: { slug } }, signal }),
+	).then((link) => {
+		if (link.app && !signal?.aborted) {
+			client.setQueryData(
+				appKeys.detail(link.target.project_id, link.target.notebook_id),
+				link.app,
+			);
+		}
+		return link;
+	});
+}
+
+// Consume boot lookups once: revisiting a slug must resolve its current target.
+const bootLookups = new WeakMap<QueryClient, Map<string, ReturnType<typeof resolveAppLink>>>();
+
+export function prefetchAppLink(client: QueryClient, slug: string) {
+	const lookups = bootLookups.get(client) ?? new Map();
+	bootLookups.set(client, lookups);
+	if (!lookups.has(slug)) {
+		const pending = resolveAppLink(client, slug);
+		lookups.set(slug, pending);
+		void pending.catch(() => {});
+	}
+	return lookups.get(slug)!;
+}
+
+function takeBootAppLink(client: QueryClient, slug: string) {
+	const lookups = bootLookups.get(client);
+	const pending = lookups?.get(slug);
+	lookups?.delete(slug);
+	return pending;
+}
+
 export function useDeepLinkQuery(slug: string) {
 	const client = useQueryClient();
 	return useQuery({
 		queryKey: deepLinkKeys.resolve(slug),
-		queryFn: async ({ signal }) => {
-			const link = await apiData(
-				apiClient.GET('/api/v1/deep-links/{slug}', { params: { path: { slug } }, signal }),
-			);
-			if (link.app && !signal.aborted)
-				client.setQueryData(
-					appKeys.detail(link.target.project_id, link.target.notebook_id),
-					link.app,
-				);
-			return link;
-		},
+		// Reading context.signal opts into cancellation; boot lookups must survive StrictMode.
+		queryFn: (context) =>
+			takeBootAppLink(client, slug) ?? resolveAppLink(client, slug, context.signal),
 		staleTime: 0,
 		gcTime: 0,
 	});

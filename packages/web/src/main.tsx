@@ -6,12 +6,11 @@ import { createRoot } from 'react-dom/client';
 import { QueryClientProvider } from '@tanstack/react-query';
 import './index.css';
 import App from './App.tsx';
+import { preloadInitialRoute } from './lib/initialRoute';
 import { queryClient } from './api/queryClient';
 import { capabilitiesQueryOptions, userQueryOptions } from './api/hooks';
 
-// Dev-only: the React Query devtools are loaded via a dynamic import gated on
-// `import.meta.env.DEV`, so the production build tree-shakes the module out
-// entirely (it ships nothing to users instead of a render-nothing component).
+// The DEV guard keeps query devtools out of production bundles.
 const ReactQueryDevtools = import.meta.env.DEV
 	? lazy(() =>
 			import('@tanstack/react-query-devtools').then((m) => ({
@@ -21,12 +20,11 @@ const ReactQueryDevtools = import.meta.env.DEV
 	: () => null;
 
 async function bootstrap() {
-	// Neither request depends on the theme, so start them before it blocks the first
-	// render; the hooks share these query keys and pick up the in-flight requests.
+	const initialRoute = preloadInitialRoute(queryClient).catch(() => ({}));
+	// Hooks reuse these requests while the theme and route load.
 	void queryClient.prefetchQuery(userQueryOptions());
 	void queryClient.prefetchQuery(capabilitiesQueryOptions());
-	// Apply the stored preference before awaiting the theme request so a
-	// dark-mode user does not see a light page while it is in flight.
+	// Apply the saved mode before the theme request to avoid a light-mode flash.
 	try {
 		applyThemeMode(getInitialTheme());
 	} catch (error) {
@@ -44,11 +42,12 @@ async function bootstrap() {
 	} catch (error) {
 		console.warn('Could not fully initialize the deployment theme.', error);
 	}
+	const initialRoutes = await initialRoute;
 	createRoot(document.getElementById('root')!).render(
 		<StrictMode>
 			<QueryClientProvider client={queryClient}>
 				<BrandingContext value={branding}>
-					<App />
+					<App initialRoutes={initialRoutes} />
 				</BrandingContext>
 				{import.meta.env.DEV && (
 					<Suspense fallback={null}>

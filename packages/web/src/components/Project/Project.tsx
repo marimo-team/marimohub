@@ -1,3 +1,4 @@
+import { NOTEBOOK_STATUS_FILTERS } from '@/api/routePrefetch';
 import { MoveNotebookDialog } from '@/components/Notebook/MoveNotebookDialog';
 import { TagFieldValue } from '@/lib/tagFieldValue';
 import { isPathTag } from '@marimo-hub/core/tag-paths';
@@ -78,10 +79,7 @@ import {
 	useStopSession,
 	useUsersQuery,
 	useCapabilitiesQuery,
-	useIntegrationKindsQuery,
-	useIntegrationsQuery,
 } from '@/api/hooks';
-import { supportsIntegrationDataPage } from '@/lib/integrationNotebook';
 import { AppSessionIndicator } from './AppSessionIndicator';
 import { NotebookCollection } from './NotebookCollection';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
@@ -116,13 +114,6 @@ const WorkspaceBrowserDialog = lazy(
 );
 
 const MAX_UPLOAD_BYTES = 1_000_000;
-
-const NOTEBOOK_STATUS_FILTERS = [
-	{ value: 'active', label: 'Active' },
-	{ value: 'draft', label: 'Draft' },
-	{ value: 'archived', label: 'Archived' },
-	{ value: 'deleted', label: 'Deleted' },
-] as const;
 
 function notebookHistoryActions(jobsAvailable: boolean): DropdownMenuOption[] {
 	return [
@@ -268,17 +259,6 @@ function useProjectContent() {
 
 	const dataBrowserAvailable = (capabilities?.data_browser?.available ?? false) && canEdit;
 	const jobsAvailable = capabilities?.jobs?.available ?? false;
-	const { data: integrationKinds } = useIntegrationKindsQuery(dataBrowserAvailable);
-	const { data: projectIntegrations } = useIntegrationsQuery({ pid: pid! }, dataBrowserAvailable);
-	const dataIntegrations = useMemo(() => {
-		const kindsByName = new Map((integrationKinds ?? []).map((kind) => [kind.kind, kind]));
-		return (projectIntegrations ?? []).filter(
-			(entry) =>
-				entry.enabled &&
-				!entry.shadowed &&
-				supportsIntegrationDataPage(kindsByName.get(entry.kind)),
-		);
-	}, [integrationKinds, projectIntegrations]);
 
 	const projectTags = useMemo(() => TagFieldValue.fromTags(project.tags), [project.tags]);
 	const projectFormValues = {
@@ -684,7 +664,7 @@ function useProjectContent() {
 			}
 			actions={
 				<div className="flex items-center gap-1.5">
-					{dataBrowserAvailable && dataIntegrations.length > 0 && (
+					{dataBrowserAvailable && (
 						<LinkButton to={`/projects/${pid}/data`} aria-label="Browse data">
 							<Database className="size-4" />
 							<span className="max-sm:hidden">Browse data</span>

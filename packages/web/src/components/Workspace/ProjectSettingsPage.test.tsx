@@ -111,7 +111,7 @@ describe('Project settings pages', () => {
 			const requests = setup(section, 'app-user');
 			await screen.findByText('Apps destination');
 			expect(requests).toContain('/api/v1/apps?project_id=alpha');
-			expect(requests).not.toContain('/api/v1/projects/alpha');
+			expect(requests.filter((path) => path === '/api/v1/projects/alpha')).toHaveLength(1);
 			expect(
 				requests.some((path) => /\/(members|integrations|alert-destinations)(\?|$)/.test(path)),
 			).toBe(false);

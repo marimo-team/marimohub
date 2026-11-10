@@ -62,38 +62,27 @@ describe('project loading', () => {
 		},
 	);
 
-	it('shares one fallback until access, project details, and notebooks are ready', async () => {
-		const access = deferred<Response>();
+	it('waits for project metadata and notebooks without an apps access request', async () => {
 		const details = deferred<Response>();
 		const notebooks = deferred<Response>();
 		const { fetch } = setup((url) => {
-			if (url.pathname === '/api/v1/apps') return access.promise;
 			if (url.pathname === `/api/v1/projects/${PID}`) return details.promise;
 			if (url.pathname === `/api/v1/projects/${PID}/notebooks`) return notebooks.promise;
 		});
-		const fallback = screen.getByText('Loading page');
-		expect(screen.queryByText('Loading project…')).not.toBeInTheDocument();
-		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
-		await act(async () => {
-			access.resolve(jsonOk({ items: [], next_cursor: null, project: project() }));
-		});
+		expect(screen.getByText('Checking project access…')).toBeVisible();
+		expect(screen.queryByRole('heading', { name: 'Sales' })).not.toBeInTheDocument();
+		await act(async () => details.resolve(jsonOk(project())));
 		await waitFor(() => {
 			const paths = fetch.mock.calls.map(
 				([input]) => new URL(String(input), 'http://localhost').pathname,
 			);
-			expect(paths).toContain(`/api/v1/projects/${PID}`);
 			expect(paths).toContain(`/api/v1/projects/${PID}/notebooks`);
 			expect(paths).toContain(`/api/v1/projects/${PID}/sessions`);
+			expect(paths).not.toContain('/api/v1/apps');
 		});
-		expect(screen.getByText('Loading page')).toBe(fallback);
-		await act(async () => {
-			details.resolve(jsonOk(project()));
-		});
-		expect(screen.getByText('Loading page')).toBe(fallback);
+		expect(screen.getByText('Loading page')).toBeVisible();
 		expect(screen.queryByRole('heading', { name: 'Sales' })).not.toBeInTheDocument();
-		await act(async () => {
-			notebooks.resolve(jsonOk({ items: [notebook()] }));
-		});
+		await act(async () => notebooks.resolve(jsonOk({ items: [notebook()] })));
 		expect(await screen.findByRole('heading', { name: 'Sales' })).toBeVisible();
 		expect(screen.getByText('Forecast')).toBeVisible();
 		expect(screen.queryByText('Loading page')).not.toBeInTheDocument();
@@ -103,7 +92,7 @@ describe('project loading', () => {
 		let failAccess = false;
 		const refresh = deferred<Response>();
 		const { client } = setup((url) => {
-			if (failAccess && url.pathname === '/api/v1/apps') return refresh.promise;
+			if (failAccess && url.pathname === `/api/v1/projects/${PID}`) return refresh.promise;
 		});
 		await screen.findByRole('heading', { name: 'Sales' });
 		fireEvent.click(screen.getByRole('button', { name: 'Edit project' }));
@@ -111,14 +100,15 @@ describe('project loading', () => {
 		fireEvent.change(name, { target: { value: 'Unsaved title' } });
 		failAccess = true;
 		act(() => {
-			void client.invalidateQueries({ queryKey: ['apps', 'list'] });
+			void client.invalidateQueries({ queryKey: projectKeys.detail(PID) });
 		});
-		await waitFor(() => expect(client.isFetching({ queryKey: ['apps', 'list'] })).toBe(1));
+		await waitFor(() => expect(client.isFetching({ queryKey: projectKeys.detail(PID) })).toBe(1));
 		expect(screen.getByLabelText('Project Name')).toBe(name);
 		await act(async () => {
 			refresh.resolve(jsonError('UNAVAILABLE', 'Temporarily unavailable', 503));
 		});
-		await waitFor(() => expect(client.isFetching({ queryKey: ['apps', 'list'] })).toBe(0));
+		await waitFor(() => expect(client.isFetching({ queryKey: projectKeys.detail(PID) })).toBe(0));
+		failAccess = false;
 		await act(async () => {
 			await Promise.all([
 				client.invalidateQueries({ queryKey: projectKeys.detail(PID) }),
@@ -155,8 +145,10 @@ describe('project loading', () => {
 		expect(screen.getByRole('heading', { name: 'Sales' })).toBe(heading);
 	});
 
-	it('redirects app users without fetching authoring data', async () => {
+	it('redirects app users after hidden metadata without fetching notebooks', async () => {
 		const { fetch } = setup((url) => {
+			if (url.pathname === `/api/v1/projects/${PID}`)
+				return jsonError('NOT_FOUND', 'Not found', 404);
 			if (url.pathname === '/api/v1/apps') {
 				return jsonOk({
 					items: [],
@@ -170,7 +162,7 @@ describe('project loading', () => {
 		const paths = fetch.mock.calls.map(
 			([input]) => new URL(String(input), 'http://localhost').pathname,
 		);
-		expect(paths).not.toContain(`/api/v1/projects/${PID}`);
+		expect(paths).toContain(`/api/v1/projects/${PID}`);
 		expect(paths).not.toContain(`/api/v1/projects/${PID}/notebooks`);
 	});
 
@@ -178,7 +170,7 @@ describe('project loading', () => {
 		vi.spyOn(console, 'error').mockImplementation(() => {});
 		let failed = false;
 		setup((url) => {
-			if (url.pathname === '/api/v1/apps' && !failed) {
+			if (url.pathname === `/api/v1/projects/${PID}` && !failed) {
 				failed = true;
 				return jsonError('UNAVAILABLE', 'Try again later', 503);
 			}

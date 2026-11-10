@@ -1,3 +1,4 @@
+import { projectRosterQueryOptions } from '@/api/routePrefetch';
 import { SEARCH_ROUTE, searchPath } from '@/lib/workspaceSearch';
 import { isAppleKeyboard } from '@/lib/keyboard';
 import { useQuery } from '@tanstack/react-query';
@@ -11,7 +12,7 @@ import {
 	Search,
 	Shield,
 } from 'lucide-react';
-import { projectQueryOptions, useProjectRoster } from '@/api/hooks';
+import { projectQueryOptions } from '@/api/hooks';
 import { useSearchAccess } from '@/hooks/useSearchAccess';
 import { ProjectPicker } from './ProjectPicker';
 import { ProjectSharingIndicator } from './ProjectSharingIndicator';
@@ -25,7 +26,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void }) {
 	const { user, allowed: enabled, available: searchAvailable, capabilities } = useSearchAccess();
 	const location = useLocation();
 	const { pid, section } = workspaceRoute(location.pathname);
-	const projects = useProjectRoster({ enabled, throwOnError: false });
+	const projects = useQuery({ ...projectRosterQueryOptions(), enabled, throwOnError: false });
 	const selectedProject = useQuery({
 		...projectQueryOptions(pid ?? ''),
 		enabled: enabled && Boolean(pid),

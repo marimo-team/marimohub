@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { useParams } from 'react-router-dom';
 import { useDeepLinkQuery } from '@/api/deepLinks';
 import { isNotFoundError } from '@/api/request';
@@ -25,19 +26,24 @@ export function AppLinkPage() {
 		);
 	}
 	// A remounted route must resolve again before it can start a session for a reused slug.
-	if (!query.data || !query.isFetchedAfterMount) {
-		return (
-			<output className="flex min-h-dvh items-center justify-center text-sm text-muted-foreground">
-				Opening app…
-			</output>
-		);
-	}
+	if (!query.data || !query.isFetchedAfterMount) return <OpeningApp />;
 	const { target } = query.data;
+	// Keep alias resolution mounted while the notebook waits for project metadata.
 	return (
-		<AppEntryPage
-			key={`${target.project_id}/${target.notebook_id}`}
-			variant="app"
-			target={{ projectId: target.project_id, notebookId: target.notebook_id }}
-		/>
+		<Suspense fallback={<OpeningApp />}>
+			<AppEntryPage
+				key={`${target.project_id}/${target.notebook_id}`}
+				variant="app"
+				target={{ projectId: target.project_id, notebookId: target.notebook_id }}
+			/>
+		</Suspense>
+	);
+}
+
+function OpeningApp() {
+	return (
+		<output className="flex min-h-dvh items-center justify-center text-sm text-muted-foreground">
+			Opening app…
+		</output>
 	);
 }

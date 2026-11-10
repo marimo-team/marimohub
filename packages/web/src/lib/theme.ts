@@ -42,7 +42,7 @@ export async function loadThemeConfig(): Promise<ThemeConfig> {
 		try {
 			const response = await fetch(withBasePath('/api/v1/theme'), {
 				signal: controller.signal,
-				cache: 'no-store',
+				credentials: 'include',
 			});
 			if (!response.ok) return DEFAULT_THEME_CONFIG;
 			const parsed = ThemeResponseSchema.safeParse(await response.json());

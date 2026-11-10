@@ -76,6 +76,19 @@ export default defineConfig({
 	},
 	build: {
 		outDir: 'dist',
+		rolldownOptions: {
+			output: {
+				codeSplitting: {
+					groups: [
+						{
+							name: 'icons',
+							test: /node_modules\/lucide-react\//,
+							includeDependenciesRecursively: false,
+						},
+					],
+				},
+			},
+		},
 	},
 	// Cached build task: `output` archives/restores dist/ on a hit (a script can't).
 	run: {

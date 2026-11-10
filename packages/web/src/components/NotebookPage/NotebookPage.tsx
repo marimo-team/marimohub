@@ -104,7 +104,7 @@ function activityWarning(name: string, state: 'active' | 'idle' | 'unknown' | 's
 
 interface NotebookPageProps {
 	variant?: 'edit' | 'app';
-	target?: { projectId: string; notebookId: string };
+	target?: { projectId: string; notebookId: string; title?: string };
 }
 
 function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
@@ -115,7 +115,8 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 	const location = useLocation();
 	const isApp = variant === 'app';
 
-	const notebookTitle = (location.state as { title?: string } | null)?.title ?? nid ?? 'Notebook';
+	const notebookTitle =
+		(location.state as { title?: string } | null)?.title ?? target?.title ?? 'Notebook';
 	const renameModal = useDisclosure();
 	const thumbnailModal = useDisclosure();
 	// Stop/Restart disconnect everyone using the shared app, so both confirm first.

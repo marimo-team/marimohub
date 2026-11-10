@@ -1,10 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { makeCapabilities } from '@/test/apiStub';
 import { installMatchMedia, jsonError } from '@/test/render';
 import userEvent from '@testing-library/user-event';
 import { PID, makeFetch, notebook, renderProject, stoppableSession } from './Project.testWorld';
 
 afterEach(() => localStorage.removeItem('notebook-view'));
+
+it('shows the data link from capabilities without loading integrations', async () => {
+	const calls = makeFetch({
+		capabilities: makeCapabilities({ data_browser: { available: true } }),
+	});
+	await renderProject();
+	expect(await screen.findByRole('link', { name: 'Browse data' })).toHaveAttribute(
+		'href',
+		`/projects/${PID}/data`,
+	);
+	expect(calls.some(({ url }) => url.includes('/integrations'))).toBe(false);
+});
 
 describe('notebook filters', () => {
 	it.each(['draft', 'archived', 'deleted'] as const)(
