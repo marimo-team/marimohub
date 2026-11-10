@@ -439,40 +439,62 @@ export function useNotebookSession(
 		session?.status === 'running' || (mode === 'app' && session?.status === 'starting');
 
 	// App heartbeats also return status, avoiding a separate running-session poll.
-	useInterval(
-		() => {
-			if (!session || !heartbeatActive) return;
-			const gen = generation.current();
-			apiData(
+	const sendHeartbeat = useEffectEvent(async (signal: AbortSignal): Promise<boolean> => {
+		const current = sessionRef.current;
+		if (!current || !heartbeatActive) return false;
+		const gen = generation.current();
+		try {
+			const next = await apiData(
 				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/heartbeat', {
-					...(mode === 'app' && session.app_assignment ? { body: session.app_assignment } : {}),
-					params: {
-						path: {
-							pid: projectId,
-							nid: notebookId,
-							sid: session.session_id,
-						},
-					},
+					signal,
+					timeout: 10_000,
+					...(mode === 'app' && current.app_assignment ? { body: current.app_assignment } : {}),
+					params: { path: { pid: projectId, nid: notebookId, sid: current.session_id } },
 				}),
+			);
+			if (!signal.aborted && mode === 'app' && generation.isCurrent(gen))
+				updateRunningSession(next);
+		} catch (error) {
+			if (signal.aborted || mode !== 'app' || !generation.isCurrent(gen)) return false;
+			if (isNotFoundError(error)) concludeSession('gone');
+			else if (error instanceof ApiRequestError && error.status === 403) concludeAccessLost();
+			else if (
+				error instanceof ApiRequestError &&
+				error.code === 'CONFLICT' &&
+				error.message === 'The app assignment expired. Open the app again.'
 			)
-				.then((next) => {
-					if (mode === 'app' && generation.isCurrent(gen)) updateRunningSession(next);
-				})
-				.catch((error: unknown) => {
-					if (mode !== 'app' || !generation.isCurrent(gen)) return;
-					if (isNotFoundError(error)) concludeSession('gone');
-					else if (error instanceof ApiRequestError) {
-						if (error.status === 409) concludeSession('expired');
-						else if (error.status === 403) concludeAccessLost();
-					}
-				});
-		},
-		heartbeatActive
-			? mode === 'app'
-				? appHeartbeatIntervalSeconds * 1000
-				: EDITOR_HEARTBEAT_INTERVAL_MS
-			: null,
-	);
+				concludeSession('expired');
+			else return true;
+		}
+		return false;
+	});
+	const heartbeatSessionId = heartbeatActive ? session?.session_id : undefined;
+	useEffect(() => {
+		if (!heartbeatSessionId) return;
+		const controller = new AbortController();
+		const { signal } = controller;
+		const run = async () => {
+			let failures = 0;
+			while (!signal.aborted) {
+				const interval =
+					mode === 'app'
+						? appHeartbeatIntervalSeconds * 1000 * (0.8 + Math.random() * 0.2)
+						: EDITOR_HEARTBEAT_INTERVAL_MS;
+				const delay = failures
+					? Math.min(5000, 500 * 2 ** Math.min(failures, 4)) * (0.5 + Math.random() * 0.5)
+					: interval;
+				try {
+					await sleep(Math.floor(delay), signal);
+				} catch {
+					return;
+				}
+				if (signal.aborted) return;
+				failures = (await sendHeartbeat(signal)) ? failures + 1 : 0;
+			}
+		};
+		void run();
+		return () => controller.abort();
+	}, [heartbeatSessionId, mode, appHeartbeatIntervalSeconds]);
 
 	useEffect(() => {
 		mountedRef.current = true;

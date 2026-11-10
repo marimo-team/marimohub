@@ -35,13 +35,13 @@ async function settleHook(): Promise<void> {
 }
 
 async function setupAppHeartbeat(
-	heartbeat: () => Response | Promise<Response>,
+	heartbeat: (init?: RequestInit) => Response | Promise<Response>,
 	initial: Partial<Session> = {},
 ) {
 	vi.useFakeTimers();
-	const fetchMock = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) =>
+	const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) =>
 		String(url).endsWith('/heartbeat')
-			? heartbeat()
+			? heartbeat(init)
 			: jsonOk(
 					makeSession({ mode: 'app', status: 'starting', sandbox_url: undefined, ...initial }),
 				),
@@ -52,7 +52,11 @@ async function setupAppHeartbeat(
 		{ toaster: false },
 	);
 	await settleHook();
-	return { ...hook, fetchMock };
+	const heartbeatBodies = () =>
+		fetchMock.mock.calls
+			.filter(([url]) => String(url).endsWith('/heartbeat'))
+			.map(([, init]) => JSON.parse(init!.body as string));
+	return { ...hook, fetchMock, heartbeatBodies };
 }
 
 /**
@@ -813,7 +817,14 @@ describe('useNotebookSession', () => {
 		'ends a $sessionStatus app on heartbeat rejection $status',
 		async ({ sessionStatus, status, code, ended }) => {
 			const { result, fetchMock } = await setupAppHeartbeat(
-				() => jsonError(code, 'assignment unavailable', status),
+				() =>
+					jsonError(
+						code,
+						status === 409
+							? 'The app assignment expired. Open the app again.'
+							: 'assignment unavailable',
+						status,
+					),
 				makeSession({ mode: 'app', status: sessionStatus }),
 			);
 			await act(() => vi.advanceTimersByTimeAsync(1_000));
@@ -823,6 +834,133 @@ describe('useNotebookSession', () => {
 			fetchMock.mockClear();
 			await act(() => vi.advanceTimersByTimeAsync(30_000));
 			expect(fetchMock).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		[409, 'CONFLICT'],
+		[503, 'SERVICE_UNAVAILABLE'],
+	] as const)('retries a heartbeat %s without ending the visit', async (status, code) => {
+		const assignment = { visit_id: 'same-visit', generation: 'same-generation' };
+		let attempts = 0;
+		const { result, heartbeatBodies } = await setupAppHeartbeat(
+			() => {
+				attempts++;
+				return attempts === 1
+					? jsonError(code, 'Write conflict: max retries exceeded', status)
+					: jsonOk(makeSession({ mode: 'app' }));
+			},
+			makeSession({ mode: 'app', app_assignment: assignment }),
+		);
+		await act(() => vi.advanceTimersByTimeAsync(1000));
+		expect(result.current.ended).toBeNull();
+		expect(result.current.isRunning).toBe(true);
+		await act(() => vi.advanceTimersByTimeAsync(2000));
+		expect(attempts).toBeGreaterThanOrEqual(2);
+		expect(result.current.ended).toBeNull();
+		expect(heartbeatBodies()).toEqual(Array(attempts).fill(assignment));
+	});
+
+	it.each([
+		{ nativeAny: false, nativeTimeout: true },
+		{ nativeAny: true, nativeTimeout: false },
+		{ nativeAny: false, nativeTimeout: false },
+	])(
+		'sends heartbeats without native abort helpers (any: $nativeAny, timeout: $nativeTimeout)',
+		async ({ nativeAny, nativeTimeout }) => {
+			vi.stubGlobal(
+				'AbortSignal',
+				new Proxy(AbortSignal, {
+					get(target, property, receiver) {
+						if (property === 'any' && !nativeAny) return;
+						if (property === 'timeout' && !nativeTimeout) return;
+						return Reflect.get(target, property, receiver);
+					},
+				}),
+			);
+			const heartbeat = vi.fn(() => jsonOk(makeSession({ mode: 'app' })));
+			const { result } = await setupAppHeartbeat(heartbeat, makeSession({ mode: 'app' }));
+			await act(() => vi.advanceTimersByTimeAsync(1000));
+			expect(heartbeat).toHaveBeenCalledOnce();
+			expect(result.current.isRunning).toBe(true);
+			expect(result.current.ended).toBeNull();
+		},
+	);
+
+	it('backs off repeated network failures and resets the schedule after recovery', async () => {
+		vi.spyOn(Math, 'random').mockReturnValue(0.5);
+		const assignment = { visit_id: 'same-visit', generation: 'same-generation' };
+		const sentAt: number[] = [];
+		const { result, heartbeatBodies } = await setupAppHeartbeat(
+			() => {
+				sentAt.push(Date.now());
+				if (sentAt.length <= 6) throw new TypeError('Failed to fetch');
+				return jsonOk(makeSession({ mode: 'app', app_assignment: assignment }));
+			},
+			makeSession({ mode: 'app', app_assignment: assignment }),
+		);
+		const startedAt = Date.now();
+		await act(() => vi.advanceTimersByTimeAsync(17_400));
+		expect(sentAt.map((at) => at - startedAt)).toEqual([
+			900, 1650, 3150, 6150, 9900, 13_650, 17_400,
+		]);
+		expect(result.current.ended).toBeNull();
+		expect(result.current.isRunning).toBe(true);
+		await act(() => vi.advanceTimersByTimeAsync(899));
+		expect(sentAt).toHaveLength(7);
+		await act(() => vi.advanceTimersByTimeAsync(1));
+		expect(sentAt[7] - startedAt).toBe(18_300);
+		expect(heartbeatBodies()).toEqual(Array(sentAt.length).fill(assignment));
+	});
+
+	it.each(['timeout', 'unmount'] as const)(
+		'cancels an in-flight heartbeat on %s',
+		async (action) => {
+			vi.spyOn(Math, 'random').mockReturnValue(0.5);
+			const timeout = new AbortController();
+			const createTimeout = AbortSignal.timeout.bind(AbortSignal);
+			let intercepted = false;
+			const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+				if (ms !== 10_000 || intercepted) return createTimeout(ms);
+				intercepted = true;
+				return timeout.signal;
+			});
+			const assignment = { visit_id: 'same-visit', generation: 'same-generation' };
+			let attempts = 0;
+			let aborted = false;
+			const { result, unmount, heartbeatBodies } = await setupAppHeartbeat(
+				(init) => {
+					attempts++;
+					if (attempts > 1) return jsonOk(makeSession({ mode: 'app', app_assignment: assignment }));
+					return new Promise<Response>((_resolve, reject) => {
+						init!.signal!.addEventListener(
+							'abort',
+							() => {
+								aborted = true;
+								reject(new DOMException('Request aborted', 'AbortError'));
+							},
+							{ once: true },
+						);
+					});
+				},
+				makeSession({ mode: 'app', app_assignment: assignment }),
+			);
+			await act(() => vi.advanceTimersByTimeAsync(1000));
+			expect(attempts).toBe(1);
+			expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+			if (action === 'unmount') {
+				unmount();
+				await act(() => vi.advanceTimersByTimeAsync(30_000));
+				expect(attempts).toBe(1);
+			} else {
+				await act(async () => timeout.abort(new DOMException('Timed out', 'TimeoutError')));
+				await act(() => vi.advanceTimersByTimeAsync(1000));
+				expect(attempts).toBe(2);
+				expect(result.current.isRunning).toBe(true);
+				expect(result.current.ended).toBeNull();
+				expect(heartbeatBodies()).toEqual(Array(attempts).fill(assignment));
+			}
+			expect(aborted).toBe(true);
 		},
 	);
 
@@ -1458,6 +1596,11 @@ describe('useNotebookSession (app mode)', () => {
 			await settleHook();
 			await act(async () => vi.advanceTimersByTimeAsync(60_000));
 			await settleHook();
+			if (mode === 'app') {
+				expect(watches).toBe(1);
+				await act(async () => pending.resolve(jsonOk(makeSession({ mode }))));
+				await act(async () => vi.advanceTimersByTimeAsync(30_000));
+			}
 			expect(watches).toBe(2);
 			expect(result.current.ended).toBe(mode === 'edit' ? 'takeover' : 'terminated');
 			expect(result.current.endedByUserId).toBe(mode === 'edit' ? 'new-owner' : null);
