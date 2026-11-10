@@ -1,4 +1,3 @@
-import { createApi } from '@marimo-hub/api';
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 vi.mock('@marimo-hub/compute-cloudflare', () => ({
@@ -16,17 +15,48 @@ vi.mock('@marimo-hub/compute-cloudflare', () => ({
 }));
 
 vi.mock('@marimo-hub/storage-r2', () => ({
-	R2BucketAdapter: function R2BucketAdapter(binding: unknown) {
-		return binding;
-	},
+	R2BucketAdapter: vi.fn(function R2BucketAdapter(binding: object) {
+		// Each adapter has its own cache identity, even when the backing storage is shared.
+		return new Proxy(binding, {
+			get(target, key) {
+				const value = Reflect.get(target, key);
+				return typeof value === 'function' ? value.bind(target) : value;
+			},
+		});
+	}),
 }));
 
-import { createServices, MaintenanceLock, SessionService, SessionRetirer } from '@marimo-hub/core';
+import {
+	createServices,
+	MaintenanceLock,
+	SessionService,
+	SessionRetirer,
+	paths,
+} from '@marimo-hub/core';
 import { ASSIGNABLE_ROLES } from '@marimo-hub/core/constants';
 import type { AssignableRole } from '@marimo-hub/core/constants';
 import { JobScheduler } from '@marimo-hub/core/jobs';
-import { ACTOR, MemoryBucket } from '@marimo-hub/core/testing';
+import { ACTOR } from '@marimo-hub/core/testing';
+import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
+import { R2BucketAdapter } from '@marimo-hub/storage-r2';
 import worker, { buildDeps } from './index';
+
+const makeEnv = (bucket = new MemoryBucket()): Env => ({
+	AUTH_MODE: 'dev',
+	USER_ID: ACTOR,
+	USER_EMAIL: `${ACTOR}@example.com`,
+	NOTEBOOKS_BUCKET: bucket as never,
+	SANDBOX: {} as never,
+});
+const makeContext = (waitUntil = vi.fn()): ExecutionContext => ({
+	waitUntil,
+	passThroughOnException() {},
+	props: {},
+});
+
+function fetchApi(env: Env, path = '/api/v1/capabilities', ctx = makeContext()) {
+	return worker.fetch(new Request(new URL(path, 'https://hub.example.com')), env, ctx);
+}
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -35,21 +65,13 @@ afterEach(() => {
 it('registers core audits with waitUntil while awaiting session teardown', async () => {
 	const tasks: Promise<unknown>[] = [];
 	const bucket = new MemoryBucket();
-	const deps = buildDeps(
-		new Request('https://hub.example.com'),
-		{
-			AUTH_MODE: 'dev',
-			USER_ID: ACTOR,
-			USER_EMAIL: `${ACTOR}@example.com`,
-			NOTEBOOKS_BUCKET: bucket,
-			SANDBOX: {},
-		} as unknown as Env,
-		{
-			waitUntil: (task) => {
-				tasks.push(task);
-			},
-		},
+	const env = makeEnv(bucket);
+	const ctx = makeContext(
+		vi.fn((task: Promise<unknown>) => {
+			tasks.push(task);
+		}),
 	);
+	const deps = buildDeps(new Request('https://hub.example.com'), env);
 	expect(deps.teardownInline).toBe(true);
 	await deps.services.catalog.initialize(ACTOR);
 	const project = await deps.services.projects.createProject({ name: 'P', description: '' }, ACTOR);
@@ -58,6 +80,16 @@ it('registers core audits with waitUntil while awaiting session teardown', async
 		{ title: 'N', description: '', code: '' },
 		ACTOR,
 	);
+	const updated = await worker.fetch(
+		new Request(`https://hub.example.com/api/v1/projects/${project.id}`, {
+			method: 'PATCH',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ name: 'Updated project' }),
+		}),
+		env,
+		ctx,
+	);
+	expect(updated.status).toBe(200);
 	await Promise.all(tasks);
 	expect(tasks.length).toBeGreaterThan(0);
 	const session = await deps.services.sessions.createSession({
@@ -78,9 +110,13 @@ it('registers core audits with waitUntil while awaiting session teardown', async
 	);
 	let responded = false;
 	const response = Promise.resolve(
-		createApi(deps).request(
-			`https://hub.example.com/api/v1/projects/${project.id}/notebooks/${notebook.id}/sessions/${session.session_id}`,
-			{ method: 'DELETE' },
+		worker.fetch(
+			new Request(
+				`https://hub.example.com/api/v1/projects/${project.id}/notebooks/${notebook.id}/sessions/${session.session_id}`,
+				{ method: 'DELETE' },
+			),
+			env,
+			ctx,
 		),
 	).then((res) => {
 		responded = true;
@@ -96,6 +132,259 @@ it('registers core audits with waitUntil while awaiting session teardown', async
 	expect((await deps.services.sessions.getSession(project.id, session.session_id)).status).toBe(
 		'terminated',
 	);
+});
+
+describe('Cloudflare Worker isolate reuse', () => {
+	it('reads one snapshot across two requests and still observes catalog updates', async () => {
+		const bucket = new MemoryBucket();
+		const writer = createServices(bucket);
+		await writer.catalog.initialize(ACTOR);
+		const get = vi.spyOn(bucket, 'get');
+		const env = makeEnv(bucket);
+		const adapters = vi.mocked(R2BucketAdapter).mock.calls.length;
+		const request = () => fetchApi(env, '/api/v1/projects');
+
+		for (let i = 0; i < 2; i++) {
+			const response = await request();
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({
+				success: true,
+				data: { items: [expect.objectContaining({ name: 'My Project' })] },
+			});
+		}
+		expect(get.mock.calls.filter(([key]) => key.startsWith(paths.snapshotsPrefix))).toHaveLength(1);
+		expect(vi.mocked(R2BucketAdapter).mock.calls.length - adapters).toBe(1);
+
+		const project = await writer.projects.createProject(
+			{ name: 'New project', description: '' },
+			ACTOR,
+		);
+		get.mockClear();
+		const response = await request();
+		expect(await response.json()).toMatchObject({
+			success: true,
+			data: { items: expect.arrayContaining([expect.objectContaining({ id: project.id })]) },
+		});
+		expect(get.mock.calls.filter(([key]) => key.startsWith(paths.snapshotsPrefix))).toHaveLength(1);
+	});
+
+	it('keeps dependencies and configuration separate for different environments', async () => {
+		const firstEnv = makeEnv();
+		const secondEnv = { ...makeEnv(), MARIMOHUB_THEME_NAME: 'Other hub' };
+		const request = new Request('https://hub.example.com/api/v1/theme');
+		const first = buildDeps(request, firstEnv);
+		const second = buildDeps(request, secondEnv);
+		expect(buildDeps(request, firstEnv)).toBe(first);
+		expect(second.bucket).not.toBe(first.bucket);
+		expect(second.services).not.toBe(first.services);
+		expect(second.compute).not.toBe(first.compute);
+		expect(second.authenticator).not.toBe(first.authenticator);
+		const response = await worker.fetch(request, secondEnv, makeContext());
+		expect(await response.json()).toMatchObject({ data: { name: 'Other hub' } });
+	});
+
+	it('checks the request hostname even after the API is cached', async () => {
+		const env = { ...makeEnv(), SANDBOX_HOSTNAME: 'sandbox.example.net' };
+		expect((await fetchApi(env, '/api/v1/theme')).status).toBe(200);
+		const response = await worker.fetch(
+			new Request('https://sandbox.example.net/api/v1/theme'),
+			env,
+			makeContext(),
+		);
+		expect(response.status).toBe(500);
+		expect(await response.json()).toMatchObject({
+			error: { code: 'CONFIG_ERROR', message: expect.stringContaining('shares an origin') },
+		});
+	});
+
+	it('retries dependency construction after a transient initialization failure', async () => {
+		const env = makeEnv();
+		const fetch = () => fetchApi(env, '/api/v1/theme');
+		vi.mocked(R2BucketAdapter).mockImplementationOnce(function () {
+			throw new Error('binding unavailable');
+		});
+
+		const failed = await fetch();
+		expect(failed.status).toBe(500);
+		expect(await failed.json()).toMatchObject({
+			error: { code: 'CONFIG_ERROR', message: 'binding unavailable' },
+		});
+		expect((await fetch()).status).toBe(200);
+		expect((await fetch()).status).toBe(200);
+	});
+
+	it.each([
+		{ AUTH_MODE: undefined },
+		{ AUTH_MODE: 'access' as const, ACCESS_TEAM: 'team', ACCESS_AUD: '' },
+		{ SECRETS_KEK: 'invalid' },
+	])(
+		'fails closed on repeated invalid configuration and accepts a corrected environment: %j',
+		async (invalid) => {
+			const valid = makeEnv();
+			const env = { ...valid, ...invalid };
+			const fetch = (bindings: Env) => fetchApi(bindings);
+			for (let i = 0; i < 2; i++) {
+				const response = await fetch(env);
+				expect(response.status).toBe(500);
+				expect(await response.json()).toMatchObject({
+					success: false,
+					error: { code: 'CONFIG_ERROR' },
+				});
+			}
+			expect((await fetch(valid)).status).toBe(200);
+			expect((await fetch(env)).status).toBe(500);
+		},
+	);
+
+	it('applies changed authentication bindings even when storage and compute bindings are unchanged', async () => {
+		const dev = makeEnv();
+		const access: Env = {
+			...dev,
+			AUTH_MODE: 'access',
+			ACCESS_TEAM: 'team',
+			ACCESS_AUD: 'audience',
+		};
+		const fetch = (env: Env) => fetchApi(env);
+		expect((await fetch(dev)).status).toBe(200);
+		const denied = await fetch(access);
+		expect(denied.status).toBe(401);
+		expect(await denied.json()).toMatchObject({ success: false, error: { code: 'UNAUTHORIZED' } });
+		expect((await fetch(dev)).status).toBe(200);
+		expect((await fetch(access)).status).toBe(401);
+	});
+
+	it('retries a failed snapshot read without replacing shared dependencies', async () => {
+		const bucket = new MemoryBucket();
+		await createServices(bucket).catalog.initialize(ACTOR);
+		const env = makeEnv(bucket);
+		const request = new Request('https://hub.example.com/api/v1/projects');
+		const deps = buildDeps(request, env);
+		const originalGet = bucket.get.bind(bucket);
+		let fail = true;
+		const get = vi.spyOn(bucket, 'get').mockImplementation(async (key, options) => {
+			if (key.startsWith(paths.snapshotsPrefix) && fail) {
+				fail = false;
+				throw new Error('snapshot unavailable');
+			}
+			return originalGet(key, options);
+		});
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		const failed = await worker.fetch(request, env, makeContext());
+		expect(failed.status).toBe(500);
+		expect(await failed.json()).toMatchObject({
+			success: false,
+			error: { code: 'INTERNAL_ERROR' },
+		});
+		for (let i = 0; i < 2; i++) {
+			const response = await worker.fetch(new Request(request), env, makeContext());
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({
+				data: { items: [expect.objectContaining({ name: 'My Project' })] },
+			});
+		}
+		expect(buildDeps(request, env)).toBe(deps);
+		expect(get.mock.calls.filter(([key]) => key.startsWith(paths.snapshotsPrefix))).toHaveLength(2);
+	});
+
+	it('shares an uncached snapshot load across overlapping requests', async () => {
+		const bucket = new MemoryBucket();
+		const writer = createServices(bucket);
+		await writer.catalog.initialize(ACTOR);
+		const env = makeEnv(bucket);
+		const fetch = () => fetchApi(env, '/api/v1/projects');
+		expect((await fetch()).status).toBe(200);
+		await writer.projects.createProject({ name: 'New project', description: '' }, ACTOR);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const secondPointerRead = Promise.withResolvers<void>();
+		let snapshotPending = false;
+		const originalGet = bucket.get.bind(bucket);
+		const get = vi.spyOn(bucket, 'get').mockImplementation(async (key, options) => {
+			if (key === paths.catalog && snapshotPending) secondPointerRead.resolve();
+			if (key.startsWith(paths.snapshotsPrefix)) {
+				snapshotPending = true;
+				entered.resolve();
+				await release.promise;
+			}
+			return originalGet(key, options);
+		});
+		const first = fetch();
+		await entered.promise;
+		const second = fetch();
+		try {
+			await secondPointerRead.promise;
+		} finally {
+			release.resolve();
+		}
+		const responses = await Promise.all([first, second]);
+		expect(responses.map((response) => response.status)).toEqual([200, 200]);
+		expect(await responses[0].json()).toEqual(await responses[1].json());
+		expect(get.mock.calls.filter(([key]) => key.startsWith(paths.snapshotsPrefix))).toHaveLength(1);
+	});
+
+	it('hands rejected background work to its invocation without retaining the context afterward', async () => {
+		const env = makeEnv();
+		const deps = buildDeps(new Request('https://hub.example.com'), env);
+		const failure = new Error('background failure');
+		const outcomes: Promise<unknown>[] = [];
+		const ctx = makeContext();
+		vi.mocked(ctx.waitUntil).mockImplementation((task) => {
+			outcomes.push(task.catch((error: unknown) => error));
+		});
+		const authenticate = deps.authenticator.authenticate.bind(deps.authenticator);
+		vi.spyOn(deps.authenticator, 'authenticate').mockImplementationOnce(async (request) => {
+			await deps.backgroundWork!.defer('test', () => Promise.reject(failure));
+			return authenticate(request);
+		});
+		const request = new Request('https://hub.example.com/api/v1/capabilities');
+		expect((await worker.fetch(request, env, ctx)).status).toBe(200);
+		expect(await Promise.all(outcomes)).toEqual([failure]);
+		expect((await worker.fetch(new Request(request), env, makeContext())).status).toBe(200);
+		await expect(
+			deps.backgroundWork!.defer('outside-request', () => Promise.reject(failure)),
+		).rejects.toBe(failure);
+		expect(ctx.waitUntil).toHaveBeenCalledOnce();
+	});
+
+	it('registers concurrent background work with the originating execution context', async () => {
+		const env = makeEnv();
+		const deps = buildDeps(new Request('https://hub.example.com'), env);
+		const firstEntered = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		const firstTask = Promise.resolve();
+		const secondTask = Promise.resolve();
+		const tasks = [firstTask, secondTask];
+		const authenticate = deps.authenticator.authenticate.bind(deps.authenticator);
+		vi.spyOn(deps.authenticator, 'authenticate').mockImplementation(async (request) => {
+			const index = Number(request.headers.get('x-request-index'));
+			if (index === 0) {
+				firstEntered.resolve();
+				await releaseFirst.promise;
+			}
+			await deps.backgroundWork!.defer('test', () => tasks[index]);
+			return authenticate(request);
+		});
+		const contexts = [makeContext(), makeContext()];
+		const fetch = (index: number) =>
+			worker.fetch(
+				new Request('https://hub.example.com/api/v1/capabilities', {
+					headers: { 'x-request-index': String(index) },
+				}),
+				env,
+				contexts[index],
+			);
+		const first = fetch(0);
+		await firstEntered.promise;
+		expect((await fetch(1)).status).toBe(200);
+		expect(contexts[0].waitUntil).not.toHaveBeenCalled();
+		expect(contexts[1].waitUntil).toHaveBeenCalledOnce();
+		releaseFirst.resolve();
+		expect((await first).status).toBe(200);
+		expect(contexts[0].waitUntil).toHaveBeenCalledOnce();
+		expect(contexts[1].waitUntil).toHaveBeenCalledOnce();
+		for (const ctx of contexts)
+			await Promise.all(vi.mocked(ctx.waitUntil).mock.calls.map(([task]) => task));
+	});
 });
 
 describe('Cloudflare Worker configuration', () => {
@@ -149,19 +438,13 @@ describe('Cloudflare Worker configuration', () => {
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining('profiles are ignored'));
 	});
 
-	const baseEnv = {
-		AUTH_MODE: 'dev',
-		USER_ID: 'user-test',
-		USER_EMAIL: 'test@example.com',
-		NOTEBOOKS_BUCKET: {},
-		SANDBOX: {},
-	};
+	const baseEnv = makeEnv();
 
 	it('does not advertise previews without a source-control registry', async () => {
 		const response = await worker.fetch(
 			new Request('https://hub.example.com/api/v1/capabilities'),
 			{ ...baseEnv, NOTEBOOKS_BUCKET: new MemoryBucket() } as unknown as Env,
-			{ waitUntil: vi.fn(), passThroughOnException: vi.fn(), props: {} },
+			makeContext(),
 		);
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({
@@ -178,7 +461,7 @@ describe('Cloudflare Worker configuration', () => {
 				MARIMOHUB_THEME_NAME: 'Research Hub',
 				MARIMOHUB_THEME_PRIMARY_COLOR: '#2563eb',
 			} as Env,
-			{ waitUntil: vi.fn(), passThroughOnException: vi.fn(), props: {} },
+			makeContext(),
 		);
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({
@@ -195,7 +478,7 @@ describe('Cloudflare Worker configuration', () => {
 			MARIMOHUB_THEME_PWA_ICON_192: '/brand/192.png',
 			MARIMOHUB_THEME_APPLE_TOUCH_ICON: '/brand/apple.png',
 		} as Env;
-		const ctx = { waitUntil: vi.fn(), passThroughOnException: vi.fn(), props: {} };
+		const ctx = makeContext();
 		const response = await worker.fetch(
 			new Request('https://hub.example.com/manifest.webmanifest'),
 			env,
@@ -246,7 +529,7 @@ describe('Cloudflare Worker configuration', () => {
 		const response = await worker.fetch(
 			new Request('https://hub.example.com/api/v1/theme'),
 			{ ...baseEnv, ...theme } as Env,
-			{ waitUntil: vi.fn(), passThroughOnException: vi.fn(), props: {} },
+			makeContext(),
 		);
 		expect(response.status).toBe(500);
 		expect(await response.json()).toMatchObject({
@@ -280,7 +563,7 @@ describe('Cloudflare Worker configuration', () => {
 			const response = await worker.fetch(
 				new Request('https://hub.example.com/api/v1/capabilities'),
 				{ ...baseEnv, MARIMOHUB_SANDBOX_AUTH: raw } as unknown as Env,
-				{ waitUntil: vi.fn() } as unknown as ExecutionContext,
+				makeContext(),
 			);
 			expect(response.status).toBe(500);
 			expect(await response.json()).toMatchObject({
@@ -306,20 +589,6 @@ describe('Cloudflare Worker configuration', () => {
 		expect(deps.policy.superAdmins).toBeUndefined();
 	});
 
-	it('adapts request background tasks to the Workers execution context', async () => {
-		const waitUntil = vi.fn();
-		const deps = buildDeps(new Request('https://hub.example.com'), baseEnv as unknown as Env, {
-			waitUntil,
-		});
-		const task = vi.fn(async () => {});
-
-		void deps.backgroundWork?.defer('test', task);
-
-		expect(waitUntil).toHaveBeenCalledOnce();
-		await waitUntil.mock.calls[0][0];
-		expect(task).toHaveBeenCalledOnce();
-	});
-
 	it('defaults and canonicalizes editor sandbox sharing', () => {
 		expect(
 			buildDeps(new Request('https://hub.example.com'), baseEnv as unknown as Env).policy
@@ -334,14 +603,15 @@ describe('Cloudflare Worker configuration', () => {
 	});
 
 	it('keeps notebook jobs off unless MARIMOHUB_JOBS=on, and rejects other values', () => {
-		const at = (env: Record<string, unknown>) =>
-			buildDeps(new Request('https://hub.example.com'), env as unknown as Env).jobs;
-		expect(at(baseEnv)).toBeUndefined();
-		expect(at({ ...baseEnv, MARIMOHUB_JOBS: 'off' })).toBeUndefined();
-		expect(at({ ...baseEnv, MARIMOHUB_JOBS: ' ON ' })).toBeDefined();
-		expect(() => at({ ...baseEnv, MARIMOHUB_JOBS: 'yes' })).toThrow(
-			'Unknown MARIMOHUB_JOBS: yes (supported: on, off).',
-		);
+		const at = (jobs?: string) =>
+			buildDeps(new Request('https://hub.example.com'), {
+				...baseEnv,
+				MARIMOHUB_JOBS: jobs,
+			} as Env).jobs;
+		expect(at()).toBeUndefined();
+		expect(at('off')).toBeUndefined();
+		expect(at(' ON ')).toBeDefined();
+		expect(() => at('yes')).toThrow('Unknown MARIMOHUB_JOBS: yes (supported: on, off).');
 	});
 
 	it('rejects an invalid editor sandbox sharing value', () => {
@@ -390,19 +660,7 @@ describe('Cloudflare Worker scheduled handler', () => {
 		cron: '*/5 * * * *',
 		noRetry() {},
 	};
-	const executionContext = (waitUntil = vi.fn()): ExecutionContext => ({
-		waitUntil,
-		passThroughOnException() {},
-		props: undefined,
-	});
-	const scheduledEnv = (): Env => ({
-		AUTH_MODE: 'dev',
-		USER_ID: 'user-test',
-		USER_EMAIL: 'test@example.com',
-		NOTEBOOKS_BUCKET: new MemoryBucket() as never,
-		SANDBOX: {} as never,
-		MARIMOHUB_JOBS: 'on',
-	});
+	const scheduledEnv = (): Env => ({ ...makeEnv(), MARIMOHUB_JOBS: 'on' });
 
 	it.each([
 		{ AUTH_MODE: 'invalid' },
@@ -420,13 +678,44 @@ describe('Cloudflare Worker scheduled handler', () => {
 				...invalid,
 				MARIMOHUB_JOBS: 'off',
 			} as Env,
-			executionContext(),
+			makeContext(),
 		);
 		expect(expire).toHaveBeenCalledOnce();
 		expect(release).toHaveBeenCalledWith('cloudflare-scheduled');
 	});
 
-	it('runs the job scheduler when the maintenance lease is unavailable', async () => {
+	it('reuses fetch services while releasing the lease and context after maintenance fails', async () => {
+		const env: Env = { ...scheduledEnv(), MARIMOHUB_JOBS: 'off' };
+		const request = new Request('https://hub.example.com/api/v1/capabilities');
+		const deps = buildDeps(request, env);
+		const tasks: Promise<unknown>[] = [];
+		const ctx = makeContext(
+			vi.fn((task: Promise<unknown>) => {
+				tasks.push(task);
+			}),
+		);
+		const expire = vi
+			.spyOn(deps.services.sessions, 'expireStale')
+			.mockImplementationOnce(async () => {
+				await deps.backgroundWork!.defer('scheduled', async () => {});
+				throw new Error('maintenance failed');
+			});
+		const release = vi.spyOn(MaintenanceLock.prototype, 'release');
+		await expect(worker.scheduled(controller, env, ctx)).rejects.toThrow('maintenance failed');
+		await Promise.all(tasks);
+		expect(expire).toHaveBeenCalledOnce();
+		expect(release).toHaveBeenCalledWith('cloudflare-scheduled');
+		expect(ctx.waitUntil).toHaveBeenCalledOnce();
+		expect((await worker.fetch(request, env, makeContext())).status).toBe(200);
+		await expect(
+			deps.backgroundWork!.defer('outside-scheduled', () =>
+				Promise.reject(new Error('inline failure')),
+			),
+		).rejects.toThrow('inline failure');
+		expect(ctx.waitUntil).toHaveBeenCalledOnce();
+	});
+
+	function mockJobScheduler(dispatched = 0) {
 		vi.spyOn(MaintenanceLock.prototype, 'acquire')
 			.mockResolvedValueOnce(false)
 			.mockResolvedValueOnce(true);
@@ -435,43 +724,36 @@ describe('Cloudflare Worker scheduled handler', () => {
 			fired: 0,
 			repaired: 0,
 			skipped: 0,
-			dispatched: 0,
+			dispatched,
 			timedOut: 0,
 			markersPruned: 0,
 			errors: 0,
 		});
-		vi.spyOn(JobScheduler.prototype, 'prune').mockResolvedValue({
+		const prune = vi.spyOn(JobScheduler.prototype, 'prune').mockResolvedValue({
 			runsPruned: 0,
 			markersPruned: 0,
 		});
-		vi.spyOn(JobScheduler.prototype, 'drain').mockResolvedValue(undefined);
+		const drain = vi.spyOn(JobScheduler.prototype, 'drain').mockResolvedValue(undefined);
+		return { tick, prune, drain };
+	}
 
-		await worker.scheduled(controller, scheduledEnv(), executionContext());
+	it('runs the job scheduler when the maintenance lease is unavailable', async () => {
+		const { tick } = mockJobScheduler();
+
+		await worker.scheduled(controller, scheduledEnv(), makeContext());
 
 		expect(tick).toHaveBeenCalledOnce();
 	});
 
 	it('registers the execution drain before pruning', async () => {
-		vi.spyOn(MaintenanceLock.prototype, 'acquire')
-			.mockResolvedValueOnce(false)
-			.mockResolvedValueOnce(true);
-		vi.spyOn(MaintenanceLock.prototype, 'release').mockResolvedValue(undefined);
-		vi.spyOn(JobScheduler.prototype, 'tick').mockResolvedValue({
-			fired: 0,
-			repaired: 0,
-			skipped: 0,
-			dispatched: 1,
-			timedOut: 0,
-			markersPruned: 0,
-			errors: 0,
-		});
+		const { prune, drain } = mockJobScheduler(1);
 		const drainPromise = Promise.resolve();
-		vi.spyOn(JobScheduler.prototype, 'drain').mockReturnValue(drainPromise);
-		vi.spyOn(JobScheduler.prototype, 'prune').mockRejectedValue(new Error('prune failed'));
+		drain.mockReturnValue(drainPromise);
+		prune.mockRejectedValue(new Error('prune failed'));
 		const waitUntil = vi.fn();
 
 		await expect(
-			worker.scheduled(controller, scheduledEnv(), executionContext(waitUntil)),
+			worker.scheduled(controller, scheduledEnv(), makeContext(waitUntil)),
 		).rejects.toThrow('prune failed');
 
 		expect(waitUntil).toHaveBeenCalledWith(drainPromise);
@@ -479,13 +761,7 @@ describe('Cloudflare Worker scheduled handler', () => {
 });
 
 describe('Cloudflare Worker sandbox-host isolation guard', () => {
-	const baseEnv = {
-		AUTH_MODE: 'dev',
-		USER_ID: 'user-test',
-		USER_EMAIL: 'test@example.com',
-		NOTEBOOKS_BUCKET: {},
-		SANDBOX: {},
-	};
+	const baseEnv = makeEnv();
 
 	it.each(['sandboxes.example.net', 'sandboxes.example.com'])(
 		'allows sandbox hostname %s',

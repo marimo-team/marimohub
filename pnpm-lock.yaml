@@ -581,6 +581,9 @@ importers:
       '@marimo-hub/tsconfig':
         specifier: workspace:*
         version: link:../../packages/ts-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 25.9.3
       typescript:
         specifier: 'catalog:'
         version: 6.0.3

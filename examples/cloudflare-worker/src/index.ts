@@ -1,13 +1,8 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { parseTheme } from '@marimo-hub/config/theme';
-/**
- * Cloudflare Workers reference deployment (not an actively-built app — a
- * copy-pasteable example). It composes the SAME provider-agnostic `createApi`
- * with the Cloudflare adapters: R2 storage, Containers compute (Durable Object),
- * and Access auth. This is also the one context where the Cloudflare compute
- * adapter works, since it needs the Workers runtime + DO binding.
- */
+// Reference deployment: the shared API with R2 storage, Cloudflare Containers, and Access auth.
 import { hostsOverlap, normalizeHostname } from '@marimo-hub/core/host-isolation';
-import { backgroundWorkFrom } from '@marimo-hub/core/ports/background-work';
+import type { BackgroundWork } from '@marimo-hub/core/ports/background-work';
 import { parseAppPoolPolicy } from '@marimo-hub/config/app-pool';
 import {
 	createApi,
@@ -54,14 +49,32 @@ export { Sandbox, ContainerProxy };
 const R2_BINDING = 'NOTEBOOKS_BUCKET';
 const notebookBridge = notebookBridgeRuntime();
 let warnedAboutComputeProfiles = false;
-// The API's notebook CSS cache follows theme identity, not individual requests.
-const deploymentTheme = weakMemo((env: Env) => parseTheme(env));
+// Shared services must register work on the invocation that started it.
+const executionContext = new AsyncLocalStorage<Pick<ExecutionContext, 'waitUntil'>>();
+const backgroundWork: BackgroundWork = {
+	async defer(_label, task) {
+		const ctx = executionContext.getStore();
+		const work = Promise.resolve().then(task);
+		if (ctx) ctx.waitUntil(work);
+		else await work;
+	},
+};
 
-/**
- * Deps are built per request here, so a rejected KEK would otherwise surface as
- * an opaque 500 on whichever request happened to arrive first. Name the binding
- * the operator has to fix, the way the Node entrypoint's ConfigError does.
- */
+// Key by env identity so binding changes get fresh dependencies.
+// Maintenance uses these resources without validating HTTP-only configuration.
+const deploymentResources = weakMemo((env: Env) => {
+	const bucket = new R2BucketAdapter(env.NOTEBOOKS_BUCKET);
+	return {
+		bucket,
+		services: createServices(bucket, undefined, { backgroundWork }),
+		compute: new CloudflareSandboxProvider(env.SANDBOX, {
+			useTunnel: !env.SANDBOX_HOSTNAME?.trim(),
+		}),
+	};
+});
+const deploymentDeps = weakMemo(createDeploymentDeps);
+const deploymentApi = weakMemo((deps: ApiDeps) => createApi(deps));
+
 function secretCodec(kek: string | undefined): AesGcmSecretCodec | undefined {
 	if (!kek) return undefined;
 	try {
@@ -98,12 +111,22 @@ function parseDefaultRole(raw: string | undefined): AssignableRole | undefined {
 	throw new Error(`Invalid DEFAULT_ROLE: ${raw} (expected ${ASSIGNABLE_ROLES.join(', ')}, none)`);
 }
 
-export function buildDeps(
-	request: Request,
-	env: Env,
-	ctx?: Pick<ExecutionContext, 'waitUntil'>,
-): ApiDeps {
-	const bucket = new R2BucketAdapter(env.NOTEBOOKS_BUCKET);
+// The host check must run for every request, including cache hits.
+export function buildDeps(request: Request, env: Env): ApiDeps {
+	const deps = deploymentDeps(env);
+	const appHost = new URL(request.url).hostname;
+	const sandboxHostname = deps.sandbox.hostname;
+	if (sandboxHostname && hostsOverlap(sandboxHostname, appHost)) {
+		throw new Error(
+			`SANDBOX_HOSTNAME (${sandboxHostname}) shares an origin/parent domain with the app host (${appHost}). ` +
+				'Use a different sandbox hostname that is not a parent or subdomain of the app hostname.',
+		);
+	}
+	return deps;
+}
+
+function createDeploymentDeps(env: Env): ApiDeps {
+	const { bucket, services, compute } = deploymentResources(env);
 	const computeProfiles = parseComputeProfiles(env.MARIMOHUB_COMPUTE_PROFILES);
 	parseComputeProfileOverride(env.MARIMOHUB_COMPUTE_PROFILE_OVERRIDE);
 	const profileNotice = unsupportedBackendNotice('cloudflare', computeProfiles);
@@ -130,21 +153,11 @@ export function buildDeps(
 	}
 
 	// Without a sandbox hostname, quick tunnels give each kernel a random URL.
-	const appHost = new URL(request.url).hostname;
 	const sandboxHostname = env.SANDBOX_HOSTNAME?.trim()
 		? normalizeHostname(env.SANDBOX_HOSTNAME)
 		: undefined;
-	const useTunnel = !sandboxHostname;
-	if (sandboxHostname && hostsOverlap(sandboxHostname, appHost)) {
-		throw new Error(
-			`SANDBOX_HOSTNAME (${sandboxHostname}) shares an origin/parent domain with the app host (${appHost}). ` +
-				'Use a different sandbox hostname that is not a parent or subdomain of the app hostname.',
-		);
-	}
 
-	// Managed AI: front an OpenAI-compatible upstream so notebooks get the AI
-	// assistant with no user key. Enabled only when all four secrets are set; the
-	// real upstream key stays here and is never injected into a sandbox.
+	// The upstream API key stays in the Worker, never in a sandbox.
 	const ai: ApiDeps['ai'] =
 		env.AI_UPSTREAM_BASE_URL && env.AI_UPSTREAM_API_KEY && env.AI_MODEL && env.AI_SESSION_SECRET
 			? {
@@ -156,32 +169,26 @@ export function buildDeps(
 				}
 			: undefined;
 
-	const backgroundWork = ctx ? backgroundWorkFrom((task) => ctx.waitUntil(task)) : undefined;
-	const services = createServices(bucket, undefined, { backgroundWork });
+	const integrationOptions = {
+		bucket,
+		registry: defaultRegistry(),
+		codec: secretCodec(env.SECRETS_KEK),
+	};
+
 	return {
-		theme: deploymentTheme(env),
+		theme: parseTheme(env),
 		backgroundWork,
 		teardownInline: true,
 		services,
 		bucket,
-		compute: new CloudflareSandboxProvider(env.SANDBOX, { useTunnel }),
+		compute,
 		// Personal access tokens (`Authorization: Bearer mhub_pat_…`) work on every
 		// deployment; other requests resolve through the adapter selected above.
 		authenticator: composeAuthenticators(services.tokens, authenticator),
 		ai,
-		// Secret-free integrations work without a KEK; secret fields require SECRETS_KEK.
-		// No `probe` — Workers lack the DNS hooks the guarded egress policy needs,
-		// so connection testing stays disabled here.
-		integrations: new ProjectIntegrationsStore({
-			bucket,
-			registry: defaultRegistry(),
-			codec: secretCodec(env.SECRETS_KEK),
-		}),
-		orgIntegrations: new OrgIntegrationsStore({
-			bucket,
-			registry: defaultRegistry(),
-			codec: secretCodec(env.SECRETS_KEK),
-		}),
+		// Secret fields require a KEK. Probes require DNS hooks unavailable in Workers.
+		integrations: new ProjectIntegrationsStore(integrationOptions),
+		orgIntegrations: new OrgIntegrationsStore(integrationOptions),
 		sandbox: {
 			appBaseUrl: env.MARIMOHUB_APP_BASE_URL?.trim() || undefined,
 			// Default: credential-less R2 binding mount (no endpoint/secrets) — the
@@ -221,16 +228,12 @@ export function buildDeps(
 			// logged-in user can edit notebooks. Set DEFAULT_ROLE=none to keep writes
 			// members-only. Project edit/delete always requires manager.
 			defaultRole: parseDefaultRole(env.DEFAULT_ROLE),
-			// Comma-separated user ids/emails granted implicit admin on every project.
-			// Read under the documented, config-package name so the reference deployment
-			// honors what docs/configuration.md advertises.
+			// These user IDs and emails have admin access to every project.
 			superAdmins: env.MARIMOHUB_SUPER_ADMINS?.split(',')
 				.map((s) => s.trim())
 				.filter(Boolean),
 		},
-		// Deployment metadata for GET /api/v1/version (UI footer). On Workers there's no
-		// Docker image to report (image/sandboxImage stay null → hidden), but the
-		// resolved backends are known from this wiring.
+		// Workers have no deployment image to report in the UI footer.
 		version: {
 			version: 'dev',
 			backends: { storage: 'r2', compute: 'cloudflare', auth: env.AUTH_MODE ?? 'unset' },
@@ -240,12 +243,10 @@ export function buildDeps(
 
 export default {
 	fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response> {
-		// `buildDeps` fails closed on misconfiguration (e.g. AUTH_MODE/SANDBOX_HOSTNAME).
-		// Surface a readable 500 instead of an opaque Workers error so the operator can
-		// see what to fix in the deployment vars.
+		// Report configuration failures with the binding name for operators.
 		let api: ReturnType<typeof createApi>;
 		try {
-			api = createApi(buildDeps(request, env, ctx));
+			api = deploymentApi(buildDeps(request, env));
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			return new Response(
@@ -253,102 +254,102 @@ export default {
 				{ status: 500, headers: { 'content-type': 'application/json' } },
 			);
 		}
-		return api.fetch(request, env, ctx);
+		return executionContext.run(ctx, () => api.fetch(request, env, ctx));
 	},
-	async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-		const bucket = new R2BucketAdapter(env.NOTEBOOKS_BUCKET);
-		const {
-			sessions,
-			maintenance,
-			projects,
-			notebooks,
-			proposals,
-			idempotency,
-			jobRuns,
-			hostRetries,
-		} = createServices(bucket);
-		const compute = new CloudflareSandboxProvider(env.SANDBOX);
+	scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+		return executionContext.run(ctx, () => runScheduled(env, ctx));
+	},
+};
 
-		// The Workers scheduled trigger is already a platform singleton; the lease
-		// is belt-and-suspenders, matching the Node deployment's contract.
-		const lock = new MaintenanceLock(bucket);
-		if (await lock.acquire('cloudflare-scheduled')) {
-			try {
-				await sweepAppPools({
-					bucket,
-					compute,
-					services: createServices(bucket),
-					policy: {
-						appPool: parseAppPoolPolicy(env),
-					},
-					sandbox: {
-						workdir: env.SANDBOX_WORKDIR ?? '/workspace',
-						persistWorkspace: env.PERSIST_WORKSPACE === 'workspace' ? 'workspace' : 'source',
-					},
-				});
-				await sessions.expireStale();
-				// Reconcile still reclaims terminal sessions from their records. The Cloudflare
-				// adapter omits listActive() and connectExisting(), so orphan reaping is skipped
-				// and sessions that may need a save wait for an admin discard.
-				const reconciler = new ReconciliationService(
-					sessions,
-					notebooks,
-					compute,
-					bucket,
-					env.PERSIST_WORKSPACE === 'workspace' ? 'workspace' : 'source',
-					undefined,
-					jobRuns,
-					{ automaticThumbnails: env.MARIMOHUB_AUTOMATIC_THUMBNAILS !== 'false' },
-				);
-				await reconciler.reconcile();
-				// Reclaims that outlive their deadline keep running; keep the isolate alive for them.
-				ctx.waitUntil(reconciler.drain());
-				await sessions.reapTerminated();
-				await maintenance.expireSnapshots();
-				await maintenance.pruneEvents();
-				await idempotency.prune();
-				await hostRetries.compactExpired();
-				await proposals.pruneExpiredPayloads();
-				await projects.claimPendingInvites();
-			} finally {
-				await lock.release('cloudflare-scheduled');
-			}
-		}
+async function runScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
+	const { bucket, services, compute } = deploymentResources(env);
+	const {
+		sessions,
+		maintenance,
+		projects,
+		notebooks,
+		proposals,
+		idempotency,
+		jobRuns,
+		hostRetries,
+	} = services;
 
-		// Job scheduler tick, under its own lease. Granularity is the platform cron
-		// (5 minutes), so sub-5-minute schedules are Node-only; runs execute inside
-		// this invocation via waitUntil, bounded by the Workers wall-clock limit —
-		// the watchdog reclaims anything that outlives it.
-		if (!parseJobsToggle(env.MARIMOHUB_JOBS)) return;
-		const jobsLock = new MaintenanceLock(bucket, paths.jobSchedulerLock);
-		if (!(await jobsLock.acquire('cloudflare-scheduled'))) return;
+	// The lease prevents overlapping maintenance from different invocations.
+	const lock = new MaintenanceLock(bucket);
+	if (await lock.acquire('cloudflare-scheduled')) {
 		try {
-			const deps = buildDeps(new Request('https://scheduled.invalid/'), env, ctx);
-			const scheduler = new JobScheduler({
-				catalog: deps.services.catalog,
-				jobs: deps.services.jobs,
-				runs: deps.services.jobRuns,
-				runner: new JobRunner({
-					bucket,
-					compute,
-					notebooks: deps.services.notebooks,
-					projects: deps.services.projects,
-					jobs: deps.services.jobs,
-					runs: deps.services.jobRuns,
-					sandbox: { bucket: deps.sandbox.bucket, workdir: deps.sandbox.workdir },
-					resolveSessionEnv: (context) => resolveJobSandboxEnv(deps, context),
-				}),
+			await sweepAppPools({
+				bucket,
+				compute,
+				services,
+				policy: {
+					appPool: parseAppPoolPolicy(env),
+				},
+				sandbox: {
+					workdir: env.SANDBOX_WORKDIR ?? '/workspace',
+					persistWorkspace: env.PERSIST_WORKSPACE === 'workspace' ? 'workspace' : 'source',
+				},
+			});
+			await sessions.expireStale();
+			// Reconcile still reclaims terminal sessions from their records. The Cloudflare
+			// adapter omits listActive() and connectExisting(), so orphan reaping is skipped
+			// and sessions that may need a save wait for an admin discard.
+			const reconciler = new ReconciliationService(
+				sessions,
+				notebooks,
+				compute,
+				bucket,
+				env.PERSIST_WORKSPACE === 'workspace' ? 'workspace' : 'source',
+				undefined,
+				jobRuns,
+				{ automaticThumbnails: env.MARIMOHUB_AUTOMATIC_THUMBNAILS !== 'false' },
+			);
+			await reconciler.reconcile();
+			// Reclaims that outlive their deadline keep running; keep the isolate alive for them.
+			ctx.waitUntil(reconciler.drain());
+			await sessions.reapTerminated();
+			await maintenance.expireSnapshots();
+			await maintenance.pruneEvents();
+			await idempotency.prune();
+			await hostRetries.compactExpired();
+			await proposals.pruneExpiredPayloads();
+			await projects.claimPendingInvites();
+		} finally {
+			await lock.release('cloudflare-scheduled');
+		}
+	}
+
+	// Jobs use a separate lease and the configured five-minute cron interval.
+	// waitUntil retains active runs until the invocation limit. The watchdog reclaims unfinished runs.
+	if (!parseJobsToggle(env.MARIMOHUB_JOBS)) return;
+	const jobsLock = new MaintenanceLock(bucket, paths.jobSchedulerLock);
+	if (!(await jobsLock.acquire('cloudflare-scheduled'))) return;
+	try {
+		const deps = deploymentDeps(env);
+		const scheduler = new JobScheduler({
+			catalog: deps.services.catalog,
+			jobs: deps.services.jobs,
+			runs: deps.services.jobRuns,
+			runner: new JobRunner({
+				bucket,
 				compute,
 				notebooks: deps.services.notebooks,
 				projects: deps.services.projects,
-				events: deps.services.events,
-				config: DEFAULT_JOBS_CONFIG,
-			});
-			await scheduler.tick();
-			ctx.waitUntil(scheduler.drain());
-			await scheduler.prune(DEFAULT_JOBS_CONFIG.runRetentionMs);
-		} finally {
-			await jobsLock.release('cloudflare-scheduled');
-		}
-	},
-};
+				jobs: deps.services.jobs,
+				runs: deps.services.jobRuns,
+				sandbox: { bucket: deps.sandbox.bucket, workdir: deps.sandbox.workdir },
+				resolveSessionEnv: (context) => resolveJobSandboxEnv(deps, context),
+			}),
+			compute,
+			notebooks: deps.services.notebooks,
+			projects: deps.services.projects,
+			events: deps.services.events,
+			config: DEFAULT_JOBS_CONFIG,
+		});
+		await scheduler.tick();
+		ctx.waitUntil(scheduler.drain());
+		await scheduler.prune(DEFAULT_JOBS_CONFIG.runRetentionMs);
+	} finally {
+		await jobsLock.release('cloudflare-scheduled');
+	}
+}
