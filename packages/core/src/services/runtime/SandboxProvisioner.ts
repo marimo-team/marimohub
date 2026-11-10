@@ -257,11 +257,7 @@ export interface ProvisionOptions {
 	 */
 	workdir?: string;
 	/**
-	 * Optional base URL marimo loads its frontend assets from (passed as
-	 * `--asset-url`). Lets the kernel serve its UI from a CDN instead of bundling
-	 * assets in the sandbox image — e.g.
-	 * `https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist`.
-	 * Config: MARIMOHUB_COMPUTE_ASSET_URL. Omit to use the image's bundled assets.
+	 * Shared asset URL or marimo's `hub` key; undefined uses bundled sandbox assets.
 	 */
 	assetUrl?: string;
 	notebookBridge?: NotebookBridgeRuntime;

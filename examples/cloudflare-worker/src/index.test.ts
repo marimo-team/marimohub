@@ -99,6 +99,28 @@ it('registers core audits with waitUntil while awaiting session teardown', async
 });
 
 describe('Cloudflare Worker configuration', () => {
+	it.each([
+		[undefined, 'hub'],
+		['hub', 'hub'],
+		[' hub ', 'hub'],
+		['', undefined],
+		[' \t\r\n', undefined],
+		['false', undefined],
+		[' FaLsE ', undefined],
+		[
+			' https://cdn.example.com/Assets/{version}?fallback=false&Key=AbC ',
+			'https://cdn.example.com/Assets/{version}?fallback=false&Key=AbC',
+		],
+	])('resolves compute asset URL %j to %j', (value, expected) => {
+		const env: Env = {
+			AUTH_MODE: 'dev',
+			NOTEBOOKS_BUCKET: new MemoryBucket() as never,
+			SANDBOX: {} as never,
+			MARIMOHUB_COMPUTE_ASSET_URL: value,
+		};
+		expect(buildDeps(new Request('https://hub.example.com'), env).sandbox.assetUrl).toBe(expected);
+	});
+
 	it('supports disabling automatic thumbnails while keeping uploads available', () => {
 		const deps = buildDeps(new Request('https://hub.example.com'), {
 			AUTH_MODE: 'dev',

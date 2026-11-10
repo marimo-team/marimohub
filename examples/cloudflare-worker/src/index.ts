@@ -43,6 +43,7 @@ import {
 } from '@marimo-hub/config/compute-profiles';
 import { R2BucketAdapter } from '@marimo-hub/storage-r2';
 import { parseSandboxAuth } from '@marimo-hub/config/sandbox-auth';
+import { parseSandboxAssetUrl } from '@marimo-hub/config/sandbox-assets';
 import { notebookBridgeRuntime } from '@marimo-hub/notebook-bridge/runtime';
 
 // Re-export the Sandbox Durable Object so wrangler can discover it, and
@@ -201,6 +202,7 @@ export function buildDeps(
 			hostname: sandboxHostname ?? '',
 			auth: parseSandboxAuth(env.MARIMOHUB_SANDBOX_AUTH),
 			workdir: env.SANDBOX_WORKDIR || '/workspace',
+			assetUrl: parseSandboxAssetUrl(env.MARIMOHUB_COMPUTE_ASSET_URL),
 			notebookBridge,
 			computeProfiles: [],
 			computeProfileOverride: 'none',

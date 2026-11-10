@@ -2384,21 +2384,34 @@ describe('SandboxProvisioner', () => {
 			expect(result.counters.execs).toBe(calls.exec.length - claimExecs);
 		});
 
-		it('passes --asset-url when assetUrl is set', async () => {
+		it.each(['hub', 'https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist'])(
+			'passes --asset-url=%s to the sandbox',
+			async (assetUrl) => {
+				const { instance, calls } = makeFakeSandbox();
+				const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+				await provisioner.provision({
+					...startupOptions,
+					assetUrl,
+				});
+
+				expect(calls.startProcess[0].cmd).toContain(`--asset-url='${assetUrl}'`);
+			},
+		);
+
+		it('cleans up a failed hub asset launch without retrying with bundled assets', async () => {
 			const { instance, calls } = makeFakeSandbox();
-			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
-			const assetUrl = 'https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist';
-
-			await provisioner.provision({
-				sandboxId,
-				projectId,
-				notebookId,
-				hostname: 'localhost',
-				bucket: bucketConfig,
-				assetUrl,
-			});
-
-			expect(calls.startProcess[0].cmd).toContain(`--asset-url='${assetUrl}'`);
+			const failure = new Error('marimo launch failed');
+			const start = vi.spyOn(instance, 'startProcess').mockRejectedValue(failure);
+			await expect(
+				new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					...startupOptions,
+					assetUrl: 'hub',
+				}),
+			).rejects.toMatchObject({ cause: failure });
+			expect(start).toHaveBeenCalledOnce();
+			expect(start.mock.calls[0]?.[0]).toContain("--asset-url='hub'");
+			expect(calls.destroy).toBe(1);
 		});
 
 		it('gives the remaining startup timeout to the kernel port wait', async () => {

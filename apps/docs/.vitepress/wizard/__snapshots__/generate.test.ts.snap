@@ -12,7 +12,7 @@ MARIMOHUB_COMPUTE_BACKEND=kubernetes
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE=marimo-kernels
 MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE=https://{id}.{host}
@@ -60,7 +60,7 @@ exports[`config -> code generators > azure + kubernetes + oidc > compose 1`] = `
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE: marimo-kernels
       MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: https://{id}.{host}
@@ -97,7 +97,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE: marimo-kernels
   MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: https://{id}.{host}
@@ -207,7 +207,7 @@ MARIMOHUB_COMPUTE_BACKEND=modal
 MARIMOHUB_COMPUTE_IMAGE=_replace_me_  # e.g. ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=_replace_me_  # required, secret
@@ -252,7 +252,7 @@ exports[`config -> code generators > default-prod (s3 + modal + oidc) > compose 
       MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
       MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
@@ -285,7 +285,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT: notebooks
   MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
@@ -371,7 +371,7 @@ MARIMOHUB_COMPUTE_BACKEND=docker
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_DOCKER_HOST=localhost
 MARIMOHUB_COMPUTE_DOCKER_BIND_HOST=127.0.0.1
@@ -409,7 +409,7 @@ exports[`config -> code generators > fs + docker + oidc (single-box) > compose 1
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_DOCKER_HOST: localhost
       MARIMOHUB_COMPUTE_DOCKER_BIND_HOST: 127.0.0.1
@@ -437,7 +437,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_COMPUTE_DOCKER_HOST: localhost
   MARIMOHUB_COMPUTE_DOCKER_BIND_HOST: 127.0.0.1
@@ -516,7 +516,7 @@ MARIMOHUB_COMPUTE_BACKEND=podman
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_PODMAN_HOST=localhost
 MARIMOHUB_COMPUTE_PODMAN_BIND_HOST=127.0.0.1
@@ -554,7 +554,7 @@ exports[`config -> code generators > fs + podman + oidc > compose 1`] = `
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_PODMAN_HOST: localhost
       MARIMOHUB_COMPUTE_PODMAN_BIND_HOST: 127.0.0.1
@@ -582,7 +582,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_COMPUTE_PODMAN_HOST: localhost
   MARIMOHUB_COMPUTE_PODMAN_BIND_HOST: 127.0.0.1
@@ -665,7 +665,7 @@ MARIMOHUB_COMPUTE_BACKEND=kubernetes
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE=marimo-kernels
 MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE=https://{id}.{host}
@@ -714,7 +714,7 @@ exports[`config -> code generators > gcs + kubernetes + oidc, persist workspace 
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE: marimo-kernels
       MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: https://{id}.{host}
@@ -751,7 +751,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE: marimo-kernels
   MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: https://{id}.{host}
@@ -850,7 +850,7 @@ MARIMOHUB_COMPUTE_BACKEND=local
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_LOCAL_ROOT=/var/lib/marimohub/sandboxes
 MARIMOHUB_COMPUTE_LOCAL_HOST=localhost
@@ -884,7 +884,7 @@ exports[`config -> code generators > memory + local + dev (all-local) > compose 
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_LOCAL_ROOT: /var/lib/marimohub/sandboxes
       MARIMOHUB_COMPUTE_LOCAL_HOST: localhost
@@ -908,7 +908,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_COMPUTE_LOCAL_ROOT: /var/lib/marimohub/sandboxes
   MARIMOHUB_COMPUTE_LOCAL_HOST: localhost
@@ -983,7 +983,7 @@ MARIMOHUB_COMPUTE_BACKEND=coreweave
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/acme/marimo-sandbox:v1
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_COREWEAVE_API_KEY=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL=
@@ -1037,7 +1037,7 @@ exports[`config -> code generators > s3 + coreweave + oidc, custom image > compo
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/acme/marimo-sandbox:v1
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: _replace_me_
       MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL: ""
@@ -1079,7 +1079,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/acme/marimo-sandbox:v1
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL: ""
   MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE: auto
@@ -1179,7 +1179,7 @@ MARIMOHUB_COMPUTE_BACKEND=docker
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_DOCKER_HOST=localhost
 MARIMOHUB_COMPUTE_DOCKER_BIND_HOST=127.0.0.1
@@ -1218,7 +1218,7 @@ exports[`config -> code generators > s3 + docker + dev > compose 1`] = `
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_DOCKER_HOST: localhost
       MARIMOHUB_COMPUTE_DOCKER_BIND_HOST: 127.0.0.1
@@ -1245,7 +1245,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_COMPUTE_DOCKER_HOST: localhost
   MARIMOHUB_COMPUTE_DOCKER_BIND_HOST: 127.0.0.1
@@ -1328,7 +1328,7 @@ MARIMOHUB_COMPUTE_BACKEND=docker
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_DOCKER_HOST=localhost
 MARIMOHUB_COMPUTE_DOCKER_BIND_HOST=127.0.0.1
@@ -1365,7 +1365,7 @@ exports[`config -> code generators > s3 + docker + proxy-header > compose 1`] = 
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_DOCKER_HOST: localhost
       MARIMOHUB_COMPUTE_DOCKER_BIND_HOST: 127.0.0.1
@@ -1390,7 +1390,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_COMPUTE_DOCKER_HOST: localhost
   MARIMOHUB_COMPUTE_DOCKER_BIND_HOST: 127.0.0.1
@@ -1553,7 +1553,7 @@ MARIMOHUB_COMPUTE_BACKEND=e2b
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_E2B_API_KEY=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_E2B_TEMPLATE=marimo
@@ -1599,7 +1599,7 @@ exports[`config -> code generators > s3 + e2b + oidc > compose 1`] = `
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_E2B_API_KEY: _replace_me_
       MARIMOHUB_COMPUTE_E2B_TEMPLATE: marimo
@@ -1633,7 +1633,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_COMPUTE_E2B_TEMPLATE: marimo
   MARIMOHUB_COMPUTE_E2B_DOMAIN: ""
@@ -1724,7 +1724,7 @@ MARIMOHUB_COMPUTE_BACKEND=modal
 MARIMOHUB_COMPUTE_IMAGE=_replace_me_  # e.g. ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=_replace_me_  # required, secret
@@ -1778,7 +1778,7 @@ exports[`config -> code generators > s3 + modal + oidc, bedrock ai > compose 1`]
       MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
       MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
@@ -1820,7 +1820,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT: notebooks
   MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
@@ -1933,7 +1933,7 @@ MARIMOHUB_COMPUTE_BACKEND=modal
 MARIMOHUB_COMPUTE_IMAGE=_replace_me_  # e.g. ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=_replace_me_  # required, secret
@@ -1989,7 +1989,7 @@ exports[`config -> code generators > s3 + modal + oidc, managed ai > compose 1`]
       MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
       MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
@@ -2033,7 +2033,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT: notebooks
   MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
@@ -2144,7 +2144,7 @@ MARIMOHUB_COMPUTE_BACKEND=modal
 MARIMOHUB_COMPUTE_IMAGE=_replace_me_  # e.g. ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=_replace_me_  # required, secret
@@ -2189,7 +2189,7 @@ exports[`config -> code generators > s3 + modal + oidc, value overrides > compos
       MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
       MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
@@ -2222,7 +2222,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT: notebooks
   MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
@@ -2314,7 +2314,7 @@ MARIMOHUB_COMPUTE_BACKEND=none
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 
 # --- Auth ---
@@ -2350,7 +2350,7 @@ exports[`config -> code generators > s3 + none + dev > compose 1`] = `
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_AUTH_BACKEND: dev
       MARIMOHUB_AUTH_DEV_USER_ID: user
@@ -2374,7 +2374,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_AUTH_BACKEND: dev
   MARIMOHUB_AUTH_DEV_USER_ID: user
@@ -2455,7 +2455,7 @@ MARIMOHUB_COMPUTE_BACKEND=wandb
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
-MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_ASSET_URL=hub
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_WANDB_API_KEY=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_WANDB_ENTITY=my-team
@@ -2502,7 +2502,7 @@ exports[`config -> code generators > s3 + wandb + oidc > compose 1`] = `
       MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
-      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_ASSET_URL: hub
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_WANDB_API_KEY: _replace_me_
       MARIMOHUB_COMPUTE_WANDB_ENTITY: my-team
@@ -2537,7 +2537,7 @@ config:
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
-  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_ASSET_URL: hub
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
   MARIMOHUB_COMPUTE_WANDB_ENTITY: my-team
   MARIMOHUB_COMPUTE_WANDB_PROJECT: sandbox
