@@ -39,6 +39,7 @@ import {
 	sleep,
 	BadRequestError,
 	ConflictError,
+	PreconditionFailedError,
 	WarmPoolClaimExpiredError,
 	createKernelAuthToken,
 	createSandboxId,
@@ -1678,7 +1679,8 @@ async function startNotebookSessionOnce(
 			try {
 				return await admitApp();
 			} catch (error) {
-				if (!(error instanceof ConflictError)) throw error;
+				if (!(error instanceof ConflictError) || !(error.cause instanceof PreconditionFailedError))
+					throw error;
 				if (attempt === 3)
 					throw new UnavailableError('The app is busy. Retry shortly.', { cause: error });
 				await sleep(Math.floor(Math.random() * Math.min(2000, 250 * 2 ** attempt)));

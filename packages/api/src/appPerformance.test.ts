@@ -416,6 +416,77 @@ describe('app operation budgets', () => {
 		},
 	);
 
+	it.each([2, 3])(
+		'preserves the stale-version conflict at source check %s',
+		async (sourceCheck) => {
+			const f = await fixture();
+			vi.spyOn(Math, 'random').mockReturnValue(0);
+			const admit = vi.spyOn(AppPoolService.prototype, 'admit');
+			const sourceKey = paths.project(f.project.id).notebook(f.notebook.id).source;
+			const get = f.bucket.get.bind(f.bucket);
+			let reads = 0;
+			vi.spyOn(f.bucket, 'get').mockImplementation(async (key) => {
+				if (key === sourceKey && ++reads === sourceCheck) {
+					await f.services.notebooks.commitSession(
+						f.project.id,
+						f.notebook.id,
+						{ code: 'published concurrently' },
+						ACTOR,
+					);
+				}
+				return get(key);
+			});
+			const response = await f.client.request(
+				'POST',
+				`/projects/${f.project.id}/notebooks/${f.notebook.id}/sessions`,
+				{ mode: 'app', app_visit_id: 'stale-version' },
+			);
+			expect(response.status).toBe(409);
+			expect(await response.json()).toMatchObject({
+				error: { code: 'CONFLICT', message: 'The app version changed. Retry shortly.' },
+			});
+			expect(admit).toHaveBeenCalledOnce();
+			const pool = await new AppPoolService(f.bucket, f.services.sessions).store.read(
+				f.project.id,
+				f.notebook.id,
+			);
+			expect(pool!.assignments.some((assignment) => assignment.visit_id === 'stale-version')).toBe(
+				false,
+			);
+		},
+	);
+
+	it.each([
+		{ conflicts: 12, attempts: 2, status: 200 },
+		{ conflicts: 48, attempts: 4, status: 503 },
+	])(
+		'retries exhausted CAS admissions ($conflicts conflicts)',
+		async ({ conflicts, attempts, status }) => {
+			const f = await fixture();
+			vi.spyOn(Math, 'random').mockReturnValue(0);
+			const admit = vi.spyOn(AppPoolService.prototype, 'admit');
+			f.bucket.forcedConflicts.set(f.poolKey, conflicts);
+			const response = await f.client.request(
+				'POST',
+				`/projects/${f.project.id}/notebooks/${f.notebook.id}/sessions`,
+				{ mode: 'app', app_visit_id: 'cas-retry' },
+			);
+			expect(response.status).toBe(status);
+			expect(admit).toHaveBeenCalledTimes(attempts);
+			expect(admit.mock.calls.map(([input]) => input.visitId)).toEqual(
+				Array(attempts).fill('cas-retry'),
+			);
+			if (status === 200) {
+				expect(await expectOk(response)).toMatchObject({
+					session_id: f.admission.session_id,
+					app_assignment: { visit_id: 'cas-retry' },
+				});
+			} else {
+				expect(await response.json()).toMatchObject({ error: { code: 'SERVICE_UNAVAILABLE' } });
+			}
+		},
+	);
+
 	it('reclaims a crashed startup reservation after the startup timeout and margin', async () => {
 		const f = await fixture();
 		const pool = new AppPoolService(f.bucket, f.services.sessions, undefined, undefined, () =>
