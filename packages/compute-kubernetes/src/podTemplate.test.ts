@@ -423,17 +423,25 @@ describe('validatePodTemplate', () => {
 		expect(() => validatePodTemplate({ metadata: { [field]: 'override' } })).toThrow(/metadata/);
 	});
 
-	it.each([MANAGED_BY_LABEL, SANDBOX_NAME_LABEL])('rejects reserved label %s', (label) => {
+	it.each([
+		MANAGED_BY_LABEL,
+		SANDBOX_NAME_LABEL,
+		'marimohub.io/project-id',
+		'marimohub.io/notebook-id',
+	])('rejects reserved label %s', (label) => {
 		expect(() => validatePodTemplate({ metadata: { labels: { [label]: 'override' } } })).toThrow(
-			/management or selector/,
+			/reserved management, selector, or notebook identity/,
 		);
 	});
 
-	it('rejects the sandbox identity annotation', () => {
-		expect(() =>
-			validatePodTemplate({ metadata: { annotations: { [SANDBOX_ID_ANNOTATION]: 'override' } } }),
-		).toThrow(/sandbox identity/);
-	});
+	it.each([SANDBOX_ID_ANNOTATION, 'marimohub.io/notebook-title'])(
+		'rejects the sandbox identity annotation %s',
+		(annotation) => {
+			expect(() =>
+				validatePodTemplate({ metadata: { annotations: { [annotation]: 'override' } } }),
+			).toThrow(/sandbox or notebook identity/);
+		},
+	);
 
 	it.each([
 		[

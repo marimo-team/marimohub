@@ -8,6 +8,7 @@ export { validateIngressAnnotations, parseIngressAnnotations } from '@marimo-hub
 import type { Millis } from '@marimo-hub/core/duration';
 import type { SandboxExposureMode } from '@marimo-hub/core/ports/sandbox-exposure';
 import type { SandboxId } from '@marimo-hub/core/ids';
+import type { SandboxNotebook } from '@marimo-hub/core/ports/sandbox';
 import type { KubernetesPodTemplate } from './podTemplate';
 
 /** Label marking resources THIS deployment owns (selection + discovery/cleanup). */
@@ -16,6 +17,9 @@ export const MANAGED_BY_VALUE = 'marimohub';
 /** Annotation that carries the verbatim `SandboxId` for `listActive()` mapping. */
 export const SANDBOX_ID_ANNOTATION = 'marimohub.io/sandbox-id';
 export const SANDBOX_NAME_LABEL = 'marimohub.io/sandbox-name';
+export const NOTEBOOK_TITLE_ANNOTATION = 'marimohub.io/notebook-title';
+export const NOTEBOOK_ID_LABEL = 'marimohub.io/notebook-id';
+export const PROJECT_ID_LABEL = 'marimohub.io/project-id';
 export const KERNEL_CONTAINER_NAME = 'marimo';
 
 /** `imagePullPolicy` for the kernel container. See `defaultImagePullPolicy`. */
@@ -185,6 +189,7 @@ export interface K8sExecResult {
 
 /** Everything `ensure()` needs to materialise a session's Pod/Service and optional Ingress. */
 export interface EnsureSandboxOptions {
+	notebook?: SandboxNotebook;
 	podTemplate?: KubernetesPodTemplate;
 	/** Deterministic resource name (`mh-<sanitized id>`); also the Pod name for exec. */
 	name: string;

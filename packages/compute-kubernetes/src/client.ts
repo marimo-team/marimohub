@@ -28,6 +28,9 @@ import {
 	KERNEL_CONTAINER_NAME,
 	MANAGED_BY_LABEL,
 	MANAGED_BY_VALUE,
+	NOTEBOOK_ID_LABEL,
+	NOTEBOOK_TITLE_ANNOTATION,
+	PROJECT_ID_LABEL,
 	portName,
 	resolveIngressTlsMode,
 	SANDBOX_ID_ANNOTATION,
@@ -104,6 +107,27 @@ export function podManifest(o: EnsureSandboxOptions): V1Pod {
 	const template = o.podTemplate === undefined ? undefined : validatePodTemplate(o.podTemplate);
 	const spec = template?.spec;
 	const kernel = spec?.containers?.find((c) => c.name === KERNEL_CONTAINER_NAME);
+	const extraLabels = { ...o.extraLabels };
+	delete extraLabels[PROJECT_ID_LABEL];
+	delete extraLabels[NOTEBOOK_ID_LABEL];
+	const annotations: Record<string, string> = {
+		...template?.metadata?.annotations,
+		[SANDBOX_ID_ANNOTATION]: String(o.sandboxId),
+	};
+	validateIngressAnnotations(annotations);
+	if (o.notebook) {
+		// Optional diagnostics must not make an otherwise valid Pod exceed Kubernetes' byte limit.
+		const size = Object.entries(annotations).reduce(
+			(total, [key, value]) => total + Buffer.byteLength(key) + Buffer.byteLength(value),
+			0,
+		);
+		if (
+			size + Buffer.byteLength(NOTEBOOK_TITLE_ANNOTATION) + Buffer.byteLength(o.notebook.title) <=
+			256 * 1024
+		) {
+			annotations[NOTEBOOK_TITLE_ANNOTATION] = o.notebook.title;
+		}
+	}
 	return {
 		...(template?.apiVersion ? { apiVersion: template.apiVersion } : {}),
 		...(template?.kind ? { kind: template.kind } : {}),
@@ -112,14 +136,17 @@ export function podManifest(o: EnsureSandboxOptions): V1Pod {
 			namespace: o.namespace,
 			labels: {
 				...template?.metadata?.labels,
-				...o.extraLabels,
+				...extraLabels,
+				...(o.notebook
+					? {
+							[PROJECT_ID_LABEL]: o.notebook.projectId,
+							[NOTEBOOK_ID_LABEL]: o.notebook.notebookId,
+						}
+					: {}),
 				[MANAGED_BY_LABEL]: MANAGED_BY_VALUE,
 				[SANDBOX_NAME_LABEL]: o.name,
 			},
-			annotations: validateIngressAnnotations({
-				...template?.metadata?.annotations,
-				[SANDBOX_ID_ANNOTATION]: String(o.sandboxId),
-			}),
+			annotations,
 		},
 		spec: {
 			...spec,

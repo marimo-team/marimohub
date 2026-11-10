@@ -10,6 +10,9 @@ import { z } from 'zod';
 import {
 	KERNEL_CONTAINER_NAME,
 	MANAGED_BY_LABEL,
+	NOTEBOOK_ID_LABEL,
+	NOTEBOOK_TITLE_ANNOTATION,
+	PROJECT_ID_LABEL,
 	SANDBOX_ID_ANNOTATION,
 	SANDBOX_NAME_LABEL,
 	validateIngressAnnotations,
@@ -249,11 +252,21 @@ export function validatePodTemplate(value: unknown): KubernetesPodTemplate {
 	const labels = template.metadata?.labels ?? {};
 	validateLabels(labels);
 	validateIngressAnnotations(template.metadata?.annotations);
-	if (MANAGED_BY_LABEL in labels || SANDBOX_NAME_LABEL in labels) {
-		throw new Error('Pod template labels must not set MarimoHub management or selector labels');
+	if (
+		[MANAGED_BY_LABEL, SANDBOX_NAME_LABEL, NOTEBOOK_ID_LABEL, PROJECT_ID_LABEL].some(
+			(key) => key in labels,
+		)
+	) {
+		throw new Error(
+			'Pod template labels must not set reserved management, selector, or notebook identity labels',
+		);
 	}
-	if (SANDBOX_ID_ANNOTATION in (template.metadata?.annotations ?? {})) {
-		throw new Error('Pod template annotations must not set the MarimoHub sandbox identity');
+	if (
+		[SANDBOX_ID_ANNOTATION, NOTEBOOK_TITLE_ANNOTATION].some(
+			(key) => key in (template.metadata?.annotations ?? {}),
+		)
+	) {
+		throw new Error('Pod template annotations must not set sandbox or notebook identity');
 	}
 	const spec = template.spec;
 	const kernel = spec?.containers?.[0];

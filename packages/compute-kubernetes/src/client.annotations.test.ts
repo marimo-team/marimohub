@@ -1,9 +1,9 @@
 import { KubeConfig } from '@kubernetes/client-node';
-import { SandboxId } from '@marimo-hub/core/ids';
+import { NotebookId, ProjectId, SandboxId } from '@marimo-hub/core/ids';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createK8sClient, podManifest } from './client';
 import { validatePodTemplate } from './podTemplate';
-import { SANDBOX_ID_ANNOTATION } from './shared';
+import { NOTEBOOK_TITLE_ANNOTATION, SANDBOX_ID_ANNOTATION } from './shared';
 import type { EnsureSandboxOptions } from './shared';
 
 const options: EnsureSandboxOptions = {
@@ -12,6 +12,12 @@ const options: EnsureSandboxOptions = {
 	sandboxId: SandboxId.parse('sb-aaaaaaaaaaaaaaaa'),
 	image: 'runtime:v1',
 	ports: [{ port: 2718, host: '' }],
+};
+
+const notebook = {
+	projectId: ProjectId.parse('proj-aaaaaaaaaaaaaaaa'),
+	notebookId: NotebookId.parse('nb-aaaaaaaaaaaaaaaa'),
+	title: '',
 };
 
 function templateAtMergedLimit(character: string, extraBytes = 0) {
@@ -42,6 +48,51 @@ function templateAtMergedLimit(character: string, extraBytes = 0) {
 
 describe('merged Pod annotation size', () => {
 	afterEach(() => vi.restoreAllMocks());
+
+	it.each(['', 'a', 'é', '😀'])('retains title %j exactly at the merged byte limit', (title) => {
+		const podTemplate = templateAtMergedLimit(
+			'a',
+			-Buffer.byteLength(NOTEBOOK_TITLE_ANNOTATION) - Buffer.byteLength(title),
+		);
+		expect(
+			podManifest({ ...options, podTemplate, notebook: { ...notebook, title } }).metadata
+				?.annotations,
+		).toEqual({
+			...podTemplate.metadata.annotations,
+			[SANDBOX_ID_ANNOTATION]: options.sandboxId,
+			[NOTEBOOK_TITLE_ANNOTATION]: title,
+		});
+	});
+
+	it.each(['', 'a', 'é', '😀'])(
+		'omits title %j when it exceeds the budget by one byte',
+		(title) => {
+			const podTemplate = templateAtMergedLimit(
+				'a',
+				1 - Buffer.byteLength(NOTEBOOK_TITLE_ANNOTATION) - Buffer.byteLength(title),
+			);
+			const metadata = podManifest({
+				...options,
+				podTemplate,
+				notebook: { ...notebook, title },
+			}).metadata;
+			expect(metadata?.annotations).toEqual({
+				...podTemplate.metadata.annotations,
+				[SANDBOX_ID_ANNOTATION]: options.sandboxId,
+			});
+			expect(metadata?.labels).toMatchObject({
+				'marimohub.io/project-id': notebook.projectId,
+				'marimohub.io/notebook-id': notebook.notebookId,
+			});
+		},
+	);
+
+	it('omits an oversized Unicode title without a template', () => {
+		expect(
+			podManifest({ ...options, notebook: { ...notebook, title: '😀'.repeat(70_000) } }).metadata
+				?.annotations,
+		).toEqual({ [SANDBOX_ID_ANNOTATION]: options.sandboxId });
+	});
 
 	it.each(['a', 'é', '😀'])('accepts exactly 256 KiB including identity with %s values', (char) => {
 		const podTemplate = templateAtMergedLimit(char);

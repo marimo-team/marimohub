@@ -2606,6 +2606,22 @@ describe('Session routes', () => {
 		});
 	});
 
+	it.each(['edit', 'app'] as const)(
+		'carries the notebook identity into a new %s sandbox',
+		async (mode) => {
+			const title = `Example notebook — Δ measurements / ${'x'.repeat(70)}`;
+			await createServices(bucket).notebooks.updateNotebook(pid, nid, { title }, ACTOR);
+			const compute = makeFakeCompute();
+			const request = createTestApi({ bucket, userId: ACTOR, compute }).request;
+			await expectOk<ApiSession>(await request('POST', sessionsPath(), { mode }));
+			expect(compute.lastCreateOptions?.notebook).toEqual({
+				projectId: pid,
+				notebookId: nid,
+				title,
+			});
+		},
+	);
+
 	describe('base image resolution', () => {
 		function imageApi(compute: ReturnType<typeof makeFakeCompute>) {
 			return createTestApi({
@@ -2948,7 +2964,9 @@ describe('Session routes', () => {
 		expect(compute.createFromSnapshot).toHaveBeenCalledExactlyOnceWith(
 			expect.any(String),
 			'snap-old',
-			expect.anything(),
+			expect.objectContaining({
+				notebook: { projectId: pid, notebookId: nid, title: 'NB' },
+			}),
 		);
 		expect(data.compute_profile).toBe('small');
 		expect(data.compute_resources).toEqual({
