@@ -20,16 +20,24 @@ type ProjectInvolvement = {
 	inheritedAccess: ProjectId[];
 };
 
-function accessProjection(entry: SnapshotProjectEntry): SnapshotProjectEntry['access'] {
-	return entry.access_pending?.length ? undefined : entry.access;
+function accessProjection(
+	entry: SnapshotProjectEntry,
+	generation?: string,
+): SnapshotProjectEntry['access'] {
+	// Legacy writers cannot park access; only trust summaries from the opted-in deployment.
+	if (!generation || entry.access?.generation !== generation || entry.access_pending?.length) {
+		return undefined;
+	}
+	return entry.access;
 }
 
 export function projectedRole(
 	entry: SnapshotProjectEntry,
 	subject: AuthSubject,
 	policy?: AuthzPolicy,
+	accessGeneration?: string,
 ): Role | null | undefined {
-	const access = accessProjection(entry);
+	const access = accessProjection(entry, accessGeneration);
 	if (access === undefined) return undefined;
 	return effectiveRole(
 		{
@@ -69,7 +77,7 @@ function freeze(value: unknown): void {
 
 export class SnapshotCacheEntry {
 	readonly byProjectId: ReadonlyMap<ProjectId, SnapshotProjectEntry>;
-	private involvement?: ProjectInvolvement;
+	private readonly involvement = new Map<string | undefined, ProjectInvolvement>();
 
 	/** `json` must be the snapshot's exact serialization. */
 	constructor(
@@ -81,8 +89,12 @@ export class SnapshotCacheEntry {
 		this.byProjectId = projectsById(snapshot);
 	}
 
-	candidatesFor(subject: Subject, includeDefaultAccess = false): ReadonlySet<ProjectId> {
-		const index = (this.involvement ??= this.buildInvolvement());
+	candidatesFor(
+		subject: Subject,
+		includeDefaultAccess = false,
+		accessGeneration?: string,
+	): ReadonlySet<ProjectId> {
+		const index = this.involvementFor(accessGeneration);
 		return new Set([
 			...index.legacy,
 			...(includeDefaultAccess ? index.defaultAccess : []),
@@ -92,16 +104,29 @@ export class SnapshotCacheEntry {
 		]);
 	}
 
-	accessCandidatesFor(subject: Subject, hasDefaultRole: boolean): ReadonlySet<ProjectId> {
-		const index = (this.involvement ??= this.buildInvolvement());
+	accessCandidatesFor(
+		subject: Subject,
+		hasDefaultRole: boolean,
+		accessGeneration?: string,
+	): ReadonlySet<ProjectId> {
+		const index = this.involvementFor(accessGeneration);
 		return new Set([
-			...this.candidatesFor(subject, true),
+			...this.candidatesFor(subject, true, accessGeneration),
 			...index.indeterminateAccess,
 			...(hasDefaultRole ? index.inheritedAccess : []),
 		]);
 	}
 
-	private buildInvolvement(): ProjectInvolvement {
+	private involvementFor(accessGeneration?: string): ProjectInvolvement {
+		let index = this.involvement.get(accessGeneration);
+		if (!index) {
+			index = this.buildInvolvement(accessGeneration);
+			this.involvement.set(accessGeneration, index);
+		}
+		return index;
+	}
+
+	private buildInvolvement(accessGeneration?: string): ProjectInvolvement {
 		const index: ProjectInvolvement = {
 			userIds: new Map(),
 			emails: new Map(),
@@ -117,7 +142,7 @@ export class SnapshotCacheEntry {
 			map.set(key, entries);
 		};
 		for (const project of this.snapshot.projects) {
-			const access = accessProjection(project);
+			const access = accessProjection(project, accessGeneration);
 			if (access === undefined) {
 				index.indeterminateAccess.push(project.id);
 			}

@@ -4,7 +4,7 @@ import { memberRefMatchesSelector, memberRefMatchesSubject } from './identityMat
 import { ProjectMemberSchema } from './schema';
 import { paths } from './paths';
 import { ACTOR, makeProject, setupTestEnv, uid } from './testing';
-import { claimInviteRows } from './services/content/ProjectService';
+import { claimInviteRows, ProjectService } from './services/content/ProjectService';
 import { notificationRouter, resolveMemberRecipient } from './notifications';
 import type { CatalogService } from './services/catalog/CatalogService';
 
@@ -278,8 +278,16 @@ describe('group principals', () => {
 			role: 'app-user',
 		});
 	});
-	it('fails closed on unprojected group grants for directory access and private lists', async () => {
-		const { projects, catalog, bucket } = await setupTestEnv();
+	it('fails closed on unprojected group grants for directory access and trusted-summary lists', async () => {
+		const { catalog, bucket } = await setupTestEnv();
+		const projects = new ProjectService(
+			bucket,
+			catalog,
+			undefined,
+			undefined,
+			undefined,
+			'test-deployment',
+		);
 		const project = await projects.createProject({ name: 'Groups', description: '' }, ACTOR);
 		await bucket.put(
 			paths.project(project.id).meta,

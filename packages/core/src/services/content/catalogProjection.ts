@@ -1,5 +1,8 @@
 // Projection loaders reread metadata on every catalog CAS attempt.
-// Otherwise, an older metadata write can overwrite a newer projection.
+// Otherwise, an older metadata writer can overwrite a newer projection even
+// without a CAS conflict: the newer writer can publish before that first attempt.
+// A missing object means a hard delete won. Routine mutations leave the entry
+// unchanged; delete callers can still project their committed tombstone.
 import type { Bucket } from '../../ports/bucket';
 import type { NotebookId, ProjectId, SnapshotId } from '../../ids';
 import { paths } from '../../paths';
@@ -10,13 +13,15 @@ import { notebookCatalogPatch } from './notebookMeta';
 
 export interface SecurityLabelProjectionOptions {
 	/**
-	 * Only the label mutation can clear its pending marker.
-	 * Routine projections must preserve the marker to prevent stale authorization.
+	 * Label mutation completion and offline recovery can clear the pending marker.
+	 * Routine projections must preserve it: metadata can still hold pre-mutation
+	 * labels, and restoring those labels can retain a grant after a later crash.
 	 */
 	finalizeSecurityLabels?: true;
 }
 
 interface ProjectProjectionOptions extends SecurityLabelProjectionOptions {
+	accessGeneration?: string;
 	/** Clear only this mutation's marker. Other writers can still be active. */
 	finalizeAccess?: SnapshotId;
 }
@@ -73,7 +78,13 @@ export function projectCatalogPatch(
 	const defaultRole = project.default_role ?? 'inherit';
 	return {
 		access_pending: pending?.length ? pending : undefined,
-		access: pending?.length ? undefined : { members: project.members, default_role: defaultRole },
+		access: pending?.length
+			? undefined
+			: {
+					members: project.members,
+					default_role: defaultRole,
+					generation: options?.accessGeneration,
+				},
 		name: project.name,
 		description: project.description,
 		status: project.status,

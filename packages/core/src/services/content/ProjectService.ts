@@ -240,6 +240,7 @@ export class ProjectService {
 		private metrics: Metrics = noopMetrics,
 		private resolveIdentitiesByEmail: InviteIdentityResolver = async () => new Map(),
 		private deepLinks = new DeepLinkService(bucket, metrics),
+		private accessGeneration?: string,
 	) {
 		this.projectCache = new MetadataCache(bucket, METADATA_CACHE_MAX_ENTRIES);
 	}
@@ -270,6 +271,7 @@ export class ProjectService {
 				? snapshotEntry.accessCandidatesFor(
 						filter.subject,
 						subjectDefaultRole(filter.subject, filter.policy) !== null,
+						this.accessGeneration,
 					)
 				: undefined;
 		const matching = snapshot.projects
@@ -330,7 +332,7 @@ export class ProjectService {
 		},
 	): Promise<Role | null> {
 		if (isSuperAdmin(subject, policy?.superAdmins) || entry.owner === subject.id) return 'admin';
-		const role = projectedRole(entry, subject, policy);
+		const role = projectedRole(entry, subject, policy, this.accessGeneration);
 		if (role !== undefined) return role;
 		try {
 			return effectiveRole(await loadProject(entry.id), subject, policy);
@@ -347,7 +349,11 @@ export class ProjectService {
 		const snapshotEntry = await this.catalog.getCurrentSnapshotEntry();
 		const active = snapshotEntry.snapshot.projects.filter((entry) => entry.status !== 'deleted');
 		if (active.some((entry) => entry.owner === subject.id)) return false;
-		const candidates = snapshotEntry.accessCandidatesFor(subject, fallback !== null);
+		const candidates = snapshotEntry.accessCandidatesFor(
+			subject,
+			fallback !== null,
+			this.accessGeneration,
+		);
 		const relevant = active.filter((entry) => candidates.has(entry.id));
 		let foundAppRole = fallback === 'app-user';
 		for (let offset = 0; offset < relevant.length; offset += BUCKET_SCAN_CONCURRENCY) {
@@ -419,7 +425,9 @@ export class ProjectService {
 						projects: [
 							...snap.projects,
 							{
-								...projectCatalogPatch(project, project),
+								...projectCatalogPatch(project, project, {
+									accessGeneration: this.accessGeneration,
+								}),
 								id,
 								owner: actor,
 								created_at: now,
@@ -452,28 +460,45 @@ export class ProjectService {
 			accessMutation = await this.parkAccess(id, actor);
 		}
 
-		const updated = await mutateObject(
-			this.bucket,
-			key,
-			(raw) => parseStored(ProjectSchema, raw, key),
-			(current) => {
-				assertVersionMatch(current.updated_at, expectedVersion);
-				if (current.status === 'deleted') {
-					throw new NotFoundError(`Project ${id} not found`);
-				}
-				return {
-					...current,
-					name: name ?? current.name,
-					description: input.description ?? current.description,
-					tags: input.tags ?? current.tags,
-					default_role: input.default_role ?? current.default_role,
-					federation:
-						input.federation === undefined ? current.federation : (input.federation ?? undefined),
-					updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),
-				};
-			},
-			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
-		);
+		let updated: Project;
+		let writeMayHaveCommitted = false;
+		try {
+			updated = await mutateObject(
+				this.bucket,
+				key,
+				(raw) => parseStored(ProjectSchema, raw, key),
+				(current) => {
+					assertVersionMatch(current.updated_at, expectedVersion);
+					if (current.status === 'deleted') {
+						throw new NotFoundError(`Project ${id} not found`);
+					}
+					writeMayHaveCommitted = true;
+					return {
+						...current,
+						name: name ?? current.name,
+						description: input.description ?? current.description,
+						tags: input.tags ?? current.tags,
+						default_role: input.default_role ?? current.default_role,
+						federation:
+							input.federation === undefined ? current.federation : (input.federation ?? undefined),
+						updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),
+					};
+				},
+				{
+					notFound: () => new NotFoundError(`Project ${id} not found`),
+					onConflict: () => {
+						writeMayHaveCommitted = false;
+					},
+				},
+			);
+		} catch (error) {
+			// Only a confirmed CAS conflict rules out a commit after the callback returns.
+			// Storage failures can arrive after a write and must keep their marker.
+			if (accessMutation && !writeMayHaveCommitted) {
+				await this.unparkAccess(id, actor, accessMutation);
+			}
+			throw error;
+		}
 
 		await this.syncProjectEntry('project.update', actor, id, accessMutation);
 
@@ -557,7 +582,11 @@ export class ProjectService {
 			'project.security_labels',
 			actor,
 			id,
-			(entry) => loadProjectCatalogPatch(this.bucket, id, entry, { finalizeSecurityLabels: true }),
+			(entry) =>
+				loadProjectCatalogPatch(this.bucket, id, entry, {
+					finalizeSecurityLabels: true,
+					accessGeneration: this.accessGeneration,
+				}),
 			{
 				project_id: id,
 				previous_labels: previous,
@@ -584,7 +613,10 @@ export class ProjectService {
 				actor,
 				id,
 				(entry) =>
-					loadProjectCatalogPatch(this.bucket, id, entry, { finalizeSecurityLabels: true }),
+					loadProjectCatalogPatch(this.bucket, id, entry, {
+						finalizeSecurityLabels: true,
+						accessGeneration: this.accessGeneration,
+					}),
 				{ project_id: id },
 			);
 		} catch (err) {
@@ -744,6 +776,26 @@ export class ProjectService {
 		return mutation;
 	}
 
+	private async unparkAccess(id: ProjectId, actor: UserId, mutation: SnapshotId): Promise<void> {
+		try {
+			await this.catalog.updateProjectEntry('project.access.rollback', actor, id, async (entry) => {
+				const patch = await loadProjectCatalogPatch(this.bucket, id, entry, {
+					finalizeAccess: mutation,
+					accessGeneration: this.accessGeneration,
+				});
+				if (patch) return patch;
+				const pending = entry.access_pending?.filter((id) => id !== mutation);
+				return { access: undefined, access_pending: pending?.length ? pending : undefined };
+			});
+		} catch (error) {
+			logOperationalError(
+				'access_rollback_failed',
+				{ operation: 'project.access.rollback', project_id: id },
+				error,
+			);
+		}
+	}
+
 	private syncProjectEntry(
 		operation: string,
 		actor: UserId,
@@ -751,7 +803,10 @@ export class ProjectService {
 		accessMutation?: SnapshotId,
 	): Promise<Snapshot> {
 		return this.catalog.updateProjectEntry(operation, actor, id, (entry) =>
-			loadProjectCatalogPatch(this.bucket, id, entry, { finalizeAccess: accessMutation }),
+			loadProjectCatalogPatch(this.bucket, id, entry, {
+				finalizeAccess: accessMutation,
+				accessGeneration: this.accessGeneration,
+			}),
 		);
 	}
 
@@ -916,8 +971,9 @@ export class ProjectService {
 					actor,
 					id,
 					async (entry) =>
-						(await loadProjectCatalogPatch(this.bucket, id, entry)) ??
-						projectCatalogPatch(updated, entry),
+						(await loadProjectCatalogPatch(this.bucket, id, entry, {
+							accessGeneration: this.accessGeneration,
+						})) ?? projectCatalogPatch(updated, entry, { accessGeneration: this.accessGeneration }),
 				)
 			: null;
 

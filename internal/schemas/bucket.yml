@@ -4639,9 +4639,12 @@ components:
                       - editor
                       - viewer
                       - app-user
+                  generation:
+                    type: string
                 required:
                   - members
                   - default_role
+                additionalProperties: {}
               access_pending:
                 type: array
                 items:

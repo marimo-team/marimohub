@@ -8,13 +8,24 @@ import { CatalogService } from '../catalog/CatalogService';
 import { createProjectId } from '../../ids';
 import { PreconditionFailedError } from '../../errors';
 
+const ACCESS_GENERATION = 'test-deployment';
+
+function projectService(bucket: MemoryBucket, catalog = new CatalogService(bucket)) {
+	return new ProjectService(bucket, catalog, undefined, undefined, undefined, ACCESS_GENERATION);
+}
+
+async function setupListingEnv() {
+	const env = await setupTestEnv();
+	return { ...env, projects: projectService(env.bucket, env.catalog) };
+}
+
 function metadataReads(get: MockInstance<MemoryBucket['get']>) {
 	return get.mock.calls.filter(([key]) => key.endsWith('/project.json'));
 }
 
 describe('project listing operation counts', () => {
 	it('avoids metadata reads for stable roles across 200 projects', async () => {
-		const { bucket, projects, catalog } = await setupTestEnv();
+		const { bucket, projects, catalog } = await setupListingEnv();
 		const member = { id: uid('member'), email: 'member@example.com', groups: ['analysts'] };
 		const appUser = { id: uid('app-user'), email: 'apps@example.com' };
 		const visible: string[] = [];
@@ -68,7 +79,7 @@ describe('project access projection fencing', () => {
 	const subject = { id: uid('member'), email: 'member@example.com' };
 
 	async function pendingRevocation() {
-		const env = await setupTestEnv();
+		const env = await setupListingEnv();
 		const { projects, catalog } = env;
 		const project = await projects.createProject({ name: 'Shared', description: '' }, ACTOR);
 		await projects.addMember(project.id, { user_id: subject.id }, 'viewer', ACTOR);
@@ -87,7 +98,7 @@ describe('project access projection fencing', () => {
 	it.each(['membership', 'default'] as const)(
 		'does not change %s when parking fails',
 		async (kind) => {
-			const { bucket, projects, catalog } = await setupTestEnv();
+			const { bucket, projects, catalog } = await setupListingEnv();
 			const project = await projects.createProject({ name: 'Private', description: '' }, ACTOR);
 			vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(
 				new Error('catalog unavailable'),
@@ -104,10 +115,10 @@ describe('project access projection fencing', () => {
 	);
 
 	it('keeps other writers pending when a concurrent mutation finishes first', async () => {
-		const { bucket, projects, catalog } = await setupTestEnv();
+		const { bucket, projects, catalog } = await setupListingEnv();
 		const project = await projects.createProject({ name: 'Shared', description: '' }, ACTOR);
 		await projects.addMember(project.id, { user_id: subject.id }, 'manager', ACTOR);
-		const other = new ProjectService(bucket, new CatalogService(bucket));
+		const other = projectService(bucket);
 		const put = bucket.put.bind(bucket);
 		let raced = false;
 		vi.spyOn(bucket, 'put').mockImplementation(async (key, ...args) => {
@@ -139,7 +150,7 @@ describe('project access projection fencing', () => {
 		const [entry] = (await catalog.getCurrentSnapshot()).projects;
 		expect(entry.access).toBeUndefined();
 		expect(entry.access_pending).toHaveLength(1);
-		const other = new ProjectService(bucket, new CatalogService(bucket));
+		const other = projectService(bucket);
 		const get = vi.spyOn(bucket, 'get');
 		expect(await other.listProjects({ subject })).toEqual([]);
 		expect(await other.isAppOnly(subject)).toBe(true);
@@ -154,7 +165,7 @@ describe('project access projection fencing', () => {
 	] as const)(
 		'resolves an ambiguous $kind write from metadata (committed: $committed)',
 		async ({ kind, committed }) => {
-			const { bucket, projects, catalog } = await setupTestEnv();
+			const { bucket, projects, catalog } = await setupListingEnv();
 			const project = await projects.createProject({ name: 'Shared', description: '' }, ACTOR);
 			if (kind === 'membership')
 				await projects.addMember(project.id, { user_id: subject.id }, 'viewer', ACTOR);
@@ -178,7 +189,7 @@ describe('project access projection fencing', () => {
 			expect(entry.access).toBeUndefined();
 			expect(entry.access_pending).toHaveLength(1);
 			expect(await projects.listProjects({ subject })).toHaveLength(committed ? 0 : 1);
-			const reader = new ProjectService(bucket, new CatalogService(bucket));
+			const reader = projectService(bucket);
 			expect(await reader.listProjects({ subject })).toHaveLength(committed ? 0 : 1);
 			expect(await reader.isAppOnly(subject)).toBe(committed);
 		},
@@ -222,7 +233,11 @@ describe('project access projection fencing', () => {
 	it('ignores a retained summary while a pending marker exists', async () => {
 		const { catalog, projects, project } = await pendingRevocation();
 		await catalog.updateProjectEntry('test.stale-summary', ACTOR, project.id, () => ({
-			access: { members: [{ user_id: subject.id, role: 'manager' }], default_role: 'manager' },
+			access: {
+				members: [{ user_id: subject.id, role: 'manager' }],
+				default_role: 'manager',
+				generation: ACCESS_GENERATION,
+			},
 		}));
 		expect(await projects.listProjects({ subject })).toEqual([]);
 		expect(await projects.isAppOnly(subject)).toBe(true);
@@ -248,7 +263,7 @@ describe('project access projection fencing', () => {
 	});
 
 	it('rejects a stale default-role version before parking access', async () => {
-		const { projects, catalog } = await setupTestEnv();
+		const { projects, catalog } = await setupListingEnv();
 		const project = await projects.createProject({ name: 'Shared', description: '' }, ACTOR);
 		const snapshot = await catalog.getCurrentSnapshot();
 		await expect(
@@ -258,7 +273,7 @@ describe('project access projection fencing', () => {
 		expect(await projects.getProject(project.id)).toEqual(project);
 	});
 
-	it('rebuilds a trusted summary from committed metadata during offline recovery', async () => {
+	it('requires a generation refresh after offline recovery', async () => {
 		const { bucket, projects, catalog } = await pendingRevocation();
 		const source = { mode: 'rebuild' } as const;
 		const report = await catalog.planRecovery(source);
@@ -271,6 +286,11 @@ describe('project access projection fencing', () => {
 		expect(entry.access_pending).toBeUndefined();
 		expect(entry.access?.members).toContainEqual({ user_id: subject.id, role: 'app-user' });
 		const get = vi.spyOn(bucket, 'get');
+		expect(await projects.listProjects({ subject })).toEqual([]);
+		expect(await projects.isAppOnly(subject)).toBe(true);
+		expect(metadataReads(get)).toHaveLength(2);
+		await projects.updateProject(entry.id, { name: 'Refreshed' }, ACTOR);
+		get.mockClear();
 		expect(await projects.listProjects({ subject })).toEqual([]);
 		expect(await projects.isAppOnly(subject)).toBe(true);
 		expect(metadataReads(get)).toHaveLength(0);

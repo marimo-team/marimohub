@@ -81,20 +81,17 @@ Concurrent requests share only immutable snapshot loads. All runtimes deep-freez
 Mutators receive a deep clone, and their results are cloned before publication.
 A successful commit populates the cache.
 
-The involvement index selects candidate projects for authorization:
+The involvement index selects candidate projects for project lists and app-only checks:
 
-- Project lists filter to candidates when the subject has no default grant.
-- App-only checks use candidates when the subject default is absent or `app-user`.
-- Candidates are owners, projected members, incomplete legacy entries, and projects with a default grant.
+- Candidates include owners, projected members, projects with default access, and projects without trusted access summaries.
+- A subject default also includes projects that inherit default access.
+- Missing or pending access summaries remain candidates, so incomplete projections cannot hide a required role check.
 
-Candidate roles come from validated `project.json` reads.
-Stale projections can deny new access but cannot preserve revoked access.
-If publication fails after a metadata write, listings can omit new grants.
-A retry or catalog recovery repairs the projection.
-
-If neither the subject default nor the candidates supply a role, app-only checks read the remaining projects.
-This stops an unprojected app membership from granting project creation.
-A subject default of viewer or higher requires all project records, because explicit roles can restrict access.
+Candidate roles come from trusted `access` summaries or validated `project.json` reads.
+A summary is trusted only with no pending mutation and a matching configured deployment generation (§4.2).
+Without that generation, readers use metadata for role checks.
+Each listing reuses metadata reads across role, tag, and label checks.
+Pending markers prevent a failed projection from preserving revoked access.
 
 A single GET on the current snapshot returns the complete project and notebook listing — all metadata, no code. At 10 projects × 100 notebooks with ~200 bytes of metadata per notebook, the snapshot is roughly 200KB. That's the entire index in one fast GET.
 
@@ -378,17 +375,29 @@ controls how the service reads the structure.
 > responses. Clients address notebooks by `{project_id, notebook_id}`.
 
 **Project access projection.** Project entries can include `access`, a role
-summary with `members` and `default_role`. `/projects` and `/me` use this
-summary only when `access_pending` is empty or absent. Legacy entries and
-pending mutations require reads of `project.json`. Both fields stay internal
-and never appear in project-list responses.
+summary with `members`, `default_role`, and an optional deployment `generation`.
+When `access_pending` is empty or absent, `/projects` and `/me` can use a summary
+whose generation matches `MARIMOHUB_PROJECT_ACCESS_GENERATION`.
+An unset or blank configuration disables summary trust.
+Missing summaries, mismatched generations, and pending mutations require reads
+of `project.json`. These projection fields never appear in project-list responses.
+
+Older writers do not maintain access markers and can leave a summary stale.
+After all legacy writers stop, operators can enable summary trust with a fresh,
+unique generation shared by every writer.
+Before rolling back to legacy writers, disable summary trust on all readers.
+After legacy writers stop again, select another fresh generation before re-enabling trust.
+This prevents readers from trusting summaries left stale by legacy writers.
 
 Before changing members or the default role, `ProjectService` removes `access`
 and appends a unique mutation ID to `access_pending`. After the metadata write
-succeeds, that mutation removes only its own ID. The projection includes a fresh
-summary only when no IDs remain. Failed writes retain their IDs because the
-storage outcome can be uncertain. Routine projections preserve those IDs.
-Offline catalog recovery rebuilds the summary after all writers stop.
+succeeds, that mutation removes only its own ID. Default-role mutations also
+remove their IDs after definite no-write failures. Ambiguous failures retain their IDs
+because the storage outcome is uncertain. Routine projections preserve those IDs.
+
+When no IDs remain, configured writers publish a fresh summary with their generation.
+Offline catalog recovery rebuilds unversioned summaries after all writers stop.
+Those summaries require metadata reads until a configured project mutation refreshes them.
 
 **Security-label projection.** Project and notebook entries carry a tri-state
 `security_labels`: an object (labeled), `null` (known unlabeled), or absent
@@ -397,14 +406,14 @@ decides labeled/unlabeled entries in one batch and resolves indeterminate ones
 from the authoritative `project.json` / `meta.json`, failing closed on a read
 error. `security_labels_pending: true` marks a mutation in flight so routine
 projection writes (`projectCatalogPatch` and friends) do not resurrect the
-pre-mutation labels; only the mutation's own finalizing commit clears it. Both
+pre-mutation labels. Mutation completion or offline recovery clears the marker. Both
 fields are written through `CatalogService.mutateSnapshot` like every other
 entry field.
 
-| Field                     | Values                                             | Writer                                                                                               |
-| ------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `security_labels`         | `{ classification, compartments }`, `null`, absent | Routine projections (from the authoritative record); parked absent by a label mutation               |
-| `security_labels_pending` | `true` or absent                                   | Set by `ProjectService`/`NotebookService.setSecurityLabels`, cleared by the same mutation's finalize |
+| Field                     | Values                                             | Writer                                                                                                          |
+| ------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `security_labels`         | `{ classification, compartments }`, `null`, absent | Routine projections (from the authoritative record); parked absent by a label mutation                          |
+| `security_labels_pending` | `true` or absent                                   | Set by `ProjectService`/`NotebookService.setSecurityLabels`, cleared by mutation completion or offline recovery |
 
 ### 4.3 `projects/{pid}/project.json`
 
@@ -1485,12 +1494,14 @@ See the [role matrix](../docs/auth.md#authorization-roles) and [app restrictions
 Normal reads mask inaccessible or soft-deleted resources as `404`; insufficient write permissions return `403 FORBIDDEN`.
 Security labels and credential scopes can further restrict access.
 
-Catalog entries carry optional `member_ids`, `member_emails`, and `member_groups` projections, but no roles or default access.
+Catalog entries carry optional `member_ids`, `member_emails`, `member_groups`, and `default_role` projections for candidate selection.
 A missing `member_groups` field is empty; it grants no directory access.
 Directory search builds membership candidates from the snapshot and confirms them against current project heads.
 A stale projection cannot retain a revoked grant.
-Listings read permissions from `project.json` because catalog projections can lag changes.
-Each listing reuses project reads across role, tag, and label checks.
+
+Project lists and app-only checks resolve roles from trusted `access` summaries (§4.2).
+Missing summaries, pending mutations, or unmatched deployment generations require validated `project.json` reads.
+Each listing reuses those reads across role, tag, and label checks.
 Roles, credential scopes, and labels are filtered before pagination and totals.
 This preserves the catalog snapshot model (§7.1) without a separate per-user index.
 

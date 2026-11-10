@@ -594,6 +594,33 @@ describe('status defaulting', () => {
 });
 
 describe('SnapshotProjectEntrySchema (rolling-deploy tolerance)', () => {
+	it('preserves future access fields across snapshot rewrites without exposing them', () => {
+		const access = {
+			members: [],
+			default_role: 'inherit',
+			generation: 'writers-v2',
+			future_field: { nested: ['kept'] },
+		};
+		const parsed = SnapshotProjectEntrySchema.parse({
+			...makeSnapshotProjectEntry(),
+			access,
+		});
+		const rewritten = SnapshotProjectEntrySchema.parse(JSON.parse(JSON.stringify(parsed)));
+		expect(rewritten.access).toEqual(access);
+		expect(toPublicProjectEntry({ ...rewritten, tags: [] })).not.toHaveProperty('access');
+	});
+
+	it.each([
+		{ members: [], default_role: 'unknown' },
+		{ members: [{ user_id: ACTOR, role: 'unknown' }], default_role: 'inherit' },
+		{ members: [], future_field: true },
+		{ members: [], default_role: 'inherit', generation: 2 },
+	])('rejects malformed known access fields: %j', (access) => {
+		expect(
+			SnapshotProjectEntrySchema.safeParse({ ...makeSnapshotProjectEntry(), access }).success,
+		).toBe(false);
+	});
+
 	it('preserves unknown entry fields across a parse round-trip', () => {
 		const entry = { ...makeSnapshotProjectEntry({ id: createProjectId() }), future_field: 'kept' };
 		const parsed = SnapshotProjectEntrySchema.parse(entry);
