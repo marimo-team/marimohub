@@ -117,6 +117,11 @@ describe('createK8sClient', () => {
 		'creates pod identity annotations only when supplied (%s)',
 		async (supplied) => {
 			const title = `Example notebook — Δ measurements / ${'x'.repeat(70)}`;
+			const extraLabels = {
+				'marimohub.io/project-id': 'spoofed-project',
+				'marimohub.io/notebook-id': 'spoofed-notebook',
+				team: 'analytics',
+			};
 			const client = createK8sClient({ namespace: 'kernels' });
 			await client.ensure({
 				name: 'mh-sb',
@@ -124,6 +129,7 @@ describe('createK8sClient', () => {
 				sandboxId: SANDBOX_ID,
 				image: 'kernel:v1',
 				ports: [{ port: 2718, host: '' }],
+				extraLabels,
 				...(supplied
 					? {
 							notebook: {
@@ -140,6 +146,7 @@ describe('createK8sClient', () => {
 				...(supplied ? { 'marimohub.io/notebook-title': title } : {}),
 			});
 			expect(metadata.labels).toEqual({
+				team: 'analytics',
 				[MANAGED_BY_LABEL]: MANAGED_BY_VALUE,
 				'marimohub.io/sandbox-name': 'mh-sb',
 				...(supplied
@@ -149,6 +156,8 @@ describe('createK8sClient', () => {
 						}
 					: {}),
 			});
+			expect(extraLabels['marimohub.io/project-id']).toBe('spoofed-project');
+			expect(extraLabels['marimohub.io/notebook-id']).toBe('spoofed-notebook');
 		},
 	);
 

@@ -322,6 +322,10 @@ export interface SandboxOwner {
 export interface SandboxNotebook {
 	projectId: ProjectId;
 	notebookId: NotebookId;
+	/**
+	 * User-controlled text with arbitrary Unicode and length, including empty strings.
+	 * Adapters must handle all values within provider metadata limits, omitting the title if needed.
+	 */
 	title: string;
 }
 

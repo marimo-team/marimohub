@@ -40,14 +40,23 @@ MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
 `MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS` adds labels to Pods, Services, and
 Ingresses. Kubernetes label syntax applies, including empty values such as `team=`.
 The hub's management and selector labels take precedence.
+Pods ignore notebook identity labels supplied through this setting.
 
-New notebook session Pods include the `marimohub.io/project-id` and
+Pods provisioned for an editor or app session include the `marimohub.io/project-id` and
 `marimohub.io/notebook-id` labels and the `marimohub.io/notebook-title` annotation.
-The title is captured when the sandbox starts; renaming a notebook does not change
-an existing Pod. Titles retain spaces, punctuation, and Unicode. To display them
-alongside resource metrics, allowlist this annotation in kube-state-metrics and
-join `kube_pod_annotations` to container metrics by cluster, namespace, and Pod.
-Pods created before this metadata was available retain their original metadata.
+The hub captures the title at Pod creation. A notebook rename does not change an
+existing Pod. Titles retain spaces, punctuation, and Unicode. The hub omits the
+title annotation if it makes the total annotation size exceed 256 KiB.
+Existing Pods retain their original metadata, including Pods claimed from a warm pool.
+Warm-pool Pods and scheduled job Pods do not receive notebook identity metadata.
+
+Titles can contain sensitive names. Anyone with Pod read access can read these
+titles. If kube-state-metrics exports the annotation, anyone with access to those
+metrics can also read the titles.
+
+To display titles alongside resource metrics, allowlist this annotation in
+kube-state-metrics. Then join `kube_pod_annotations` to container metrics by
+cluster, namespace, and Pod.
 
 `MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER` sets the Pod UID and matching
 `fsGroup`, with `runAsNonRoot: true` except for UID `0`.
