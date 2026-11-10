@@ -4,6 +4,9 @@ import { normalizeEmail } from '../../identityMatch';
 import type { Bucket } from '../../ports/bucket';
 import type { Catalog, Snapshot, SnapshotProjectEntry } from '../../schema';
 import { EtagRecordCache } from '../../etagRecordCache';
+import { effectiveRole } from '../../authz';
+import type { AuthSubject, AuthzPolicy } from '../../authz';
+import type { Role } from '../../constants';
 
 type Subject = { id: UserId; email: string; groups?: readonly string[] };
 
@@ -13,7 +16,33 @@ type ProjectInvolvement = {
 	groups: Map<string, ProjectId[]>;
 	legacy: ProjectId[];
 	defaultAccess: ProjectId[];
+	indeterminateAccess: ProjectId[];
+	inheritedAccess: ProjectId[];
 };
+
+function accessProjection(entry: SnapshotProjectEntry): SnapshotProjectEntry['access'] {
+	return entry.access_pending?.length ? undefined : entry.access;
+}
+
+export function projectedRole(
+	entry: SnapshotProjectEntry,
+	subject: AuthSubject,
+	policy?: AuthzPolicy,
+): Role | null | undefined {
+	const access = accessProjection(entry);
+	if (access === undefined) return undefined;
+	return effectiveRole(
+		{
+			...entry,
+			...access,
+			schema_version: 1,
+			tags: entry.tags ?? [],
+			security_labels: entry.security_labels ?? undefined,
+		},
+		subject,
+		policy,
+	);
+}
 
 export const projectsById = weakMemo(
 	(snapshot: Snapshot): ReadonlyMap<ProjectId, SnapshotProjectEntry> =>
@@ -63,6 +92,15 @@ export class SnapshotCacheEntry {
 		]);
 	}
 
+	accessCandidatesFor(subject: Subject, hasDefaultRole: boolean): ReadonlySet<ProjectId> {
+		const index = (this.involvement ??= this.buildInvolvement());
+		return new Set([
+			...this.candidatesFor(subject, true),
+			...index.indeterminateAccess,
+			...(hasDefaultRole ? index.inheritedAccess : []),
+		]);
+	}
+
 	private buildInvolvement(): ProjectInvolvement {
 		const index: ProjectInvolvement = {
 			userIds: new Map(),
@@ -70,6 +108,8 @@ export class SnapshotCacheEntry {
 			groups: new Map(),
 			legacy: [],
 			defaultAccess: [],
+			indeterminateAccess: [],
+			inheritedAccess: [],
 		};
 		const add = (map: Map<string, ProjectId[]>, key: string, id: ProjectId) => {
 			const entries = map.get(key) ?? [];
@@ -77,6 +117,11 @@ export class SnapshotCacheEntry {
 			map.set(key, entries);
 		};
 		for (const project of this.snapshot.projects) {
+			const access = accessProjection(project);
+			if (access === undefined) {
+				index.indeterminateAccess.push(project.id);
+			}
+			if (access?.default_role === 'inherit') index.inheritedAccess.push(project.id);
 			// Deleted entries remain candidates for status-filtered administrative lists.
 			add(index.userIds, project.owner, project.id);
 			if (

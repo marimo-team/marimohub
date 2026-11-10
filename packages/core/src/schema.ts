@@ -266,13 +266,23 @@ export const SnapshotProjectEntrySchema = z.looseObject({
 	// Set by a notebook move in the same snapshot write that moves the entry, so the search
 	// crawler sees the request from the snapshot it already holds instead of a separate record.
 	search_refresh: z.string().optional(),
-	// Candidate projections can lag changes. Authorization reads project.json.
+	// These fields select candidates. Only access can decide roles without a metadata read.
 	member_ids: z.array(UserIdSchema).optional(),
 	default_role: ProjectDefaultRoleSchema.optional(),
 	// Pending invite emails are normalized for identity reconciliation.
 	member_emails: z.array(z.string().transform((e) => e.toLowerCase())).optional(),
 	// Group ids are exact. Missing projections cannot grant access.
 	member_groups: z.array(z.string()).optional(),
+	// Absent access or any pending marker requires an authoritative project.json read.
+	access: z
+		.object({
+			members: z.array(z.lazy(() => ProjectMemberSchema)),
+			default_role: ProjectDefaultRoleSchema,
+		})
+		.optional(),
+	// Each access writer removes only its own marker after its authoritative write finishes.
+	// Ambiguous failures retain their markers until offline catalog recovery.
+	access_pending: z.array(SnapshotIdSchema).optional(),
 	/**
 	 * Denormalized security-label projection for list filtering ahead of
 	 * pagination. Tri-state: an object = labeled, `null` = KNOWN unlabeled,

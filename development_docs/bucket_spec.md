@@ -333,8 +333,8 @@ The single mutable entry point. Overwritten atomically using conditional PUT wit
 
 ### 4.2 `_system/snapshots/{id}.json`
 
-Written once per mutating operation and never modified. The `schema_version`
-field controls how the service reads the structure.
+Each catalog commit writes an immutable snapshot. The `schema_version` field
+controls how the service reads the structure.
 
 ```json
 {
@@ -376,6 +376,19 @@ field controls how the service reads the structure.
 
 > `key_prefix` is an internal physical locator. The service removes it from API
 > responses. Clients address notebooks by `{project_id, notebook_id}`.
+
+**Project access projection.** Project entries can include `access`, a role
+summary with `members` and `default_role`. `/projects` and `/me` use this
+summary only when `access_pending` is empty or absent. Legacy entries and
+pending mutations require reads of `project.json`. Both fields stay internal
+and never appear in project-list responses.
+
+Before changing members or the default role, `ProjectService` removes `access`
+and appends a unique mutation ID to `access_pending`. After the metadata write
+succeeds, that mutation removes only its own ID. The projection includes a fresh
+summary only when no IDs remain. Failed writes retain their IDs because the
+storage outcome can be uncertain. Routine projections preserve those IDs.
+Offline catalog recovery rebuilds the summary after all writers stop.
 
 **Security-label projection.** Project and notebook entries carry a tri-state
 `security_labels`: an object (labeled), `null` (known unlabeled), or absent

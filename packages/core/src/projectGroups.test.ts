@@ -6,8 +6,21 @@ import { paths } from './paths';
 import { ACTOR, makeProject, setupTestEnv, uid } from './testing';
 import { claimInviteRows } from './services/content/ProjectService';
 import { notificationRouter, resolveMemberRecipient } from './notifications';
+import type { CatalogService } from './services/catalog/CatalogService';
 
 const subject = { id: uid('outsider'), email: 'out@example.com', groups: ['/teams/Data', 'other'] };
+
+function failMemberProjection(catalog: CatalogService) {
+	const update = catalog.updateProjectEntry.bind(catalog);
+	let failed = false;
+	vi.spyOn(catalog, 'updateProjectEntry').mockImplementation((operation, ...args) => {
+		if (!failed && operation === 'project.members') {
+			failed = true;
+			return Promise.reject(new Error('projection failed'));
+		}
+		return update(operation, ...args);
+	});
+}
 
 describe('group principals', () => {
 	it.each(['x', '/teams/Data', '工程', 'x'.repeat(128), 'a b', 'a@b.com', '💡'.repeat(128)])(
@@ -206,7 +219,7 @@ describe('group principals', () => {
 		await projects.addMember(project.id, { group: subject.groups[0] }, 'viewer', ACTOR);
 		expect(await catalog.hasProjectInvolvement(subject)).toBe(true);
 		expect((await projects.listProjects({ subject })).map((p) => p.id)).toContain(project.id);
-		vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(new Error('projection failed'));
+		failMemberProjection(catalog);
 		await expect(
 			projects.removeMember(project.id, { group: subject.groups[0] }, ACTOR),
 		).rejects.toThrow('projection failed');
@@ -214,7 +227,7 @@ describe('group principals', () => {
 		expect(await projects.listProjects({ subject })).toEqual([]);
 	});
 	it.each(['add', 'update', 'remove'] as const)(
-		'leaves the roster and catalog unchanged when the authoritative %s write fails',
+		'leaves the roster unchanged and access indeterminate when the authoritative %s write fails',
 		async (operation) => {
 			const { projects, catalog, bucket } = await setupTestEnv();
 			const project = await projects.createProject({ name: 'Groups', description: '' }, ACTOR);
@@ -235,7 +248,12 @@ describe('group principals', () => {
 						: projects.removeMember(project.id, selector, ACTOR);
 			await expect(mutation).rejects.toThrow('storage unavailable');
 			expect(await projects.getProject(project.id)).toEqual(before);
-			expect(await catalog.getCurrentSnapshot()).toEqual(snapshot);
+			const [entry] = (await catalog.getCurrentSnapshot()).projects;
+			expect(entry).toEqual({
+				...snapshot.projects[0],
+				access: undefined,
+				access_pending: [expect.any(String)],
+			});
 			expect(resolveEffectiveRole(await projects.getProject(project.id), subject).role).toBe(
 				operation === 'add' ? null : 'viewer',
 			);
@@ -246,7 +264,7 @@ describe('group principals', () => {
 		const project = await projects.createProject({ name: 'Groups', description: '' }, ACTOR);
 		const selector = { group: subject.groups[0] };
 		await projects.addMember(project.id, selector, 'manager', ACTOR);
-		vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(new Error('projection failed'));
+		failMemberProjection(catalog);
 		await expect(
 			projects.updateMemberRole(project.id, selector, 'app-user', ACTOR),
 		).rejects.toThrow('projection failed');

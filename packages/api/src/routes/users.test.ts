@@ -190,9 +190,14 @@ describe('User routes', () => {
 			201,
 		);
 		expect(await expectOk(await other('GET', `/users?ids=${ACTOR}`))).toHaveProperty(ACTOR);
+		const catalog = owner.deps.services.catalog;
+		const update = catalog.updateProjectEntry.bind(catalog);
 		const projection = vi
-			.spyOn(owner.deps.services.catalog, 'updateProjectEntry')
-			.mockRejectedValueOnce(new Error('projection failed'));
+			.spyOn(catalog, 'updateProjectEntry')
+			.mockImplementation((operation, ...args) => {
+				if (operation === 'project.members') return Promise.reject(new Error('projection failed'));
+				return update(operation, ...args);
+			});
 		await expect(
 			owner.deps.services.projects.removeMember(ProjectId.parse(project.id), member, ACTOR),
 		).rejects.toThrow('projection failed');
