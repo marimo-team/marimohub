@@ -218,41 +218,68 @@ rates from deltas between lines.
 
 Signals emitted today:
 
-| Signal                                                                                    | Type      | Source                          |
-| ----------------------------------------------------------------------------------------- | --------- | ------------------------------- |
-| `catalog.cas.attempt` / `.conflict` / `.exhausted`                                        | counter   | `CatalogService.mutateSnapshot` |
-| `sessions.live`                                                                           | gauge     | `SessionService.expireStale`    |
-| `sessions.expired` / `sessions.reaped`                                                    | counter   | `SessionService`                |
-| `snapshots.count` / `snapshots.bytes`                                                     | gauge     | `MaintenanceService`            |
-| `maintenance.snapshots_pruned` / `.events_pruned`                                         | counter   | `MaintenanceService`            |
-| `object_browser.s3.operations` / `.failures`                                              | counter   | `S3ObjectBrowser`               |
-| `object_browser.s3.latency_ms`                                                            | histogram | `S3ObjectBrowser`               |
-| `object_browser.s3.bytes_read` / `.keys_scanned`                                          | counter   | `S3ObjectBrowser`               |
-| `object_browser.cache.requests`                                                           | counter   | object browse API cache         |
-| `object_browser.download.active`                                                          | gauge     | object download gate            |
-| `object_browser.download.rejected` / `.timeouts` / `.cancellations`                       | counter   | object download API             |
-| `notify.delivered` / `.skipped` / `.deliver_failed`                                       | counter   | `Notifier` fan-out              |
-| `project_alert.delivered` / `.skipped` / `.deliver_failed`                                | counter   | `NodeProjectAlertDispatcher`    |
-| `project_alert.rate_limited`                                                              | counter   | project alert delivery budget   |
-| `data_preview.selected`                                                                   | counter   | `DataPreviewService`            |
-| `data_preview.duckdb.initialize` / `.execution` / `.recycle`                              | counter   | `DuckDBWasmDataPreview`         |
-| `data_preview.duckdb.pool_size` / `.active` / `.rows`                                     | gauge     | `DuckDBWasmDataPreview`         |
-| `data_preview.duckdb.queue_wait_ms` / `.initialize_ms` / `.execution_ms`                  | gauge     | `DuckDBWasmDataPreview`         |
-| `duckdb_http_broker.request` / `.redirect` / `.budget_exhausted`                          | counter   | guarded DuckDB HTTP broker      |
-| `duckdb_http_broker.response_bytes`                                                       | histogram | guarded DuckDB HTTP broker      |
-| `duckdb_http_broker.bridge_failure`                                                       | counter   | guarded DuckDB HTTP broker      |
-| `duckdb_http_broker.request_latency_ms` / `.transport_latency_ms`                         | histogram | guarded DuckDB HTTP broker      |
-| `duckdb_http_broker.oauth_exchange` / `.oauth_refresh` / `.oauth_token`                   | counter   | guarded DuckDB OAuth2 provider  |
-| `duckdb_http_database.policy`                                                             | counter   | remote DuckDB object validation |
-| `sessions.unreclaimed_terminal.count` / `.oldest_age_ms`                                  | gauge     | maintenance cycle               |
-| `sessions.editor_claim.lost` (`phase`)                                                    | counter   | editor session start            |
-| `loop.seconds_since_success` / `.consecutive_failures` / `.last_duration_ms` / `.stalled` | gauge     | `BackgroundLoops`               |
-| `loop.timeouts`                                                                           | counter   | `BackgroundLoops`               |
-| Per-cycle: `sessions_expired`, `snapshots_pruned`, …                                      | fields    | the `maintenance_cycle` event   |
+| Signal                                                                                    | Type      | Source                                              |
+| ----------------------------------------------------------------------------------------- | --------- | --------------------------------------------------- |
+| `catalog.cas.attempt` / `.conflict`                                                       | counter   | `CatalogService.mutateSnapshot` / `.commitRecovery` |
+| `catalog.cas.exhausted`                                                                   | counter   | `CatalogService.mutateSnapshot`                     |
+| `sessions.live`                                                                           | gauge     | `SessionService.expireStale`                        |
+| `sessions.expired` / `sessions.reaped`                                                    | counter   | `SessionService`                                    |
+| `snapshots.count` / `snapshots.bytes`                                                     | gauge     | `MaintenanceService`                                |
+| `maintenance.snapshots_pruned` / `.events_pruned`                                         | counter   | `MaintenanceService`                                |
+| `object_browser.s3.operations` / `.failures`                                              | counter   | `S3ObjectBrowser`                                   |
+| `object_browser.s3.latency_ms`                                                            | histogram | `S3ObjectBrowser`                                   |
+| `object_browser.s3.bytes_read` / `.keys_scanned`                                          | counter   | `S3ObjectBrowser`                                   |
+| `object_browser.cache.requests`                                                           | counter   | object browse API cache                             |
+| `object_browser.download.active`                                                          | gauge     | object download gate                                |
+| `object_browser.download.rejected` / `.timeouts` / `.cancellations`                       | counter   | object download API                                 |
+| `notify.delivered` / `.skipped` / `.deliver_failed`                                       | counter   | `Notifier` fan-out                                  |
+| `project_alert.delivered` / `.skipped` / `.deliver_failed`                                | counter   | `NodeProjectAlertDispatcher`                        |
+| `project_alert.rate_limited`                                                              | counter   | project alert delivery budget                       |
+| `data_preview.selected`                                                                   | counter   | `DataPreviewService`                                |
+| `data_preview.duckdb.initialize` / `.execution` / `.recycle`                              | counter   | `DuckDBWasmDataPreview`                             |
+| `data_preview.duckdb.pool_size` / `.active` / `.rows`                                     | gauge     | `DuckDBWasmDataPreview`                             |
+| `data_preview.duckdb.queue_wait_ms` / `.initialize_ms` / `.execution_ms`                  | gauge     | `DuckDBWasmDataPreview`                             |
+| `duckdb_http_broker.request` / `.redirect` / `.budget_exhausted`                          | counter   | guarded DuckDB HTTP broker                          |
+| `duckdb_http_broker.response_bytes`                                                       | histogram | guarded DuckDB HTTP broker                          |
+| `duckdb_http_broker.bridge_failure`                                                       | counter   | guarded DuckDB HTTP broker                          |
+| `duckdb_http_broker.request_latency_ms` / `.transport_latency_ms`                         | histogram | guarded DuckDB HTTP broker                          |
+| `duckdb_http_broker.oauth_exchange` / `.oauth_refresh` / `.oauth_token`                   | counter   | guarded DuckDB OAuth2 provider                      |
+| `duckdb_http_database.policy`                                                             | counter   | remote DuckDB object validation                     |
+| `sessions.unreclaimed_terminal.count` / `.oldest_age_ms`                                  | gauge     | maintenance cycle                                   |
+| `sessions.editor_claim.lost` (`phase`)                                                    | counter   | editor session start                                |
+| `loop.seconds_since_success` / `.consecutive_failures` / `.last_duration_ms` / `.stalled` | gauge     | `BackgroundLoops`                                   |
+| `loop.timeouts`                                                                           | counter   | `BackgroundLoops`                                   |
+| Per-cycle: `sessions_expired`, `snapshots_pruned`, …                                      | fields    | the `maintenance_cycle` event                       |
 
 `catalog.cas.attempt` counts conditional writes for mutations and recovery, including
 retries. It excludes reads, no-ops, preparation failures, and initialization.
 Counters can be absent until their first increment. Never sum cumulative samples.
+
+For the built-in Prometheus exporter, query the hourly CAS conflict ratio with:
+
+```promql
+(
+  (sum(increase(catalog_cas_conflict_total[1h])) or vector(0))
+  / sum(increase(catalog_cas_attempt_total[1h]))
+)
+and sum(increase(catalog_cas_attempt_total[1h])) > 0
+```
+
+[`increase`](https://prometheus.io/docs/prometheus/latest/querying/functions/#increase)
+handles resets per series before aggregation. This query treats an absent conflict
+counter as zero and omits windows with no attempts.
+
+For wide events, use `counter.catalog.cas.attempt` and `counter.catalog.cas.conflict`:
+
+1. Order samples by time within each process. Use the hostname/PID prefix of `holder`;
+   its final UUID changes each sweep. Separate known process restarts.
+2. Treat an absent counter as zero. Subtract the previous value from each value.
+   After a counter decrease or known restart, use the current value as the delta.
+   Use a sample before the window as the baseline. Without one, omit the first
+   sample unless the process started within the window; then its baseline is zero.
+3. Sum each counter's deltas across processes within the same window. Divide conflict
+   deltas by attempt deltas. No attempts means no ratio. Gaps can hide increments
+   before a restart, so these totals can undercount.
 
 Object-browser metric attributes are deliberately low-cardinality: operation,
 mode, outcome, and sanitized error code only. Never add bucket names, keys,
@@ -263,10 +290,8 @@ OAuth2 fields.
 What to watch / alert on:
 
 - **CAS conflict rate climbing** → write contention on the catalog.
-  Use `increase(catalog.cas.conflict) / increase(catalog.cas.attempt)` over the same
-  interval. Account for restarts per process, then sum each counter's increases
-  before division. No attempts means no rate. An increase in `catalog.cas.exhausted`
-  signals `409 CONFLICT` failures.
+  Use the ratio above. An increase in `catalog.cas.exhausted` signals `409 CONFLICT`
+  failures.
 - **`snapshots.count` / `snapshots.bytes` trending up** without bound → retention
   isn't running (check the maintenance Deployment / lease).
 - **`maintenance_cycle` line missing** for multiple intervals → the reaper is
