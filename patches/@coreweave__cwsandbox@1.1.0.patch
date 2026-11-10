@@ -1,21 +1,21 @@
-diff --git a/dist/client-DpqdEOsC.d.ts b/dist/client-DpqdEOsC.d.ts
-index e1c65ca33b3de5f623366b47ea619200e0f0a839..8ce50ead5f0894e8d13d62497e3bd8cb3ea849a5 100644
---- a/dist/client-DpqdEOsC.d.ts
-+++ b/dist/client-DpqdEOsC.d.ts
-@@ -731,6 +731,8 @@ declare class SandboxList implements AsyncIterable<Sandbox> {
+diff --git a/dist/client-DavxuRin.d.ts b/dist/client-DavxuRin.d.ts
+index af84ce02f..faf5e74dd 100644
+--- a/dist/client-DavxuRin.d.ts
++++ b/dist/client-DavxuRin.d.ts
+@@ -1162,6 +1162,8 @@ declare class SandboxList implements AsyncIterable<Sandbox> {
  type WithSandboxCallback<TResult> = (sandbox: Sandbox) => Promise<TResult> | TResult;
  /** Public interface returned by all CWSandbox client factories. */
  interface SandboxClient {
 +  /** Prepare cached Direct credentials/channels without sandbox operations. False means skipped or unavailable in auto mode; strict Direct errors, deadlines and cancellation reject. */
 +  preconnect(sandboxId: SandboxId, options?: RequestOptions): Promise<boolean>;
-   create(options?: SandboxRunOptions): Promise<Sandbox>;
-   run(command: CommandInput, options?: SandboxRunOptions): Promise<Sandbox>;
-   get(sandboxId: SandboxId, options?: RequestOptions): Promise<GetSandboxResult>;
-diff --git a/dist/grpc-transport-DlmDQLSO.js b/dist/grpc-transport-DlmDQLSO.js
-index e141d203164bde153cc87f4abd4beac6a46a8a9b..670f91880ac06b8b1a436d71bac9511b6d09f13c 100644
---- a/dist/grpc-transport-DlmDQLSO.js
-+++ b/dist/grpc-transport-DlmDQLSO.js
-@@ -2102,6 +2102,15 @@ var SandboxClient = class {
+   /**
+    * Waits for `running` by default. If creation returns an accepted sandbox but
+    * the readiness wait rejects (failure, `timeoutMs`, or abort), the SDK
+diff --git a/dist/grpc-transport-CciLDcF-.js b/dist/grpc-transport-CciLDcF-.js
+index ddcb2c98a..d59d47245 100644
+--- a/dist/grpc-transport-CciLDcF-.js
++++ b/dist/grpc-transport-CciLDcF-.js
+@@ -2707,6 +2707,15 @@ var SandboxClient = class {
  		this.fileAdapter = options.fileAdapter;
  		this.dataPlaneMode = options.dataPlaneMode ?? "auto";
  	}
@@ -29,9 +29,9 @@ index e141d203164bde153cc87f4abd4beac6a46a8a9b..670f91880ac06b8b1a436d71bac9511b
 +	}
 +
  	async create(options = {}) {
- 		return this.run(DEFAULT_KEEP_ALIVE_COMMAND, options);
+ 		return this.start(options.containers === void 0 ? DEFAULT_KEEP_ALIVE_COMMAND : void 0, options);
  	}
-@@ -11539,6 +11548,7 @@ const CREDENTIAL_RPC_TIMEOUT_MS = 5e3;
+@@ -14558,6 +14567,7 @@ const CREDENTIAL_RPC_TIMEOUT_MS = 5e3;
  const RETRY_COOLDOWN_MS = 3e4;
  const EXPIRY_SKEW_MS = 3e4;
  const MAX_IDLE_CHANNELS = 64;
@@ -39,7 +39,7 @@ index e141d203164bde153cc87f4abd4beac6a46a8a9b..670f91880ac06b8b1a436d71bac9511b
  const MAX_SANDBOX_STATES = 2048;
  const STRICT_RETRY_START_MS = 200;
  const FALLBACK_CODES = /* @__PURE__ */ new Set([
-@@ -11559,9 +11569,12 @@ var DirectChannelPool = class {
+@@ -14578,9 +14588,12 @@ var DirectChannelPool = class {
  		this.maxIdleChannels = maxIdleChannels;
  		this.channelFactory = channelFactory;
  	}
@@ -53,7 +53,7 @@ index e141d203164bde153cc87f4abd4beac6a46a8a9b..670f91880ac06b8b1a436d71bac9511b
  			let channel;
  			try {
  				channel = this.channelFactory(bundle);
-@@ -11572,22 +11585,24 @@ var DirectChannelPool = class {
+@@ -14591,22 +14604,24 @@ var DirectChannelPool = class {
  				activeLeases: 0,
  				channel,
  				closed: false,
@@ -82,7 +82,7 @@ index e141d203164bde153cc87f4abd4beac6a46a8a9b..670f91880ac06b8b1a436d71bac9511b
  			if (signal?.aborted === true) throw signal.reason;
  			throw new DirectDataPlaneUnavailable("could not connect to the direct endpoint", { cause: error });
  		}
-@@ -11597,6 +11612,24 @@ var DirectChannelPool = class {
+@@ -14616,6 +14631,24 @@ var DirectChannelPool = class {
  			release
  		};
  	}
@@ -107,7 +107,7 @@ index e141d203164bde153cc87f4abd4beac6a46a8a9b..670f91880ac06b8b1a436d71bac9511b
  	discard(cacheKey) {
  		const entry = this.entries.get(cacheKey);
  		if (entry !== void 0) this.discardEntry(cacheKey, entry);
-@@ -11606,11 +11639,11 @@ var DirectChannelPool = class {
+@@ -14625,11 +14658,11 @@ var DirectChannelPool = class {
  		if (this.entries.get(cacheKey) === entry) this.entries.delete(cacheKey);
  		if (entry.activeLeases === 0) this.close(entry);
  	}
@@ -121,7 +121,7 @@ index e141d203164bde153cc87f4abd4beac6a46a8a9b..670f91880ac06b8b1a436d71bac9511b
  		if (entry.activeLeases === 0 && entry.discardWhenIdle) {
  			if (this.entries.get(cacheKey) === entry) this.entries.delete(cacheKey);
  			this.close(entry);
-@@ -11629,12 +11662,14 @@ var DirectChannelPool = class {
+@@ -14648,12 +14681,14 @@ var DirectChannelPool = class {
  	evictIdle() {
  		let idleCount = [...this.entries.values()].filter((entry) => entry.activeLeases === 0).length;
  		if (idleCount <= this.maxIdleChannels) return;
@@ -142,7 +142,7 @@ index e141d203164bde153cc87f4abd4beac6a46a8a9b..670f91880ac06b8b1a436d71bac9511b
  		}
  	}
  };
-@@ -11677,15 +11712,31 @@ var DirectDataPlane = class {
+@@ -14696,15 +14731,31 @@ var DirectDataPlane = class {
  	async acquireDirect(options) {
  		const state = this.stateFor(options.sandboxId);
  		if (options.dataPlaneMode === "auto" && Date.now() < state.retryAtMs) throw new DirectDataPlaneUnavailable("direct connection retry is temporarily deferred");
@@ -178,7 +178,7 @@ index e141d203164bde153cc87f4abd4beac6a46a8a9b..670f91880ac06b8b1a436d71bac9511b
  			return lease;
  		} catch (error) {
  			if (options.dataPlaneMode === "direct" && error instanceof RpcError && error.code === "UNAVAILABLE" && remainingMs(deadlineMs) > retryDelayMs) {
-@@ -11694,29 +11745,35 @@ var DirectDataPlane = class {
+@@ -14713,29 +14764,35 @@ var DirectDataPlane = class {
  				continue;
  			}
  			if (isFallbackError(error)) {
@@ -229,8 +229,8 @@ index e141d203164bde153cc87f4abd4beac6a46a8a9b..670f91880ac06b8b1a436d71bac9511b
  	}
  	async issueCredential(sandboxId, permission) {
  		const algorithm = {
-@@ -12995,6 +13052,30 @@ var GrpcSandboxTransport = class {
- 		this.client = this.clients.client;
+@@ -15481,6 +15538,30 @@ var GrpcSandboxTransport = class {
+ 		this.networkConfigClient = this.clients.networkConfigClient;
  		this.directDataPlane = new DirectDataPlane(this.client);
  	}
 +	async preconnect(request) {
@@ -258,5 +258,5 @@ index e141d203164bde153cc87f4abd4beac6a46a8a9b..670f91880ac06b8b1a436d71bac9511b
 +	}
 +
  	async start(request) {
- 		return toSdkStartSandboxResult(await withGrpcErrorMapping("Start sandbox", () => this.client.createSandbox(toProtoCreateRequest(request), toRpcOptions(request)).response));
- 	}
+ 		const body = toProtoCreateRequest(request);
+ 		return toSdkStartSandboxResult(await withGrpcErrorMapping("Start sandbox", () => retryCreateCapacity((timeoutMs) => this.client.createSandbox(body, toRpcOptions({

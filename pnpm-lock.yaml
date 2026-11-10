@@ -67,8 +67,8 @@ catalogs:
       specifier: ^6.43.7
       version: 6.43.7
     '@coreweave/cwsandbox':
-      specifier: 1.0.0
-      version: 1.0.0
+      specifier: 1.1.0
+      version: 1.1.0
     '@duckdb/duckdb-wasm':
       specifier: 1.32.0
       version: 1.32.0
@@ -361,9 +361,9 @@ overrides:
   vitepress>vite: ^8.0.0
 
 patchedDependencies:
-  '@coreweave/cwsandbox@1.0.0':
-    hash: 8da5cf283c1e0a39ad73b64cc6d325f58f931ccdaae7ee04e594b41ced023c94
-    path: patches/@coreweave__cwsandbox@1.0.0.patch
+  '@coreweave/cwsandbox@1.1.0':
+    hash: 97308ca61001e7ce6a20b0b77abf347eaa8162a15e9c11e65e67a97200986136
+    path: patches/@coreweave__cwsandbox@1.1.0.patch
   vitepress@1.6.4:
     hash: 3ba46d79d2c2e973e4f6a2f873e0a5dd361d41df9c901fd63d12fc4cc6a323ef
     path: patches/vitepress@1.6.4.patch
@@ -904,7 +904,7 @@ importers:
     dependencies:
       '@coreweave/cwsandbox':
         specifier: 'catalog:'
-        version: 1.0.0(patch_hash=8da5cf283c1e0a39ad73b64cc6d325f58f931ccdaae7ee04e594b41ced023c94)
+        version: 1.1.0(patch_hash=97308ca61001e7ce6a20b0b77abf347eaa8162a15e9c11e65e67a97200986136)
       '@marimo-hub/compute-commons':
         specifier: workspace:*
         version: link:../compute-commons
@@ -2793,8 +2793,8 @@ packages:
     peerDependencies:
       '@bufbuild/protobuf': ^2.7.0
 
-  '@coreweave/cwsandbox@1.0.0':
-    resolution: {integrity: sha512-QVej1FZ8OqlD1zeaa/2qthNx02pgRAfoT9ZU/i/6ivB6WlW3WRrDJSYV+KwRv3j9pNnAijnriP6D8qeuto0Bjg==}
+  '@coreweave/cwsandbox@1.1.0':
+    resolution: {integrity: sha512-xp7P/6oZxv53vEWTF7AXpyI9iPgOS6x6ngtH+XUDCiyRUQV14Sms/QwdLs2CJ0pXJqwN2npn+gEXTYuruMGs2Q==}
     engines: {node: '>=22'}
 
   '@csstools/color-helpers@6.0.2':
@@ -9317,7 +9317,7 @@ snapshots:
     dependencies:
       '@bufbuild/protobuf': 2.12.1
 
-  '@coreweave/cwsandbox@1.0.0(patch_hash=8da5cf283c1e0a39ad73b64cc6d325f58f931ccdaae7ee04e594b41ced023c94)':
+  '@coreweave/cwsandbox@1.1.0(patch_hash=97308ca61001e7ce6a20b0b77abf347eaa8162a15e9c11e65e67a97200986136)':
     dependencies:
       '@grpc/grpc-js': 1.14.5
       '@peculiar/x509': 2.1.0
