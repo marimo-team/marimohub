@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
 import type { SandboxId } from '../../ids';
 import { paths } from '../../paths';
+import { NotFoundError } from '../../errors';
 import type { SandboxInstance, SandboxProvider } from '../../ports/sandbox';
 import type { Session } from '../../schema';
 
@@ -322,6 +323,52 @@ describe('ReconciliationService', () => {
 			expect((await service.reconcile()).reclaimed).toBe(0);
 		},
 	);
+
+	it('clears a backlog of expired sessions whose sandboxes are already gone', async () => {
+		const records = await Promise.all(
+			Array.from({ length: 7 }, async () => {
+				const session = await putSession({
+					notebook_id: createNotebookId(),
+					status: 'expired',
+					sandbox_id: createSandboxId(),
+					started_at: iso(-25 * 24 * 60 * 60_000),
+					last_heartbeat: iso(-25 * 24 * 60 * 60_000),
+				});
+				await sessions.claimEditor(projectId, session.notebook_id, session.session_id, 'shared');
+				return session;
+			}),
+		);
+		const { instance, calls } = makeFakeSandbox();
+		vi.spyOn(instance, 'exec').mockRejectedValue(new NotFoundError('Sandbox is gone'));
+		const create = vi.fn(() => {
+			throw new Error('Must not allocate a replacement');
+		});
+		const service = new ReconciliationService(
+			sessions,
+			notebooks,
+			{ create, connectExisting: () => instance, proxy: async () => null },
+			bucket,
+			'source',
+		);
+
+		expect(await service.reclaimTerminalSessions()).toEqual({
+			reclaimed: 7,
+			unreclaimedTerminal: 0,
+			oldestUnreclaimedAgeMs: null,
+		});
+		for (const session of records) {
+			expect(
+				(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
+			).toBeDefined();
+			expect(
+				(await sessions.getEditorClaim(projectId, session.notebook_id))?.session_id,
+			).toBeNull();
+		}
+		expect((await service.reclaimTerminalSessions()).reclaimed).toBe(0);
+		expect(calls.destroy).toBe(7);
+		expect(create).not.toHaveBeenCalled();
+		expect(notebooks.commitSession).not.toHaveBeenCalled();
+	});
 
 	it('retries failed terminal destruction and reports the retained claim', async () => {
 		const session = await putSession({

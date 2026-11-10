@@ -743,8 +743,36 @@ describe('catalog recovery', () => {
 		);
 	});
 
+	it('does not count a recovery attempt when snapshot preparation fails', async () => {
+		const { bucket } = await fixture();
+		const increment = vi.fn();
+		const catalog = new CatalogService(bucket, { increment, gauge: vi.fn() });
+		const report = await catalog.planRecovery(SOURCE);
+		const put = bucket.put.bind(bucket);
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+			if (key.startsWith(paths.snapshotsPrefix)) throw new Error('snapshot put failed');
+			return put(key, value, options);
+		});
+
+		await expect(applyRecovery(catalog, report)).rejects.toThrow('snapshot put failed');
+		expect(increment).not.toHaveBeenCalled();
+	});
+
+	it('counts one conditional write for a successful recovery', async () => {
+		const { bucket } = await fixture();
+		const increment = vi.fn();
+		const catalog = new CatalogService(bucket, { increment, gauge: vi.fn() });
+		const report = await catalog.planRecovery(SOURCE);
+
+		await applyRecovery(catalog, report);
+
+		expect(increment.mock.calls).toEqual([['catalog.cas.attempt']]);
+	});
+
 	it('deletes its uncommitted snapshot when it loses the recovery CAS', async () => {
 		const { bucket, services } = await fixture();
+		const increment = vi.fn();
+		const catalog = new CatalogService(bucket, { increment, gauge: vi.fn() });
 		await bucket.delete(paths.catalog);
 		const report = await services.catalog.planRecovery(SOURCE);
 		const before = (await listAllObjects(bucket, paths.snapshotsPrefix)).map((o) => o.key);
@@ -753,7 +781,8 @@ describe('catalog recovery', () => {
 			if (key === paths.catalog) await put(key, '{}');
 			return put(key, value, options);
 		});
-		await expect(applyRecovery(services.catalog, report)).rejects.toThrow('conflict');
+		await expect(applyRecovery(catalog, report)).rejects.toThrow('conflict');
+		expect(increment.mock.calls).toEqual([['catalog.cas.attempt'], ['catalog.cas.conflict']]);
 		expect((await listAllObjects(bucket, paths.snapshotsPrefix)).map((o) => o.key)).toEqual(before);
 	});
 	it('warns about snapshot keys that snapshot mode skips because their ID is invalid', async () => {

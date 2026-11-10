@@ -481,6 +481,7 @@ describe('SessionRetirer', () => {
 	});
 
 	it.each(['1', '', '0'])('automatic reclaim requires confirmed idle: %j', async (output) => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 		const session = await expiredEditor();
 		const { instance, calls } = makeFakeSandbox();
 		vi.spyOn(instance, 'exec').mockResolvedValue(execResult(true, output, ''));
@@ -493,10 +494,27 @@ describe('SessionRetirer', () => {
 		);
 		expect(calls.destroy).toBe(output === '0' ? 1 : 0);
 		if (output !== '0') {
+			const line = log.mock.calls.find(([line]) =>
+				String(line).includes('session_reclaim_skipped'),
+			)?.[0] as string;
+			expect(JSON.parse(line)).toMatchObject({
+				level: output === '1' ? 'info' : 'warn',
+				event: 'session_reclaim_skipped',
+				session_id: session.session_id,
+				project_id: projectId,
+				notebook_id: notebookId,
+				sandbox_id: session.sandbox_id,
+				status: 'expired',
+				reason: output === '1' ? 'kernel_active' : 'kernel_unreachable',
+			});
 			expect(notebooks.commitSession).not.toHaveBeenCalled();
 			expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
 				session.session_id,
 			);
+		} else {
+			expect(
+				log.mock.calls.some(([line]) => String(line).includes('session_reclaim_skipped')),
+			).toBe(false);
 		}
 	});
 

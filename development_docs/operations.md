@@ -250,6 +250,10 @@ Signals emitted today:
 | `loop.timeouts`                                                                           | counter   | `BackgroundLoops`               |
 | Per-cycle: `sessions_expired`, `snapshots_pruned`, …                                      | fields    | the `maintenance_cycle` event   |
 
+`catalog.cas.attempt` counts conditional writes for mutations and recovery, including
+retries. It excludes reads, no-ops, preparation failures, and initialization.
+Counters can be absent until their first increment. Never sum cumulative samples.
+
 Object-browser metric attributes are deliberately low-cardinality: operation,
 mode, outcome, and sanitized error code only. Never add bucket names, keys,
 queries, integration IDs, project IDs, or user IDs as metric attributes.
@@ -258,9 +262,11 @@ OAuth2 fields.
 
 What to watch / alert on:
 
-- **CAS conflict rate climbing** (`catalog.cas.conflict` / `attempt`) → write
-  contention on the catalog; `catalog.cas.exhausted` > 0 means writes are being
-  rejected with `409 CONFLICT`.
+- **CAS conflict rate climbing** → write contention on the catalog.
+  Use `increase(catalog.cas.conflict) / increase(catalog.cas.attempt)` over the same
+  interval. Account for restarts per process, then sum each counter's increases
+  before division. No attempts means no rate. An increase in `catalog.cas.exhausted`
+  signals `409 CONFLICT` failures.
 - **`snapshots.count` / `snapshots.bytes` trending up** without bound → retention
   isn't running (check the maintenance Deployment / lease).
 - **`maintenance_cycle` line missing** for multiple intervals → the reaper is

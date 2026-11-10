@@ -78,6 +78,7 @@ import { forEachConcurrentUntilFailure, withDeadline } from '@marimo-hub/core/as
 import type { DeadlineOptions } from '@marimo-hub/core/async';
 import { BoundedLruMap } from '@marimo-hub/core/cache';
 import { Semaphore } from '@marimo-hub/core/concurrency';
+import { NotFoundError } from '@marimo-hub/core/errors';
 import {
 	createSandboxClient,
 	DEFAULT_BASE_URL,
@@ -707,6 +708,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		const existing =
 			this.reconnectId || !this.reuse || cached ? undefined : await this.findByOurId();
 		if (this.existingOnly && !this.reconnectId && !cached && existing?.status !== 'running') {
+			if (!existing) throw new NotFoundError(`CoreWeave sandbox ${this.id} is no longer available`);
 			throw new Error(`CoreWeave sandbox ${this.id} is no longer available`);
 		}
 		const t1 = Date.now();
@@ -715,17 +717,20 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		const sandbox =
 			cached ??
 			(this.reconnectId
-				? await this.client.fromId(this.reconnectId)
+				? await this.fromId(this.reconnectId)
 				: existing
-					? await this.client.fromId(existing.sandboxId)
+					? await this.fromId(existing.sandboxId)
 					: this.config.templateId
 						? await this.client.runFromTemplate(this.config.templateId, this.templateOptions())
 						: await this.client.create(this.createOptions()));
 		const t2 = Date.now();
-		if (
-			this.reconnectId &&
-			(sandbox.sandboxId !== this.reconnectId || sandbox.status !== 'running')
-		) {
+		if (this.reconnectId && sandbox.sandboxId !== this.reconnectId) {
+			throw new Error('CoreWeave saved sandbox is no longer available');
+		}
+		if ((this.existingOnly || this.reconnectId) && sandbox.status !== 'running') {
+			if (sandbox.status && isDeadStatus(sandbox.status)) {
+				throw new NotFoundError(`CoreWeave sandbox ${this.id} is no longer available`);
+			}
 			throw new Error('CoreWeave saved sandbox is no longer available');
 		}
 		this.sandbox = sandbox;
@@ -773,6 +778,17 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			{ channel: 'warn' },
 		);
 		return this.sandbox;
+	}
+
+	private async fromId(sandboxId: string): Promise<CoreWeaveSandbox> {
+		try {
+			return await this.client.fromId(sandboxId);
+		} catch (error) {
+			if (error instanceof CWSandboxNotFoundError) {
+				throw new NotFoundError(`CoreWeave sandbox ${this.id} is no longer available`);
+			}
+			throw error;
+		}
 	}
 
 	private assertValidReference(): void {

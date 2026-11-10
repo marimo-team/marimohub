@@ -1601,7 +1601,7 @@ async function startNotebookSessionOnce(
 	});
 	const logStoredConfigFallback = (config: 'base_image' | 'compute_profile') =>
 		logEvent({
-			level: 'error',
+			level: 'warn',
 			event: 'stored_config_fallback',
 			request_id: request.requestId ?? null,
 			config,

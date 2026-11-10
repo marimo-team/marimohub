@@ -883,8 +883,7 @@ describe('CatalogService', () => {
 				'snapshot put boom',
 			);
 
-			// A non-precondition error is not retried.
-			expect(increment.mock.calls.filter(([n]) => n === 'catalog.cas.attempt')).toHaveLength(1);
+			expect(increment).not.toHaveBeenCalled();
 			// Nothing was written (the failed put left no orphan).
 			expect((await bucket.list({ prefix: paths.snapshotsPrefix })).objects.length).toBe(before);
 		});
@@ -901,7 +900,7 @@ describe('CatalogService', () => {
 				}),
 			).rejects.toBe(boom);
 
-			expect(increment.mock.calls.filter(([n]) => n === 'catalog.cas.attempt')).toHaveLength(1);
+			expect(increment).not.toHaveBeenCalled();
 			expect((await bucket.list({ prefix: paths.snapshotsPrefix })).objects.length).toBe(before);
 		});
 
@@ -914,7 +913,7 @@ describe('CatalogService', () => {
 			await expect(svc.mutateSnapshot('test', ACTOR, (s) => ({ ...s }))).rejects.toBeInstanceOf(
 				NotInitializedError,
 			);
-			expect(increment.mock.calls.filter(([n]) => n === 'catalog.cas.attempt')).toHaveLength(1);
+			expect(increment).not.toHaveBeenCalled();
 		});
 
 		it('throws a corrupted-object error on malformed catalog JSON', async () => {
@@ -992,6 +991,48 @@ describe('CatalogService', () => {
 	});
 
 	describe('metrics', () => {
+		it('does not count reads, cache validation, or no-op mutations as writes', async () => {
+			const increment = vi.fn();
+			const instrumented = new CatalogService(bucket, { increment, gauge: vi.fn() });
+			await instrumented.initialize(ACTOR);
+			const put = vi.spyOn(bucket, 'put');
+
+			await instrumented.getCurrentSnapshot();
+			await instrumented.getCurrentSnapshot();
+			await instrumented.mutateSnapshot('noop', ACTOR, (snapshot) => snapshot);
+
+			expect(put).not.toHaveBeenCalled();
+			expect(increment).not.toHaveBeenCalled();
+		});
+
+		it('counts each conditional write and only the rejected write as a conflict', async () => {
+			const increment = vi.fn();
+			const instrumented = new CatalogService(
+				bucket,
+				{ increment, gauge: vi.fn() },
+				undefined,
+				ZERO_BACKOFF,
+			);
+			await instrumented.initialize(ACTOR);
+			const originalPut = bucket.put.bind(bucket);
+			let writes = 0;
+			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (key === paths.catalog && ++writes === 1) {
+					throw new PreconditionFailedError('competing write');
+				}
+				return originalPut(key, value, options);
+			});
+
+			await instrumented.mutateSnapshot('test', ACTOR, (snapshot) => ({ ...snapshot }));
+
+			expect(writes).toBe(2);
+			expect(increment.mock.calls).toEqual([
+				['catalog.cas.attempt'],
+				['catalog.cas.conflict'],
+				['catalog.cas.attempt'],
+			]);
+		});
+
 		it('emits CAS conflict + exhausted counters under contention', async () => {
 			const increment = vi.fn();
 			const instrumented = new CatalogService(
@@ -1014,8 +1055,13 @@ describe('CatalogService', () => {
 			await expect(instrumented.mutateSnapshot('t', ACTOR, (s) => ({ ...s }))).rejects.toThrow(
 				ConflictError,
 			);
-			expect(increment).toHaveBeenCalledWith('catalog.cas.conflict');
-			expect(increment).toHaveBeenCalledWith('catalog.cas.exhausted');
+			expect(increment.mock.calls).toEqual([
+				...Array.from({ length: 5 }, () => [
+					['catalog.cas.attempt'],
+					['catalog.cas.conflict'],
+				]).flat(),
+				['catalog.cas.exhausted'],
+			]);
 		});
 	});
 
