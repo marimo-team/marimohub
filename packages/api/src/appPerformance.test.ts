@@ -391,18 +391,30 @@ describe('app operation budgets', () => {
 		expect(sessions).toBe(2);
 	});
 
-	it('still reports an expired assignment as a terminal conflict', async () => {
-		const f = await fixture();
-		const response = await f.client.request(
-			'POST',
-			`/projects/${f.project.id}/notebooks/${f.notebook.id}/sessions/${f.admission.session_id}/heartbeat`,
-			{ ...f.admission.app_assignment, generation: 'stale' },
-		);
-		expect(response.status).toBe(409);
-		expect(await response.json()).toMatchObject({
-			error: { code: 'CONFLICT', message: 'The app assignment expired. Open the app again.' },
-		});
-	});
+	it.each(['stale generation', 'expired lease'] as const)(
+		'reports %s as a terminal conflict',
+		async (reason) => {
+			const f = await fixture();
+			const assignment = { ...f.admission.app_assignment };
+			if (reason === 'expired lease') {
+				const pool = await new AppPoolService(f.bucket, f.services.sessions).store.read(
+					f.project.id,
+					f.notebook.id,
+				);
+				vi.useFakeTimers({ toFake: ['Date'] });
+				vi.setSystemTime(pool!.assignments[0].visits[0].expires_at + 1);
+			} else assignment.generation = 'stale';
+			const response = await f.client.request(
+				'POST',
+				`/projects/${f.project.id}/notebooks/${f.notebook.id}/sessions/${f.admission.session_id}/heartbeat`,
+				assignment,
+			);
+			expect(response.status).toBe(409);
+			expect(await response.json()).toMatchObject({
+				error: { code: 'CONFLICT', message: 'The app assignment expired. Open the app again.' },
+			});
+		},
+	);
 
 	it('reclaims a crashed startup reservation after the startup timeout and margin', async () => {
 		const f = await fixture();
