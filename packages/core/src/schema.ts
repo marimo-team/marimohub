@@ -266,13 +266,24 @@ export const SnapshotProjectEntrySchema = z.looseObject({
 	// Set by a notebook move in the same snapshot write that moves the entry, so the search
 	// crawler sees the request from the snapshot it already holds instead of a separate record.
 	search_refresh: z.string().optional(),
-	// Candidate projections can lag changes. Authorization reads project.json.
+	// These fields select candidates. Only access can decide roles without a metadata read.
 	member_ids: z.array(UserIdSchema).optional(),
 	default_role: ProjectDefaultRoleSchema.optional(),
 	// Pending invite emails are normalized for identity reconciliation.
 	member_emails: z.array(z.string().transform((e) => e.toLowerCase())).optional(),
 	// Group ids are exact. Missing projections cannot grant access.
 	member_groups: z.array(z.string()).optional(),
+	// Absent access or any pending marker requires an authoritative project.json read.
+	access: z
+		.looseObject({
+			members: z.array(z.lazy(() => ProjectMemberSchema)),
+			default_role: ProjectDefaultRoleSchema,
+			generation: z.string().optional(),
+		})
+		.optional(),
+	// A writer can remove only its own marker; other writers may still be active.
+	// Ambiguous failures retain their markers until offline catalog recovery.
+	access_pending: z.array(SnapshotIdSchema).optional(),
 	/**
 	 * Denormalized security-label projection for list filtering ahead of
 	 * pagination. Tri-state: an object = labeled, `null` = KNOWN unlabeled,
@@ -286,8 +297,8 @@ export const SnapshotProjectEntrySchema = z.looseObject({
 	security_labels: ResourceSecurityLabelsSchema.nullable().optional(),
 	/**
 	 * Set while a label mutation is in flight. Routine projections preserve it
-	 * and keep `security_labels` indeterminate; only the mutation's own
-	 * finalization clears it (see `catalogProjection.ts`).
+	 * and keep `security_labels` indeterminate. Mutation completion or offline
+	 * recovery clears it (see `catalogProjection.ts`).
 	 */
 	security_labels_pending: z.literal(true).optional(),
 });

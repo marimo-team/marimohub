@@ -4606,6 +4606,49 @@ components:
                 type: array
                 items:
                   type: string
+              access:
+                type: object
+                properties:
+                  members:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        user_id:
+                          type: string
+                        email:
+                          type: string
+                        group:
+                          type: string
+                        role:
+                          type: string
+                          enum:
+                            - admin
+                            - manager
+                            - editor
+                            - viewer
+                            - app-user
+                      required:
+                        - role
+                  default_role:
+                    type: string
+                    enum:
+                      - inherit
+                      - none
+                      - manager
+                      - editor
+                      - viewer
+                      - app-user
+                  generation:
+                    type: string
+                required:
+                  - members
+                  - default_role
+                additionalProperties: {}
+              access_pending:
+                type: array
+                items:
+                  type: string
               security_labels:
                 anyOf:
                   - type: object

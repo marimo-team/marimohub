@@ -341,10 +341,13 @@ describe('project group member routes', () => {
 			role: 'viewer',
 		});
 	});
-	it('fails closed if the authoritative group role is corrupt', async () => {
+	it('fails closed if a legacy project has a corrupt authoritative group role', async () => {
 		await expectOk(await add(), 201);
 		const services = createServices(bucket);
 		const project = await services.projects.getProject(ProjectId.parse(pid));
+		await services.catalog.updateProjectEntry('test.legacy', ACTOR, project.id, () => ({
+			access: undefined,
+		}));
 		await bucket.put(
 			paths.project(project.id).meta,
 			JSON.stringify({ ...project, members: [{ group: GROUP, role: 'admin' }] }),

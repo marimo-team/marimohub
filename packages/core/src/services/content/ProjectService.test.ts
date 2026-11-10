@@ -34,6 +34,18 @@ function metaReads(get: MockInstance<MemoryBucket['get']>, id: ProjectId) {
 	return get.mock.calls.filter(([key]) => key === paths.project(id).meta);
 }
 
+function failFinalProjection(catalog: CatalogService, error = new Error('projection failed')) {
+	const update = catalog.updateProjectEntry.bind(catalog);
+	let failed = false;
+	return vi.spyOn(catalog, 'updateProjectEntry').mockImplementation((operation, ...args) => {
+		if (!failed && operation !== 'project.access.pending') {
+			failed = true;
+			return Promise.reject(error);
+		}
+		return update(operation, ...args);
+	});
+}
+
 describe('ProjectService', () => {
 	let bucket: MemoryBucket;
 	let projects: ProjectService;
@@ -50,42 +62,14 @@ describe('ProjectService', () => {
 		identities = env.identities;
 	});
 
-	it('reads only two candidate records among fifty projects for account and private listings', async () => {
-		const subject = { id: uid('candidate'), email: 'candidate@example.com' };
-		const ids: ProjectId[] = [];
-		for (let i = 0; i < 50; i++) {
-			const project = await projects.createProject(
-				{ name: `Project ${i}`, description: '' },
-				ACTOR,
-			);
-			ids.push(project.id);
-			if (i < 2) await projects.addMember(project.id, { user_id: subject.id }, 'viewer', ACTOR);
-		}
-		const get = vi.spyOn(bucket, 'get');
-		expect(await projects.isAppOnly(subject, { defaultRole: 'app-user' })).toBe(false);
-		expect(
-			get.mock.calls.filter(([key]) => key.endsWith('/project.json')).map(([key]) => key),
-		).toEqual(ids.slice(0, 2).map((id) => paths.project(id).meta));
-		get.mockClear();
-		expect(await projects.isAppOnly(subject)).toBe(false);
-		expect(get.mock.calls.filter(([key]) => key.endsWith('/project.json'))).toHaveLength(2);
-		get.mockClear();
-		expect((await projects.listProjects({ subject })).map((entry) => entry.id)).toEqual(
-			ids.slice(0, 2),
-		);
-		expect(get.mock.calls.filter(([key]) => key.endsWith('/project.json'))).toHaveLength(2);
-		get.mockClear();
-		expect(
-			await projects.listProjects({ subject, policy: { defaultRole: 'viewer' } }),
-		).toHaveLength(50);
-		expect(get.mock.calls.filter(([key]) => key.endsWith('/project.json'))).toHaveLength(50);
-	});
-
 	it.each(['membership', 'project-default'] as const)(
-		'keeps app-only classification when an app-user %s is absent from the projection',
+		'keeps app-only classification when an app-user %s is absent from a legacy projection',
 		async (kind) => {
 			const subject = { id: uid('unprojected'), email: 'unprojected@example.com' };
 			const project = await projects.createProject({ name: 'Private', description: '' }, ACTOR);
+			await catalog.updateProjectEntry('test.legacy', ACTOR, project.id, () => ({
+				access: undefined,
+			}));
 			expect(await projects.isAppOnly(subject)).toBe(false);
 			await bucket.put(
 				paths.project(project.id).meta,
@@ -104,6 +88,7 @@ describe('ProjectService', () => {
 		const subject = { id: uid('legacy'), email: 'legacy@example.com' };
 		const project = await projects.createProject({ name: 'Legacy', description: '' }, ACTOR);
 		await catalog.updateProjectEntry('test.legacy', ACTOR, project.id, () => ({
+			access: undefined,
 			member_ids: undefined,
 			default_role: undefined,
 		}));
@@ -122,17 +107,19 @@ describe('ProjectService', () => {
 	});
 
 	it.each(['viewer', 'manager', 'app-user'] as const)(
-		'discovers a new %s default after repairing a failed projection',
+		'uses the authoritative %s default while its projection is pending',
 		async (role) => {
 			const project = await projects.createProject({ name: 'Private', description: '' }, ACTOR);
 			await projects.updateProject(project.id, { default_role: 'none' }, ACTOR);
 			const subject = { id: uid('unprojected'), email: 'unprojected@example.com' };
-			vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(new Error('projection failed'));
+			failFinalProjection(catalog);
 			await expect(
 				projects.updateProject(project.id, { default_role: role }, ACTOR),
 			).rejects.toThrow('projection failed');
 			expect((await projects.getProject(project.id)).default_role).toBe(role);
-			expect(await projects.listProjects({ subject, action: 'app.read' })).toEqual([]);
+			expect(await projects.listProjects({ subject, action: 'app.read' })).toMatchObject([
+				{ id: project.id },
+			]);
 			expect(await projects.isAppOnly(subject)).toBe(role === 'app-user');
 
 			await projects.updateProject(project.id, { default_role: role }, ACTOR);
@@ -146,7 +133,7 @@ describe('ProjectService', () => {
 		const project = await projects.createProject({ name: 'Private', description: '' }, ACTOR);
 		const subject = { id: uid('user_out'), email: 'out@example.com' };
 		const policy = { defaultRole: 'manager' as const };
-		vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(new Error('projection failed'));
+		failFinalProjection(catalog);
 		await expect(
 			projects.updateProject(project.id, { default_role: 'none' }, ACTOR),
 		).rejects.toThrow('projection failed');
@@ -183,7 +170,9 @@ describe('ProjectService', () => {
 			projects.updateProject(project.id, { default_role: 'manager' }, ACTOR),
 		).rejects.toThrow('storage unavailable');
 		expect(await projects.getProject(project.id)).toEqual(restricted);
-		expect(projection).not.toHaveBeenCalled();
+		expect(projection.mock.calls.map(([operation]) => operation)).toEqual([
+			'project.access.pending',
+		]);
 		expect(
 			await projects.listProjects({
 				subject: { id: uid('user_out'), email: 'out@example.com' },
@@ -558,16 +547,15 @@ describe('ProjectService', () => {
 				await projects.updateProject(project.id, { default_role: 'none' }, ACTOR);
 				await projects.addMember(project.id, member, 'manager', ACTOR);
 				expect(await projects.listProjects({ subject: STRANGER })).toHaveLength(1);
-				const snapshot = await catalog.getCurrentSnapshot();
-				vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(
-					new Error('projection failed'),
-				);
+				failFinalProjection(catalog);
 
 				await expect(projects.removeMember(project.id, selector, ACTOR)).rejects.toThrow(
 					'projection failed',
 				);
 
-				expect(await catalog.getCurrentSnapshot()).toEqual(snapshot);
+				const [entry] = (await catalog.getCurrentSnapshot()).projects;
+				expect(entry.access).toBeUndefined();
+				expect(entry.access_pending).toHaveLength(1);
 				expect((await projects.getProject(project.id)).members).toEqual([
 					{ user_id: ACTOR, role: 'admin' },
 				]);
@@ -581,15 +569,13 @@ describe('ProjectService', () => {
 
 			it.each([
 				{ role: 'app-user', defaultRole: 'manager', visible: false, appOnly: true },
-				{ role: 'viewer', defaultRole: 'app-user', visible: true, appOnly: true },
-				{ role: 'editor', defaultRole: null, visible: false, appOnly: false },
+				{ role: 'viewer', defaultRole: 'app-user', visible: true, appOnly: false },
+				{ role: 'editor', defaultRole: null, visible: true, appOnly: false },
 			] as const)(
-				'narrows candidates without granting access when $role membership projection fails (default $defaultRole)',
+				'uses authoritative $role membership when projection fails (default $defaultRole)',
 				async ({ role, defaultRole, visible, appOnly }) => {
 					const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
-					vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(
-						new Error('projection failed'),
-					);
+					failFinalProjection(catalog);
 					await expect(projects.addMember(project.id, member, role, ACTOR)).rejects.toThrow(
 						'projection failed',
 					);
@@ -604,7 +590,7 @@ describe('ProjectService', () => {
 					expect(await projects.isAppOnly(STRANGER, policy)).toBe(appOnly);
 					expect(
 						await projects.listProjects({ subject: STRANGER, policy, action: 'app.read' }),
-					).toHaveLength(defaultRole === null ? 0 : 1);
+					).toHaveLength(1);
 				},
 			);
 		});
@@ -645,9 +631,12 @@ describe('ProjectService', () => {
 			expect(await projects.isAppOnly(STRANGER)).toBe(false);
 		});
 
-		it('ignores a missing project head but propagates storage failures', async () => {
+		it('ignores a missing legacy project head but propagates storage failures', async () => {
 			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
 			await projects.addMember(project.id, { user_id: STRANGER.id }, 'viewer', ACTOR);
+			await catalog.updateProjectEntry('test.legacy', ACTOR, project.id, () => ({
+				access: undefined,
+			}));
 			const read = vi.spyOn(projects, 'getProject');
 			read.mockRejectedValueOnce(new Error('storage unavailable'));
 			await expect(projects.listProjects({ subject: STRANGER })).rejects.toThrow(
@@ -662,9 +651,15 @@ describe('ProjectService', () => {
 			expect(await projects.isAppOnly(STRANGER)).toBe(false);
 		});
 
-		it('stops scanning account roles after finding viewer access', async () => {
+		it('stops scanning legacy account roles after finding viewer access', async () => {
 			for (let index = 0; index <= BUCKET_SCAN_CONCURRENCY; index++) {
-				await projects.createProject({ name: `Project ${index}`, description: '' }, ACTOR);
+				const project = await projects.createProject(
+					{ name: `Project ${index}`, description: '' },
+					ACTOR,
+				);
+				await catalog.updateProjectEntry('test.legacy', ACTOR, project.id, () => ({
+					access: undefined,
+				}));
 			}
 			const get = vi.spyOn(bucket, 'get');
 			expect(await projects.isAppOnly(STRANGER, { defaultRole: 'viewer' })).toBe(false);
@@ -681,6 +676,7 @@ describe('ProjectService', () => {
 			await projects.deleteProject(current.id, ACTOR);
 			await projects.deleteProject(legacy.id, ACTOR);
 			await catalog.updateProjectEntry('test.strip', ACTOR, legacy.id, () => ({
+				access: undefined,
 				member_ids: undefined,
 			}));
 
@@ -1007,7 +1003,7 @@ describe('ProjectService', () => {
 			await projects.addMember(p.id, { email: 'invitee@example.com' }, 'editor', ACTOR);
 			await identities.upsert({ id: MEMBER, email: 'invitee@example.com', name: 'Invitee' });
 			const projectionFailure = new Error('catalog unavailable');
-			vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(projectionFailure);
+			failFinalProjection(catalog, projectionFailure);
 
 			await expect(projects.claimPendingInvites()).rejects.toBe(projectionFailure);
 			expect((await projects.getProject(p.id)).members).toContainEqual({

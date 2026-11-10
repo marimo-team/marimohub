@@ -514,6 +514,8 @@ export interface CreateServicesOptions {
 	backgroundWork?: BackgroundWork;
 	workspaceLimits?: WorkspaceLimits;
 	repositoryHosts?: GitProviderHosts;
+	/** Select a fresh generation only after all legacy project-access writers stop. */
+	projectAccessGeneration?: string;
 	/**
 	 * Wrap the bucket and every service in OTEL spans (one per method call).
 	 * Enable only when a global tracer provider is registered — otherwise the
@@ -571,6 +573,7 @@ export function createServices(
 			metrics,
 			(emails) => identities.getUniqueByEmails(emails),
 			deepLinks,
+			options?.projectAccessGeneration,
 		),
 		{
 			getProject: project,

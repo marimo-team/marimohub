@@ -530,7 +530,7 @@ describe('Project member routes', () => {
 	});
 
 	it.each(['invalid-json', 'invalid-member-role'] as const)(
-		'fails closed on %s despite a matching catalog membership',
+		'fails closed on %s despite a matching legacy catalog membership',
 		async (corruption) => {
 			await expectOk(
 				await owner('POST', `/projects/${pid}/members`, { user_id: bob, role: 'viewer' }),
@@ -539,7 +539,11 @@ describe('Project member routes', () => {
 			const member = createTestApi({ bucket, userId: bob }).request;
 			await expectOk(await member('GET', `/projects/${pid}`));
 			expect(await expectPage(await member('GET', '/projects'))).toHaveLength(1);
-			const project = await createServices(bucket).projects.getProject(ProjectId.parse(pid));
+			const services = createServices(bucket);
+			const project = await services.projects.getProject(ProjectId.parse(pid));
+			await services.catalog.updateProjectEntry('test.legacy', ACTOR, project.id, () => ({
+				access: undefined,
+			}));
 			await bucket.put(
 				paths.project(project.id).meta,
 				corruption === 'invalid-json'
