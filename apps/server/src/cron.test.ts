@@ -366,9 +366,10 @@ describe('startMaintenance', () => {
 		const job = await deps.services.jobs.createJob(project.id, notebook.id, { name: 'j' }, ACTOR);
 		const old = await deps.services.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
 		await deps.services.jobRuns.transition(old, 'fail', () => ({
-			finished_at: new Date(Date.now() - 60 * 24 * 3_600_000).toISOString(),
+			finished_at: new Date().toISOString(),
 		}));
 		await deps.services.jobRuns.deleteMarker(old);
+		vi.setSystemTime(Date.now() + 60 * 24 * 3_600_000);
 
 		h.track(startMaintenance(deps, metrics));
 		await flushRun();

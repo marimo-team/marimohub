@@ -79,6 +79,8 @@ export default defineConfig({
 			// webServer is config-wide, so CRUD shares this backend when the lifecycle project runs.
 			// Those specs intentionally never open a notebook and therefore never start compute.
 			MARIMOHUB_COMPUTE_BACKEND: runLifecycle ? 'local' : 'none',
+			// Use the installed runtime's assets so lifecycle tests do not depend on a CDN.
+			MARIMOHUB_COMPUTE_ASSET_URL: '',
 			MARIMOHUB_AUTH_BACKEND: 'dev',
 			MARIMOHUB_STATIC_ROOT: 'packages/web/dist',
 		},
