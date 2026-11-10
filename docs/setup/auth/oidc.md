@@ -361,12 +361,12 @@ user identities, not machine identities or client-credentials grants.
 
 #### Scope grants
 
-| OAuth scope      | Permitted actions                                |
-| ---------------- | ------------------------------------------------ |
-| `marimohub:read` | Read projects and integrations                   |
-| `marimohub:run`  | Read, use integrations, and run sessions         |
-| `marimohub:edit` | Run, edit notebooks, and publish change requests |
-| `marimohub:full` | All actions available to a bearer credential     |
+| OAuth scope      | Permitted actions                                                       |
+| ---------------- | ----------------------------------------------------------------------- |
+| `marimohub:read` | Read projects and integrations                                          |
+| `marimohub:run`  | Read, use integrations, and run sessions                                |
+| `marimohub:edit` | Run, edit notebooks, save working branches, and publish change requests |
+| `marimohub:full` | All actions available to a bearer credential                            |
 
 Clients must request at least one grant scope. Multiple grant scopes combine
 their actions. The Hub ignores unrelated scopes and rejects tokens without a

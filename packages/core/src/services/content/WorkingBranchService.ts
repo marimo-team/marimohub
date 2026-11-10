@@ -415,7 +415,11 @@ export class WorkingBranchService {
 			]),
 		);
 		const fingerprint = await sha256Hex(
-			JSON.stringify([input.sessionId, input.message ?? 'Save notebook changes']),
+			JSON.stringify([
+				input.sessionId,
+				input.message ?? 'Save notebook changes',
+				input.coAuthor ? [input.coAuthor.name, input.coAuthor.email] : null,
+			]),
 		);
 		return this.runSave({ ...input, id, fingerprint });
 	}
@@ -785,17 +789,22 @@ export class WorkingBranchService {
 		receipt: WorkingBranchSave,
 		context: SaveContext,
 	): Promise<WorkingBranchSave> {
-		const { input, source, record, reader, check } = context;
+		const { input, source, record, reader, check, finish } = context;
 		const { projectId: pid, notebookId: nid, actor, id } = input;
 		try {
 			const current = await this.source(pid, nid);
+			if (current.commit !== receipt.base_commit && current.commit !== receipt.commit)
+				return await finish({
+					...receipt,
+					state: 'conflict',
+					error:
+						'Committed remotely, but the hub source advanced. Download recovery and restart the editor before saving again.',
+				});
 			const [files, gitFiles] = await Promise.all([
 				reader.fetchWorkspace(source.repo, receipt.commit!, source.root_path),
 				reader.fetchGitDirectory!(source.repo, receipt.commit!, source.branch),
 			]);
 			await check();
-			if (current.commit !== receipt.base_commit && current.commit !== receipt.commit)
-				throw new ConflictError('Hub source advanced past this save; it will not be regressed');
 			await input.authorize?.();
 			await this.deps.notebooks.synced.sync(
 				pid,
@@ -1011,41 +1020,51 @@ export class WorkingBranchService {
 		let count = 0;
 		for (const item of page.objects) {
 			if (!item.key.endsWith('/receipt.json')) continue;
-			const object = await this.deps.bucket.get(item.key);
-			if (!object) continue;
-			let receipt = await readStored(WorkingBranchSaveSchema, object, item.key);
-			if (Date.parse(receipt.expires_at) + 3600_000 > now) continue;
-			if (SAVE_STAGES[receipt.state].expirable) {
-				try {
-					receipt = await this.store.withLease(
-						receipt.project_id,
-						receipt.notebook_id,
-						async (check, update) => {
-							const fresh = await this.getSave(receipt.project_id, receipt.notebook_id, receipt.id);
-							if (!SAVE_STAGES[fresh.state].expirable) return fresh;
-							const expired = await this.putSave(
-								{ ...fresh, state: 'expired', error: 'Capture expired before publication' },
-								check,
-							);
-							await update((record) =>
-								record.active_save === receipt.id ? { ...record, active_save: undefined } : record,
-							);
-							return expired;
-						},
-					);
-				} catch (error) {
-					if (!(error instanceof ConflictError)) throw error;
-					receipt = await this.expireRetiredSave(receipt);
+			try {
+				const object = await this.deps.bucket.get(item.key);
+				if (!object) continue;
+				let receipt = await readStored(WorkingBranchSaveSchema, object, item.key);
+				if (Date.parse(receipt.expires_at) + 3600_000 > now) continue;
+				if (SAVE_STAGES[receipt.state].expirable) {
+					try {
+						receipt = await this.store.withLease(
+							receipt.project_id,
+							receipt.notebook_id,
+							async (check, update) => {
+								const fresh = await this.getSave(
+									receipt.project_id,
+									receipt.notebook_id,
+									receipt.id,
+								);
+								if (!SAVE_STAGES[fresh.state].expirable) return fresh;
+								const expired = await this.putSave(
+									{ ...fresh, state: 'expired', error: 'Capture expired before publication' },
+									check,
+								);
+								await update((record) =>
+									record.active_save === receipt.id
+										? { ...record, active_save: undefined }
+										: record,
+								);
+								return expired;
+							},
+						);
+					} catch (error) {
+						if (!(error instanceof ConflictError)) throw error;
+						receipt = await this.expireRetiredSave(receipt);
+					}
 				}
-			}
-			// An unknown ref outcome can still become a remote commit; keep its capture and baseline.
-			if (!SAVE_STAGES[receipt.state].terminal) continue;
-			const captureKey = workingBranchPaths(receipt.project_id, receipt.notebook_id).capture(
-				receipt.id,
-			);
-			if (await this.deps.bucket.head(captureKey)) {
-				await this.deps.bucket.delete(captureKey);
-				count++;
+				// An unknown ref outcome can still become a remote commit; keep its capture and baseline.
+				if (!SAVE_STAGES[receipt.state].terminal) continue;
+				const captureKey = workingBranchPaths(receipt.project_id, receipt.notebook_id).capture(
+					receipt.id,
+				);
+				if (await this.deps.bucket.head(captureKey)) {
+					await this.deps.bucket.delete(captureKey);
+					count++;
+				}
+			} catch (error) {
+				logOperationalError('working_branch.cleanup_failed', { object: item.key }, error);
 			}
 		}
 		try {

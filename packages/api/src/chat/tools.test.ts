@@ -10,6 +10,7 @@ import type { ApiDeps } from '../context';
 import { withRequestMemo } from '../requestMemo';
 import { createInitializedBucket, createTestApi, expectOk } from '../testing';
 import { openToolSession } from './tools';
+import { workingBranchFixture } from '../testing/workingBranches';
 
 const principal: AuthenticatedPrincipal = {
 	id: ACTOR,
@@ -131,6 +132,26 @@ describe('chat tool session', () => {
 		expect(chunks).toEqual([]);
 		expect(tools.state.calls).toBe(0);
 		await tools.close();
+	});
+
+	it('refuses an oversized PR body before consent or provider calls', async () => {
+		const env = await workingBranchFixture();
+		const { call, checkpoints, chunks, tools } = await session({
+			sourceControl: env.sourceControl,
+		});
+		try {
+			const output = await call('open_change_request', {
+				notebook: 'Working',
+				body: 'x'.repeat(CHAT_LIMITS.consentDetailCharacters + 1),
+			});
+			expect(output).toMatchObject({ code: 'INPUT_TOO_LARGE' });
+			expect(checkpoints).toEqual([]);
+			expect(chunks).toEqual([]);
+			expect(env.writer.openBranchChangeRequest).not.toHaveBeenCalled();
+			expect(tools.state.calls).toBe(0);
+		} finally {
+			await tools.close();
+		}
 	});
 
 	describe('a mutating call that fails', () => {

@@ -110,11 +110,12 @@ export function SyncedNotebookDialog({
 					title: value.title.trim(),
 					description: value.title.trim(),
 					repo: value.repo.trim(),
-					branch: value.branch.trim(),
 					root_path: normalizeRootPathInput(value.rootPath) || undefined,
 					entry_notebook: value.entryNotebook.trim(),
 					sync_mode: value.newBranch === 'yes' ? 'pull' : value.syncMode,
-					...(value.newBranch === 'yes' ? { fork: { base_branch: value.branch.trim() } } : {}),
+					...(value.newBranch === 'yes'
+						? { fork: { base_branch: value.branch.trim() } }
+						: { branch: value.branch.trim() }),
 					...(value.baseImage !== DEFAULT_BASE_IMAGE ? { base_image: value.baseImage } : {}),
 					...(value.computeProfile !== DEFAULT_COMPUTE_PROFILE
 						? { compute_profile: value.computeProfile }

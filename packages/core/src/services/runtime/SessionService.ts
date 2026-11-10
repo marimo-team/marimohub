@@ -260,7 +260,7 @@ export class SessionService {
 		return this.mutate(projectId, id, (session) => {
 			if (session.notebook_id !== notebookId)
 				throw new ConflictError('Session belongs to another notebook');
-			if (session.status !== 'running') return null;
+			if (session.status !== 'running' && session.status !== 'terminating') return null;
 			if (session.working_branch_version_id === version) return null;
 			if ((session.working_branch_version_id ?? session.source_version_id) !== expected) {
 				throw new ConflictError('Session save baseline changed');

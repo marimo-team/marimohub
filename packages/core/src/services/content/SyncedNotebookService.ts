@@ -317,9 +317,10 @@ export class SyncedNotebookService {
 
 		// Re-syncing the same commit (a retried CI run) is a genuine no-op, not a conflict.
 		if (isAtBranchHead(syncedSource, prepared.commit)) {
+			let meta = existing;
 			if (syncedSource.working_branch) {
 				const nb = paths.project(projectId).notebook(notebookId);
-				await mutateObject(
+				meta = await mutateObject(
 					this.bucket,
 					nb.meta,
 					(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
@@ -337,7 +338,7 @@ export class SyncedNotebookService {
 					(entry) => loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry),
 				);
 			}
-			return { meta: existing, versionId: null };
+			return { meta, versionId: null };
 		}
 		// Fast-fail before writing any version files; the CAS callback re-checks.
 		assertSyncSourcePrecondition(syncedSource, input);

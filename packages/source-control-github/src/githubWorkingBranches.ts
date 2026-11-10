@@ -31,10 +31,13 @@ function workingBranch(branch: string): void {
 	}
 }
 
-function fullCommit(commit: string): void {
-	if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(commit)) {
+const FULL_COMMIT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
+
+function fullCommit(commit: string): string {
+	if (!FULL_COMMIT.test(commit)) {
 		throw new ValidationError('Working branches require a full commit SHA');
 	}
+	return commit.toLowerCase();
 }
 
 export class GitHubWorkingBranches implements WorkingBranchWriter {
@@ -54,43 +57,45 @@ export class GitHubWorkingBranches implements WorkingBranchWriter {
 
 	async createBranch(input: Input<'createBranch'>): Promise<{ commit: string }> {
 		workingBranch(input.branch);
-		fullCommit(input.fromCommit);
+		const fromCommit = fullCommit(input.fromCommit);
 		const { repository } = await this.context(input.repository);
-		const result = await repository.createRef(input.branch, input.fromCommit);
+		const result = await repository.createRef(input.branch, fromCommit);
 		if (result.existed) throw new ConflictError('The working branch already exists');
-		if (result.headCommit !== input.fromCommit) {
+		if (result.headCommit.toLowerCase() !== fromCommit) {
 			throw new UnavailableError('GitHub returned an unexpected working branch commit');
 		}
-		return { commit: result.headCommit };
+		return { commit: fromCommit };
 	}
 
 	async prepareCommit(input: Input<'prepareCommit'>): Promise<{ commit: string }> {
-		fullCommit(input.parentCommit);
+		const parentCommit = fullCommit(input.parentCommit);
 		validateChanges(input.changes);
 		validateCommitIdentity(input.coAuthor);
 		if (!input.message.trim() || input.message.length > 65_536) {
 			throw new ValidationError('A working branch commit requires a bounded message');
 		}
 		const { repository } = await this.context(input.repository);
-		const tree = await repository.createProposalTree(input, input.parentCommit);
+		const tree = await repository.createProposalTree(input, parentCommit);
 		const commit = await repository.createProposalCommit(
-			input.parentCommit,
+			parentCommit,
 			tree,
 			input.message,
 			'',
 			input.coAuthor,
 		);
-		fullCommit(commit);
-		return { commit };
+		if (!FULL_COMMIT.test(commit)) {
+			throw new UnavailableError('GitHub returned an invalid working branch commit');
+		}
+		return { commit: commit.toLowerCase() };
 	}
 
 	async advanceBranch(input: Input<'advanceBranch'>): Promise<{ commit: string }> {
 		workingBranch(input.branch);
-		fullCommit(input.expectedHead);
-		fullCommit(input.commit);
+		const expectedHead = fullCommit(input.expectedHead);
+		const commit = fullCommit(input.commit);
 		const { repository } = await this.context(input.repository);
-		await repository.compareAndSwapRef(input.branch, input.expectedHead, input.commit);
-		return { commit: input.commit };
+		await repository.compareAndSwapRef(input.branch, expectedHead, commit);
+		return { commit };
 	}
 
 	private parsePull(data: unknown, owner: string, repo: string): Pull {
@@ -148,7 +153,7 @@ export class GitHubWorkingBranches implements WorkingBranchWriter {
 
 	async inspectBranch(input: Input<'inspectBranch'>): Promise<WorkingBranchInspection> {
 		workingBranch(input.branch);
-		if (input.commit !== undefined) fullCommit(input.commit);
+		const commit = input.commit === undefined ? undefined : fullCommit(input.commit);
 		if (
 			input.changeRequestNumber !== undefined &&
 			(!Number.isSafeInteger(input.changeRequestNumber) || input.changeRequestNumber <= 0)
@@ -157,12 +162,12 @@ export class GitHubWorkingBranches implements WorkingBranchWriter {
 		}
 		const ctx = await this.context(input.repository);
 		const headCommit = await ctx.repository.getRef(input.branch);
-		let containsCommit = Boolean(input.commit && headCommit === input.commit);
-		if (input.commit && headCommit && !containsCommit) {
+		let containsCommit = Boolean(commit && headCommit?.toLowerCase() === commit);
+		if (commit && headCommit && !containsCommit) {
 			// Compare immutable SHAs so an external push during inspection cannot change its meaning.
 			const comparison = await responseJson(
 				await this.client.request(
-					`${ctx.base}/compare/${input.commit}...${headCommit}?per_page=1`,
+					`${ctx.base}/compare/${commit}...${headCommit}?per_page=1`,
 					ctx.token,
 				),
 			);
@@ -186,7 +191,7 @@ export class GitHubWorkingBranches implements WorkingBranchWriter {
 			}
 			const { headCommit: _headCommit, ...metadata } = pull;
 			changeRequest = metadata;
-		} else if (headCommit) {
+		} else {
 			const pull = await this.findPull(ctx, input.branch);
 			if (pull) {
 				const { headCommit: _headCommit, ...metadata } = pull;

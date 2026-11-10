@@ -241,10 +241,7 @@ export class GitHubRepositoryWriter {
 			!isRecord(payload.data) ||
 			!isRecord(payload.data.updateRefs)
 		) {
-			if (!force) {
-				throw new UnavailableError('Could not confirm the GitHub working branch update');
-			}
-			throw new ConflictError('The GitHub proposal branch changed while updating');
+			throw new UnavailableError('Could not confirm the GitHub branch update');
 		}
 	}
 

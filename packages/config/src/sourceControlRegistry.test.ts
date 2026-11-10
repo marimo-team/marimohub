@@ -113,11 +113,13 @@ describe('ConfiguredSourceControlRegistry', () => {
 		const disabled = new ConfiguredSourceControlRegistry([{ reader: publisher, publisher }]);
 		expect(disabled.getPublisher('test')?.workingBranches).toBeUndefined();
 		expect(disabled.workingBranchProviders()).toEqual([]);
+		expect(disabled.workingBranchesEnabled).toBe(false);
 		const unreadable = new ConfiguredSourceControlRegistry([{ publisher }], {
 			workingBranchesEnabled: true,
 		});
 		expect(unreadable.getPublisher('test')?.workingBranches).toBeUndefined();
 		expect(unreadable.workingBranchProviders()).toEqual([]);
+		expect(unreadable.workingBranchesEnabled).toBe(false);
 	});
 
 	it('checks reader and publisher repository policy without external calls', () => {

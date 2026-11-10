@@ -1408,6 +1408,9 @@ app.openapi(createGitNotebook, async (c) => {
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
 	const body = c.req.valid('json');
+	if (body.fork && body.branch !== undefined) {
+		throw new BadRequestError('Specify either branch or fork, not both');
+	}
 	const project = await assertProjectRole(
 		projects,
 		pid,

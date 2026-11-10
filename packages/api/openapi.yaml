@@ -3850,8 +3850,10 @@ components:
           type: string
         created_at:
           type: string
+          format: date-time
         expires_at:
           type: string
+          format: date-time
         base_version_id:
           type: string
         base_commit:
@@ -3941,30 +3943,7 @@ components:
             - string
             - 'null'
         change_request:
-          type: object
-          properties:
-            number:
-              type: integer
-              exclusiveMinimum: 0
-            url:
-              type: string
-              format: uri
-            state:
-              type: string
-              enum:
-                - open
-                - closed
-                - merged
-            headBranch:
-              type: string
-            baseBranch:
-              type: string
-          required:
-            - number
-            - url
-            - state
-            - headBranch
-            - baseBranch
+          $ref: '#/components/schemas/WorkingBranchChangeRequestResponse'
         checked_at:
           type: string
         last_save:
@@ -3983,6 +3962,31 @@ components:
         - branch
         - commit
         - remote_commit
+    WorkingBranchChangeRequestResponse:
+      type: object
+      properties:
+        number:
+          type: integer
+          exclusiveMinimum: 0
+        url:
+          type: string
+          format: uri
+        state:
+          type: string
+          enum:
+            - open
+            - closed
+            - merged
+        head_branch:
+          type: string
+        base_branch:
+          type: string
+      required:
+        - number
+        - url
+        - state
+        - head_branch
+        - base_branch
     SessionPage:
       type: object
       properties:
@@ -20137,7 +20141,9 @@ paths:
       summary: Download captured source changes for recovery
       description: Returns a ZIP containing a manifest of modifications/deletions and
         captured file bytes. Requires current notebook authorization. Payloads
-        expire at the time shown on the save receipt.
+        become eligible for cleanup at expires_at, except unresolved dispatched
+        saves retain their capture. Downloads remain available until the payload
+        is pruned.
       parameters:
         - schema:
             type: string
@@ -20388,30 +20394,7 @@ paths:
                     enum:
                       - true
                   data:
-                    type: object
-                    properties:
-                      number:
-                        type: integer
-                        exclusiveMinimum: 0
-                      url:
-                        type: string
-                        format: uri
-                      state:
-                        type: string
-                        enum:
-                          - open
-                          - closed
-                          - merged
-                      headBranch:
-                        type: string
-                      baseBranch:
-                        type: string
-                    required:
-                      - number
-                      - url
-                      - state
-                      - headBranch
-                      - baseBranch
+                    $ref: '#/components/schemas/WorkingBranchChangeRequestResponse'
                 required:
                   - success
                   - data

@@ -73,7 +73,7 @@ export function GitSourceDetails({
 				{source.working_branch && (
 					<>
 						<dt>Base branch</dt>
-						<dd>{source.working_branch.base_branch}</dd>
+						<dd className="min-w-0 truncate">{source.working_branch.base_branch}</dd>
 						<dt>Saving</dt>
 						<dd>Explicit commits to the working branch</dd>
 					</>

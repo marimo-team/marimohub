@@ -2052,6 +2052,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'Allow editors to create working notebooks, save source changes, and open draft PRs. Does not enable automatic saves.',
 						default: 'false',
+						example: 'true',
 						optIn: true,
 					},
 				],

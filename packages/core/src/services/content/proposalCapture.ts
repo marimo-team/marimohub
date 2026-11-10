@@ -94,6 +94,9 @@ import hashlib
 import json
 import sys
 
+class FileTooLarge(Exception):
+    pass
+
 root, paths_json, limit_text = sys.argv[1:4]
 result = []
 for path in json.loads(paths_json):
@@ -107,9 +110,11 @@ for path in json.loads(paths_json):
                     break
                 size += len(chunk)
                 if size > int(limit_text):
-                    raise ValueError('Working tree file exceeds the file size limit')
+                    raise FileTooLarge()
                 digest.update(chunk)
         result.append(dict(path=path, size_bytes=size, sha256=digest.hexdigest()))
+    except FileTooLarge:
+        result.append(dict(path=path, error='too_large'))
     except FileNotFoundError:
         result.append(dict(path=path, missing=True))
 print(json.dumps(result))
@@ -118,6 +123,7 @@ print(json.dumps(result))
 const WorkingTreeDigestSchema = z.union([
 	WorkspaceManifestSchema.element,
 	z.object({ path: z.string(), missing: z.literal(true) }),
+	z.object({ path: z.string(), error: z.literal('too_large') }),
 ]);
 
 function pythonCommand(args: string): string {
@@ -130,7 +136,10 @@ async function workingTreeDigests(
 	candidates: string[],
 	renew: () => Promise<void>,
 ) {
-	const result = new Map<string, z.infer<typeof WorkingTreeDigestSchema>>();
+	const result = new Map<
+		string,
+		Exclude<z.infer<typeof WorkingTreeDigestSchema>, { error: string }>
+	>();
 	// Bound argv size and each hash pass so large folders can renew their lease between batches.
 	for (let offset = 0; offset < candidates.length; ) {
 		const batch: string[] = [];
@@ -155,8 +164,14 @@ async function workingTreeDigests(
 		const entries = z.array(WorkingTreeDigestSchema).parse(JSON.parse(hashed.stdout));
 		if (entries.length !== batch.length || entries.some((entry, i) => entry.path !== batch[i]))
 			throw new ConflictError('Working tree digest paths do not match the request');
-		for (let i = 0; i < entries.length; i++)
-			result.set(candidates[offset - batch.length + i], entries[i]);
+		for (let i = 0; i < entries.length; i++) {
+			const entry = entries[i];
+			if ('error' in entry)
+				throw new ValidationError(
+					`Changed file ${entry.path} exceeds the ${MAX_WORKSPACE_FILE_BYTES}-byte limit`,
+				);
+			result.set(candidates[offset - batch.length + i], entry);
+		}
 	}
 	return result;
 }

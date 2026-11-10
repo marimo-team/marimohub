@@ -1586,7 +1586,7 @@ export function useCreateSyncedNotebook(projectId: string) {
 			title: string;
 			description: string;
 			repo: string;
-			branch: string;
+			branch?: string;
 			root_path?: string;
 			entry_notebook: string;
 			sync_mode?: 'push' | 'pull';

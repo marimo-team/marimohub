@@ -354,5 +354,6 @@ it('lets editors create a working notebook without offering existing-branch trac
 		fork: { base_branch: 'main' },
 		sync_mode: 'pull',
 	});
+	expect(JSON.parse(init!.body as string)).not.toHaveProperty('branch');
 	expect(new Headers(init?.headers).get('idempotency-key')).toBeTruthy();
 });

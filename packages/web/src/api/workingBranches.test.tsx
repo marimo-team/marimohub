@@ -205,7 +205,6 @@ describe('working branch mutations', () => {
 			title: 'App',
 			description: '',
 			repo: 'owner/repo',
-			branch: 'main',
 			entry_notebook: 'app.py',
 			fork: { base_branch: 'main' },
 		};

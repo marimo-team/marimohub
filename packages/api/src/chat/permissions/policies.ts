@@ -82,6 +82,7 @@ const ACTIONS: Record<
 			['Title', 'title'],
 			['Repository', 'repo'],
 			['Base branch', 'base_branch'],
+			['Root path', 'root_path'],
 			['Notebook file', 'entry_notebook'],
 			['Start a session', 'launch'],
 		],
@@ -107,6 +108,7 @@ const ACTIONS: Record<
 			['Base branch', 'base_branch'],
 			['Title', 'title'],
 			['Draft', 'draft'],
+			['Body', 'body', DETAIL_LIMITS.code],
 		],
 	},
 	retry_branch_save: {

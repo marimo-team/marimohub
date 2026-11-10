@@ -114,6 +114,7 @@ export function sourceControlPublishFailure(
 }
 
 export interface WorkingBranchInspection {
+	/** Null only when the branch does not exist; provider failures must throw. */
 	headCommit: string | null;
 	/** True only when the inspected head equals or descends from the requested commit. */
 	containsCommit: boolean;
@@ -156,6 +157,11 @@ export interface WorkingBranchWriter {
 		body: string;
 		draft: boolean;
 	}): Promise<OpenChangeRequestResult>;
+	/**
+	 * Search by head branch when no change-request number is supplied, even if the ref is missing.
+	 * A returned change request must have headBranch equal to the inspected branch.
+	 * Reject an explicit number that belongs to a different head branch.
+	 */
 	inspectBranch(input: {
 		repository: string;
 		branch: string;

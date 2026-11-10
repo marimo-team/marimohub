@@ -12,6 +12,7 @@ import type {
 	ProjectId,
 	Session,
 	SessionId,
+	WorkingBranchService,
 } from '@marimo-hub/core';
 import { z } from '@hono/zod-openapi';
 import type { ApiDeps } from './context';
@@ -36,19 +37,47 @@ export const WorkingBranchSaveResponse = WorkingBranchSaveSchema.omit({
 	fingerprint: true,
 	co_author: true,
 }).openapi('WorkingBranchSave');
+export const WorkingBranchChangeRequestResponse = WorkingBranchChangeRequestSchema.omit({
+	headBranch: true,
+	baseBranch: true,
+})
+	.extend({
+		head_branch: WorkingBranchChangeRequestSchema.shape.headBranch,
+		base_branch: WorkingBranchChangeRequestSchema.shape.baseBranch,
+	})
+	.openapi('WorkingBranchChangeRequestResponse');
 export const WorkingBranchStatusResponse = z
 	.object({
 		base_branch: z.string(),
 		branch: z.string(),
 		commit: z.string().nullable(),
 		remote_commit: z.string().nullable(),
-		change_request: WorkingBranchChangeRequestSchema.optional(),
+		change_request: WorkingBranchChangeRequestResponse.optional(),
 		checked_at: z.string().optional(),
 		last_save: WorkingBranchSaveResponse.optional(),
 		active_save: z.string().optional(),
 		ended_reason: WorkingBranchRecordSchema.shape.ended_reason,
 	})
 	.openapi('WorkingBranchStatus');
+
+export function toWorkingBranchChangeRequest({
+	headBranch,
+	baseBranch,
+	...request
+}: z.infer<typeof WorkingBranchChangeRequestSchema>) {
+	return WorkingBranchChangeRequestResponse.parse({
+		...request,
+		head_branch: headBranch,
+		base_branch: baseBranch,
+	});
+}
+
+export function toWorkingBranchStatus(status: Awaited<ReturnType<WorkingBranchService['status']>>) {
+	return WorkingBranchStatusResponse.parse({
+		...status,
+		change_request: status.change_request && toWorkingBranchChangeRequest(status.change_request),
+	});
+}
 
 export async function authorizeWorkingBranchCreation(
 	deps: ApiDeps,

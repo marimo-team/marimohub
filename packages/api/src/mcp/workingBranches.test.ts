@@ -71,6 +71,18 @@ describe('working branch MCP and chat', { timeout: 30000 }, () => {
 			state: 'complete',
 			recovery_url: expect.stringContaining('/recovery'),
 		});
+		for (const name of ['get_branch_save', 'retry_branch_save']) {
+			const receipt = await client.callTool({
+				name,
+				arguments: {
+					project: env.project.id,
+					notebook: data.notebook_id,
+					save_id: (saved.structuredContent as { id: string }).id,
+				},
+			});
+			expect(receipt.isError, JSON.stringify(receipt)).not.toBe(true);
+			expect(receipt.structuredContent).toEqual(saved.structuredContent);
+		}
 		const cards: unknown[] = [];
 		const decision = await checkPermission(
 			{
@@ -110,7 +122,43 @@ describe('working branch MCP and chat', { timeout: 30000 }, () => {
 			arguments: { project: env.project.id, notebook: data.notebook_id },
 		});
 		expect(pr.isError, JSON.stringify(pr)).not.toBe(true);
-		expect(pr.structuredContent).toMatchObject({ change_request: { number: 42 } });
+		expect(pr.structuredContent).toMatchObject({
+			change_request: {
+				number: 42,
+				head_branch: data.source.branch,
+				base_branch: 'main',
+			},
+		});
+		expect(pr.structuredContent).not.toHaveProperty('change_request.headBranch');
+		expect(pr.structuredContent).not.toHaveProperty('change_request.baseBranch');
+		const status = await client.callTool({
+			name: 'get_working_branch',
+			arguments: {
+				project: env.project.id,
+				notebook: data.notebook_id,
+			},
+		});
+		expect(status.structuredContent).toMatchObject(pr.structuredContent!);
+		const enrich = workingBranchConsentInput(
+			env.deps,
+			principal,
+			env.project.id,
+			'open_change_request',
+		)!;
+		for (const draft of [undefined, false, true]) {
+			const input = await enrich({
+				notebook: data.notebook_id,
+				body: 'Reviewed body',
+				...(draft === undefined ? {} : { draft }),
+			});
+			const card = permissionRequest({ name: 'open_change_request' }, input)!;
+			expect(card.details).toEqual(
+				expect.arrayContaining([
+					{ label: 'Draft', value: String(draft ?? true) },
+					{ label: 'Body', value: 'Reviewed body' },
+				]),
+			);
+		}
 	});
 	it('hides creation replay after notebook security labels change', async () => {
 		const env = await workingBranchFixture();

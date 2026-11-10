@@ -26,7 +26,15 @@ export function WorkingBranchActions({
 	const pr = data?.change_request;
 	const recoveryExpired =
 		last &&
-		['complete', 'no_changes', 'conflict', 'expired'].includes(last.state) &&
+		[
+			'claimed',
+			'captured',
+			'commit_prepared',
+			'complete',
+			'no_changes',
+			'conflict',
+			'expired',
+		].includes(last.state) &&
 		Date.parse(last.expires_at) <= Date.now();
 	const ended = data?.ended_reason || (pr && pr.state !== 'open') || data?.remote_commit === null;
 	const busy = save.isPending || open.isPending;

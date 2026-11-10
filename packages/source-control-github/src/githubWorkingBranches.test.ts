@@ -50,18 +50,21 @@ function setup(
 }
 
 describe('GitHub working branches', () => {
-	it('creates an absent branch at the exact pinned commit', async () => {
-		const { writer, requests } = setup(() => response({ object: { sha: base } }, 201));
-		await expect(
-			writer.createBranch({ repository: coordinate, branch, fromCommit: base }),
-		).resolves.toEqual({ commit: base });
-		expect(requests).toHaveLength(1);
-		expect(requests[0]?.path).toBe('/repos/owner/repo/git/refs');
-		expect(JSON.parse(String(requests[0]?.init.body))).toEqual({
-			ref: `refs/heads/${branch}`,
-			sha: base,
-		});
-	});
+	it.each([base, base.toUpperCase()])(
+		'creates an absent branch at pinned commit %s',
+		async (fromCommit) => {
+			const { writer, requests } = setup(() => response({ object: { sha: base } }, 201));
+			await expect(
+				writer.createBranch({ repository: coordinate, branch, fromCommit }),
+			).resolves.toEqual({ commit: base });
+			expect(requests).toHaveLength(1);
+			expect(requests[0]?.path).toBe('/repos/owner/repo/git/refs');
+			expect(JSON.parse(String(requests[0]?.init.body))).toEqual({
+				ref: `refs/heads/${branch}`,
+				sha: base,
+			});
+		},
+	);
 
 	it('rejects an existing branch even when it points at the requested commit', async () => {
 		const { writer } = setup((_url, init) =>
@@ -83,7 +86,12 @@ describe('GitHub working branches', () => {
 				origin,
 			);
 			await expect(
-				writer.advanceBranch({ ...refInput, repository: `${origin}/${coordinate}` }),
+				writer.advanceBranch({
+					...refInput,
+					repository: `${origin}/${coordinate}`,
+					expectedHead: base.toUpperCase(),
+					commit: commit.toUpperCase(),
+				}),
 			).resolves.toEqual({ commit });
 			expect(requests.map((r) => r.path)).toEqual(['/repos/owner/repo', '/graphql']);
 			expect(JSON.parse(String(requests[1]?.init.body))).toMatchObject({
@@ -185,14 +193,64 @@ describe('GitHub working branches', () => {
 	);
 
 	it('reports a missing branch without issuing an ancestry lookup', async () => {
-		const { writer, requests } = setup(() => response({}, 404));
+		const { writer, requests } = setup((url) =>
+			url.pathname.endsWith('/pulls') ? response([]) : response({}, 404),
+		);
 		await expect(writer.inspectBranch({ repository: coordinate, branch, commit })).resolves.toEqual(
 			{ headCommit: null, containsCommit: false },
 		);
-		expect(requests).toHaveLength(1);
+		expect(requests.map((request) => request.path)).toEqual([
+			`/repos/owner/repo/git/ref/heads/${branch}`,
+			`/repos/owner/repo/pulls?state=all&head=owner%3Amarimohub%2Fproj-abc%2Fnb-def&per_page=100`,
+		]);
 	});
 
-	it('prepares commit objects without touching a ref', async () => {
+	it('finds the pull request after its head branch is deleted', async () => {
+		const { writer } = setup((url) =>
+			url.pathname.endsWith('/pulls') ? response([pull({ state: 'closed' })]) : response({}, 404),
+		);
+		await expect(writer.inspectBranch({ repository: coordinate, branch })).resolves.toMatchObject({
+			headCommit: null,
+			containsCommit: false,
+			changeRequest: { number: 17, headBranch: branch, state: 'closed' },
+		});
+	});
+
+	it('recognizes an uppercase requested commit without an ancestry lookup', async () => {
+		const { writer, requests } = setup((url) =>
+			url.pathname.endsWith('/pulls') ? response([]) : response({ object: { sha: base } }),
+		);
+		await expect(
+			writer.inspectBranch({ repository: coordinate, branch, commit: base.toUpperCase() }),
+		).resolves.toEqual({ headCommit: base, containsCommit: true });
+		expect(requests.some(({ path }) => path.includes('/compare/'))).toBe(false);
+	});
+
+	it.each(['invalid-sha', '', 'a'.repeat(39)])(
+		'rejects malformed provider commit %j as unavailable',
+		async (sha) => {
+			const { writer } = setup((url) => {
+				if (url.pathname.endsWith(`/git/commits/${base}`))
+					return response({ tree: { sha: 'tree-base' } });
+				if (url.pathname.includes('/contents/')) return response({}, 404);
+				if (url.pathname.endsWith('/git/blobs')) return response({ sha: 'blob-new' }, 201);
+				if (url.pathname.endsWith('/git/trees')) return response({ sha: 'tree-new' }, 201);
+				return response({ sha }, 201);
+			});
+			await expect(
+				writer.prepareCommit({
+					repository: coordinate,
+					parentCommit: base,
+					message: 'Save',
+					changes: [
+						{ operation: 'add', path: 'app.py', content: new TextEncoder().encode('print(1)') },
+					],
+				}),
+			).rejects.toBeInstanceOf(UnavailableError);
+		},
+	);
+
+	it('normalizes commit SHAs and prepares objects without touching a ref', async () => {
 		const { writer, requests } = setup((url, init) => {
 			if (url.pathname.endsWith(`/git/commits/${base}`))
 				return response({ tree: { sha: 'tree-base' } });
@@ -205,14 +263,14 @@ describe('GitHub working branches', () => {
 					tree: 'tree-new',
 					parents: [base],
 				});
-				return response({ sha: commit }, 201);
+				return response({ sha: commit.toUpperCase() }, 201);
 			}
 			throw new Error(`Unexpected request ${url}`);
 		});
 		await expect(
 			writer.prepareCommit({
 				repository: coordinate,
-				parentCommit: base,
+				parentCommit: base.toUpperCase(),
 				message: 'Save analysis',
 				coAuthor: { name: 'Ada', email: 'ada@example.com' },
 				changes: [

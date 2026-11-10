@@ -1,5 +1,4 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { WorkingBranchChangeRequestSchema } from '@marimo-hub/core';
 import {
 	commonErrors,
 	createApp,
@@ -19,6 +18,9 @@ import {
 	resumeWorkingBranch,
 	WorkingBranchSaveResponse,
 	WorkingBranchStatusResponse,
+	WorkingBranchChangeRequestResponse,
+	toWorkingBranchChangeRequest,
+	toWorkingBranchStatus,
 } from '../workingBranches';
 
 const tags = ['Working branches'];
@@ -88,7 +90,7 @@ const recovery = createRoute({
 	tags,
 	summary: 'Download captured source changes for recovery',
 	description:
-		'Returns a ZIP containing a manifest of modifications/deletions and captured file bytes. Requires current notebook authorization. Payloads expire at the time shown on the save receipt.',
+		'Returns a ZIP containing a manifest of modifications/deletions and captured file bytes. Requires current notebook authorization. Payloads become eligible for cleanup at expires_at, except unresolved dispatched saves retain their capture. Downloads remain available until the payload is pruned.',
 	request: { params: SaveParam },
 	responses: {
 		200: {
@@ -109,7 +111,7 @@ const openPr = createRoute({
 	request: { params: NotebookIdParam, body: jsonBody(OpenWorkingBranchPrBody) },
 	responses: {
 		200: jsonContent(
-			z.object({ success: z.literal(true), data: WorkingBranchChangeRequestSchema }),
+			z.object({ success: z.literal(true), data: WorkingBranchChangeRequestResponse }),
 			'Working branch pull request',
 		),
 		...errors,
@@ -146,7 +148,7 @@ app.openapi(status, async (c) => {
 	return c.json(
 		{
 			success: true,
-			data: WorkingBranchStatusResponse.parse(await deps.services.workingBranches.status(pid, nid)),
+			data: toWorkingBranchStatus(await deps.services.workingBranches.status(pid, nid)),
 		},
 		200,
 	);
@@ -215,6 +217,6 @@ app.openapi(openPr, async (c) => {
 		nid,
 		{ change_request: data.number },
 	);
-	return c.json({ success: true, data }, 200);
+	return c.json({ success: true, data: toWorkingBranchChangeRequest(data) }, 200);
 });
 export default app;

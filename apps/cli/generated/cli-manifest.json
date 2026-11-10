@@ -5074,7 +5074,7 @@
 			"method": "GET",
 			"path": "/api/v1/projects/{pid}/notebooks/{nid}/saves/{save_id}/recovery",
 			"summary": "Download captured source changes for recovery",
-			"description": "Returns a ZIP containing a manifest of modifications/deletions and captured file bytes. Requires current notebook authorization. Payloads expire at the time shown on the save receipt.",
+			"description": "Returns a ZIP containing a manifest of modifications/deletions and captured file bytes. Requires current notebook authorization. Payloads become eligible for cleanup at expires_at, except unresolved dispatched saves retain their capture. Downloads remain available until the payload is pruned.",
 			"parameters": [
 				{
 					"name": "nid",

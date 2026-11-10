@@ -1,4 +1,9 @@
-import { MAX_REQUEST_BYTES, MAX_WORKSPACE_FILES, MAX_WORKSPACE_BYTES } from '../../constants';
+import {
+	MAX_REQUEST_BYTES,
+	MAX_WORKSPACE_FILES,
+	MAX_WORKSPACE_BYTES,
+	MAX_WORKSPACE_FILE_BYTES,
+} from '../../constants';
 import { paths } from '../../paths';
 import { workspaceManifest } from './workspaceManifest';
 import { proposalSha256 } from './proposalUtils';
@@ -26,10 +31,11 @@ import type {
 	WorkingBranchWriter,
 } from '../../ports/sourceControl';
 import { execResult } from '../../ports/sandbox';
-import { ConflictError } from '../../errors';
+import { ConflictError, ValidationError } from '../../errors';
 import { WorkingBranchService } from './WorkingBranchService';
 import {
 	workingBranchPaths,
+	WORKING_BRANCH_CLEANUP_KEY,
 	WorkingBranchStore,
 	WorkingBranchSaveSchema,
 	WorkingBranchRecordSchema,
@@ -184,6 +190,143 @@ describe('WorkingBranchService', { timeout: 60_000 }, () => {
 			getSandbox,
 		});
 	}
+
+	it('includes the effective co-author in the idempotency fingerprint', async () => {
+		const input = {
+			projectId: pid,
+			notebookId: nid,
+			sessionId: sid,
+			actor: ACTOR,
+			idempotencyKey: 'co-author',
+			workdir,
+			getSandbox: sandbox,
+			coAuthor: { name: 'Editor', email: 'editor@example.com' },
+		};
+		const saved = await service.save(input);
+		expect(
+			await service.save({ ...input, coAuthor: { email: 'editor@example.com', name: 'Editor' } }),
+		).toEqual(saved);
+		await expect(
+			service.save({ ...input, coAuthor: { ...input.coAuthor, name: 'Other' } }),
+		).rejects.toThrow('different save');
+		await expect(service.save({ ...input, coAuthor: undefined })).rejects.toThrow('different save');
+	});
+	it('returns activated metadata when the same commit is synced again', async () => {
+		const detail = await env.notebooks.getNotebook(pid, nid);
+		if (detail.source.type !== 'git') throw new Error('git source required');
+		await env.bucket.put(
+			paths.project(pid).notebook(nid).meta,
+			JSON.stringify({ ...detail.meta, status: 'draft' }),
+		);
+		const result = await env.notebooks.synced.sync(
+			pid,
+			nid,
+			{
+				...detail.source,
+				commit: 'base',
+				files: [{ path: 'dashboard.py', bytes: encode('base') }],
+				git_files: [{ path: 'HEAD', bytes: encode('head') }],
+			},
+			ACTOR,
+		);
+		expect(result.meta.status).toBe('active');
+		expect(result.versionId).toBeNull();
+		expect((await env.notebooks.getNotebook(pid, nid)).meta.status).toBe('active');
+	});
+	it('reports an oversized file as validation failure and releases the save slot', async () => {
+		writeFileSync(join(workdir, 'oversized.bin'), new Uint8Array(MAX_WORKSPACE_FILE_BYTES + 1));
+		const failure = save('oversized');
+		await expect(failure).rejects.toBeInstanceOf(ValidationError);
+		await expect(failure).rejects.toThrow(
+			`oversized.bin exceeds the ${MAX_WORKSPACE_FILE_BYTES}-byte limit`,
+		);
+		expect((await new WorkingBranchStore(env.bucket).read(pid, nid)).active_save).toBeUndefined();
+		expect(writer.prepareCommit).not.toHaveBeenCalled();
+	});
+	it('finishes with recoverable conflict when the hub advances after a remote commit', async () => {
+		writeFileSync(join(workdir, 'dashboard.py'), 'saved remotely');
+		vi.mocked(reader.fetchWorkspace).mockRejectedValueOnce(new Error('provider unavailable'));
+		const pending = await save('advanced');
+		expect(pending.state).toBe('remote_committed');
+		const detail = await env.notebooks.getNotebook(pid, nid);
+		const advanced = { ...detail.source, commit: 'newer', current_version_id: createVersionId() };
+		await env.bucket.put(paths.project(pid).notebook(nid).source, JSON.stringify(advanced));
+		const result = await save('advanced');
+		expect(result).toMatchObject({ state: 'conflict', commit: pending.commit });
+		expect(result.error).toContain('hub source advanced');
+		expect(result.error).not.toContain('Retry this operation');
+		expect((await new WorkingBranchStore(env.bucket).read(pid, nid)).active_save).toBeUndefined();
+		expect((await env.notebooks.getNotebook(pid, nid)).source).toEqual(advanced);
+		expect(await save('advanced')).toEqual(result);
+		expect(writer.prepareCommit).toHaveBeenCalledTimes(1);
+		expect(writer.advanceBranch).toHaveBeenCalledTimes(1);
+		const recovered = unzipSync(await service.recovery(pid, nid, result.id));
+		expect(new TextDecoder().decode(recovered['files/dashboard.py'])).toBe('saved remotely');
+	});
+	it.each([false, true])(
+		'logs release failure without replacing callback outcome (throws=%s)',
+		async (throws) => {
+			const store = new WorkingBranchStore(env.bucket);
+			const put = env.bucket.put.bind(env.bucket);
+			const key = workingBranchPaths(pid, nid).head;
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			vi.spyOn(env.bucket, 'put').mockImplementation(async (target, body, options) => {
+				if (
+					target === key &&
+					typeof body === 'string' &&
+					!WorkingBranchRecordSchema.parse(JSON.parse(body)).lease
+				)
+					throw new Error('release unavailable');
+				return put(target, body, options);
+			});
+			const result = store.withLease(pid, nid, async () => {
+				if (throws) throw new Error('original callback failure');
+				return 'saved';
+			});
+			if (throws) await expect(result).rejects.toThrow('original callback failure');
+			else await expect(result).resolves.toBe('saved');
+			expect(log).toHaveBeenCalledWith(
+				expect.stringContaining('working_branch.lease_release_failed'),
+			);
+			expect((await store.read(pid, nid)).lease).toBeDefined();
+		},
+	);
+	it('advances cleanup past malformed receipts and prunes later captures', async () => {
+		writeFileSync(join(workdir, 'dashboard.py'), 'captured');
+		vi.mocked(writer.prepareCommit).mockRejectedValueOnce(new Error('provider unavailable'));
+		await expect(save('cleanup')).rejects.toThrow('provider unavailable');
+		const record = await new WorkingBranchStore(env.bucket).read(pid, nid);
+		for (let i = 0; i < 100; i++)
+			await env.bucket.put(
+				`_system/working-branches/notebooks/000/${String(i).padStart(3, '0')}/receipt.json`,
+				'{}',
+			);
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const now = Date.now() + 26 * 3600_000;
+		expect(await service.pruneExpiredPayloads(now)).toBe(0);
+		expect(log).toHaveBeenCalledWith(expect.stringContaining('working_branch.cleanup_failed'));
+		expect(await (await env.bucket.get(WORKING_BRANCH_CLEANUP_KEY))!.json()).toHaveProperty(
+			'cursor',
+		);
+		expect(await service.pruneExpiredPayloads(now)).toBe(1);
+		expect((await service.getSave(pid, nid, record.active_save!)).state).toBe('expired');
+		expect(
+			await env.bucket.head(workingBranchPaths(pid, nid).capture(record.active_save!)),
+		).toBeNull();
+	});
+	it('rejects malformed record IDs and timestamps before expiry decisions', async () => {
+		const record = await new WorkingBranchStore(env.bucket).read(pid, nid);
+		const receipt = await save('schema');
+		expect(WorkingBranchRecordSchema.safeParse({ ...record, id: 'bad-id' }).success).toBe(false);
+		for (const field of ['created_at', 'checked_at'])
+			expect(WorkingBranchRecordSchema.safeParse({ ...record, [field]: 'invalid' }).success).toBe(
+				false,
+			);
+		for (const field of ['created_at', 'expires_at'])
+			expect(WorkingBranchSaveSchema.safeParse({ ...receipt, [field]: 'invalid' }).success).toBe(
+				false,
+			);
+	});
 
 	it('replays creation without another branch or catalog entry', async () => {
 		const replay = await service.create(pid, ACTOR, 'create', createInput);

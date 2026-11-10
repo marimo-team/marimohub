@@ -258,7 +258,8 @@ create-if-absent. Name claims use the same pattern as app claims.
 
 Deleting a notebook or project can delete its subordinate claims and objects as
 cleanup, except app pool records (retain their deletion tombstones and members awaiting reclamation)
-and `PreviewStore` records (retain project heads, automation tombstones, and unexpired idempotency receipts).
+`PreviewStore` records (retain project heads, automation tombstones, and unexpired idempotency receipts),
+and `WorkingBranchService` heads (retain deletion tombstones).
 Everything else is immutable, append-only, or an operational record,
 such as a session, identity, token, or secret. Do not bypass the owners listed
 above.

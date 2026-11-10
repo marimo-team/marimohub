@@ -23,7 +23,8 @@ import {
 	OpenWorkingBranchPrBody,
 	SaveWorkingBranchBody,
 	WorkingBranchSaveResponse,
-	WorkingBranchStatusResponse,
+	toWorkingBranchStatus,
+	toWorkingBranchChangeRequest,
 } from '../workingBranches';
 
 const project = z.string().trim().min(1).describe(PROJECT_REFERENCE_DESCRIPTION);
@@ -210,7 +211,11 @@ export function registerWorkingBranchTools(
 				n.id,
 				{ change_request: change_request.number },
 			);
-			return { project_id: p.id, notebook_id: n.id, change_request };
+			return {
+				project_id: p.id,
+				notebook_id: n.id,
+				change_request: toWorkingBranchChangeRequest(change_request),
+			};
 		},
 	);
 	register(
@@ -223,15 +228,13 @@ export function registerWorkingBranchTools(
 			return {
 				project_id: p.id,
 				notebook_id: n.id,
-				...WorkingBranchStatusResponse.parse(
-					await deps.services.workingBranches.status(p.id, n.id),
-				),
+				...toWorkingBranchStatus(await deps.services.workingBranches.status(p.id, n.id)),
 			};
 		},
 	);
 	register(
 		'get_branch_save',
-		'Inspect a save receipt and obtain an authenticated recovery archive URL. Captured bytes expire at expires_at unless retained for unresolved publication.',
+		'Inspect a save receipt and obtain an authenticated recovery archive URL. Captured bytes become eligible for cleanup at expires_at unless retained for unresolved publication.',
 		selection.extend({ save_id: saveId }),
 		true,
 		async (input) => {
@@ -258,7 +261,7 @@ export function registerWorkingBranchTools(
 				n.id,
 				{ save_id: receipt.id, state: receipt.state },
 			);
-			return WorkingBranchSaveResponse.parse(receipt);
+			return saveResult(receipt);
 		},
 	);
 }
@@ -270,7 +273,9 @@ export function workingBranchConsentInput(
 	name: string,
 ) {
 	if (!['save_to_branch', 'open_change_request', 'retry_branch_save'].includes(name)) return;
-	return async (input: Record<string, unknown>) => {
+	return async (rawInput: Record<string, unknown>) => {
+		const input =
+			name === 'open_change_request' ? { ...rawInput, draft: rawInput.draft ?? true } : rawInput;
 		if (typeof input.notebook !== 'string') return input;
 		const { project, notebook } = await resolveAuthorizedNotebook(
 			deps,

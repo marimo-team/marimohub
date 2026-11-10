@@ -539,7 +539,7 @@ Requires GitHub publishing and pull-source credentials. Editors publish through 
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED` | Allow editors to create working notebooks, save source changes, and open draft PRs. Does not enable automatic saves. | — | `false` | — |
+| `MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED` | Allow editors to create working notebooks, save source changes, and open draft PRs. Does not enable automatic saves. | — | `false` | `true` |
 
 ### GitHub App
 

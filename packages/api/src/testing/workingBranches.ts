@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { onTestFinished, vi } from 'vitest';
-import { ConflictError, createSandboxId, execResult } from '@marimo-hub/core';
+import { ConflictError, NotFoundError, createSandboxId, execResult } from '@marimo-hub/core';
 import type {
 	WorkingBranchInspection,
 	SourceControlReader,
@@ -23,19 +23,23 @@ export async function workingBranchFixture() {
 	git('config', 'core.fsmonitor', 'false');
 	writeFileSync(join(workdir, 'app.py'), 'base');
 	git('add', 'app.py');
-	let head: string | null = null;
+	const heads = new Map([['main', 'base']]);
+	let lastCreatedBranch: string | undefined;
 	let revision = 0;
-	let changeRequest: WorkingBranchInspection['changeRequest'];
+	const changeRequests = new Map<string, WorkingBranchInspection['changeRequest']>();
 	const bytes = (text: string) => new TextEncoder().encode(text);
 	const snapshots = new Map([['base', new Map([['app.py', bytes('base')]])]]);
 	const writer: WorkingBranchWriter = {
-		createBranch: vi.fn<WorkingBranchWriter['createBranch']>(async ({ fromCommit }) => {
-			if (head) throw new ConflictError('exists');
-			head = fromCommit;
+		createBranch: vi.fn<WorkingBranchWriter['createBranch']>(async ({ branch, fromCommit }) => {
+			if (heads.has(branch)) throw new ConflictError('exists');
+			heads.set(branch, fromCommit);
+			lastCreatedBranch = branch;
 			return { commit: fromCommit };
 		}),
 		prepareCommit: vi.fn(async ({ parentCommit, changes }) => {
-			const tree = new Map(snapshots.get(parentCommit));
+			const parent = snapshots.get(parentCommit);
+			if (!parent) throw new NotFoundError(`Unknown parent commit: ${parentCommit}`);
+			const tree = new Map(parent);
 			for (const change of changes) {
 				if (change.operation === 'delete') tree.delete(change.path);
 				else tree.set(change.path, change.content);
@@ -44,34 +48,44 @@ export async function workingBranchFixture() {
 			snapshots.set(commit, tree);
 			return { commit };
 		}),
-		advanceBranch: vi.fn(async ({ expectedHead, commit }) => {
-			if (head !== expectedHead) throw new ConflictError('moved');
-			head = commit;
+		advanceBranch: vi.fn(async ({ branch, expectedHead, commit }) => {
+			if (heads.get(branch) !== expectedHead) throw new ConflictError('moved');
+			heads.set(branch, commit);
 			return { commit };
 		}),
-		inspectBranch: vi.fn(async ({ commit }) => ({
-			headCommit: head,
-			containsCommit: head === commit,
-			changeRequest,
+		inspectBranch: vi.fn(async ({ branch, commit }) => ({
+			headCommit: heads.get(branch) ?? null,
+			containsCommit: commit !== undefined && heads.get(branch) === commit,
+			changeRequest: changeRequests.get(branch),
 		})),
 		openBranchChangeRequest: vi.fn(async ({ headBranch, baseBranch }) => {
-			changeRequest = {
+			const changeRequest = {
 				number: 42,
 				url: 'https://github.com/owner/repo/pull/42',
-				state: 'open',
+				state: 'open' as const,
 				headBranch,
 				baseBranch,
 			};
-			return { number: 42, url: changeRequest.url, headBranch, headCommit: head! };
+			changeRequests.set(headBranch, changeRequest);
+			return { number: 42, url: changeRequest.url, headBranch, headCommit: heads.get(headBranch)! };
 		}),
 	};
 	const reader: SourceControlReader = {
 		provider: 'github',
 		supportsRepository: () => true,
-		getBranchHead: async () => ({ commit: 'base' }),
-		fetchWorkspace: vi.fn(async (_repo, commit) =>
-			[...snapshots.get(commit)!].map(([path, bytes]) => ({ path, bytes })),
-		),
+		getBranchHead: async (_repo, branch) => {
+			const commit = heads.get(branch);
+			if (!commit) throw new NotFoundError(`Unknown branch: ${branch}`);
+			return { commit };
+		},
+		fetchWorkspace: vi.fn(async (_repo, commit, rootPath) => {
+			const snapshot = snapshots.get(commit);
+			if (!snapshot) throw new NotFoundError(`Unknown commit: ${commit}`);
+			const prefix = rootPath ? `${rootPath.replace(/\/+$/, '')}/` : '';
+			return [...snapshot]
+				.filter(([path]) => path.startsWith(prefix))
+				.map(([path, bytes]) => ({ path: path.slice(prefix.length), bytes }));
+		}),
 		fetchGitDirectory: async () => [{ path: 'HEAD', bytes: bytes('ref: refs/heads/main\n') }],
 	};
 	const sourceControl = {
@@ -134,8 +148,9 @@ export async function workingBranchFixture() {
 		snapshots,
 		session,
 		edit: (text: string) => writeFileSync(join(workdir, 'app.py'), text),
-		setHead: (commit: string) => {
-			head = commit;
+		setHead: (commit: string, branch = lastCreatedBranch) => {
+			if (!branch) throw new Error('Create a working branch before moving its head');
+			heads.set(branch, commit);
 		},
 		createBody: {
 			title: 'Working notebook',

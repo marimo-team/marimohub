@@ -1,3 +1,5 @@
+import { utcTimestamp } from '../../stringFormats';
+import { logOperationalError } from '../../operationalLog';
 import { listAllPrefixes } from '../catalog/storage';
 import { NotebookId as NotebookIdValue } from '../../ids';
 import { z } from 'zod';
@@ -38,7 +40,7 @@ export const WorkingBranchChangeRequestSchema = z.object({
 });
 export const WorkingBranchRecordSchema = z.object({
 	schema_version: z.literal(1),
-	id: z.string(),
+	id: z.string().regex(/^[a-f0-9]{64}$/),
 	project_id: ProjectIdSchema,
 	notebook_id: NotebookIdSchema,
 	provider: z.string(),
@@ -46,13 +48,13 @@ export const WorkingBranchRecordSchema = z.object({
 	base_branch: z.string(),
 	fork_commit: z.string(),
 	created_by: UserIdSchema,
-	created_at: z.string(),
+	created_at: utcTimestamp(),
 	state: z.enum(['claimed', 'branch_dispatched', 'branch_created', 'ready', 'deleted']),
 	active_save: z.string().optional(),
 	last_save: z.string().optional(),
 	change_request: WorkingBranchChangeRequestSchema.optional(),
 	ended_reason: z.enum(['branch_deleted', 'pr_closed', 'pr_merged', 'pr_retargeted']).optional(),
-	checked_at: z.string().optional(),
+	checked_at: utcTimestamp().optional(),
 	remote_commit: z.string().nullable().optional(),
 	lease: z.object({ owner: z.string(), until: z.number() }).optional(),
 });
@@ -67,8 +69,8 @@ export const WorkingBranchSaveSchema = z.object({
 	fingerprint: z.string(),
 	message: z.string(),
 	co_author: z.object({ name: z.string(), email: z.string() }).optional(),
-	created_at: z.string(),
-	expires_at: z.string(),
+	created_at: utcTimestamp(),
+	expires_at: utcTimestamp(),
 	base_version_id: VersionIdSchema,
 	base_commit: z.string(),
 	state: z.enum([
@@ -190,7 +192,13 @@ export class WorkingBranchStore {
 		} finally {
 			await this.update(pid, nid, (record) =>
 				record.lease?.owner === owner ? { ...record, lease: undefined } : record,
-			).catch(() => {});
+			).catch((error) => {
+				logOperationalError(
+					'working_branch.lease_release_failed',
+					{ project_id: pid, notebook_id: nid },
+					error,
+				);
+			});
 		}
 	}
 }

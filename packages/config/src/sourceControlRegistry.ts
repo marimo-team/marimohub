@@ -10,13 +10,6 @@ import { ConfigError } from './errors';
 
 export type AuthorizeRepository = (repository: string, projectId?: ProjectId) => void;
 type RepositoryArgument = string | { repository: string };
-const WORKING_BRANCH_METHODS: Record<keyof WorkingBranchWriter, true> = {
-	createBranch: true,
-	prepareCommit: true,
-	advanceBranch: true,
-	openBranchChangeRequest: true,
-	inspectBranch: true,
-};
 
 export interface SourceControlRegistration {
 	reader?: SourceControlReader;
@@ -36,12 +29,12 @@ export class ConfiguredSourceControlRegistry implements SourceControlRegistry {
 	>();
 	readonly repositoryHosts: GitProviderHosts;
 	readonly workingBranchesEnabled: boolean;
+	private readonly workingBranchProviderIds: readonly string[];
 
 	constructor(
 		registrations: readonly SourceControlRegistration[],
 		options: { workingBranchesEnabled?: boolean } = {},
 	) {
-		this.workingBranchesEnabled = options.workingBranchesEnabled ?? false;
 		const hosts: Record<string, GitProvider> = Object.create(null);
 		for (const registration of registrations) {
 			const { reader, publisher } = registration;
@@ -62,6 +55,15 @@ export class ConfiguredSourceControlRegistry implements SourceControlRegistry {
 			}
 		}
 		this.repositoryHosts = hosts;
+		this.workingBranchProviderIds = [...this.publishers.values()]
+			.filter(
+				({ publisher }) =>
+					publisher.workingBranches &&
+					this.readers.get(publisher.provider)?.reader.fetchGitDirectory,
+			)
+			.map(({ publisher }) => publisher.provider);
+		this.workingBranchesEnabled =
+			(options.workingBranchesEnabled ?? false) && this.workingBranchProviderIds.length > 0;
 	}
 
 	assertRepositoryAllowed(provider: string, repository: string, projectId: ProjectId): void {
@@ -134,27 +136,21 @@ export class ConfiguredSourceControlRegistry implements SourceControlRegistry {
 		authorize: AuthorizeRepository,
 		projectId?: ProjectId,
 	): WorkingBranchWriter {
-		const guarded: Partial<WorkingBranchWriter> = Object.fromEntries(
-			(Object.keys(WORKING_BRANCH_METHODS) as (keyof WorkingBranchWriter)[]).map((method) => [
-				method,
-				async (input: Parameters<WorkingBranchWriter[typeof method]>[0]) => {
-					authorize(input.repository, projectId);
-					return writer[method](input as never);
-				},
-			]),
-		);
-		return guarded as WorkingBranchWriter;
+		return {
+			createBranch: this.guard(writer.createBranch.bind(writer), authorize, projectId),
+			prepareCommit: this.guard(writer.prepareCommit.bind(writer), authorize, projectId),
+			advanceBranch: this.guard(writer.advanceBranch.bind(writer), authorize, projectId),
+			openBranchChangeRequest: this.guard(
+				writer.openBranchChangeRequest.bind(writer),
+				authorize,
+				projectId,
+			),
+			inspectBranch: this.guard(writer.inspectBranch.bind(writer), authorize, projectId),
+		};
 	}
 
 	workingBranchProviders(): readonly string[] {
-		if (!this.workingBranchesEnabled) return [];
-		return [...this.publishers.values()]
-			.filter(
-				({ publisher }) =>
-					publisher.workingBranches &&
-					this.readers.get(publisher.provider)?.reader.fetchGitDirectory,
-			)
-			.map(({ publisher }) => publisher.provider);
+		return this.workingBranchesEnabled ? this.workingBranchProviderIds : [];
 	}
 
 	publisherProviders(): readonly string[] {

@@ -58,6 +58,26 @@ describe('working branch routes', { timeout: 30000 }, () => {
 			503,
 		);
 	});
+	it.each(['main', 'other'])(
+		'rejects fork with explicit branch %s before provider writes',
+		async (branch) => {
+			const env = await workingBranchFixture();
+			await expectError(
+				await env.request(
+					'POST',
+					`/projects/${env.project.id}/notebooks/git`,
+					{
+						...env.createBody,
+						branch,
+					},
+					{ 'Idempotency-Key': 'ambiguous' },
+				),
+				400,
+				'BAD_REQUEST',
+			);
+			expect(env.writer.createBranch).not.toHaveBeenCalled();
+		},
+	);
 	it('hides creation replay after notebook security labels change', async () => {
 		const env = await workingBranchFixture();
 		const api = createTestApi({
@@ -110,7 +130,7 @@ describe('working branch routes', { timeout: 30000 }, () => {
 			env.createBody,
 			{ 'Idempotency-Key': 'revoked' },
 		);
-		expect([403, 404]).toContain(response.status);
+		await expectError(response, 403, 'FORBIDDEN');
 		expect(env.writer.createBranch).not.toHaveBeenCalled();
 	});
 	it('revalidates editor access before opening a PR', async () => {
@@ -133,7 +153,7 @@ describe('working branch routes', { timeout: 30000 }, () => {
 			deps: { sourceControl: env.sourceControl },
 		});
 		const response = await api.request('POST', `${env.path}/change-requests`, {});
-		expect([403, 404]).toContain(response.status);
+		await expectError(response, 403, 'FORBIDDEN');
 		expect(env.writer.openBranchChangeRequest).not.toHaveBeenCalled();
 	});
 	it('saves, exposes safe receipts, downloads capture and opens a draft PR', async () => {
@@ -203,7 +223,15 @@ describe('working branch routes', { timeout: 30000 }, () => {
 			),
 		).toBe('changed');
 		const pr = await expectOk(await env.request('POST', `${env.path}/change-requests`, {}));
-		expect(pr.number).toBe(42);
+		expect(pr).toMatchObject({
+			number: 42,
+			base_branch: 'main',
+			head_branch: expect.stringContaining('marimohub/'),
+		});
+		expect(pr).not.toHaveProperty('headBranch');
+		expect(pr).not.toHaveProperty('baseBranch');
+		const status = await expectOk(await env.request('GET', `${env.path}/working-branch`));
+		expect(status.change_request).toEqual(pr);
 		expect(env.writer.openBranchChangeRequest).toHaveBeenCalledWith(
 			expect.objectContaining({ draft: true, baseBranch: 'main' }),
 		);

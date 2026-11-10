@@ -364,6 +364,15 @@ describe('GitLab source control', () => {
 			registry.getReader('gitlab')?.supportsRepository('https://gitlab.com/Group/Sub/Project'),
 		).toBe(false);
 	});
+	it('does not enable working-branch tools for a GitLab-only deployment', () => {
+		const registry = makeSourceControl({
+			...env,
+			MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED: 'true',
+		}).sourceControl!;
+		expect(registry.workingBranchesEnabled).toBe(false);
+		expect(registry.workingBranchProviders?.()).toEqual([]);
+		expect(registry.getPublisher('gitlab')?.workingBranches).toBeUndefined();
+	});
 	it('defaults to GitLab.com', () => {
 		const registry = makeSourceControl({
 			MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN: 'test-token',

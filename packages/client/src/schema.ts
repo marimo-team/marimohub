@@ -1666,7 +1666,7 @@ export interface paths {
 		};
 		/**
 		 * Download captured source changes for recovery
-		 * @description Returns a ZIP containing a manifest of modifications/deletions and captured file bytes. Requires current notebook authorization. Payloads expire at the time shown on the save receipt.
+		 * @description Returns a ZIP containing a manifest of modifications/deletions and captured file bytes. Requires current notebook authorization. Payloads become eligible for cleanup at expires_at, except unresolved dispatched saves retain their capture. Downloads remain available until the payload is pruned.
 		 */
 		get: operations['notebooks.working-branch.saves.recovery'];
 		put?: never;
@@ -4461,7 +4461,9 @@ export interface components {
 			session_id: string;
 			author: string;
 			message: string;
+			/** Format: date-time */
 			created_at: string;
+			/** Format: date-time */
 			expires_at: string;
 			base_version_id: string;
 			base_commit: string;
@@ -4501,20 +4503,21 @@ export interface components {
 			branch: string;
 			commit: string | null;
 			remote_commit: string | null;
-			change_request?: {
-				number: number;
-				/** Format: uri */
-				url: string;
-				/** @enum {string} */
-				state: 'open' | 'closed' | 'merged';
-				headBranch: string;
-				baseBranch: string;
-			};
+			change_request?: components['schemas']['WorkingBranchChangeRequestResponse'];
 			checked_at?: string;
 			last_save?: components['schemas']['WorkingBranchSave'];
 			active_save?: string;
 			/** @enum {string} */
 			ended_reason?: 'branch_deleted' | 'pr_closed' | 'pr_merged' | 'pr_retargeted';
+		};
+		WorkingBranchChangeRequestResponse: {
+			number: number;
+			/** Format: uri */
+			url: string;
+			/** @enum {string} */
+			state: 'open' | 'closed' | 'merged';
+			head_branch: string;
+			base_branch: string;
 		};
 		SessionPage: {
 			items: components['schemas']['Session'][];
@@ -18009,15 +18012,7 @@ export interface operations {
 					'application/json': {
 						/** @enum {boolean} */
 						success: true;
-						data: {
-							number: number;
-							/** Format: uri */
-							url: string;
-							/** @enum {string} */
-							state: 'open' | 'closed' | 'merged';
-							headBranch: string;
-							baseBranch: string;
-						};
+						data: components['schemas']['WorkingBranchChangeRequestResponse'];
 					};
 				};
 			};

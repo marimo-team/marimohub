@@ -85,12 +85,20 @@ describe('WorkingBranchActions', () => {
 			'/api/v1/projects/proj-1/notebooks/nb-1/saves/save-id/recovery',
 		);
 	});
-	it('does not offer expired terminal payloads for download', () => {
+	it.each([
+		'claimed',
+		'captured',
+		'commit_prepared',
+		'complete',
+		'no_changes',
+		'conflict',
+		'expired',
+	])('does not offer expired %s payloads for download', (state) => {
 		hooks.status.mockReturnValue({
 			data: {
 				last_save: {
 					id: 'save-id',
-					state: 'conflict',
+					state,
 					changes: [{ path: 'app.py' }],
 					expires_at: '2020-01-01T00:00:00Z',
 				},
@@ -100,4 +108,23 @@ describe('WorkingBranchActions', () => {
 		expect(screen.queryByRole('link', { name: 'Download recovery' })).toBeNull();
 		expect(screen.getByText('Recovery capture expired.')).toBeInTheDocument();
 	});
+	it.each(['ref_dispatched', 'remote_committed', 'hub_synced'])(
+		'keeps recovery for unresolved %s saves past their expiry date',
+		(state) => {
+			hooks.status.mockReturnValue({
+				data: {
+					active_save: 'save-id',
+					last_save: {
+						id: 'save-id',
+						state,
+						changes: [{ path: 'app.py' }],
+						expires_at: '2020-01-01T00:00:00Z',
+					},
+				},
+			});
+			render(<WorkingBranchActions {...props} />);
+			expect(screen.getByRole('link', { name: 'Download recovery' })).toBeInTheDocument();
+			expect(screen.queryByText('Recovery capture expired.')).not.toBeInTheDocument();
+		},
+	);
 });
