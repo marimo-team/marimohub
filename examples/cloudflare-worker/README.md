@@ -12,7 +12,8 @@ npx wrangler deploy                          # or: npx wrangler dev
 
 - `src/index.ts` — wires `R2BucketAdapter` + `CloudflareSandboxProvider` +
   `CloudflareAccessAuthenticator` into `ApiDeps`, re-exports the `Sandbox` DO, and
-  runs maintenance and notebook jobs through `scheduled()`.
+  runs maintenance through `scheduled()`. Notebook jobs are off by default.
+  Set `MARIMOHUB_JOBS` to `on` under `vars` in `wrangler.jsonc` to enable them.
 - `wrangler.jsonc` — R2 + Durable Object bindings, the `*/5` maintenance cron, and
   `assets.directory` → `../../packages/web/dist`.
 - `sandbox.Dockerfile` — the marimo kernel sandbox image (`cloudflare/sandbox` base).
