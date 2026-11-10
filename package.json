@@ -13,6 +13,8 @@
 		"check": "vp check",
 		"typecheck": "vp run -r typecheck",
 		"test": "vp run test:root && vp run -r test --configLoader=runner --pool=threads --silent=passed-only --hideSkippedTests",
+		"test:perf": "pnpm --filter @marimo-hub/api test run src/testing/performance",
+		"test:perf:update": "pnpm test:perf --update",
 		"test:root": "node --test actions/preview/preview.test.mjs && vp run test:root:vitest",
 		"test:release-scripts": "bash scripts/release-helpers.test.sh",
 		"test:external-adapter": "node --test examples/external-adapter/oidc-login-policy.test.mjs",
