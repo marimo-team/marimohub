@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runPreflight } from '@marimo-hub/core';
+import { DataPreviewService, runPreflight, SandboxDataPreview } from '@marimo-hub/core';
+import { fakeComputeFrom, makeFakeSandbox } from '@marimo-hub/core/testing';
 import type { ApiDeps } from '@marimo-hub/api';
 import { makeTestWif } from '@marimo-hub/api/testing';
 import { buildPreflightChecks } from './preflightChecks';
@@ -413,6 +414,25 @@ describe('integrations.secrets check', () => {
 });
 
 describe('integrations.data-preview check', () => {
+	it('makes sandbox previews available without creating a sandbox during replica preflight', async () => {
+		const { instance } = makeFakeSandbox();
+		const create = vi.fn(() => instance);
+		const sandbox = new SandboxDataPreview(
+			{ ...fakeComputeFrom(instance), create },
+			{
+				image: 'preview:test',
+				startupTimeoutMs: 100,
+				executionTimeoutMs: 100,
+			},
+		);
+		const preview = new DataPreviewService({ sandbox, maxConcurrent: 1, maxConcurrentPerUser: 1 });
+		const deps = makeDeps({ dataBrowser: { preview: true, checkPreview: () => preview.check() } });
+		expect((await run({}, deps)).by('integrations.data-preview')).toMatchObject({ status: 'ok' });
+		expect(preview.available({ python: true })).toBe(true);
+		expect(create).not.toHaveBeenCalled();
+		await preview.close();
+	});
+
 	it('marks the runtime ready only after its preflight succeeds', async () => {
 		let ready = false;
 		const deps = makeDeps({

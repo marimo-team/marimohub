@@ -800,6 +800,14 @@ it.each(['app-user', 'viewer', 'editor'] as const)(
 	'returns generic app startup failures for app-scoped %s access',
 	async (role) => {
 		await services.projects.updateMemberRole(pid, STAKEHOLDER, role, ACTOR);
+		await services.notebooks.updateNotebook(
+			pid,
+			nid,
+			{
+				deps: '[project]\nname = "app"\nversion = "0.1.0"\ndependencies = ["pandas"]\n',
+			},
+			ACTOR,
+		);
 		const { instance } = makeFakeSandbox();
 		const client = stakeholderToken(
 			{ projects: [pid], actions: ['app.read', 'session.start', 'session.attach'] },

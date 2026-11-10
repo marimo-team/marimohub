@@ -42,7 +42,12 @@ import { utf8Tail } from '../../text';
 import { Stopwatch } from '../../timing';
 import type { Timings } from '../../timing';
 import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/filesystemSnapshots';
-import { buildMarimoLaunch, DEFAULT_LAUNCH_STRATEGY } from './marimoLaunch';
+import {
+	buildMarimoLaunch,
+	DEFAULT_LAUNCH_STRATEGY,
+	EMPTY_PYPROJECT,
+	preparePyproject,
+} from './marimoLaunch';
 import type { MarimoLaunchMode, MarimoLaunchPlan, MarimoLaunchStrategyName } from './marimoLaunch';
 import { assertValidKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { shellQuote } from './shell';
@@ -983,7 +988,45 @@ export class SandboxProvisioner {
 			sw.timings.inject_files = Date.now() - started;
 			if (options.notebookBridge) sw.timings.bridge_prepare = sw.timings.inject_files;
 		};
-		const workspaceWriter = combineWrites && !options.gitPrefix ? flush : undefined;
+		let skipPyprojectSetup = false;
+		let sawPyproject = false;
+		const pyprojectPath = `${mountPath}/pyproject.toml`;
+		const emptyPyproject = { path: pyprojectPath, content: EMPTY_PYPROJECT };
+		const missingPyproject =
+			!options.restoreFilesystemSnapshotId &&
+			!options.workspaceArchive &&
+			!options.workspaceOverlay?.some((file) => file.path === 'pyproject.toml') &&
+			options.bucketHandle
+				? withDeadline(options.bucketHandle.head(`${prefix}pyproject.toml`), {
+						timeoutMs: Math.min(1000, options.startupTimeoutMs || 1000),
+						timeoutError: () => new Error('Pyproject metadata read timed out'),
+					}).then(
+						(object) => object === null,
+						() => false,
+					)
+				: undefined;
+		const workspaceWriter: SandboxInstance['writeFiles'] = async (files) => {
+			const batch = [...files];
+			if (
+				!sawPyproject &&
+				!files.some((file) => file.path === pyprojectPath) &&
+				(await missingPyproject)
+			)
+				batch.push(emptyPyproject);
+			let transferredPyproject: boolean | undefined;
+			const prepared = batch.map((file) => {
+				if (file.path !== pyprojectPath) return file;
+				const pyproject = preparePyproject(file.content);
+				transferredPyproject = pyproject.skipSetup;
+				return { ...file, content: pyproject.content };
+			});
+			await (combineWrites && !options.gitPrefix ? flush : writeFiles)(prepared);
+			// Failed transfers must replay synthesized files before setup can be skipped.
+			if (transferredPyproject !== undefined) {
+				sawPyproject = true;
+				skipPyprojectSetup = transferredPyproject;
+			}
+		};
 
 		const ensureReachable = async () => {
 			if (options.bootedSandbox) {
@@ -1003,7 +1046,15 @@ export class SandboxProvisioner {
 					) ??
 						this.loadWorkspace(sandbox, options, layout, prefix, waitUntilReady, workspaceWriter));
 					if (!loaded.overlayApplied) {
-						await this.applyWorkspaceOverlay(sandbox, options, mountPath);
+						await this.applyWorkspaceOverlay(sandbox, options, mountPath, workspaceWriter);
+					}
+					if (
+						!sawPyproject &&
+						loaded.usedFallback &&
+						loaded.overlayApplied &&
+						(await missingPyproject)
+					) {
+						await workspaceWriter([emptyPyproject]);
 					}
 					return loaded;
 				});
@@ -1045,6 +1096,7 @@ export class SandboxProvisioner {
 				pythonPath,
 				deferSetup,
 				setupPrefix,
+				skipPyprojectSetup,
 			});
 		const uploadBridge = () =>
 			launchStrategy.then(
@@ -1240,13 +1292,14 @@ export class SandboxProvisioner {
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
 		mountPath: string,
+		writeFiles = sandbox.writeFiles.bind(sandbox),
 	): Promise<void> {
 		const overlay = options.workspaceOverlay;
 		if (!overlay || overlay.length === 0) return;
 		const bucket = options.bucketHandle;
 		if (!bucket) throw new UnavailableError('Bucket access is required for workspace overlay');
 		try {
-			await sandbox.writeFiles(await loadWorkspaceOverlay(bucket, mountPath, overlay));
+			await writeFiles(await loadWorkspaceOverlay(bucket, mountPath, overlay));
 		} catch (err) {
 			throw provisionFailure('restoring the notebook workspace into the sandbox', err);
 		}
@@ -1630,6 +1683,7 @@ export class SandboxProvisioner {
 			pythonPath?: Promise<string>;
 			deferSetup?: boolean;
 			setupPrefix?: MarimoLaunchPlan['setup'];
+			skipPyprojectSetup?: boolean;
 		},
 	): Promise<MarimoStartup> {
 		const sessionEnv = await options.sessionEnv;
@@ -1644,6 +1698,11 @@ export class SandboxProvisioner {
 		const startup: MarimoStartup = {
 			plan: buildMarimoLaunch(
 				{
+					skipPyprojectSetup:
+						prepared.skipPyprojectSetup &&
+						!sessionEnv?.files?.some(
+							(file) => normalizeAbsoluteSandboxPath(file.path) === `${mountPath}/pyproject.toml`,
+						),
 					notebookFile: options.entryNotebook ?? DEFAULT_LOCAL_ENTRY_NOTEBOOK,
 					port: MARIMO_PORT,
 					host: '0.0.0.0',
@@ -1689,6 +1748,7 @@ export class SandboxProvisioner {
 			else await this.configureGitWorkdir(sandbox, options, layout);
 		}
 		startup.plan.setup.unshift(...(prepared.setupPrefix ?? []));
+		if (startup.plan.setup.length === 0) return startup;
 		if (prepared.deferSetup) {
 			startup.onSetup = (output, elapsed) => {
 				const diagnostics = setupDiagnostics(output.stdout, output.stderr);
@@ -1698,7 +1758,6 @@ export class SandboxProvisioner {
 			};
 			return startup;
 		}
-		if (startup.plan.setup.length === 0) return startup;
 
 		const command = `cd ${shellQuote(mountPath)} && ${instrumentSetup(startup.plan.setup)}`;
 		let diagnostics: SetupDiagnostics | undefined;

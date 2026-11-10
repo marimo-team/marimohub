@@ -2,6 +2,7 @@
  * How marimo is launched inside a sandbox. Strategies are inferred per-source
  * (see launchStrategy.ts); the default is the project-managed env.
  */
+import { parse as parseToml } from 'smol-toml';
 import type { RuntimeContributions } from '../../ports/integrations';
 import type { SessionMode } from '../../constants';
 import { runtimePackageCommand } from './runtimePackageCommand';
@@ -19,6 +20,8 @@ export type MarimoLaunchMode = SessionMode | 'job';
 export interface MarimoLaunchParams extends RuntimeContributions {
 	/** Process-visible path to the Hub-managed Python logging bootstrap. */
 	loggingDirectory?: string;
+	/** True only for a dependency-free pyproject inspected during workspace transfer. */
+	skipPyprojectSetup?: boolean;
 	notebookFile: string;
 	port: number;
 	/** Bind 0.0.0.0 so the external ingress can reach the kernel. */
@@ -145,29 +148,57 @@ function launchCommand(p: MarimoLaunchParams, sandbox = false): string {
 	return runtimePackageCommand([], marimoCommand(p));
 }
 
-// Sync only when the notebook declares real deps; an empty one just gets a
-// `[project]` table (so `uv add` works) and runs from the pre-installed
-// image environment via `--no-sync`. --no-compile-bytecode skips ~5s of compiling
-// freshly-added deps on the launch path (lazy-compiled on import instead).
-// The image must NOT set UV_COMPILE_BYTECODE (it would
-// conflict with --no-compile-bytecode). A failure is fatal: the provisioner
-// reports it as PYTHON_ENV_SETUP_FAILED before starting the kernel.
+// Unknown manifests need sandbox validation. Empty projects use the image environment;
+// a [project] table lets `uv add` work. Setup failures prevent kernel launch.
+// Defer bytecode compilation until import. Images must not set the conflicting UV_COMPILE_BYTECODE.
 const PYPROJECT_LAYER_SETUP = `{ status=0; python3 -c "import pathlib,sys,tomllib;path=pathlib.Path('pyproject.toml');data=tomllib.loads(path.read_text()) if path.exists() else {};sys.exit(0 if data.get('project',{}).get('dependencies') else 2)" || status=$?; if [ "$status" -eq 0 ]; then uv sync --inexact --no-install-package marimo --no-compile-bytecode; elif [ "$status" -eq 2 ]; then if ! grep -q '^\\[project\\]' pyproject.toml 2>/dev/null; then rm -f pyproject.toml && uv init --bare --no-package --vcs none --name notebook --description "Built in marimohub"; fi; else exit "$status"; fi; }`;
 
-// The env the kernel's `uv run --no-sync` will use — uv resolves the project
-// env as UV_PROJECT_ENVIRONMENT, else `.venv` in the project dir. Deliberately
-// not VIRTUAL_ENV: `uv run` ignores it, so pins installed there would be
-// invisible to the kernel. Local dev (compute-local) has neither var nor an
-// existing env, hence the create-if-missing guard — a no-op on sandbox images,
-// whose contract pre-creates UV_PROJECT_ENVIRONMENT.
+export const EMPTY_PYPROJECT =
+	'[project]\nname = "notebook"\nversion = "0.1.0"\ndescription = "Built in marimohub"\ndependencies = []\n';
+
+export function preparePyproject(input: string | Uint8Array): {
+	content: string | Uint8Array;
+	skipSetup: boolean;
+} {
+	let content = input;
+	try {
+		if (typeof content !== 'string')
+			content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content);
+		// smol-toml accepts a BOM, but Python's tomllib rejects it.
+		if (content.startsWith('\uFEFF')) return { content, skipSetup: false };
+		const data = parseToml(content);
+		if (Object.keys(data).length === 0) return { content: EMPTY_PYPROJECT, skipSetup: true };
+		const project: unknown = data.project;
+		if (
+			project &&
+			typeof project === 'object' &&
+			(Object.getPrototypeOf(project) === Object.prototype ||
+				Object.getPrototypeOf(project) === null)
+		) {
+			const dependencies = 'dependencies' in project ? project.dependencies : undefined;
+			if (dependencies === undefined || (Array.isArray(dependencies) && dependencies.length === 0))
+				return { content, skipSetup: true };
+		}
+	} catch {
+		// Keep sandbox-side validation and its existing user-facing setup error.
+	}
+	return { content, skipSetup: false };
+}
+
+function pyprojectSetup(p: MarimoLaunchParams): MarimoSetupStep[] {
+	// Startup scripts can replace the transferred dependency manifest.
+	return p.skipPyprojectSetup && !p.startupScripts?.length
+		? []
+		: [{ name: 'pyproject_layer', command: PYPROJECT_LAYER_SETUP }];
+}
+
+// Match `uv run --no-sync`: it uses UV_PROJECT_ENVIRONMENT or .venv, ignoring VIRTUAL_ENV.
+// Sandbox images pre-create this environment; compute-local needs the create-if-missing guard.
 const PIN_ENV_EXPANSION = '${UV_PROJECT_ENVIRONMENT:-.venv}';
 const PIN_ENV = `"${PIN_ENV_EXPANSION}"`;
 
-// Inside the pin env: per-sandbox on every backend (a container's env dies
-// with it; a local sandbox's .venv is removed with its root), so nothing
-// accumulates on a shared host /tmp and concurrent launches can't clobber
-// each other. Also keeps it out of workspace capture and away from a synced
-// repo's own requirements.txt.
+// Keep requirements in the sandbox's environment to avoid shared-host collisions,
+// workspace capture, and overwriting the repository's requirements.txt.
 const SCRIPT_REQUIREMENTS = `"${PIN_ENV_EXPANSION}/marimohub-script-requirements.txt"`;
 
 // uv 0.10.9's pip interface ignores UV_NO_BUILD, unlike uv sync/export.
@@ -182,26 +213,18 @@ const SCRIPT_PIN_INSTALL = [
 ].join(' ');
 
 export const MARIMO_LAUNCH_STRATEGIES = {
-	// marimohub's default. The sandbox image pre-installs marimo (pinned) plus
-	// popular libraries into the project env (UV_PROJECT_ENVIRONMENT), so the base
-	// case needs no install and startup is near-instant. A notebook's own deps live
-	// in pyproject.toml; `uv sync --inexact --no-install-package marimo` adds them
-	// without replacing the image-owned marimo, then `--no-sync` runs straight from it. Unlike
-	// marimo's `--sandbox` (which force-refreshes when a notebook declares no
-	// inline deps), this never refetches.
+	// Add notebook dependencies to the image environment without replacing its marimo.
+	// Launch with --no-sync to preserve that environment.
 	'uv-sync-edit': (p) => ({
-		setup: [{ name: 'pyproject_layer', command: PYPROJECT_LAYER_SETUP }],
+		setup: pyprojectSetup(p),
 		start: launchCommand(p),
 	}),
 
-	// Notebooks with PEP 723 inline metadata: the pyproject layer runs
-	// first, then the script's pins install into the same base env. Prune marimo's
-	// dependency tree so a notebook's inline marimo pin cannot replace the
-	// bytecode-compiled image version. --no-hashes because hash checking rejects
-	// the unhashed base env.
+	// Install PEP 723 pins after project dependencies. Prune marimo's dependency tree
+	// to preserve the image version; --no-hashes accepts the unhashed base environment.
 	'uv-script-pins': (p) => ({
 		setup: [
-			{ name: 'pyproject_layer', command: PYPROJECT_LAYER_SETUP },
+			...pyprojectSetup(p),
 			{ name: 'ensure_pin_env', command: `{ [ -d ${PIN_ENV} ] || uv venv ${PIN_ENV}; }` },
 			{
 				name: 'export_script_pins',

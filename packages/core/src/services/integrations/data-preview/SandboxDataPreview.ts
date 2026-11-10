@@ -13,7 +13,6 @@ import { DrainableService } from '../DrainableService';
 const SCRIPT_PATH = '/tmp/marimohub-data-preview.py';
 const REQUEST_PATH = '/tmp/marimohub-data-preview-request.json';
 const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
-const PREFLIGHT_COMMAND = `python3 -c 'import pyarrow, pyiceberg'`;
 
 export interface SandboxDataPreviewOptions {
 	image: string;
@@ -24,7 +23,6 @@ export interface SandboxDataPreviewOptions {
 
 export class SandboxDataPreview extends DrainableService {
 	private readyForTraffic = false;
-	private checking: Promise<void> | undefined;
 
 	constructor(
 		private readonly compute: SandboxProvider,
@@ -42,13 +40,10 @@ export class SandboxDataPreview extends DrainableService {
 	}
 
 	check(): Promise<void> {
-		if (this.available()) return Promise.resolve();
 		if (this.closed) return Promise.reject(new UnavailableError('The preview sandbox is closed.'));
-		if (this.checking) return this.checking;
-		this.checking = this.track(this.checkRuntime()).finally(() => {
-			this.checking = undefined;
-		});
-		return this.checking;
+		// Validate the image through the first real preview, without a throwaway boot sandbox.
+		this.readyForTraffic = true;
+		return Promise.resolve();
 	}
 
 	async preview(program: PythonPreviewProgram): Promise<TablePreview> {
@@ -104,24 +99,6 @@ export class SandboxDataPreview extends DrainableService {
 				throw new UnavailableError('The preview sandbox could not read this table.');
 			}
 			return parseTablePreviewJson(result.stdout, program.maxRows);
-		} finally {
-			await this.destroy(sandbox);
-		}
-	}
-
-	private async checkRuntime(): Promise<void> {
-		const sandbox = this.createSandbox();
-		try {
-			await sandboxDeadline(ready(sandbox), this.options.startupTimeoutMs, 'start');
-			const result = await sandboxDeadline(
-				sandbox.exec(PREFLIGHT_COMMAND),
-				this.options.executionTimeoutMs,
-				'verify its runtime',
-			);
-			if (!result.success) {
-				throw new UnavailableError('The preview image does not provide PyIceberg and PyArrow.');
-			}
-			if (!this.closed) this.readyForTraffic = true;
 		} finally {
 			await this.destroy(sandbox);
 		}

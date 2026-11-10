@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { buildMarimoLaunch, MARIMO_LAUNCH_STRATEGIES } from './marimoLaunch';
+import { buildMarimoLaunch, MARIMO_LAUNCH_STRATEGIES, preparePyproject } from './marimoLaunch';
 import type { MarimoLaunchParams } from './marimoLaunch';
 
 const BASE: MarimoLaunchParams = {
@@ -369,5 +369,27 @@ describe('buildMarimoLaunch argument quoting', () => {
 	it('escapes a double quote in --base-url', () => {
 		const { start } = buildMarimoLaunch({ ...BASE, baseUrl: '/proxy/a"; touch /tmp/pwned; #' });
 		expect(start).toContain(`--base-url='/proxy/a"; touch /tmp/pwned; #'`);
+	});
+});
+
+describe('hub-side pyproject inspection', () => {
+	it.each([
+		'project = false',
+		'project = "invalid"',
+		'project = []',
+		'project = 2026-01-01',
+		'[project]\ndependencies = "pandas"',
+		'[project]\ndependencies = false',
+		'[project]\ndependencies = ["pandas"]',
+		'[project]\ndependencies = [',
+		'\uFEFF[project]\ndependencies = []',
+	])('leaves questionable manifests to sandbox validation: %s', (content) => {
+		expect(preparePyproject(content)).toEqual({ content, skipSetup: false });
+	});
+	it.each([
+		'[project]\nname = "example"\ndependencies = []\n# keep this comment\n',
+		'project.dependencies = []\n',
+	])('preserves dependency-free source text: %s', (content) => {
+		expect(preparePyproject(content)).toEqual({ content, skipSetup: true });
 	});
 });

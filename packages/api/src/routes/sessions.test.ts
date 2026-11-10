@@ -1533,7 +1533,7 @@ describe('Session routes', () => {
 					compute: fakeComputeFrom(sb.instance),
 				}).request;
 				await expectOk<ApiSession>(await api('POST', sessionsPath(), { mode: 'app' }));
-				const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
+				const setup = sb.calls.exec.join('\n');
 				expect(setup.includes("uv export --script 'notebook.py'")).toBe(inline);
 				const writes = sb.calls.writeFile.filter((file) => file.path === '/workspace/notebook.py');
 				expect(writes.at(-1)?.content).toEqual(enc(saved));

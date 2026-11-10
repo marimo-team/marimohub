@@ -30,16 +30,16 @@ const options = {
 };
 
 describe('SandboxDataPreview', () => {
-	it('preflights the dedicated image', async () => {
+	it('enables previews without allocating a sandbox during boot checks', async () => {
 		const { instance, calls } = makeFakeSandbox();
-		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
+		const create = vi.fn(() => instance);
+		const preview = new SandboxDataPreview({ ...fakeComputeFrom(instance), create }, options);
 		expect(preview.available()).toBe(false);
-
-		await preview.check();
-
+		await Promise.all([preview.check(), preview.check()]);
 		expect(preview.available()).toBe(true);
-		expect(calls.exec.at(-1)).toContain('pyarrow, pyiceberg');
-		expect(calls.destroy).toBe(1);
+		expect(create).not.toHaveBeenCalled();
+		expect(calls.exec).toEqual([]);
+		expect(calls.destroy).toBe(0);
 	});
 
 	it('applies a Python program and destroys the sandbox', async () => {
@@ -55,7 +55,7 @@ describe('SandboxDataPreview', () => {
 		await preview.check();
 
 		await expect(preview.preview(program)).resolves.toEqual({ columns: ['id'], rows: [[1]] });
-		expect(create).toHaveBeenLastCalledWith(expect.any(String), {
+		expect(create).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
 			reuse: false,
 			image: 'preview:tested',
 		});
@@ -67,7 +67,7 @@ describe('SandboxDataPreview', () => {
 			]),
 		);
 		expect(calls.setEnvVars.at(-1)).toMatchObject({ AWS_ACCESS_KEY_ID: 'temporary' });
-		expect(calls.destroy).toBe(2);
+		expect(calls.destroy).toBe(1);
 	});
 
 	it('resolves credentials only when the Python program executes', async () => {
@@ -113,7 +113,7 @@ describe('SandboxDataPreview', () => {
 
 			const result = preview.preview({ ...program, credentialVars: credentials });
 			await vi.advanceTimersByTimeAsync(options.startupTimeoutMs + 1);
-			expect(create).toHaveBeenCalledOnce();
+			expect(create).not.toHaveBeenCalled();
 
 			resolveCredentials?.({ AWS_ACCESS_KEY_ID: 'slow-temporary' });
 			await expect(result).resolves.toEqual({ columns: ['id'], rows: [[1]] });
@@ -142,7 +142,7 @@ describe('SandboxDataPreview', () => {
 			await vi.advanceTimersByTimeAsync(options.executionTimeoutMs);
 			await rejected;
 			await closing;
-			expect(create).toHaveBeenCalledOnce();
+			expect(create).not.toHaveBeenCalled();
 		} finally {
 			vi.useRealTimers();
 		}
@@ -162,8 +162,8 @@ describe('SandboxDataPreview', () => {
 				},
 			}),
 		).rejects.toThrow('WIF exchange failed');
-		expect(create).toHaveBeenCalledOnce();
-		expect(calls.destroy).toBe(1);
+		expect(create).not.toHaveBeenCalled();
+		expect(calls.destroy).toBe(0);
 	});
 
 	it('destroys the sandbox after execution failure', async () => {
@@ -183,7 +183,7 @@ describe('SandboxDataPreview', () => {
 		await preview.check();
 
 		await expect(preview.preview(program)).rejects.toThrow('could not read this table');
-		expect(calls.destroy).toBe(2);
+		expect(calls.destroy).toBe(1);
 	});
 
 	it('rejects a program result that exceeds its row bound', async () => {
@@ -239,38 +239,87 @@ describe('SandboxDataPreview', () => {
 		});
 		await expect(result).resolves.toEqual({ columns: ['id'], rows: [[1]] });
 		await closing;
-		expect(calls.destroy).toBe(2);
+		expect(calls.destroy).toBe(1);
 		expect(preview.available()).toBe(false);
 	});
 
-	it('waits for an in-flight readiness check without becoming available after close', async () => {
+	it('does not enable previews after close', async () => {
 		const { instance, calls } = makeFakeSandbox();
-		let finishCheck:
-			| ((result: { success: true; stdout: string; stderr: string }) => void)
-			| undefined;
-		const checkResult = new Promise<{ success: true; stdout: string; stderr: string }>(
-			(resolve) => {
-				finishCheck = resolve;
-			},
-		);
-		instance.exec = vi.fn((command) => {
-			calls.exec.push(command);
-			return checkResult;
-		});
 		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
-		const checking = preview.check();
+		await preview.close();
+		await expect(preview.check()).rejects.toThrow('closed');
+		expect(preview.available()).toBe(false);
+		expect(calls.exec).toEqual([]);
+		expect(calls.destroy).toBe(0);
+	});
+});
 
+it('cleans up a failed first preview startup and permits a later preview to succeed', async () => {
+	const { instance, calls } = makeFakeSandbox();
+	instance.ready = vi
+		.fn()
+		.mockRejectedValueOnce(new Error('image unavailable'))
+		.mockResolvedValue(undefined);
+	instance.exec = async () => ({
+		success: true,
+		stdout: '{"columns":["id"],"rows":[[1]]}',
+		stderr: '',
+	});
+	const create = vi.fn(() => instance);
+	const preview = new SandboxDataPreview({ ...fakeComputeFrom(instance), create }, options);
+	await preview.check();
+	expect(create).not.toHaveBeenCalled();
+	await expect(preview.preview(program)).rejects.toThrow('image unavailable');
+	expect(calls.destroy).toBe(1);
+	expect(calls.writeFile).toEqual([]);
+	await expect(preview.preview(program)).resolves.toEqual({ columns: ['id'], rows: [[1]] });
+	expect(create).toHaveBeenCalledTimes(2);
+	expect(calls.destroy).toBe(2);
+	await preview.close();
+});
+
+it('bounds first-preview readiness, drains cleanup on close, and ignores late readiness', async () => {
+	vi.useFakeTimers();
+	try {
+		const { instance, calls } = makeFakeSandbox();
+		const ready = Promise.withResolvers<void>();
+		const destroy = Promise.withResolvers<void>();
+		instance.ready = vi.fn(() => ready.promise);
+		instance.destroy = vi.fn(() => destroy.promise);
+		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
+		await preview.check();
+		const result = preview.preview(program);
+		const rejected = expect(result).rejects.toThrow('did not start in time');
+		await vi.advanceTimersByTimeAsync(0);
 		let closed = false;
 		const closing = preview.close().then(() => {
 			closed = true;
 		});
-		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(options.startupTimeoutMs);
+		expect(instance.destroy).toHaveBeenCalledOnce();
 		expect(closed).toBe(false);
-
-		finishCheck?.({ success: true, stdout: '', stderr: '' });
-		await Promise.all([checking, closing]);
-		expect(calls.destroy).toBe(1);
+		destroy.resolve();
+		await rejected;
+		await closing;
+		ready.resolve();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(calls.writeFile).toEqual([]);
+		expect(calls.exec).toEqual([]);
 		expect(preview.available()).toBe(false);
-		await expect(preview.check()).rejects.toThrow('closed');
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it('does not allocate a replacement or hang close when first-preview creation fails', async () => {
+	const { instance } = makeFakeSandbox();
+	const create = vi.fn(() => {
+		throw new Error('compute unavailable');
 	});
+	const preview = new SandboxDataPreview({ ...fakeComputeFrom(instance), create }, options);
+	await preview.check();
+	await expect(preview.preview(program)).rejects.toThrow('compute unavailable');
+	expect(create).toHaveBeenCalledOnce();
+	await preview.close();
+	expect(preview.available()).toBe(false);
 });

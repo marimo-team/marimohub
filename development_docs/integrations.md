@@ -299,9 +299,10 @@ is evaluated before
 secret resolution and again after resolved configuration is loaded, so a concurrent integration
 update cannot bypass it.
 
-The sandbox adapter renders only the selected integration. It uses the image
-from `MARIMOHUB_DATA_PREVIEW_IMAGE` after a PyIceberg and PyArrow preflight. It
-also injects applicable WIF credentials.
+The sandbox adapter renders only the selected integration. It uses
+`MARIMOHUB_DATA_PREVIEW_IMAGE` and injects applicable WIF credentials.
+The first preview validates the image's runtime dependencies. Replica startup
+does not create a sandbox for this check.
 
 Per-user and process-wide limits control admission across both executors.
 Deadlines bound startup and execution. A `finally` block destroys each sandbox;
