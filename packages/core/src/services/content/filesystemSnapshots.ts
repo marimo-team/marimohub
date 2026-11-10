@@ -16,7 +16,7 @@ import type { NotebookService } from './NotebookService';
 
 type CreateOrRestoreSandboxOptions = Pick<
 	CreateSandboxOptions,
-	'image' | 'resources' | 'userHome' | 'sessionIdleTimeoutMs' | 'owner'
+	'image' | 'resources' | 'userHome' | 'sessionIdleTimeoutMs' | 'owner' | 'notebook'
 >;
 
 /**
@@ -77,6 +77,7 @@ export function createOrRestoreSandbox(
 			? { sessionIdleTimeoutMs: options.sessionIdleTimeoutMs }
 			: {}),
 		...(options.owner ? { owner: options.owner } : {}),
+		...(options.notebook ? { notebook: options.notebook } : {}),
 	};
 	// reuse: false — this id is brand new, so the adapter's reconnect lookup can
 	// never match and would just cost a round-trip on the critical path.

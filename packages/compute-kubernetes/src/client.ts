@@ -28,6 +28,9 @@ import {
 	KERNEL_CONTAINER_NAME,
 	MANAGED_BY_LABEL,
 	MANAGED_BY_VALUE,
+	NOTEBOOK_ID_LABEL,
+	NOTEBOOK_TITLE_ANNOTATION,
+	PROJECT_ID_LABEL,
 	portName,
 	resolveIngressTlsMode,
 	SANDBOX_ID_ANNOTATION,
@@ -113,11 +116,18 @@ export function podManifest(o: EnsureSandboxOptions): V1Pod {
 			labels: {
 				...template?.metadata?.labels,
 				...o.extraLabels,
+				...(o.notebook
+					? {
+							[PROJECT_ID_LABEL]: o.notebook.projectId,
+							[NOTEBOOK_ID_LABEL]: o.notebook.notebookId,
+						}
+					: {}),
 				[MANAGED_BY_LABEL]: MANAGED_BY_VALUE,
 				[SANDBOX_NAME_LABEL]: o.name,
 			},
 			annotations: validateIngressAnnotations({
 				...template?.metadata?.annotations,
+				...(o.notebook ? { [NOTEBOOK_TITLE_ANNOTATION]: o.notebook.title } : {}),
 				[SANDBOX_ID_ANNOTATION]: String(o.sandboxId),
 			}),
 		},

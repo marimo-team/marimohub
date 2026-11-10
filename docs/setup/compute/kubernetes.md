@@ -41,6 +41,14 @@ MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
 Ingresses. Kubernetes label syntax applies, including empty values such as `team=`.
 The hub's management and selector labels take precedence.
 
+New notebook session Pods include the `marimohub.io/project-id` and
+`marimohub.io/notebook-id` labels and the `marimohub.io/notebook-title` annotation.
+The title is captured when the sandbox starts; renaming a notebook does not change
+an existing Pod. Titles retain spaces, punctuation, and Unicode. To display them
+alongside resource metrics, allowlist this annotation in kube-state-metrics and
+join `kube_pod_annotations` to container metrics by cluster, namespace, and Pod.
+Pods created before this metadata was available retain their original metadata.
+
 `MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER` sets the Pod UID and matching
 `fsGroup`, with `runAsNonRoot: true` except for UID `0`.
 If unset, the hub uses the template security context or leaves it unset.
@@ -129,7 +137,7 @@ Container security fields take precedence over Pod security fields.
 **Managed fields.** Templates must omit:
 
 - Metadata other than `labels` and `annotations`, including the Pod name and
-  namespace. Reserved management labels and the sandbox identity annotation
+  namespace. Reserved management and notebook identity labels and annotations
   are also prohibited.
 - Container `image`, `command`, `args`, `ports`, and `resources`. MarimoHub
   supplies these from runtime configuration and compute profiles.

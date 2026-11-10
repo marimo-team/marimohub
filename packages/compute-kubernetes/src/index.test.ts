@@ -7,7 +7,7 @@ import {
 	WRITE_BATCH_COMMAND,
 } from '@marimo-hub/compute-commons';
 import { Millis } from '@marimo-hub/core/duration';
-import type { SandboxId } from '@marimo-hub/core/ids';
+import type { NotebookId, ProjectId, SandboxId } from '@marimo-hub/core/ids';
 import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
 import {
 	computeContract,
@@ -356,6 +356,22 @@ describe('KubernetesCompute', () => {
 	});
 
 	describe('lazy ensure()', () => {
+		it('forwards notebook identity at creation and reconnects without it', async () => {
+			const world = makeWorld();
+			const compute = makeCompute(world);
+			const notebook = {
+				projectId: 'proj-aaaaaaaaaaaaaaaa' as ProjectId,
+				notebookId: 'nb-aaaaaaaaaaaaaaaa' as NotebookId,
+				title: `Example notebook — Δ / ${'x'.repeat(70)}`,
+			};
+			await compute.create(SANDBOX_ID, { notebook }).ready!();
+			expect(world.ensured[0].notebook).toEqual(notebook);
+			await compute.connectExisting(SANDBOX_ID).ready!();
+			expect(world.ensured).toHaveLength(1);
+			await compute.connectExisting(SANDBOX_ID).destroy();
+			expect(world.deleted).toEqual([NAME]);
+		});
+
 		it('validates programmatic templates before creating a sandbox', () => {
 			const world = makeWorld();
 			expect(() =>

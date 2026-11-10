@@ -33,6 +33,7 @@ import type {
 	SandboxLaunchResult,
 	SandboxFileWrite,
 	SandboxUserHome,
+	SandboxNotebook,
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
@@ -209,6 +210,7 @@ export type BootOptions = Pick<
 	ProvisionOptions,
 	| 'sandboxId'
 	| 'projectId'
+	| 'notebook'
 	| 'userId'
 	| 'image'
 	| 'resources'
@@ -244,6 +246,7 @@ export interface ProvisionOptions {
 	sandboxId: SandboxId;
 	projectId: ProjectId;
 	notebookId: NotebookId;
+	notebook?: SandboxNotebook;
 	hostname: string;
 	bucket: BucketConfig;
 	/** Storage bucket handle for fallback file copy. */
@@ -858,6 +861,7 @@ export class SandboxProvisioner {
 					projectId: options.projectId,
 					...(options.userId ? { userId: options.userId } : {}),
 				},
+				notebook: options.notebook,
 			},
 		);
 	}
