@@ -2,7 +2,8 @@ import type { MeterProvider } from '@opentelemetry/api';
 import { metrics as metricsApi } from '@opentelemetry/api';
 import type { Metrics, MetricTags } from '@marimo-hub/core';
 
-const MAX_SERIES_PER_KIND = 2048;
+const MAX_SERIES_PER_METRIC = 2048;
+type MetricSeries<T> = Map<string, Map<string, T>>;
 
 function instrumentCache<T>(create: (name: string) => T): (name: string) => T {
 	const instruments = new Map<string, T>();
@@ -24,41 +25,48 @@ function seriesKey(name: string, tags?: MetricTags): string {
 /** Cumulative counters, histogram summaries, and latest gauges, keyed by labels. */
 export class WideEventMetrics implements Metrics {
 	private droppedSamples = 0;
-	private counters = new Map<string, number>();
-	private gauges = new Map<string, number>();
-	private histograms = new Map<string, { count: number; sum: number; max: number }>();
+	private counters: MetricSeries<number> = new Map();
+	private gauges: MetricSeries<number> = new Map();
+	private histograms: MetricSeries<{ count: number; sum: number; max: number }> = new Map();
 
 	increment(name: string, value = 1, tags?: MetricTags): void {
-		const key = this.key(name, tags, this.counters);
-		if (key === undefined) return;
-		this.counters.set(key, (this.counters.get(key) ?? 0) + value);
+		const series = this.series(name, tags, this.counters);
+		if (!series) return;
+		const { key, values } = series;
+		values.set(key, (values.get(key) ?? 0) + value);
 	}
 
 	gauge(name: string, value: number, tags?: MetricTags): void {
-		const key = this.key(name, tags, this.gauges);
-		if (key === undefined) return;
-		this.gauges.set(key, value);
+		const series = this.series(name, tags, this.gauges);
+		if (!series) return;
+		series.values.set(series.key, value);
 	}
 
 	histogram(name: string, value: number, tags?: MetricTags): void {
-		const key = this.key(name, tags, this.histograms);
-		if (key === undefined) return;
-		const current = this.histograms.get(key);
-		this.histograms.set(key, {
+		const series = this.series(name, tags, this.histograms);
+		if (!series) return;
+		const { key, values } = series;
+		const current = values.get(key);
+		values.set(key, {
 			count: (current?.count ?? 0) + 1,
 			sum: (current?.sum ?? 0) + value,
 			max: Math.max(current?.max ?? Number.NEGATIVE_INFINITY, value),
 		});
 	}
 
-	private key(
+	private series<T>(
 		name: string,
 		tags: MetricTags | undefined,
-		series: ReadonlyMap<string, unknown>,
-	): string | undefined {
+		metrics: MetricSeries<T>,
+	): { key: string; values: Map<string, T> } | undefined {
+		let values = metrics.get(name);
+		if (!values) {
+			values = new Map();
+			metrics.set(name, values);
+		}
 		const key = seriesKey(name, tags);
-		// Object-ID labels must not cause unbounded growth in memory or log size.
-		if (series.has(key) || series.size < MAX_SERIES_PER_KIND) return key;
+		// Bound object-ID labels without suppressing unrelated metric names.
+		if (values.has(key) || values.size < MAX_SERIES_PER_METRIC) return { key, values };
 		this.droppedSamples++;
 		return undefined;
 	}
@@ -66,12 +74,18 @@ export class WideEventMetrics implements Metrics {
 	collect(): Record<string, number> {
 		const out: Record<string, number> = {};
 		if (this.droppedSamples > 0) out['counter.metrics.dropped_samples'] = this.droppedSamples;
-		for (const [k, v] of this.counters) out[`counter.${k}`] = v;
-		for (const [k, v] of this.gauges) out[`gauge.${k}`] = v;
-		for (const [k, v] of this.histograms) {
-			out[`histogram.${k}.count`] = v.count;
-			out[`histogram.${k}.sum`] = v.sum;
-			out[`histogram.${k}.max`] = v.max;
+		for (const series of this.counters.values()) {
+			for (const [key, value] of series) out[`counter.${key}`] = value;
+		}
+		for (const series of this.gauges.values()) {
+			for (const [key, value] of series) out[`gauge.${key}`] = value;
+		}
+		for (const series of this.histograms.values()) {
+			for (const [key, value] of series) {
+				out[`histogram.${key}.count`] = value.count;
+				out[`histogram.${key}.sum`] = value.sum;
+				out[`histogram.${key}.max`] = value.max;
+			}
 		}
 		return out;
 	}

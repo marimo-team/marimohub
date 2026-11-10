@@ -156,3 +156,48 @@ it('bounds labeled series and reports dropped samples while updating admitted se
 	expect(values['counter.metrics.dropped_samples']).toBe(1);
 	expect(values['gauge.app_pool.visits{"notebook_id":0}']).toBe(0);
 });
+
+it.each(['counter', 'gauge', 'histogram'] as const)(
+	'limits %s series per metric name without suppressing unrelated signals',
+	(kind) => {
+		const metrics = new WideEventMetrics();
+		const record = {
+			counter: metrics.increment.bind(metrics),
+			gauge: metrics.gauge.bind(metrics),
+			histogram: metrics.histogram.bind(metrics),
+		}[kind];
+		for (let i = 0; i < 2048; i++) record('busy', 1, { notebook_id: i });
+		record('busy', 10, { notebook_id: 2048 });
+		record('busy', 2, { notebook_id: 0 });
+		record('critical', 3);
+		record('critical', 4, { label: 'teardown' });
+		record('another', 5);
+
+		const values = metrics.collect();
+		expect(values['counter.metrics.dropped_samples']).toBe(1);
+		const retained = `${kind}.busy{"notebook_id":0}`;
+		const dropped = `${kind}.busy{"notebook_id":2048}`;
+		if (kind === 'histogram') {
+			expect(values).toMatchObject({
+				[`${retained}.count`]: 2,
+				[`${retained}.sum`]: 3,
+				[`${retained}.max`]: 2,
+				'histogram.critical.count': 1,
+				'histogram.critical.sum': 3,
+				'histogram.critical{"label":"teardown"}.sum': 4,
+				'histogram.another.sum': 5,
+			});
+			expect(values[`${dropped}.count`]).toBeUndefined();
+			expect(Object.keys(values)).toHaveLength(2051 * 3 + 1);
+		} else {
+			expect(values).toMatchObject({
+				[retained]: kind === 'counter' ? 3 : 2,
+				[`${kind}.critical`]: 3,
+				[`${kind}.critical{"label":"teardown"}`]: 4,
+				[`${kind}.another`]: 5,
+			});
+			expect(values[dropped]).toBeUndefined();
+			expect(Object.keys(values)).toHaveLength(2052);
+		}
+	},
+);
