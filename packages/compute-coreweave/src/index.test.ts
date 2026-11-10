@@ -1797,6 +1797,25 @@ describe('CoreWeaveCompute', () => {
 			}
 		});
 
+		it('switches to two-second polls after five seconds', async () => {
+			vi.useFakeTimers();
+			try {
+				const world = makeWorld({ bootStatus: 'pending' });
+				const waiting = makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!();
+				await vi.advanceTimersByTimeAsync(5_000);
+				const fake = world.registry.get('cw-1')!.fake;
+				expect(fake.statusPolls).toBe(21);
+				fake.status = 'running';
+				await vi.advanceTimersByTimeAsync(1_999);
+				expect(fake.statusPolls).toBe(21);
+				await vi.advanceTimersByTimeAsync(1);
+				await waiting;
+				expect(fake.statusPolls).toBe(22);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
 		it('times out after 60 s of boot polling', async () => {
 			vi.useFakeTimers();
 			try {
@@ -1812,7 +1831,7 @@ describe('CoreWeaveCompute', () => {
 				await vi.advanceTimersByTimeAsync(1);
 				await waiting;
 				expect(error).toBeInstanceOf(CWSandboxTimeoutError);
-				expect(world.registry.get('cw-1')!.fake.statusPolls).toBe(50);
+				expect(world.registry.get('cw-1')!.fake.statusPolls).toBe(48);
 				expect(vi.getTimerCount()).toBe(0);
 			} finally {
 				vi.useRealTimers();
@@ -2995,7 +3014,6 @@ it('transfers a binary batch on stdin without flushing the session environment',
 	expect(fake.startCalls[0].slice(0, 2)).toEqual(['sh', '-c']);
 	expect(fake.startCalls[0][2]).not.toContain('not-in-argv');
 	expect(instance.drainCounters!()).toEqual({
-		packed_fallback: 0,
 		reconnect_by_reference: 0,
 		reconnect_by_lookup: 0,
 		execs: 0,
@@ -3201,7 +3219,6 @@ it('counts environment and launch streams once on a cold start and drains a warm
 		startupTimeout: 1_000,
 	});
 	expect(instance.drainCounters!()).toEqual({
-		packed_fallback: 0,
 		reconnect_by_reference: 0,
 		reconnect_by_lookup: 0,
 		execs: 1,
@@ -3212,7 +3229,6 @@ it('counts environment and launch streams once on a cold start and drains a warm
 		status_polls: 1,
 	});
 	expect(instance.drainCounters!()).toEqual({
-		packed_fallback: 0,
 		reconnect_by_reference: 0,
 		reconnect_by_lookup: 0,
 		execs: 0,
@@ -3608,23 +3624,24 @@ it.each(['auto', 'gateway'] as const)(
 		release.resolve();
 		await writing;
 		expect(concurrency.peak).toBe(2);
-		expect(instance.drainCounters!()).toMatchObject({ file_write_waves: 2, stream_execs: 3 });
+		expect(instance.drainCounters!()).toMatchObject({ file_write_waves: 1, stream_execs: 3 });
 	},
 );
 
-it('caches missing packed receivers per image across sandbox instances', async () => {
+it('disables a missing packed receiver only on that sandbox instance', async () => {
 	const { world, commands } = packedWriterExits([127, 0]);
 	const compute = makeCompute(world);
 	const first = compute.create(SANDBOX_ID, { reuse: false });
 	await first.writeFiles(packedFiles());
-	expect(first.drainCounters!()).toMatchObject({ packed_fallback: 1 });
-	await compute.create('sb-next' as SandboxId, { reuse: false }).writeFiles(packedFiles());
+	await first.writeFiles(packedFiles());
 	expect(commands).toHaveLength(1);
-	expect(world.registry.get('cw-2')!.fake.batchWrites.flat()).toEqual(packedFiles());
-	await compute
-		.create('sb-other' as SandboxId, { reuse: false, image: 'other-image' })
-		.writeFiles(packedFiles());
+	expect(world.registry.get('cw-1')!.fake.batchWrites.flat()).toEqual([
+		...packedFiles(),
+		...packedFiles(),
+	]);
+	await compute.create('sb-next' as SandboxId, { reuse: false }).writeFiles(packedFiles());
 	expect(commands).toHaveLength(2);
+	expect(world.registry.get('cw-2')!.fake.batchWrites).toEqual([]);
 });
 
 it('drains an in-flight packed sibling before reporting failure and stops queued batches', async () => {
@@ -3667,17 +3684,17 @@ it('shares the direct-mode slot cap across packed writers for the same sandbox',
 	expect(concurrency.peak).toBe(2);
 });
 
-it.each([1, 126])('does not poison the image receiver cache after exit %i', async (exitCode) => {
+it.each([1, 126])('keeps packed writes enabled after exit %i', async (exitCode) => {
 	const { world, commands } = packedWriterExits([exitCode, 0]);
 	const compute = makeCompute(world);
-	await expect(
-		compute.create(SANDBOX_ID, { reuse: false }).writeFiles(packedFiles()),
-	).rejects.toThrow('Could not write sandbox file batch');
-	const next = compute.create('sb-after-failure' as SandboxId, { reuse: false });
+	const next = compute.create(SANDBOX_ID, { reuse: false });
+	await expect(next.writeFiles(packedFiles())).rejects.toThrow(
+		'Could not write sandbox file batch',
+	);
 	await next.writeFiles(packedFiles());
 	expect(commands).toHaveLength(2);
-	expect(world.registry.get('cw-2')!.fake.batchWrites).toEqual([]);
-	expect(next.drainCounters!()).toMatchObject({ packed_fallback: 0, stream_execs: 1 });
+	expect(world.registry.get('cw-1')!.fake.batchWrites).toEqual([]);
+	expect(next.drainCounters!()).toMatchObject({ stream_execs: 2 });
 });
 
 it('waits for the successful sibling before falling back only the missing receiver batch', async () => {
@@ -3719,5 +3736,4 @@ it('waits for the successful sibling before falling back only the missing receiv
 	release.resolve();
 	await writing;
 	expect(fake.batchWrites.flat()).toEqual(files.slice(0, 128));
-	expect(instance.drainCounters!()).toMatchObject({ packed_fallback: 1 });
 });

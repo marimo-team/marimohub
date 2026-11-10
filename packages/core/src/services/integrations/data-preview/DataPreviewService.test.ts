@@ -54,7 +54,6 @@ describe('DataPreviewService', () => {
 			duckdbWasm: duckdb,
 			sandbox: {
 				available: () => true,
-				check: async () => {},
 				preview: sandboxPreview,
 				close: async () => {},
 			},
@@ -91,7 +90,6 @@ describe('DataPreviewService', () => {
 			duckdbWasm: duckdb,
 			sandbox: {
 				available: () => true,
-				check: async () => {},
 				preview: sandboxPreview,
 				close: async () => {},
 			},
@@ -125,7 +123,6 @@ describe('DataPreviewService', () => {
 			duckdbWasm: duckdb,
 			sandbox: {
 				available: () => true,
-				check: async () => {},
 				preview: sandboxPreview,
 				close: async () => {},
 			},
@@ -158,7 +155,6 @@ describe('DataPreviewService', () => {
 		const service = new DataPreviewService({
 			sandbox: {
 				available: () => true,
-				check: async () => {},
 				preview: async () => ({ columns: [], rows: [] }),
 				close: async () => {},
 			},
@@ -179,7 +175,6 @@ describe('DataPreviewService', () => {
 		const service = new DataPreviewService({
 			sandbox: {
 				available: () => true,
-				check: async () => {},
 				preview: () =>
 					new Promise((resolve) => {
 						finish = () => resolve({ columns: [], rows: [] });
@@ -239,7 +234,6 @@ describe('DataPreviewService', () => {
 		const service = new DataPreviewService({
 			sandbox: {
 				available: () => true,
-				check: async () => {},
 				preview: () =>
 					new Promise((resolve) => {
 						finish = () => resolve({ columns: [], rows: [] });
@@ -266,7 +260,6 @@ describe('DataPreviewService', () => {
 		const service = new DataPreviewService({
 			sandbox: {
 				available: () => true,
-				check: async () => {},
 				preview: sandboxPreview,
 				close: async () => {},
 			},
@@ -285,7 +278,6 @@ describe('DataPreviewService', () => {
 		const service = new DataPreviewService({
 			sandbox: {
 				available: () => false,
-				check: async () => {},
 				preview: async () => ({ columns: [], rows: [] }),
 				close: async () => {},
 			},
@@ -299,7 +291,7 @@ describe('DataPreviewService', () => {
 		);
 	});
 
-	it('is ready when either configured executor passes preflight', async () => {
+	it('keeps sandbox previews available when DuckDB initialization fails', async () => {
 		const service = new DataPreviewService({
 			duckdbWasm: {
 				available: () => false,
@@ -314,7 +306,6 @@ describe('DataPreviewService', () => {
 			},
 			sandbox: {
 				available: () => true,
-				check: async () => {},
 				preview: async () => ({ columns: [], rows: [] }),
 				close: async () => {},
 			},
@@ -325,7 +316,7 @@ describe('DataPreviewService', () => {
 		await expect(service.check()).resolves.toBeUndefined();
 	});
 
-	it('rejects preflight when every configured executor fails', async () => {
+	it('rejects failed DuckDB initialization without an available sandbox', async () => {
 		const service = new DataPreviewService({
 			duckdbWasm: {
 				available: () => false,
@@ -340,9 +331,6 @@ describe('DataPreviewService', () => {
 			},
 			sandbox: {
 				available: () => false,
-				check: async () => {
-					throw new Error('sandbox failed');
-				},
 				preview: async () => ({ columns: [], rows: [] }),
 				close: async () => {},
 			},
@@ -378,7 +366,6 @@ describe('DataPreviewService', () => {
 			},
 			sandbox: {
 				available: () => true,
-				check: async () => {},
 				preview: async () => ({ columns: [], rows: [] }),
 				close: sandboxClose,
 			},

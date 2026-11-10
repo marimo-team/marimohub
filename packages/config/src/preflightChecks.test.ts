@@ -414,7 +414,7 @@ describe('integrations.secrets check', () => {
 });
 
 describe('integrations.data-preview check', () => {
-	it('makes sandbox previews available without creating a sandbox during replica preflight', async () => {
+	it('initializes DuckDB without creating a preview sandbox during replica preflight', async () => {
 		const { instance } = makeFakeSandbox();
 		const create = vi.fn(() => instance);
 		const sandbox = new SandboxDataPreview(
@@ -425,9 +425,24 @@ describe('integrations.data-preview check', () => {
 				executionTimeoutMs: 100,
 			},
 		);
-		const preview = new DataPreviewService({ sandbox, maxConcurrent: 1, maxConcurrentPerUser: 1 });
+		const initializeDuckdb = vi.fn(async () => {});
+		const preview = new DataPreviewService({
+			sandbox,
+			duckdbWasm: {
+				available: () => true,
+				supports: () => true,
+				supportsFeatures: () => true,
+				status: () => ({ available: true }),
+				check: initializeDuckdb,
+				preview: async () => ({ columns: [], rows: [] }),
+				close: async () => {},
+			},
+			maxConcurrent: 1,
+			maxConcurrentPerUser: 1,
+		});
 		const deps = makeDeps({ dataBrowser: { preview: true, checkPreview: () => preview.check() } });
 		expect((await run({}, deps)).by('integrations.data-preview')).toMatchObject({ status: 'ok' });
+		expect(initializeDuckdb).toHaveBeenCalledOnce();
 		expect(preview.available({ python: true })).toBe(true);
 		expect(create).not.toHaveBeenCalled();
 		await preview.close();

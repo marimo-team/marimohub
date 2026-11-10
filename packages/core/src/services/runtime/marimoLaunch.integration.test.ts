@@ -136,6 +136,18 @@ describe.runIf(process.env.MARIMOHUB_UV_INTEGRATION === '1')(
 			},
 		);
 
+		it('supports uv add with an explicit Python constraint in the generated manifest', async () => {
+			await writeFile(join(root, 'pyproject.toml'), EMPTY_PYPROJECT);
+			const { stderr } = await run('uv', ['add', '--no-sync', 'mhub_project_dep==1.0.0']);
+			expect(stderr).not.toMatch(/No.*requires-python|defaulting to/i);
+			expect(await readFile(join(root, 'pyproject.toml'), 'utf8')).toContain(
+				'requires-python = ">=3.11"',
+			);
+			expect(await readFile(join(root, 'pyproject.toml'), 'utf8')).toContain(
+				'mhub-project-dep==1.0.0',
+			);
+		});
+
 		it.each([`\uFEFF${EMPTY_PYPROJECT}`, '[project]\ndependencies = ['])(
 			'preserves Python validation errors for a malformed project manifest: %s',
 			async (content) => {

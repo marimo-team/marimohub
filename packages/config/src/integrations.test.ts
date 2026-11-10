@@ -560,13 +560,16 @@ describe('makeIntegrations data browser', () => {
 		}
 	});
 
-	it('delegates aggregate preview preflight', async () => {
+	it('delegates DuckDB preview initialization', async () => {
 		let checked = false;
 		const runtime = new DataPreviewService({
 			maxConcurrent: 1,
 			maxConcurrentPerUser: 1,
-			sandbox: {
+			duckdbWasm: {
 				available: () => checked,
+				supports: () => checked,
+				supportsFeatures: () => checked,
+				status: () => ({ available: checked }),
 				check: async () => {
 					checked = true;
 				},

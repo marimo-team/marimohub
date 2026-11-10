@@ -2666,3 +2666,110 @@ it('routes ordinary workspace files and overlays through a retryable sink after 
 	);
 	expect(calls.writeFiles).toEqual([]);
 });
+
+describe('workspace defaults', () => {
+	const defaultFiles = [{ path: 'pyproject.toml', content: new TextEncoder().encode('default') }];
+
+	it.each([false, true])(
+		'batches absent defaults with source files and retries them (empty: %s)',
+		async (empty) => {
+			const bucket = new MemoryBucket();
+			const { instance, calls } = makeFakeSandbox();
+			if (!empty) await bucket.put('workspace/notebook.py', 'code');
+			const head = vi.spyOn(bucket, 'head');
+			const writeFiles = vi.fn(instance.writeFiles.bind(instance));
+			writeFiles.mockRejectedValueOnce(new Error('stream reset'));
+			const stats = await restoreWorkspace(instance, bucket, 'workspace/', MOUNT, {
+				defaultFiles,
+				writeFiles,
+			});
+			expect(head).not.toHaveBeenCalled();
+			expect(writeFiles).toHaveBeenCalledTimes(2);
+			expect(writeFiles.mock.calls[1]).toEqual(writeFiles.mock.calls[0]);
+			expect(calls.writeFiles).toHaveLength(1);
+			expect(calls.writeFiles[0]).toContainEqual({
+				path: `${MOUNT}/pyproject.toml`,
+				content: defaultFiles[0].content,
+			});
+			expect(stats).toEqual({ objectCount: empty ? 1 : 2, bytes: empty ? 7 : 11 });
+		},
+	);
+
+	it.each(['listing', 'overlay'] as const)(
+		'preserves a manifest present in the %s',
+		async (source) => {
+			const bucket = new MemoryBucket();
+			const { instance, calls } = makeFakeSandbox();
+			const key = source === 'listing' ? 'workspace/pyproject.toml' : 'versions/pyproject.toml';
+			await bucket.put(key, 'original');
+			await restoreWorkspace(instance, bucket, 'workspace/', MOUNT, {
+				defaultFiles,
+				overlay: source === 'overlay' ? [{ path: 'pyproject.toml', key }] : undefined,
+			});
+			expect(calls.writeFile).toEqual([
+				{ path: `${MOUNT}/pyproject.toml`, content: new TextEncoder().encode('original') },
+			]);
+		},
+	);
+
+	it('does not replace a listed file skipped by workspace limits', async () => {
+		const bucket = new MemoryBucket();
+		const { instance, calls } = makeFakeSandbox();
+		await bucket.put('workspace/pyproject.toml', 'oversized');
+		await restoreWorkspace(instance, bucket, 'workspace/', MOUNT, {
+			defaultFiles,
+			limits: { ...WORKSPACE_LIMITS, maxFileBytes: 1 },
+		});
+		expect(calls.writeFile).toEqual([]);
+	});
+
+	it('does not replace a listed file that disappears before GET', async () => {
+		const bucket = new VanishingObjectBucket('workspace/pyproject.toml');
+		const { instance, calls } = makeFakeSandbox();
+		await bucket.put('workspace/pyproject.toml', 'original');
+		await expect(
+			restoreWorkspace(instance, bucket, 'workspace/', MOUNT, {
+				defaultFiles,
+				requireComplete: true,
+			}),
+		).rejects.toThrow('listed object is missing');
+		expect(calls.writeFile).toEqual([]);
+	});
+
+	it('deduplicates defaults and respects excluded roots', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		await restoreWorkspace(instance, new MemoryBucket(), 'workspace/', MOUNT, {
+			defaultFiles: [
+				...defaultFiles,
+				...defaultFiles,
+				{ path: 'excluded/file', content: new Uint8Array() },
+			],
+			excludeRelativeRoots: ['excluded'],
+		});
+		expect(calls.writeFile).toHaveLength(1);
+	});
+
+	it.each(['../escape', '/absolute', '.git/hooks/pre-commit'])(
+		'rejects unsafe default path %s',
+		async (path) => {
+			const { instance, calls } = makeFakeSandbox();
+			await expect(
+				restoreWorkspace(instance, new MemoryBucket(), 'workspace/', MOUNT, {
+					defaultFiles: [{ path, content: new Uint8Array() }],
+				}),
+			).rejects.toThrow('unsafe default path');
+			expect(calls.writeFile).toEqual([]);
+		},
+	);
+
+	it('keeps generated defaults outside source quotas', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const bucket = new MemoryBucket();
+		await bucket.put('workspace/data', 'x');
+		await restoreWorkspace(instance, bucket, 'workspace/', MOUNT, {
+			defaultFiles,
+			limits: { maxTotalBytes: 1, maxFileBytes: 1, maxFiles: 1 },
+		});
+		expect(calls.writeFile).toHaveLength(2);
+	});
+});

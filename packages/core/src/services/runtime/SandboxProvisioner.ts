@@ -59,7 +59,11 @@ import {
 	restoreWorkspace,
 	sharedWorkspaceListing,
 } from './sandboxFiles';
-import type { WorkspaceOverlay, WorkspaceRestoreStats } from './sandboxFiles';
+import type {
+	WorkspaceOverlay,
+	WorkspaceRestoreOptions,
+	WorkspaceRestoreStats,
+} from './sandboxFiles';
 import { restorePackedWorkspace } from './packedWorkspaceRestore';
 import { sandboxWorkspaceLayout } from './workspaceLayout';
 import type { SandboxWorkspaceLayout } from './workspaceLayout';
@@ -564,6 +568,7 @@ async function withSandboxSpan<T>(
 }
 
 export interface WorkspaceLoadContext {
+	defaultFiles?: WorkspaceRestoreOptions['defaultFiles'];
 	writeFiles?: SandboxInstance['writeFiles'];
 	workspaceLimits?: WorkspaceLimits;
 	overlay?: WorkspaceOverlay;
@@ -605,6 +610,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 	readonly supportsPrefetch = true;
 
 	async load({
+		defaultFiles,
 		sandbox,
 		bucketHandle,
 		workspacePrefix,
@@ -624,6 +630,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		}
 		try {
 			const stats = await restoreWorkspace(sandbox, bucketHandle, workspacePrefix, mountPath, {
+				defaultFiles,
 				limits: workspaceLimits,
 				writeFiles,
 				// Capture treats absent files as deletions, so a session must restore every file.
@@ -989,32 +996,10 @@ export class SandboxProvisioner {
 			if (options.notebookBridge) sw.timings.bridge_prepare = sw.timings.inject_files;
 		};
 		let skipPyprojectSetup = false;
-		let sawPyproject = false;
 		const pyprojectPath = `${mountPath}/pyproject.toml`;
-		const emptyPyproject = { path: pyprojectPath, content: EMPTY_PYPROJECT };
-		const missingPyproject =
-			!options.restoreFilesystemSnapshotId &&
-			!options.workspaceArchive &&
-			!options.workspaceOverlay?.some((file) => file.path === 'pyproject.toml') &&
-			options.bucketHandle
-				? withDeadline(options.bucketHandle.head(`${prefix}pyproject.toml`), {
-						timeoutMs: Math.min(1000, options.startupTimeoutMs || 1000),
-						timeoutError: () => new Error('Pyproject metadata read timed out'),
-					}).then(
-						(object) => object === null,
-						() => false,
-					)
-				: undefined;
 		const workspaceWriter: SandboxInstance['writeFiles'] = async (files) => {
-			const batch = [...files];
-			if (
-				!sawPyproject &&
-				!files.some((file) => file.path === pyprojectPath) &&
-				(await missingPyproject)
-			)
-				batch.push(emptyPyproject);
 			let transferredPyproject: boolean | undefined;
-			const prepared = batch.map((file) => {
+			const prepared = files.map((file) => {
 				if (file.path !== pyprojectPath) return file;
 				const pyproject = preparePyproject(file.content);
 				transferredPyproject = pyproject.skipSetup;
@@ -1023,7 +1008,6 @@ export class SandboxProvisioner {
 			await (combineWrites && !options.gitPrefix ? flush : writeFiles)(prepared);
 			// Failed transfers must replay synthesized files before setup can be skipped.
 			if (transferredPyproject !== undefined) {
-				sawPyproject = true;
 				skipPyprojectSetup = transferredPyproject;
 			}
 		};
@@ -1047,14 +1031,6 @@ export class SandboxProvisioner {
 						this.loadWorkspace(sandbox, options, layout, prefix, waitUntilReady, workspaceWriter));
 					if (!loaded.overlayApplied) {
 						await this.applyWorkspaceOverlay(sandbox, options, mountPath, workspaceWriter);
-					}
-					if (
-						!sawPyproject &&
-						loaded.usedFallback &&
-						loaded.overlayApplied &&
-						(await missingPyproject)
-					) {
-						await workspaceWriter([emptyPyproject]);
 					}
 					return loaded;
 				});
@@ -1476,6 +1452,9 @@ export class SandboxProvisioner {
 				: this.workspaceLoadStrategies.mountOrCopy;
 		if (!strategy.supportsPrefetch) await waitUntilReady();
 		const load = strategy.load({
+			defaultFiles: options.restoreFilesystemSnapshotId
+				? undefined
+				: [{ path: 'pyproject.toml', content: new TextEncoder().encode(EMPTY_PYPROJECT) }],
 			writeFiles,
 			overlay: options.workspaceOverlay,
 			workspaceLimits: options.workspaceLimits,

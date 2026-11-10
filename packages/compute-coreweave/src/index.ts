@@ -569,12 +569,9 @@ async function waitUntilRunning(
 			retryUntil ??= Date.now() + READY_POLL_RETRY_BUDGET_MS;
 			if (Date.now() >= retryUntil) throw error;
 		}
-		let delay = Math.min(
-			READY_POLL_INTERVAL_MS *
-				2 **
-					Math.max(0, Math.floor((READY_TIMEOUT_MS - remaining - READY_FAST_POLL_MS) / 1000) + 1),
-			READY_POLL_MAX_RETRY_DELAY_MS,
-		);
+		const elapsed = READY_TIMEOUT_MS - remaining;
+		let delay =
+			elapsed < READY_FAST_POLL_MS ? READY_POLL_INTERVAL_MS : READY_POLL_MAX_RETRY_DELAY_MS;
 		if (status === undefined) {
 			delay = Math.min(READY_POLL_INTERVAL_MS * 2 ** retries++, READY_POLL_MAX_RETRY_DELAY_MS);
 		} else {
@@ -646,7 +643,6 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	private counters = {
 		reconnect_by_reference: 0,
 		reconnect_by_lookup: 0,
-		packed_fallback: 0,
 		file_writes: 0,
 		file_write_waves: 0,
 		env_writes: 0,
@@ -681,7 +677,6 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		private readonly fileWriteSlots = new SandboxFileWriteSlots(
 			fileWriteLimit(config.dataPlaneMode),
 		),
-		private readonly packedReceiverCache = new BoundedLruMap<string, boolean>(256),
 	) {
 		this.idTag = ID_TAG_PREFIX + id;
 		if (reference !== undefined) {
@@ -1124,31 +1119,23 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			paths.add(file.path);
 		}
 		const sandbox = await this.ensure();
-		const image = JSON.stringify([
-			this.config.image ?? DEFAULT_CONTAINER_IMAGE,
-			this.config.templateId,
-		]);
-		if (
-			batch.length > fileWriteLimit(this.config.dataPlaneMode) &&
-			this.packedWritesAvailable &&
-			this.packedReceiverCache.get(image) !== false
-		) {
+		if (batch.length > fileWriteLimit(this.config.dataPlaneMode) && this.packedWritesAvailable) {
+			// Count one packed pipeline per call, plus any retried streams.
+			this.counters.file_write_waves++;
 			const batches = batchFileWrites(batch);
 			const fallback: SandboxFileWrite[] = [];
-			let dispatched = 0;
 			const writePacked = async (packed: readonly SandboxFileWrite[], bootstrap?: string) => {
 				if (!this.packedWritesAvailable) {
 					fallback.push(...packed);
 					return;
 				}
 				const command = bootstrap ? `${bootstrap} ${WRITE_BATCH_COMMAND}` : WRITE_BATCH_COMMAND;
-				const wave = dispatched++ % WRITE_BATCH_CONCURRENCY === 0;
 				for (let attempt = 0; ; attempt++) {
 					try {
 						const { result, exitCode } = await this.fileWriteSlots.run(
 							sandbox.sandboxId,
 							async () => {
-								if (wave || attempt > 0) this.counters.file_write_waves++;
+								if (attempt > 0) this.counters.file_write_waves++;
 								return this.runRaw(command, encodeFileWriteBatch(packed), {
 									timeout: FILE_WRITE_TIMEOUT_MS,
 								});
@@ -1156,8 +1143,6 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 						);
 						if (exitCode === 127) {
 							this.packedWritesAvailable = false;
-							this.packedReceiverCache.set(image, false);
-							this.counters.packed_fallback++;
 							fallback.push(...packed);
 							this.pendingBootstrap ??= bootstrap;
 						} else if (!result.success) throw new Error('Could not write sandbox file batch');
@@ -1177,7 +1162,6 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				const bootstrap = this.pendingBootstrap;
 				this.pendingBootstrap = undefined;
 				await writePacked(batches.shift()!, bootstrap);
-				dispatched = 0;
 			}
 			await forEachConcurrentUntilFailure({
 				items: batches,
@@ -1730,7 +1714,6 @@ export class CoreWeaveCompute implements SandboxProvider {
 	readonly preconnect?: SandboxProvider['preconnect'];
 	private client?: CoreWeaveClient;
 	private readonly fileWriteSlots: SandboxFileWriteSlots;
-	private readonly packedReceiverCache = new BoundedLruMap<string, boolean>(256);
 	/**
 	 * Provider sandbox ids this process has seen running for a hub id, so a re-resolved instance
 	 * can Get by id instead of paying the tag List. Entries are hints: every hit is validated, and
@@ -1820,7 +1803,6 @@ export class CoreWeaveCompute implements SandboxProvider {
 			existingOnly,
 			reference,
 			this.fileWriteSlots,
-			this.packedReceiverCache,
 		);
 	}
 

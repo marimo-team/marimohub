@@ -1580,7 +1580,7 @@ describe('SandboxProvisioner', () => {
 					],
 				]);
 				expect(calls.mountBucket).toEqual([]);
-				expect(result.counters.files_objects).toBe(withGit ? 3 : 2);
+				expect(result.counters.files_objects).toBe(withGit ? 4 : 3);
 			},
 		);
 
@@ -3443,7 +3443,7 @@ describe('SandboxProvisioner', () => {
 			expect(restored).toContain(`${MOUNT_PATH}/.git/HEAD`);
 			expect(restored).toContain(`${MOUNT_PATH}/.git/objects/pack/pack-a.pack`);
 			expect(restored.some((path) => path.includes('/.git/hooks'))).toBe(false);
-			expect(result.counters).toMatchObject({ files_objects: 3 });
+			expect(result.counters).toMatchObject({ files_objects: 4 });
 			expect(
 				calls.exec.some((command) =>
 					command.includes("git config --global --add safe.directory '/workspace'"),
@@ -3476,7 +3476,7 @@ describe('SandboxProvisioner', () => {
 			const restored = calls.writeFiles.flat().map((file) => file.path);
 			expect(restored).toContain(`${MOUNT_PATH}/python/apps/app.py`);
 			expect(restored).toContain(`${MOUNT_PATH}/.git/HEAD`);
-			expect(result.counters).toMatchObject({ files_objects: 2 });
+			expect(result.counters).toMatchObject({ files_objects: 3 });
 			const gitCommands = calls.exec.filter((command) => command.includes('safe.directory'));
 			expect(gitCommands).toHaveLength(1);
 			expect(gitCommands[0]).toContain("git config --global --add safe.directory '/workspace'\n");
@@ -3804,7 +3804,10 @@ describe('SandboxProvisioner', () => {
 				.find(({ path }) => path === `${MOUNT_PATH}/.git/objects/pack/large.pack`);
 			expect(restored?.content).toBeInstanceOf(Uint8Array);
 			expect(restored?.content).toHaveLength(size);
-			expect(result.counters).toMatchObject({ files_objects: 1, files_bytes: size });
+			expect(result.counters).toMatchObject({
+				files_objects: 2,
+				files_bytes: size + new TextEncoder().encode(EMPTY_PYPROJECT).byteLength,
+			});
 		});
 
 		it('restores Git metadata after a successful workspace mount', async () => {
@@ -5330,32 +5333,31 @@ it.each([false, true])(
 	},
 );
 
-it('does not wait for optional metadata when the transferred batch already contains pyproject', async () => {
-	vi.useFakeTimers();
-	try {
-		const { calls, bucketHandle, nb, provisioner, options } = await pyprojectFixture();
-		await bucketHandle.put(nb.deps, EMPTY_PYPROJECT);
-		const head = deferred<null>();
-		vi.spyOn(bucketHandle, 'head').mockImplementationOnce(() => head.promise);
-		const provision = provisioner.provision(options);
-		try {
-			await vi.advanceTimersByTimeAsync(0);
-			expect(calls.startProcess).toHaveLength(1);
-		} finally {
-			head.resolve(null);
-			await provision;
-		}
-	} finally {
-		vi.useRealTimers();
-	}
-});
+it.each([false, true])(
+	'uses the restore listing without a pyproject HEAD (prefetch: %s)',
+	async (prefetch) => {
+		const { instance, calls, bucketHandle, provisioner, options } = await pyprojectFixture();
+		const head = vi
+			.spyOn(bucketHandle, 'head')
+			.mockRejectedValue(new Error('HEAD must not be used'));
+		await provisioner.provision({
+			...options,
+			...(prefetch ? { workspacePrefetch: provisioner.prefetchWorkspace(instance, options) } : {}),
+		});
+		expect(head).not.toHaveBeenCalled();
+		expect(calls.exec).toEqual([]);
+		expect(calls.writeFiles).toHaveLength(1);
+		expect(calls.writeFiles[0]).toContainEqual({
+			path: '/workspace/pyproject.toml',
+			content: EMPTY_PYPROJECT,
+		});
+	},
+);
 
-it.each(['metadata failure', 'invalid UTF-8', 'restored snapshot', 'injected dependencies'])(
+it.each(['invalid UTF-8', 'restored snapshot', 'injected dependencies'])(
 	'keeps the dependency probe for %s',
 	async (scenario) => {
 		const { calls, bucketHandle, nb, provisioner, options } = await pyprojectFixture();
-		if (scenario === 'metadata failure')
-			vi.spyOn(bucketHandle, 'head').mockRejectedValue(new Error('storage unavailable'));
 		if (scenario === 'invalid UTF-8') await bucketHandle.put(nb.deps, new Uint8Array([0xff, 0xfe]));
 		if (scenario === 'restored snapshot')
 			options.restoreFilesystemSnapshotId = 'snapshot-with-deps';
@@ -5396,26 +5398,6 @@ it('destroys the sandbox without launching when dependency validation fails', as
 	);
 	expect(calls.startProcess).toEqual([]);
 	expect(calls.destroy).toBe(1);
-});
-
-it('falls back to sandbox validation when optional metadata times out and ignores its late result', async () => {
-	vi.useFakeTimers();
-	try {
-		const { calls, bucketHandle, provisioner, options } = await pyprojectFixture();
-		const head = deferred<null>();
-		vi.spyOn(bucketHandle, 'head').mockImplementationOnce(() => head.promise);
-		const provision = provisioner.provision(options);
-		await vi.advanceTimersByTimeAsync(1000);
-		await provision;
-		expect(calls.exec.join('\n')).toContain('pyproject_layer');
-		expect(calls.writeFile.map((file) => file.path)).not.toContain('/workspace/pyproject.toml');
-		head.resolve(null);
-		await vi.advanceTimersByTimeAsync(0);
-		expect(calls.startProcess).toHaveLength(1);
-		expect(calls.writeFile).toHaveLength(1);
-	} finally {
-		vi.useRealTimers();
-	}
 });
 
 it.each([true, false])(

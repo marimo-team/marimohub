@@ -9,6 +9,7 @@ import { bundleIntegrations } from '../bundle';
 import type { PythonPreviewProgram } from './programs';
 import { parseTablePreviewJson } from './previewResult';
 import { DrainableService } from '../DrainableService';
+import { utf8Tail } from '../../../text';
 
 const SCRIPT_PATH = '/tmp/marimohub-data-preview.py';
 const REQUEST_PATH = '/tmp/marimohub-data-preview-request.json';
@@ -22,8 +23,6 @@ export interface SandboxDataPreviewOptions {
 }
 
 export class SandboxDataPreview extends DrainableService {
-	private readyForTraffic = false;
-
 	constructor(
 		private readonly compute: SandboxProvider,
 		private readonly options: SandboxDataPreviewOptions,
@@ -36,14 +35,7 @@ export class SandboxDataPreview extends DrainableService {
 	}
 
 	available(): boolean {
-		return this.readyForTraffic && !this.closed;
-	}
-
-	check(): Promise<void> {
-		if (this.closed) return Promise.reject(new UnavailableError('The preview sandbox is closed.'));
-		// Validate the image through the first real preview, without a throwaway boot sandbox.
-		this.readyForTraffic = true;
-		return Promise.resolve();
+		return !this.closed;
 	}
 
 	async preview(program: PythonPreviewProgram): Promise<TablePreview> {
@@ -52,10 +44,7 @@ export class SandboxDataPreview extends DrainableService {
 	}
 
 	close(): Promise<void> {
-		return this.closeOnce(async () => {
-			this.readyForTraffic = false;
-			await this.inFlight.drain();
-		});
+		return this.closeOnce(() => this.inFlight.drain());
 	}
 
 	private async runPreview(program: PythonPreviewProgram): Promise<TablePreview> {
@@ -92,10 +81,8 @@ export class SandboxDataPreview extends DrainableService {
 				this.options.executionTimeoutMs,
 				'finish',
 			);
-			if (
-				!result.success ||
-				new TextEncoder().encode(result.stdout).byteLength > MAX_STDOUT_BYTES
-			) {
+			if (!result.success) throw previewExecutionError(result.stderr);
+			if (new TextEncoder().encode(result.stdout).byteLength > MAX_STDOUT_BYTES) {
 				throw new UnavailableError('The preview sandbox could not read this table.');
 			}
 			return parseTablePreviewJson(result.stdout, program.maxRows);
@@ -119,6 +106,18 @@ export class SandboxDataPreview extends DrainableService {
 			logOperationalError('data_preview_sandbox_destroy_failed', {}, error);
 		}
 	}
+}
+
+function previewExecutionError(stderr: string): UnavailableError {
+	// Tracebacks can contain credentials. Expose only import names, never arbitrary stderr.
+	const importError = utf8Tail(stderr, 4096).match(
+		/^(?:ModuleNotFoundError|ImportError): (?:No module named ['"][a-zA-Z_][\w.]*['"]|cannot import name ['"][a-zA-Z_]\w*['"] from ['"][a-zA-Z_][\w.]*['"])/m,
+	);
+	return new UnavailableError(
+		importError
+			? `The preview image has incompatible Python dependencies (${importError[0]}). Check MARIMOHUB_DATA_PREVIEW_IMAGE.`
+			: 'The preview sandbox could not read this table.',
+	);
 }
 
 async function resolveCredentialVars(

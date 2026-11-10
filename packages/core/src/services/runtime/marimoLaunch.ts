@@ -3,6 +3,7 @@
  * (see launchStrategy.ts); the default is the project-managed env.
  */
 import { parse as parseToml } from 'smol-toml';
+import { decodeUtf8PreservingBom } from '../../text';
 import type { RuntimeContributions } from '../../ports/integrations';
 import type { SessionMode } from '../../constants';
 import { runtimePackageCommand } from './runtimePackageCommand';
@@ -154,7 +155,7 @@ function launchCommand(p: MarimoLaunchParams, sandbox = false): string {
 const PYPROJECT_LAYER_SETUP = `{ status=0; python3 -c "import pathlib,sys,tomllib;path=pathlib.Path('pyproject.toml');data=tomllib.loads(path.read_text()) if path.exists() else {};sys.exit(0 if data.get('project',{}).get('dependencies') else 2)" || status=$?; if [ "$status" -eq 0 ]; then uv sync --inexact --no-install-package marimo --no-compile-bytecode; elif [ "$status" -eq 2 ]; then if ! grep -q '^\\[project\\]' pyproject.toml 2>/dev/null; then rm -f pyproject.toml && uv init --bare --no-package --vcs none --name notebook --description "Built in marimohub"; fi; else exit "$status"; fi; }`;
 
 export const EMPTY_PYPROJECT =
-	'[project]\nname = "notebook"\nversion = "0.1.0"\ndescription = "Built in marimohub"\ndependencies = []\n';
+	'[project]\nname = "notebook"\nversion = "0.1.0"\ndescription = "Built in marimohub"\nrequires-python = ">=3.11"\ndependencies = []\n';
 
 export function preparePyproject(input: string | Uint8Array): {
 	content: string | Uint8Array;
@@ -162,8 +163,7 @@ export function preparePyproject(input: string | Uint8Array): {
 } {
 	let content = input;
 	try {
-		if (typeof content !== 'string')
-			content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content);
+		if (typeof content !== 'string') content = decodeUtf8PreservingBom(content, { fatal: true });
 		// smol-toml accepts a BOM, but Python's tomllib rejects it.
 		if (content.startsWith('\uFEFF')) return { content, skipSetup: false };
 		const data = parseToml(content);
@@ -172,8 +172,8 @@ export function preparePyproject(input: string | Uint8Array): {
 		if (
 			project &&
 			typeof project === 'object' &&
-			(Object.getPrototypeOf(project) === Object.prototype ||
-				Object.getPrototypeOf(project) === null)
+			!Array.isArray(project) &&
+			!(project instanceof Date)
 		) {
 			const dependencies = 'dependencies' in project ? project.dependencies : undefined;
 			if (dependencies === undefined || (Array.isArray(dependencies) && dependencies.length === 0))

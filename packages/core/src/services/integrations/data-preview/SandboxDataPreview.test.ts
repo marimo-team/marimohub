@@ -30,12 +30,10 @@ const options = {
 };
 
 describe('SandboxDataPreview', () => {
-	it('enables previews without allocating a sandbox during boot checks', async () => {
+	it('is available immediately without allocating a sandbox', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const create = vi.fn(() => instance);
 		const preview = new SandboxDataPreview({ ...fakeComputeFrom(instance), create }, options);
-		expect(preview.available()).toBe(false);
-		await Promise.all([preview.check(), preview.check()]);
 		expect(preview.available()).toBe(true);
 		expect(create).not.toHaveBeenCalled();
 		expect(calls.exec).toEqual([]);
@@ -52,7 +50,6 @@ describe('SandboxDataPreview', () => {
 		};
 		const create = vi.fn(() => instance);
 		const preview = new SandboxDataPreview({ ...fakeComputeFrom(instance), create }, options);
-		await preview.check();
 
 		await expect(preview.preview(program)).resolves.toEqual({ columns: ['id'], rows: [[1]] });
 		expect(create).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
@@ -80,7 +77,6 @@ describe('SandboxDataPreview', () => {
 		};
 		const credentials = vi.fn(async () => ({ AWS_ACCESS_KEY_ID: 'lazy-temporary' }));
 		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
-		await preview.check();
 		expect(credentials).not.toHaveBeenCalled();
 
 		await preview.preview({ ...program, credentialVars: credentials });
@@ -109,7 +105,6 @@ describe('SandboxDataPreview', () => {
 				{ ...fakeComputeFrom(instance), create },
 				{ ...options, executionTimeoutMs: options.startupTimeoutMs * 2 },
 			);
-			await preview.check();
 
 			const result = preview.preview({ ...program, credentialVars: credentials });
 			await vi.advanceTimersByTimeAsync(options.startupTimeoutMs + 1);
@@ -128,7 +123,6 @@ describe('SandboxDataPreview', () => {
 			const { instance } = makeFakeSandbox();
 			const create = vi.fn(() => instance);
 			const preview = new SandboxDataPreview({ ...fakeComputeFrom(instance), create }, options);
-			await preview.check();
 
 			const result = preview.preview({
 				...program,
@@ -152,7 +146,6 @@ describe('SandboxDataPreview', () => {
 		const { instance, calls } = makeFakeSandbox();
 		const create = vi.fn(() => instance);
 		const preview = new SandboxDataPreview({ ...fakeComputeFrom(instance), create }, options);
-		await preview.check();
 
 		await expect(
 			preview.preview({
@@ -180,7 +173,6 @@ describe('SandboxDataPreview', () => {
 				: { success: true, stdout: '', stderr: '' };
 		};
 		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
-		await preview.check();
 
 		await expect(preview.preview(program)).rejects.toThrow('could not read this table');
 		expect(calls.destroy).toBe(1);
@@ -193,7 +185,6 @@ describe('SandboxDataPreview', () => {
 				? { success: true, stdout: '{"columns":["id"],"rows":[[1],[2]]}', stderr: '' }
 				: { success: true, stdout: '', stderr: '' };
 		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
-		await preview.check();
 
 		await expect(preview.preview({ ...program, maxRows: 1 })).rejects.toThrow('invalid result');
 	});
@@ -201,7 +192,6 @@ describe('SandboxDataPreview', () => {
 	it('is unavailable after close', async () => {
 		const { instance } = makeFakeSandbox();
 		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
-		await preview.check();
 		await preview.close();
 
 		expect(preview.available()).toBe(false);
@@ -221,7 +211,6 @@ describe('SandboxDataPreview', () => {
 			});
 		});
 		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
-		await preview.check();
 		const result = preview.preview(program);
 		await vi.waitFor(() => expect(finishExecution).toBeTypeOf('function'));
 
@@ -247,7 +236,7 @@ describe('SandboxDataPreview', () => {
 		const { instance, calls } = makeFakeSandbox();
 		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
 		await preview.close();
-		await expect(preview.check()).rejects.toThrow('closed');
+		await expect(preview.preview(program)).rejects.toThrow('unavailable');
 		expect(preview.available()).toBe(false);
 		expect(calls.exec).toEqual([]);
 		expect(calls.destroy).toBe(0);
@@ -267,7 +256,6 @@ it('cleans up a failed first preview startup and permits a later preview to succ
 	});
 	const create = vi.fn(() => instance);
 	const preview = new SandboxDataPreview({ ...fakeComputeFrom(instance), create }, options);
-	await preview.check();
 	expect(create).not.toHaveBeenCalled();
 	await expect(preview.preview(program)).rejects.toThrow('image unavailable');
 	expect(calls.destroy).toBe(1);
@@ -287,7 +275,6 @@ it('bounds first-preview readiness, drains cleanup on close, and ignores late re
 		instance.ready = vi.fn(() => ready.promise);
 		instance.destroy = vi.fn(() => destroy.promise);
 		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
-		await preview.check();
 		const result = preview.preview(program);
 		const rejected = expect(result).rejects.toThrow('did not start in time');
 		await vi.advanceTimersByTimeAsync(0);
@@ -317,9 +304,42 @@ it('does not allocate a replacement or hang close when first-preview creation fa
 		throw new Error('compute unavailable');
 	});
 	const preview = new SandboxDataPreview({ ...fakeComputeFrom(instance), create }, options);
-	await preview.check();
 	await expect(preview.preview(program)).rejects.toThrow('compute unavailable');
 	expect(create).toHaveBeenCalledOnce();
 	await preview.close();
 	expect(preview.available()).toBe(false);
+});
+
+it.each([
+	"ModuleNotFoundError: No module named 'pyarrow'",
+	"ImportError: cannot import name 'Table' from 'pyiceberg.table'",
+])('reports %s on the first preview without exposing the traceback', async (detail) => {
+	const { instance, calls } = makeFakeSandbox();
+	instance.ready = async () => {};
+	instance.exec = async () => ({
+		success: false,
+		stdout: '',
+		stderr: `Traceback with credentials: secret-token\n${detail} (/private/secret-path)`,
+		error: { code: 'COMMAND_FAILED' },
+	});
+	const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
+	await expect(preview.preview(program)).rejects.toThrow(
+		`The preview image has incompatible Python dependencies (${detail}). Check MARIMOHUB_DATA_PREVIEW_IMAGE.`,
+	);
+	expect(calls.destroy).toBe(1);
+});
+
+it('does not expose arbitrary stderr or overlong import lines', async () => {
+	const { instance } = makeFakeSandbox();
+	instance.ready = async () => {};
+	instance.exec = async () => ({
+		success: false,
+		stdout: '',
+		stderr: `ImportError: No module named '${'secret'.repeat(1000)}'`,
+		error: { code: 'COMMAND_FAILED' },
+	});
+	const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
+	await expect(preview.preview(program)).rejects.toThrow(
+		'The preview sandbox could not read this table.',
+	);
 });
