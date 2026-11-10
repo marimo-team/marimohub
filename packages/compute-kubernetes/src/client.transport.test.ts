@@ -136,7 +136,7 @@ describe('pod templates over the Kubernetes SDK HTTP transport', () => {
 				...options,
 				podTemplate: { metadata: { labels: { 'marimohub.io/sandbox-name': 'other' } } },
 			}),
-		).rejects.toThrow(/selector labels/);
+		).rejects.toThrow(/reserved management, selector, or notebook identity/);
 		expect(requests).toEqual([]);
 		expect(KubeConfig.prototype.loadFromCluster).not.toHaveBeenCalled();
 	});

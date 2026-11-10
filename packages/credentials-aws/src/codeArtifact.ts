@@ -51,15 +51,23 @@ export class AwsCodeArtifactCredentials implements PackageRegistryCredentialProv
 					}
 				: options.federatedCredentials;
 		// A caller-owned cancellation must not abort another start's shared mint.
-		if (options.signal) return this.mint(source, options, credentials);
-		// Include secret rotation without retaining plaintext credentials in cache keys.
-		const identity = await sha256Hex(
-			JSON.stringify([
-				credentials?.accessKeyId,
-				credentials?.secretAccessKey,
-				credentials?.sessionToken,
-			]),
-		);
+		if (options.signal || !credentials?.accessKeyId || !credentials.secretAccessKey) {
+			return this.mint(source, options, credentials);
+		}
+		// STS rotation preserves the source identity; static secret rotation must invalidate tokens.
+		const identity =
+			source.auth.method === 'ambient' && options.federatedSourceIdentity
+				? ['federated', options.federatedSourceIdentity]
+				: [
+						'credentials',
+						await sha256Hex(
+							JSON.stringify([
+								credentials.accessKeyId,
+								credentials.secretAccessKey,
+								credentials.sessionToken,
+							]),
+						),
+					];
 		const key = JSON.stringify([
 			source.region,
 			source.domain,

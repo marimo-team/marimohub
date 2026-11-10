@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { Readable, Writable } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SandboxId } from '@marimo-hub/core/ids';
+import type { NotebookId, ProjectId, SandboxId } from '@marimo-hub/core/ids';
 
 const k8sMock = vi.hoisted(() => {
 	class CoreV1Api {}
@@ -114,6 +114,54 @@ beforeEach(() => {
 
 describe('createK8sClient', () => {
 	it.each([true, false])(
+		'creates pod identity annotations only when supplied (%s)',
+		async (supplied) => {
+			const title = `Example notebook — Δ measurements / ${'x'.repeat(70)}`;
+			const extraLabels = {
+				'marimohub.io/project-id': 'spoofed-project',
+				'marimohub.io/notebook-id': 'spoofed-notebook',
+				team: 'analytics',
+			};
+			const client = createK8sClient({ namespace: 'kernels' });
+			await client.ensure({
+				name: 'mh-sb',
+				namespace: 'kernels',
+				sandboxId: SANDBOX_ID,
+				image: 'kernel:v1',
+				ports: [{ port: 2718, host: '' }],
+				extraLabels,
+				...(supplied
+					? {
+							notebook: {
+								projectId: 'proj-aaaaaaaaaaaaaaaa' as ProjectId,
+								notebookId: 'nb-aaaaaaaaaaaaaaaa' as NotebookId,
+								title,
+							},
+						}
+					: {}),
+			});
+			const metadata = k8sMock.core.createNamespacedPod.mock.calls[0][0].body.metadata;
+			expect(metadata.annotations).toEqual({
+				[SANDBOX_ID_ANNOTATION]: SANDBOX_ID,
+				...(supplied ? { 'marimohub.io/notebook-title': title } : {}),
+			});
+			expect(metadata.labels).toEqual({
+				team: 'analytics',
+				[MANAGED_BY_LABEL]: MANAGED_BY_VALUE,
+				'marimohub.io/sandbox-name': 'mh-sb',
+				...(supplied
+					? {
+							'marimohub.io/project-id': 'proj-aaaaaaaaaaaaaaaa',
+							'marimohub.io/notebook-id': 'nb-aaaaaaaaaaaaaaaa',
+						}
+					: {}),
+			});
+			expect(extraLabels['marimohub.io/project-id']).toBe('spoofed-project');
+			expect(extraLabels['marimohub.io/notebook-id']).toBe('spoofed-notebook');
+		},
+	);
+
+	it.each([true, false])(
 		'repairs missing routes without creating a Pod (hosted: %s)',
 		async (hosted) => {
 			const client = createK8sClient({ namespace: 'kernels' });
@@ -217,7 +265,7 @@ describe('createK8sClient', () => {
 				ports: [{ port: 2718, host: '' }],
 				podTemplate: { metadata: { labels: { [MANAGED_BY_LABEL]: 'other' } } },
 			}),
-		).rejects.toThrow(/management or selector/);
+		).rejects.toThrow(/reserved management, selector, or notebook identity/);
 		expect(k8sMock.core.createNamespacedPod).not.toHaveBeenCalled();
 		expect(k8sMock.core.createNamespacedService).not.toHaveBeenCalled();
 		expect(k8sMock.net.createNamespacedIngress).not.toHaveBeenCalled();

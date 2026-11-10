@@ -1136,7 +1136,7 @@ Choose an authentication method:
 Token acquisition requires the Node deployment's AWS credential adapter.
 **Test connection** checks token acquisition and repository access. For workload identity, test from a project with AWS cloud access enabled.
 
-The hub creates a token for each new session or job. Tokens last 12 hours.
+Tokens last 12 hours. See [Performance](#performance) for cache reuse.
 After expiry, restart the session before installing packages.
 Temporary AWS credentials must remain valid for new token requests.
 
@@ -1423,14 +1423,17 @@ Later renders read secrets again unless `MARIMOHUB_SECRETS_KUBERNETES_CACHE_TTL_
 AWS Secrets Manager caching defaults to off. For a 60-second cache, set
 `MARIMOHUB_SECRETS_AWS_CACHE_TTL_SECONDS=60`. Secret rotation can take that long to reach new sessions.
 
-CodeArtifact tokens share a bounded cache by domain, owner, region, and credentials.
-Rotation selects a new entry. Reuse requires at least ten hours remaining: two hours for a twelve-hour token.
-Concurrent starts share requests. Cancellable requests remain separate.
-The `codeartifact_token_cache_hit` debug event reports remaining lifetime without credential values.
-
-WIF credentials share a bounded cache per configuration, project, and workload kind, with more than 45 minutes remaining.
+WIF credentials share a bounded cache per configuration, project, and workload kind.
+The refresh margin is `min(20 minutes, remaining lifetime / 2)`, calculated when the exchange completes.
+One-hour credentials allow 40 minutes of reuse. Ten-minute credentials allow five minutes.
 Undated credentials are not reused. Restricted viewers and projects with federation disabled cannot use the cache.
 Sessions keep separate endpoint entries and authorization tokens. The exchanged JWT identifies the first workload.
+
+CodeArtifact tokens share a bounded cache by domain, owner, region, and credential source, with the same WIF scope boundaries.
+STS rotation preserves cached tokens. Static credential rotation selects a new entry.
+Reuse requires at least ten hours remaining, allowing two hours of reuse for a twelve-hour token.
+Concurrent starts share requests. Cancellable requests remain separate.
+The `codeartifact_token_cache_hit` debug event reports remaining lifetime without credential values.
 
 ## Failure model
 

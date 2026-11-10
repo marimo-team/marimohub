@@ -13,6 +13,7 @@ interface CacheEntry {
 }
 
 export class WifCredentialCache {
+	readonly scopeId = crypto.randomUUID();
 	private readonly entries: BoundedLruMap<string, CacheEntry>;
 
 	constructor(
@@ -31,13 +32,13 @@ export class WifCredentialCache {
 	}
 
 	getShared(key: string, exchange: () => Promise<TempS3Creds>): Promise<TempS3Creds> {
-		return this.load(`shared\0${key}`, exchange, 45 * 60_000);
+		return this.load(`shared\0${key}`, exchange, true);
 	}
 
 	private load(
 		key: string,
 		exchange: () => Promise<TempS3Creds>,
-		minimumLifetimeMs?: number,
+		allowUndated = false,
 	): Promise<TempS3Creds> {
 		const hit = this.entries.get(key);
 		if (hit && hit.reuseUntil > this.now()) return hit.creds;
@@ -50,15 +51,14 @@ export class WifCredentialCache {
 					const expiresAt = Date.parse(creds.expiration ?? '');
 					const remaining = expiresAt - this.now();
 					// Static delivery accepts undated credentials, but they cannot be reused.
-					if (minimumLifetimeMs !== undefined && creds.expiration === undefined) {
+					if (allowUndated && creds.expiration === undefined) {
 						if (this.entries.peek(key) === entry) this.entries.delete(key);
 						return { ...creds };
 					}
 					if (!Number.isFinite(expiresAt) || remaining <= 0) {
 						throw new UnavailableError('WIF credentials require a valid future expiration');
 					}
-					// Session endpoints can refresh short-lived credentials; shared starts need the full margin.
-					const margin = minimumLifetimeMs ?? Math.min(REFRESH_MARGIN_MS, remaining / 2);
+					const margin = Math.min(REFRESH_MARGIN_MS, remaining / 2);
 					entry.reuseUntil = expiresAt - margin;
 					return { ...creds, expiration: new Date(expiresAt).toISOString() };
 				}),

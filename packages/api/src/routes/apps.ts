@@ -16,7 +16,14 @@ import {
 	loadAuthorizedNotebookMeta,
 	NotebookIdParam,
 } from '../shared';
-import { PaginationQuery, paginate, pageSchema } from '../pagination';
+import {
+	PaginationQuery,
+	encodeCursor,
+	pageSchema,
+	decodeCursor,
+	DEFAULT_PAGE_SIZE,
+	MAX_PAGE_SIZE,
+} from '../pagination';
 import type { ApiDeps } from '../context';
 import type { AuthUser, Project, NotebookId, ResourceSecurityLabels } from '@marimo-hub/core';
 
@@ -94,11 +101,13 @@ app.openapi(
 		const deps = c.get('deps');
 		const user = c.get('user');
 		const query = c.req.valid('query');
+		const search = query.q?.toLocaleLowerCase();
+		const after = decodeCursor(query.cursor);
+		const limit = Math.min(query.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
 		const selectedProject = query.project_id
 			? await loadAppProject(deps.services.projects, query.project_id, user, deps)
 			: undefined;
-		// A selected project is already authorized, so skip listProjects: it reads every
-		// project.json in the deployment.
+		// A selected project needs no deployment-wide discovery.
 		const listed = selectedProject
 			? []
 			: await deps.services.projects.listProjects({
@@ -109,77 +118,99 @@ app.openapi(
 					status: 'active',
 				});
 		const snapshot = await deps.services.catalog.getCurrentSnapshot();
-		// listProjects' `status: 'active'` filter reads the catalog entry, not project.json.
+		// Both scoped and unscoped lists use the snapshot's active status.
 		const projectIds = selectedProject
 			? snapshot.projects.some((p) => p.id === selectedProject.id && p.status === 'active')
 				? [selectedProject.id]
 				: []
 			: listed.map((entry) => entry.id);
-		const candidates: { project: Project; notebook: { id: NotebookId; title: string } }[] = [];
-		// Notebook listing already bounds label reads; nesting project workers would multiply that limit.
-		for (const id of projectIds) {
-			try {
-				const project =
-					selectedProject ?? (await loadAppProject(deps.services.projects, id, user, deps));
-				const notebooks = await deps.services.notebooks.listNotebooks(
-					project.id,
-					{
-						subject: user,
-						policy: deps.policy,
-						resourceSecurity: deps.resourceSecurity,
-						action: 'app.read',
-					},
-					snapshot,
-				);
-				for (const notebook of notebooks) {
-					if (
-						!query.q ||
-						`${project.name} ${notebook.title}`
-							.toLocaleLowerCase()
-							.includes(query.q.toLocaleLowerCase())
-					)
-						candidates.push({ project, notebook });
-				}
-			} catch (error) {
-				if (!(error instanceof NotFoundError)) throw error;
-			}
-		}
-		const apps = await mapWithConcurrency(
-			candidates,
+		const projectCandidates = await mapWithConcurrency(
+			projectIds,
 			BUCKET_SCAN_CONCURRENCY,
-			async ({ project, notebook }) => {
+			async (id) => {
 				try {
-					return await appSummary(
-						deps,
-						user,
-						project,
-						notebook,
-						await deps.services.notebooks.getSecurityLabels(project.id, notebook.id),
+					const project =
+						selectedProject ?? (await loadAppProject(deps.services.projects, id, user, deps));
+					// Page reads check labels and deletions because the snapshot can lag metadata.
+					const notebooks = await deps.services.notebooks.listNotebooks(
+						project.id,
+						undefined,
+						snapshot,
 					);
+					return notebooks
+						.filter(
+							(notebook) =>
+								!search || `${project.name} ${notebook.title}`.toLocaleLowerCase().includes(search),
+						)
+						.map((notebook) => ({ project, notebook }));
 				} catch (error) {
-					if (error instanceof NotFoundError) return null;
+					if (error instanceof NotFoundError) return [];
 					throw error;
 				}
 			},
 		);
+		const candidates = projectCandidates
+			.flat()
+			.filter(({ project, notebook }) => {
+				if (!after) return true;
+				const byProject = project.id.localeCompare(after[0]);
+				return byProject !== 0 ? byProject < 0 : notebook.id.localeCompare(after[1]) < 0;
+			})
+			.sort(
+				(a, b) =>
+					b.project.id.localeCompare(a.project.id) || b.notebook.id.localeCompare(a.notebook.id),
+			);
+		const authz = authorizationService(deps);
+		const apps: Awaited<ReturnType<typeof appSummary>>[] = [];
+		// A next_cursor requires one extra visible item, after deletion and label checks.
+		for (let offset = 0; offset < candidates.length && apps.length <= limit; ) {
+			const batch = candidates.slice(offset, offset + limit + 1 - apps.length);
+			offset += batch.length;
+			const resolved = await mapWithConcurrency(
+				batch,
+				BUCKET_SCAN_CONCURRENCY,
+				async (candidate) => {
+					try {
+						const labels = await deps.services.notebooks.getSecurityLabels(
+							candidate.project.id,
+							candidate.notebook.id,
+							{ consistency: 'validated' },
+						);
+						return { ...candidate, labels };
+					} catch (error) {
+						if (error instanceof NotFoundError) return null;
+						throw error;
+					}
+				},
+			);
+			const readable = resolved.filter((item) => item !== null);
+			const visible = await authz.projectLabelConstraints(
+				user,
+				readable.map((item) => item.labels),
+				'app.read',
+			);
+			apps.push(
+				...(await mapWithConcurrency(
+					readable.filter((_, index) => visible[index]),
+					BUCKET_SCAN_CONCURRENCY,
+					({ project, notebook, labels }) => appSummary(deps, user, project, notebook, labels),
+				)),
+			);
+		}
+		const last = apps[limit - 1];
 		return c.json(
 			{
 				success: true as const,
 				data: {
-					...paginate(
-						apps.filter((item) => item !== null),
-						query,
-						{
-							key: (item) => item.project_id,
-							tiebreak: (item) => item.notebook_id,
-						},
-					),
+					items: apps.slice(0, limit),
+					next_cursor:
+						apps.length > limit && last ? encodeCursor(last.project_id, last.notebook_id) : null,
 					...(selectedProject
 						? {
 								project: {
 									id: selectedProject.id,
 									name: selectedProject.name,
-									your_role: authorizationService(deps).role(user, selectedProject),
+									your_role: authz.role(user, selectedProject),
 								},
 							}
 						: {}),

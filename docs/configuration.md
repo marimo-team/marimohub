@@ -148,7 +148,7 @@ Read regardless of the selected compute backend.
 | `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE` | Whether editors may choose a non-default compute profile per notebook (`none` or `editors`). | — | `none` | `editors` |
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` | Public hostname used to expose kernel ports. | — | `'' (empty)` | `hub.example.com` |
 | `MARIMOHUB_COMPUTE_WORKDIR` | Working directory inside the sandbox where notebook files land and marimo runs. | — | `/workspace` | — |
-| `MARIMOHUB_COMPUTE_ASSET_URL` | Versioned base URL for shared marimo frontend assets. Use {version} to match the installed marimo version. Recommended for connected deployments after worker, WASM, and CSP staging checks. Omit to use bundled sandbox assets. | — | — | `https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist` |
+| `MARIMOHUB_COMPUTE_ASSET_URL` | Use `hub` for cached marimo assets, or a custom URL with {version}. Empty or `false` uses bundled sandbox assets. | — | `hub` | — |
 | `MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS` | How long a session start waits for the marimo kernel to come up before failing. Generous by default because a cold sandbox may resolve + download the notebook environment on first boot. Served on `/api/v1/capabilities` so the client bounds its own startup wait with the same value. | — | `120` | — |
 | `MARIMOHUB_SURFACES` | Comma-separated editor surfaces enabled in notebook sandboxes. `marimo` is always available; add `vscode`, `opencode`, or both. | — | `marimo` | `marimo,vscode,opencode` |
 | `MARIMOHUB_SURFACE_VSCODE_FLAVOR` | Browser editor implementation (`code-server` or `openvscode`). `openvscode` is experimental: no published sandbox image ships it, and selecting it logs a warning at boot. | — | `code-server` | — |

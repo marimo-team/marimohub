@@ -315,8 +315,16 @@ export interface CopyIntegrationOptions {
 
 export type WorkloadRef = { kind: 'session'; id: SessionId } | { kind: 'job-run'; id: RunId };
 
+export interface FederatedCredentialResolver<
+	T extends TempS3Creds | undefined = TempS3Creds | undefined,
+> {
+	(): Promise<T>;
+	/** Stable across rotation; scoped to the WIF configuration, project, and workload kind. */
+	sourceIdentity?: string;
+}
+
 export interface SessionRenderContext {
-	resolveFederatedCredentials?: () => Promise<TempS3Creds | undefined>;
+	resolveFederatedCredentials?: FederatedCredentialResolver;
 	workload: WorkloadRef;
 	principal: { userId: UserId; email: string };
 }

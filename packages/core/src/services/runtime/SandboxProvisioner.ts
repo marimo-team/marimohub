@@ -33,6 +33,7 @@ import type {
 	SandboxLaunchResult,
 	SandboxFileWrite,
 	SandboxUserHome,
+	SandboxNotebook,
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
@@ -209,6 +210,7 @@ export type BootOptions = Pick<
 	ProvisionOptions,
 	| 'sandboxId'
 	| 'projectId'
+	| 'notebook'
 	| 'userId'
 	| 'image'
 	| 'resources'
@@ -244,6 +246,7 @@ export interface ProvisionOptions {
 	sandboxId: SandboxId;
 	projectId: ProjectId;
 	notebookId: NotebookId;
+	notebook?: SandboxNotebook;
 	hostname: string;
 	bucket: BucketConfig;
 	/** Storage bucket handle for fallback file copy. */
@@ -254,11 +257,7 @@ export interface ProvisionOptions {
 	 */
 	workdir?: string;
 	/**
-	 * Optional base URL marimo loads its frontend assets from (passed as
-	 * `--asset-url`). Lets the kernel serve its UI from a CDN instead of bundling
-	 * assets in the sandbox image — e.g.
-	 * `https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist`.
-	 * Config: MARIMOHUB_COMPUTE_ASSET_URL. Omit to use the image's bundled assets.
+	 * Shared asset URL or marimo's `hub` key; undefined uses bundled sandbox assets.
 	 */
 	assetUrl?: string;
 	notebookBridge?: NotebookBridgeRuntime;
@@ -858,6 +857,7 @@ export class SandboxProvisioner {
 					projectId: options.projectId,
 					...(options.userId ? { userId: options.userId } : {}),
 				},
+				notebook: options.notebook,
 			},
 		);
 	}
