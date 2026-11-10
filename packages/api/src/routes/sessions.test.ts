@@ -58,6 +58,7 @@ import {
 	expectPage,
 	makeTestWif,
 } from '../testing';
+import { captureLogEvents } from '../testing/logs';
 import type { TestApiOptions, TestWifOptions } from '../testing';
 import { makeFakeSnapshotCompute } from '../testing/snapshotCompute';
 
@@ -872,9 +873,9 @@ describe('Session routes', () => {
 			deps: { policy: { maxConcurrentSessionsPerUser: 1 } },
 		});
 		const sessions = api.deps.services.sessions;
-		vi.spyOn(sessions, 'listActiveForUser')
-			.mockResolvedValueOnce([])
-			.mockRejectedValueOnce(new ResourceExhaustedError('cap wins'));
+		vi.spyOn(sessions, 'listActiveForUser').mockRejectedValueOnce(
+			new ResourceExhaustedError('cap wins'),
+		);
 		const claim = vi.spyOn(sessions, 'claimEditor').mockImplementationOnce(async () => {
 			await editor.promise;
 			return {
@@ -917,9 +918,9 @@ describe('Session routes', () => {
 			},
 		});
 		const sessions = api.deps.services.sessions;
-		vi.spyOn(sessions, 'listActiveForUser')
-			.mockResolvedValueOnce([])
-			.mockRejectedValueOnce(new ResourceExhaustedError('cap wins'));
+		vi.spyOn(sessions, 'listActiveForUser').mockRejectedValueOnce(
+			new ResourceExhaustedError('cap wins'),
+		);
 		try {
 			await expectError(await api.request('POST', sessionsPath()), 429, 'RESOURCE_EXHAUSTED');
 			expect(fake.calls.destroy).toBe(0);
@@ -3935,6 +3936,112 @@ describe('Session routes', () => {
 		expect(await expectPage<any>(await owner('GET', `/projects/${pid}/sessions`))).toEqual([]);
 	});
 
+	it('launches with a reserved ingress URL and reports publication time before responding', async () => {
+		const fake = makeFakeSandbox();
+		const published = Promise.withResolvers<void>();
+		const url = 'https://kernel.example';
+		fake.instance.prepareExposure = async () => ({ url });
+		fake.instance.exposePort = async () => {
+			await published.promise;
+			return { url };
+		};
+		fake.instance.drainTimings = () => ({ ingress_publish: 125 });
+		const log = captureLogEvents('session_provision');
+		const api = createTestApi({ bucket, compute: fakeComputeFrom(fake.instance) });
+		let responded = false;
+		const pending = Promise.resolve(api.request('POST', sessionsPath())).then((response) => {
+			responded = true;
+			return response;
+		});
+		try {
+			await vi.waitFor(() => expect(fake.calls.startProcess).toHaveLength(1));
+			expect(responded).toBe(false);
+		} finally {
+			published.resolve();
+		}
+		try {
+			await expectOk(await pending);
+			const events = log.events();
+			expect(events).toHaveLength(1);
+			expect(events[0]).toMatchObject({ ingress_publish_ms: 125, success: true });
+		} finally {
+			log.restore();
+		}
+	});
+
+	it.each(['admit', 'reject', 'scan-failed'] as const)(
+		'boots before a slow deployment-wide cap scan completes (%s)',
+		async (outcome) => {
+			const fake = makeFakeSandbox();
+			const ready = vi.fn(async () => {});
+			fake.instance.ready = ready;
+			const api = createTestApi({
+				bucket,
+				compute: fakeComputeFrom(fake.instance),
+				maxConcurrentSessionsPerUser: 1,
+			});
+			const { sessions } = api.deps.services;
+			const scanned = Promise.withResolvers<void>();
+			const list = sessions.listActiveForUser.bind(sessions);
+			const scan = vi
+				.spyOn(sessions, 'listActiveForUser')
+				.mockImplementationOnce(async (...args) => {
+					expect(ready).toHaveBeenCalledOnce();
+					await scanned.promise;
+					if (outcome === 'reject') throw new ResourceExhaustedError('cap reached');
+					if (outcome === 'scan-failed') throw new Error('session scan unavailable');
+					return list(...args);
+				});
+			const request = api.request('POST', sessionsPath());
+			try {
+				await vi.waitFor(() => expect(scan).toHaveBeenCalledOnce());
+				expect(ready).toHaveBeenCalledOnce();
+				expect(fake.calls.startProcess).toEqual([]);
+			} finally {
+				scanned.resolve();
+			}
+			if (outcome !== 'admit') {
+				await expectError(await request, outcome === 'reject' ? 429 : 500);
+				expect(fake.calls.destroy).toBe(1);
+				expect(await sessions.listSessions(nid)).toMatchObject([
+					{ status: 'failed', sandbox_reclaimed_at: expect.any(String) },
+				]);
+			} else {
+				await expectOk(await request);
+				expect(fake.calls.destroy).toBe(0);
+			}
+			expect(scan).toHaveBeenCalledOnce();
+		},
+	);
+
+	it.each([false, true])(
+		'skips thumbnails on interactive Stop (wait=%s) while preserving snapshots',
+		async (wait) => {
+			const background = queuedBackgroundWork();
+			const compute = makeFakeSnapshotCompute();
+			const api = createTestApi({ bucket, compute, deps: { backgroundWork: background.work } });
+			const started = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			await background.runAll();
+			const capture = vi
+				.spyOn(SandboxProvisioner.prototype, 'captureSession')
+				.mockResolvedValue(true);
+			const thumbnail = vi.spyOn(api.deps.services.notebooks.thumbnails, 'prepare');
+			try {
+				await expectOk(
+					await api.request('DELETE', sessionsPath(`/${started.session_id}?wait=${wait}`)),
+					wait ? 200 : 202,
+				);
+				await background.runAll();
+				expect(capture).toHaveBeenCalledOnce();
+				expect(thumbnail).not.toHaveBeenCalled();
+				expect(compute.captureSnapshot).toHaveBeenCalledOnce();
+			} finally {
+				capture.mockRestore();
+				thumbnail.mockRestore();
+			}
+		},
+	);
+
 	it('POST /sessions enforces the per-user concurrent-session cap (429)', async () => {
 		// Cap the owner at 1 concurrent session.
 		const compute = makeFakeCompute();
@@ -3962,12 +4069,11 @@ describe('Session routes', () => {
 		// A 429 carries a backoff hint so the client doesn't have to guess.
 		expect(capRes.headers.get('Retry-After')).toBe('5');
 
-		// A cold start at the cap is rejected before it creates a sandbox or a record.
-		expect(create).toHaveBeenCalledOnce();
+		expect(create).toHaveBeenCalledTimes(2);
 		expect(await createServices(bucket).sessions.listSessions(nid)).toHaveLength(1);
 		expect(
 			await createServices(bucket).sessions.listSessions(otherNb.id as NotebookId),
-		).toHaveLength(0);
+		).toMatchObject([{ status: 'failed', sandbox_reclaimed_at: expect.any(String) }]);
 	});
 
 	it.each(['full', 'rejected', 'thrown'] as const)(
@@ -3995,7 +4101,6 @@ describe('Session routes', () => {
 				});
 			const userQueue = vi
 				.spyOn(sessions, 'listActiveForUser')
-				.mockResolvedValueOnce([])
 				.mockImplementationOnce((...args) => {
 					userQueueStarted.resolve();
 					if (userResult === 'rejected') return Promise.reject(new Error('User scan failed'));
@@ -4012,7 +4117,7 @@ describe('Session routes', () => {
 				'Concurrent app limit reached for this project (1). Stop an app before starting another.',
 			);
 			expect(projectQueue).toHaveBeenCalledTimes(2);
-			expect(userQueue).toHaveBeenCalledTimes(2);
+			expect(userQueue).toHaveBeenCalledOnce();
 		},
 	);
 
@@ -4026,12 +4131,10 @@ describe('Session routes', () => {
 				await userQueueStarted.promise;
 				throw new ConflictError('Project scan failed');
 			});
-		vi.spyOn(sessions, 'listActiveForUser')
-			.mockResolvedValueOnce([])
-			.mockImplementationOnce(async () => {
-				userQueueStarted.resolve();
-				throw new Error('User scan failed');
-			});
+		vi.spyOn(sessions, 'listActiveForUser').mockImplementationOnce(async () => {
+			userQueueStarted.resolve();
+			throw new Error('User scan failed');
+		});
 
 		const error = await expectError(
 			await api.request('POST', sessionsPath(), { mode: 'app' }),
@@ -4054,9 +4157,7 @@ describe('Session routes', () => {
 					.mockResolvedValueOnce([])
 					.mockRejectedValueOnce(error);
 			} else {
-				vi.spyOn(sessions, 'listActiveForUser')
-					.mockResolvedValueOnce([])
-					.mockRejectedValueOnce(error);
+				vi.spyOn(sessions, 'listActiveForUser').mockRejectedValueOnce(error);
 			}
 
 			await expectError(await api.request('POST', sessionsPath(), { mode: 'app' }), 500);
@@ -4089,7 +4190,7 @@ describe('Session routes', () => {
 	});
 
 	it.each([
-		{ start: 'cold', scans: 2 },
+		{ start: 'cold', scans: 1 },
 		{ start: 'warm', scans: 1 },
 	] as const)(
 		'scans deployment-wide sessions $scans time(s) for the per-user cap on a $start start',
@@ -4375,6 +4476,7 @@ describe('Session routes', () => {
 	};
 
 	it('waits for a deferred stop and restores the snapshot published during the wait', async () => {
+		const log = captureLogEvents('session_provision');
 		const background = queuedBackgroundWork();
 		const capture = Promise.withResolvers<{ snapshotId: string }>();
 		const capturing = Promise.withResolvers<void>();
@@ -4420,6 +4522,13 @@ describe('Session routes', () => {
 			await vi.advanceTimersByTimeAsync(500);
 			const replacement = await expectOk<ApiSession>(await pending);
 			expect(replacement.session_id).not.toBe(first.session_id);
+			const event = log.events().find((event) => event.session_id === replacement.session_id);
+			expect(event).toMatchObject({
+				stop_wait_ms: 1000,
+				total_ms: 1000,
+				auth_reuse_ms: 0,
+				success: true,
+			});
 			expect(compute.createFromSnapshot).toHaveBeenCalledExactlyOnceWith(
 				expect.any(String),
 				'captured-during-stop',
@@ -4429,6 +4538,7 @@ describe('Session routes', () => {
 		} finally {
 			capture.resolve({ snapshotId: 'captured-during-stop' });
 			vi.useRealTimers();
+			log.restore();
 		}
 	});
 
@@ -4560,6 +4670,7 @@ describe('Session routes', () => {
 		const compute = makeFakeCompute();
 		const create = vi.spyOn(compute, 'create');
 		const api = createTestApi({ bucket, compute });
+		const log = captureLogEvents('session_provision');
 		vi.useFakeTimers();
 		try {
 			let responded = false;
@@ -4572,11 +4683,57 @@ describe('Session routes', () => {
 			await vi.advanceTimersByTimeAsync(1);
 			await expectError(await pending, 409, 'EDIT_SESSION_RETIRING');
 			expect(create).not.toHaveBeenCalled();
+			const events = log.events();
+			expect(events).toEqual([
+				expect.objectContaining({
+					stop_wait_ms: 10_000,
+					total_ms: 10_000,
+					success: false,
+					error: 'EditSessionRetiringError',
+				}),
+			]);
 			expect((await api.deps.services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(
 				holder.session_id,
 			);
 		} finally {
 			vi.useRealTimers();
+			log.restore();
+		}
+	});
+
+	it('aborts a stop wait without allocating or replacing the editor claim', async () => {
+		const holder = await seedEditorHolder({ user_id: ACTOR, status: 'terminating' });
+		const compute = makeFakeCompute();
+		const create = vi.spyOn(compute, 'create');
+		const api = createTestApi({ bucket, compute });
+		const abort = new AbortController();
+		const log = captureLogEvents('session_provision');
+		vi.useFakeTimers();
+		try {
+			const pending = api.app.request(`/api/v1${sessionsPath()}`, {
+				method: 'POST',
+				signal: abort.signal,
+			});
+			await vi.advanceTimersByTimeAsync(250);
+			abort.abort();
+			expect((await pending).status).not.toBe(200);
+			const events = log.events();
+			expect(events).toEqual([
+				expect.objectContaining({
+					stop_wait_ms: 250,
+					total_ms: 250,
+					success: false,
+					error: 'AbortError',
+				}),
+			]);
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(create).not.toHaveBeenCalled();
+			expect((await api.deps.services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(
+				holder.session_id,
+			);
+		} finally {
+			vi.useRealTimers();
+			log.restore();
 		}
 	});
 

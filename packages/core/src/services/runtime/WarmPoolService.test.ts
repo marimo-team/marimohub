@@ -1547,32 +1547,39 @@ describe('warm pool failure boundaries', () => {
 		expect((await w.members())[0]).toMatchObject({ state: 'claimed', assigned: false });
 	});
 
-	it.each(['wrong sandbox', 'failed session', 'stale token', 'expired claim', 'expired lifetime'])(
-		'fences handoff with %s',
-		async (reason) => {
-			const w = setup({ providerLifetimeMs: reason === 'expired lifetime' ? 90_000 : undefined });
-			await w.service.sweep();
-			const request = w.request();
-			const claim = (await claimWarm(w.service, request))!;
-			await w.sessions.createSession({
-				...request.destination,
-				user_id: ACTOR,
-				sandbox_id: reason === 'wrong sandbox' ? createSandboxId() : claim.member.sandbox_id,
+	it.each(
+		['wrong sandbox', 'failed session', 'stale token', 'expired claim', 'expired lifetime'].flatMap(
+			(reason) => ['read', 'provided'].map((source) => ({ reason, source })),
+		),
+	)('fences handoff with $reason and a $source session', async ({ reason, source }) => {
+		const w = setup({ providerLifetimeMs: reason === 'expired lifetime' ? 90_000 : undefined });
+		await w.service.sweep();
+		const request = w.request();
+		const claim = (await claimWarm(w.service, request))!;
+		await w.sessions.createSession({
+			...request.destination,
+			user_id: ACTOR,
+			sandbox_id: reason === 'wrong sandbox' ? createSandboxId() : claim.member.sandbox_id,
+		});
+		if (reason === 'failed session') {
+			await w.sessions.markFailed(request.destination.project_id, request.destination.session_id, {
+				code: 'STARTUP_FAILED',
+				message: 'failed',
 			});
-			if (reason === 'failed session') {
-				await w.sessions.markFailed(
-					request.destination.project_id,
-					request.destination.session_id,
-					{ code: 'STARTUP_FAILED', message: 'failed' },
-				);
-			}
-			if (reason === 'stale token') claim.member.token = 'stale';
-			if (reason === 'expired claim') w.advance(60_000);
-			if (reason === 'expired lifetime') w.advance(30_000);
-			await expect(w.service.handoff(claim)).rejects.toThrow();
-			expect((await w.members())[0].assigned).toBe(false);
-		},
-	);
+		}
+		if (reason === 'stale token') claim.member.token = 'stale';
+		if (reason === 'expired claim') w.advance(60_000);
+		if (reason === 'expired lifetime') w.advance(30_000);
+		const session =
+			source === 'provided'
+				? await w.sessions.getSession(
+						request.destination.project_id,
+						request.destination.session_id,
+					)
+				: undefined;
+		await expect(w.service.handoff(claim, session)).rejects.toThrow();
+		expect((await w.members())[0].assigned).toBe(false);
+	});
 
 	it('does not destroy the current claim when an old token tries to abandon it', async () => {
 		const w = setup();
@@ -1731,3 +1738,22 @@ it.each(['resolve', 'reject'] as const)(
 		}
 	},
 );
+
+it('logs pool capacity at most once a minute', async () => {
+	const w = setup();
+	const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+	const capacity = () =>
+		log.mock.calls
+			.map(([line]) => JSON.parse(line) as Record<string, unknown>)
+			.filter((event) => event.event === 'warm_pool_capacity');
+	await w.service.sweep();
+	expect(capacity()).toHaveLength(1);
+	for (let tick = 0; tick < 11; tick++) {
+		w.advance(5000);
+		await w.service.sweep();
+	}
+	expect(capacity()).toHaveLength(1);
+	w.advance(5000);
+	await w.service.sweep();
+	expect(capacity()).toHaveLength(2);
+});

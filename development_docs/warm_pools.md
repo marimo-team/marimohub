@@ -14,13 +14,14 @@ Notebook files, credentials, and kernels load after assignment.
    A failed pre-install keeps the member, and the kernel launcher retries installation.
    See [Installation and sandbox images](../packages/notebook-bridge/README.md#installation-and-sandbox-images).
 3. Reservation records the destination and changes the operation token. Reconnect and a bounded probe overlap session publication and admission.
-4. Handoff checks the current session, claim token, and deadline while URL preparation runs. Workspace writes and credential injection wait for handoff.
+4. Handoff validates the just-published session without reading it again. Its CAS checks the claim token and deadline while URL preparation runs. Workspace writes and credential injection wait for handoff.
 5. Session teardown owns assigned sandboxes. Claims never return to the pool. Failed cleanup retains ownership for retry.
 
 If the probe fails or the claim expires, the route replaces the starting session's sandbox ID and repeats URL preparation.
 The old member remains owned until cleanup succeeds.
 
-Maintenance runs every five seconds under its own lease. Healthy idle members rotate after at most six hours, sooner for limited provider lifetimes. Health checks do not extend this limit.
+Maintenance runs every five seconds under its own lease. Capacity gauges update each sweep; each service instance logs capacity at most once per minute.
+Healthy idle members rotate after at most six hours, sooner for limited provider lifetimes. Health checks do not extend this limit.
 The idle policy preserves existing pool keys. Maintenance extends legacy 30-minute idle deadlines from the original creation time, subject to provider limits.
 Only compatible, retained `ready` members receive the extension. Claimed members keep their deadlines.
 Disabling pooling drains unassigned members. Unreadable ownership blocks orphan deletion.

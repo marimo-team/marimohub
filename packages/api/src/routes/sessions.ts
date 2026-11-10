@@ -755,19 +755,15 @@ async function checkCapQueues(
 	}
 }
 
-/**
- * Reuse bypasses cap checks. User queues require a deployment-wide scan, so they
- * run before record creation only when a cold boot would otherwise be spent.
- */
+/** Reuse bypasses cap checks; only project-local queues run before boot. */
 async function enforceSessionCap(
 	deps: ApiDeps,
 	mode: SessionMode,
 	pid: ProjectId,
 	userId: UserId,
 	excludedSessionId: SessionId | undefined,
-	preflight: boolean,
 ): Promise<void> {
-	const caps = capsFor(deps, mode, pid, userId).filter((cap) => cap.preflight === preflight);
+	const caps = capsFor(deps, mode, pid, userId).filter((cap) => cap.preflight);
 	await checkCapQueues(caps, excludedSessionId, (cap) => {
 		if (cap.sessions.length >= cap.max) throw new ResourceExhaustedError(cap.message);
 	});
@@ -1381,41 +1377,94 @@ export async function startNotebookSession(input: {
 		signal?: AbortSignal;
 	};
 }): Promise<SessionCreateResult> {
-	try {
-		return await startNotebookSessionOnce(input);
-	} catch (error) {
-		if (!(error instanceof EditSessionRetiringError)) throw error;
+	const startedAt = Date.now();
+	let authReuseMs = 0;
+	let provisionAttempted = false;
+	let stopWaitMs = 0;
+	const observer = logObserver({
+		event: 'session_provision',
+		client: sessionClientFor(input.user.credential.kind, input.request.via ?? 'rest'),
+		project_id: input.pid,
+		notebook_id: input.nid,
+		user_id: input.user.id,
+		mode: input.body?.mode ?? 'edit',
+	});
+	const start = async () => {
+		const attemptStarted = Date.now();
+		let authFinishedAt: number | undefined;
+		try {
+			return await startNotebookSessionOnce(
+				input,
+				() => {
+					provisionAttempted = true;
+					return observer;
+				},
+				() => {
+					authFinishedAt = Date.now();
+				},
+			);
+		} finally {
+			authReuseMs += (authFinishedAt ?? Date.now()) - attemptStarted;
+		}
+	};
+	const waitForStop = async (error: EditSessionRetiringError) => {
 		const { sessions } = input.deps.services;
 		const { pid, nid, user, request } = input;
 		const claim = await sessions.getEditorClaim(pid, nid);
 		if (claim?.transfer) throw error;
-		if (!claim?.session_id) return startNotebookSessionOnce(input);
+		if (!claim?.session_id) return;
 		const holder = await sessions.getSession(pid, claim.session_id).catch((readError: unknown) => {
 			if (readError instanceof NotFoundError) return null;
 			throw readError;
 		});
-		if (!holder) return startNotebookSessionOnce(input);
+		if (!holder) return;
 		if (holder.user_id !== user.id || holder.status !== 'terminating') throw error;
 
-		const deadline = Date.now() + EDITOR_STOP_WAIT_MS;
-		while (Date.now() < deadline) {
-			await sleep(Math.min(500, deadline - Date.now()), request.signal);
-			const current = await sessions.getEditorClaim(pid, nid);
-			if (
-				current?.transfer ||
-				current?.session_id !== claim.session_id ||
-				!(await sessions.isClaimRetiring(pid, nid, user.id, { claim: current }))
-			) {
-				// Capture can publish new content and snapshots while Start waits.
-				return startNotebookSessionOnce(input);
+		const waitStarted = Date.now();
+		const deadline = waitStarted + EDITOR_STOP_WAIT_MS;
+		try {
+			while (Date.now() < deadline) {
+				await sleep(Math.min(500, deadline - Date.now()), request.signal);
+				const current = await sessions.getEditorClaim(pid, nid);
+				if (
+					current?.transfer ||
+					current?.session_id !== claim.session_id ||
+					!(await sessions.isClaimRetiring(pid, nid, user.id, { claim: current }))
+				)
+					return;
 			}
+			throw error;
+		} finally {
+			stopWaitMs = Date.now() - waitStarted;
 		}
+	};
+	try {
+		const result = await start().catch(async (error: unknown) => {
+			if (!(error instanceof EditSessionRetiringError)) throw error;
+			await waitForStop(error);
+			// Stop can save a new snapshot, so the retry must repeat admission and reads.
+			return start();
+		});
+		observer.tag('success', true);
+		observer.tag('reused', result.reused);
+		observer.tag('session_id', result.session_id);
+		return result;
+	} catch (error) {
+		observer.tag('success', false);
+		observer.tag('error', error instanceof Error ? error.name : 'unknown');
 		throw error;
+	} finally {
+		observer.tag('auth_reuse_ms', authReuseMs);
+		observer.tag('stop_wait_ms', stopWaitMs);
+		observer.tag('total_ms', Date.now() - startedAt);
+		if (provisionAttempted) observer.flush();
 	}
 }
 
 async function startNotebookSessionOnce(
 	input: Parameters<typeof startNotebookSession>[0],
+	observeProvision: () => ReturnType<typeof logObserver>,
+	recordAuthReuse: () => void,
 ): Promise<SessionCreateResult> {
 	input.request.signal?.throwIfAborted();
 	const { deps, user, pid, nid, body, request } = input;
@@ -1762,26 +1811,15 @@ async function startNotebookSessionOnce(
 		}
 	}
 
-	const client = sessionClientFor(user.credential.kind, request.via ?? 'rest');
 	if (
 		mode === 'edit' &&
 		!ephemeral &&
 		(await sessions.isClaimRetiring(pid, nid, user.id, { claim: existingEditorClaim }))
 	) {
 		deps.metrics?.increment('sessions.editor_claim.lost', 1, { phase: 'preflight' });
-		logEvent({
-			event: 'session_provision',
-			client,
-			origin,
-			project_id: pid,
-			notebook_id: origin?.notebook_id ?? nid,
-			user_id: user.id,
-			mode,
-			editor_claim_lost: true,
-			editor_claim_lost_phase: 'preflight',
-			success: false,
-			error: 'EditSessionRetiringError',
-		});
+		const observer = observeProvision();
+		observer.tag('editor_claim_lost', true);
+		observer.tag('editor_claim_lost_phase', 'preflight');
 		throw new EditSessionRetiringError();
 	}
 
@@ -1842,18 +1880,12 @@ async function startNotebookSessionOnce(
 	// In subdomain mode clientUrl === url and originUrl is unset.
 	let clientUrl = '';
 	let originUrl: string | undefined;
-	const observer = logObserver({
-		event: 'session_provision',
-		client,
-		origin,
-		sandbox_id: sandboxId,
-		image,
-		compute_profile: requestedComputeProfile.name,
-		project_id: pid,
-		notebook_id: origin?.notebook_id ?? nid,
-		user_id: user.id,
-		mode,
-	});
+	const observer = observeProvision();
+	observer.tag('origin', origin);
+	observer.tag('sandbox_id', sandboxId);
+	observer.tag('image', image);
+	observer.tag('compute_profile', requestedComputeProfile.name);
+	observer.tag('notebook_id', origin?.notebook_id ?? nid);
 	try {
 		// Sessions and jobs share credential resolution. Viewer sandboxes exclude project credentials.
 		const sessionWorkload: WorkloadRef = { kind: 'session', id: sessionId };
@@ -1953,10 +1985,8 @@ async function startNotebookSessionOnce(
 				},
 			});
 
-		// Credential exchange and secret reads wait for the preflight (per-project app) cap so
-		// callers it rejects cannot drive STS or secret-store traffic; they still overlap the
-		// record phase. Per-user caps need a deployment-wide scan and are enforced before a
-		// cold boot and at cap_recheck, after resolution has started.
+		// Project caps reject before credential exchange. The user cap scan follows
+		// record creation to rank concurrent starts while the cold sandbox boots.
 		const startEnvResolution = () => {
 			const sessionEnv = all({
 				wifVars: resolveWifVars,
@@ -2087,6 +2117,7 @@ async function startNotebookSessionOnce(
 			})());
 		};
 
+		recordAuthReuse();
 		await saga(observer)
 			.step('preview_admission', async () => {
 				if (!previewRecord) return;
@@ -2106,7 +2137,7 @@ async function startNotebookSessionOnce(
 				await deps.services.previews.reserveAdmission(reaped, nid, sessionId, PREVIEW_MAX_SESSIONS);
 			})
 			.step('capacity', async () => {
-				await enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id, true);
+				await enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id);
 				envResolution = startEnvResolution();
 			})
 			.step('warm_sandbox', async () => {
@@ -2119,7 +2150,10 @@ async function startNotebookSessionOnce(
 					destination: { project_id: pid, notebook_id: nid, session_id: sessionId },
 				});
 				if (!warmClaim) return;
-				warmProbe = deps.warmPool!.probe(warmClaim);
+				const probeStarted = Date.now();
+				warmProbe = deps.warmPool!.probe(warmClaim).finally(() => {
+					observer.tag('warm_probe_ms', Date.now() - probeStarted);
+				});
 				warmProbe.catch(() => {});
 				sandboxId = warmClaim.member.sandbox_id;
 				sandboxMayExist = true;
@@ -2130,11 +2164,8 @@ async function startNotebookSessionOnce(
 				await bindAppSandbox();
 			})
 			.step('sandbox_boot', {
-				do: async () => {
+				do: () => {
 					if (warmClaim) return;
-					// A rejected start must not create and destroy a sandbox; cap_recheck still
-					// covers concurrent starts.
-					await enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id, false);
 					bootSandbox();
 				},
 				compensate: cleanupColdSandbox,
@@ -2298,7 +2329,7 @@ async function startNotebookSessionOnce(
 								provision: () => Promise<ProvisionResult>;
 							}>({
 								handoff: async () => {
-									if (warmClaim) await deps.warmPool!.handoff(warmClaim);
+									if (warmClaim) await deps.warmPool!.handoff(warmClaim, session);
 								},
 								async provision(): Promise<ProvisionResult> {
 									const { baseUrl, publicUrl, cookiePartitioned } =
@@ -2333,6 +2364,7 @@ async function startNotebookSessionOnce(
 						provisionedSandbox = provision.sandbox;
 						for (const [phase, ms] of Object.entries(provision.timings)) {
 							observer.tag(`provision_${phase}_ms`, ms);
+							if (phase === 'ingress_publish') observer.tag('ingress_publish_ms', ms);
 						}
 						for (const [name, value] of Object.entries(provision.counters)) {
 							observer.tag(`provision_${name}`, value);
@@ -2531,8 +2563,6 @@ async function startNotebookSessionOnce(
 			throw new UnavailableError('The app could not start. Contact its owner.');
 		}
 		throw err;
-	} finally {
-		observer.flush();
 	}
 
 	if (replacingAfterTakeover && temporaryToRetire) {
@@ -2661,12 +2691,7 @@ app.openapi(deleteSession, async (c) => {
 	await assertSessionControl(project, existing, user, deps, labels);
 
 	const wait = c.req.valid('query').wait === 'true';
-	await retireSelectedSession(
-		deps,
-		existing,
-		{ wait, thumbnail: wait ? 'skip' : 'bounded' },
-		known,
-	);
+	await retireSelectedSession(deps, existing, { wait, thumbnail: 'skip' }, known);
 
 	return wait ? c.json({ success: true }, 200) : c.json({ success: true }, 202);
 });

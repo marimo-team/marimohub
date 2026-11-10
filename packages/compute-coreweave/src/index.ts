@@ -1578,12 +1578,23 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		};
 	}
 
-	async prepareExposure(port: number, options: ExposePortOptions): Promise<void> {
+	async prepareExposure(
+		port: number,
+		options: ExposePortOptions,
+	): Promise<ExposePortResult | void> {
 		if (!this.config.kernelIngress || this.config.resolveExposedUrl) return;
-		await this.exposePort(port, options);
+		return this.exposure(port, options, false);
 	}
 
 	async exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult> {
+		return this.exposure(port, options, true);
+	}
+
+	private async exposure(
+		port: number,
+		options: ExposePortOptions,
+		wait: boolean,
+	): Promise<ExposePortResult> {
 		const sandbox = await this.ensure();
 		// Without a resolver, construct the public URL from a template (the kernel
 		// port was declared `public` at create). Integration surface — the exact
@@ -1608,24 +1619,35 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			const key = `${port}:${new URL(url).hostname}`;
 			let publishing = this.exposures.get(key);
 			if (!publishing) {
+				const started = Date.now();
 				publishing = this.config.kernelIngress
 					.publish({
 						sandboxId: sandbox.sandboxId,
 						host: new URL(url).hostname,
 						port,
 					})
-					.catch((error) => {
-						if (this.exposures.get(key) === publishing) this.exposures.delete(key);
-						throw error;
+					.finally(() => {
+						this.dataplaneTimings.ingress_publish = Date.now() - started;
 					});
+				// Setup can fail before exposePort consumes the background publication.
+				publishing.catch(() => {});
 				this.exposures.set(key, publishing);
 			}
-			await publishing;
+			if (wait) {
+				try {
+					await publishing;
+				} catch (error) {
+					if (this.exposures.get(key) === publishing) this.exposures.delete(key);
+					throw error;
+				}
+			}
 		}
 		return { url };
 	}
 
 	async destroy(): Promise<void> {
+		// A late publication must settle before ingress removal.
+		await Promise.allSettled(this.exposures.values());
 		this.providerIds.delete(this.id);
 		if (this.sandbox) {
 			await this.removeIngress(this.sandbox.sandboxId);

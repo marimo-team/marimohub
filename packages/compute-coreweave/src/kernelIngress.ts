@@ -107,8 +107,9 @@ export interface KernelIngressOptions {
 	ingressClassName: string;
 	ingressAnnotations?: Record<string, string>;
 	api?: KubernetesApi;
-	/** Service lookup retries: the runner creates it moments after `running`. */
+	/** Service lookup retries after the runner starts. Default: 100. */
 	retries?: number;
+	/** Delay between service lookups. Default: 100 ms. */
 	retryDelayMs?: number;
 }
 
@@ -130,8 +131,8 @@ export function createKernelIngressPublisher(
 	const annotations = validateIngressAnnotations(options.ingressAnnotations);
 	const api = options.api ?? inClusterKubernetesApi();
 	const ns = options.namespace;
-	const retries = options.retries ?? 10;
-	const retryDelayMs = options.retryDelayMs ?? 1000;
+	const retries = options.retries ?? 100;
+	const retryDelayMs = options.retryDelayMs ?? 100;
 	// Cleanup by label also removes the port-less names created by older deployments.
 	const ingressName = (sandboxId: string, port: number) => `kernel-${sandboxId}-${port}`;
 

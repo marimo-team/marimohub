@@ -3081,7 +3081,7 @@ it.each([CWSandboxUnavailableError, CWSandboxResourceExhaustedError])(
 	},
 );
 
-it('shares in-flight ingress publication with exposePort', async () => {
+it('reserves the URL during ingress publication and waits only at exposePort', async () => {
 	const world = makeWorld();
 	const pending = Promise.withResolvers<void>();
 	const publish = vi.fn(() => pending.promise);
@@ -3091,14 +3091,19 @@ it('shares in-flight ingress publication with exposePort', async () => {
 	}).create(SANDBOX_ID, { reuse: false });
 	await instance.ready!();
 	const options = { hostname: 'example.test', token: 'token' };
-	const preparing = instance.prepareExposure!(2718, options);
-	const exposed = instance.exposePort(2718, options);
+	await expect(instance.prepareExposure!(2718, options)).resolves.toEqual({
+		url: 'https://cw-1-2718.example.test',
+	});
+	let exposedResolved = false;
+	const exposed = instance.exposePort(2718, options).then((result) => {
+		exposedResolved = true;
+		return result;
+	});
 	await vi.waitFor(() => expect(publish).toHaveBeenCalledOnce());
+	expect(exposedResolved).toBe(false);
 	pending.resolve();
-	await expect(Promise.all([preparing, exposed])).resolves.toEqual([
-		undefined,
-		{ url: 'https://cw-1-2718.example.test' },
-	]);
+	await expect(exposed).resolves.toEqual({ url: 'https://cw-1-2718.example.test' });
+	expect(instance.drainTimings!()).toMatchObject({ ingress_publish: expect.any(Number) });
 	expect(publish).toHaveBeenCalledOnce();
 	expect(publish).toHaveBeenCalledWith({
 		sandboxId: 'cw-1',
@@ -3119,11 +3124,10 @@ it('retries failed ingress publication while retaining successful publications',
 	}).create(SANDBOX_ID, { reuse: false });
 	await instance.ready!();
 	const options = { hostname: 'example.test' };
-	const preparing = expect(instance.prepareExposure!(2718, options)).rejects.toBe(failure);
-	const exposing = expect(instance.exposePort(2718, options)).rejects.toBe(failure);
-	await vi.waitFor(() => expect(publish).toHaveBeenCalledOnce());
+	await instance.prepareExposure!(2718, options);
 	pending.reject(failure);
-	await Promise.all([preparing, exposing]);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	await expect(instance.exposePort(2718, options)).rejects.toBe(failure);
 	await expect(instance.exposePort(2718, options)).resolves.toEqual({
 		url: 'https://cw-1-2718.example.test',
 	});
@@ -3498,5 +3502,26 @@ it.each([0, 1])(
 			expect(fake.runCalls[0][2]).toContain("ln -s '/var/run/marimohub/user-home'");
 		}
 		expect(fake.batchWrites.flat()).toEqual(files.slice(completedBatches * 128));
+	},
+);
+
+it.each(['published', 'failed'] as const)(
+	'drains %s background ingress publication before destruction',
+	async (outcome) => {
+		const world = makeWorld();
+		const pending = Promise.withResolvers<void>();
+		const remove = vi.fn(async () => {});
+		const instance = makeCompute(world, {
+			...baseConfig,
+			kernelIngress: { publish: () => pending.promise, remove },
+		}).create(SANDBOX_ID, { reuse: false });
+		await instance.ready!();
+		await instance.prepareExposure!(2718, { hostname: 'example.test' });
+		const destroying = instance.destroy();
+		expect(remove).not.toHaveBeenCalled();
+		if (outcome === 'failed') pending.reject(new Error('ingress unavailable'));
+		else pending.resolve();
+		await destroying;
+		expect(remove).toHaveBeenCalledExactlyOnceWith('cw-1');
 	},
 );

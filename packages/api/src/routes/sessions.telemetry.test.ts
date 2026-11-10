@@ -3,6 +3,7 @@ import type { AuthCredential, AuthenticatedPrincipal } from '@marimo-hub/core';
 import { createNotebookId } from '@marimo-hub/core';
 import { ACTOR, makeFakeCompute } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
+import { captureLogEvents } from '../testing/logs';
 import { connectMcpClient } from '../testing/mcp';
 import type { SessionCreateResult } from './sessionStart';
 
@@ -32,12 +33,7 @@ async function setup(credential: AuthCredential) {
 		{ title: 'Notebook', description: '', code: 'import marimo as mo' },
 		ACTOR,
 	);
-	const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-	const events = () =>
-		log.mock.calls
-			.filter(([line]) => typeof line === 'string' && line.startsWith('{'))
-			.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
-			.filter((event) => event.event === 'session_provision');
+	const { events } = captureLogEvents('session_provision');
 	return {
 		deps,
 		create: vi.spyOn(compute, 'create'),
@@ -57,6 +53,9 @@ async function setup(credential: AuthCredential) {
 				expect.objectContaining({
 					project_id: project.id,
 					notebook_id: notebook.id,
+					auth_reuse_ms: expect.any(Number),
+					stop_wait_ms: expect.any(Number),
+					total_ms: expect.any(Number),
 					...fields,
 				}),
 			]),
