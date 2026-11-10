@@ -822,7 +822,7 @@ export async function assertProjectVisible(
 }
 
 export function createApp() {
-	return new OpenAPIHono<HonoEnv>({
+	const app = new OpenAPIHono<HonoEnv>({
 		defaultHook: (result, c) => {
 			if (!result.success) {
 				const details = [
@@ -841,6 +841,22 @@ export function createApp() {
 			}
 		},
 	});
+	app.use('/api/v1/*', async (c, next) => {
+		// Hono omits JSON lengths. Both compression and ETag limits need them.
+		c.json = ((object, arg, headers) => {
+			const body = new TextEncoder().encode(JSON.stringify(object));
+			const contentLength = String(body.byteLength);
+			// Set both: Hono retains context headers, but explicit response headers can override them.
+			c.header('Content-Length', contentLength);
+			return c.newResponse(body, arg, {
+				'Content-Type': 'application/json',
+				...headers,
+				'Content-Length': contentLength,
+			});
+		}) as typeof c.json;
+		await next();
+	});
+	return app;
 }
 
 // --- Helpers ---

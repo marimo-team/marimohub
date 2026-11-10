@@ -43,7 +43,11 @@ export function conditionalJsonEtag(): MiddlewareHandler {
 			return;
 
 		if (!response.headers.get('ETag')) {
-			if (Number(response.headers.get('Content-Length')) > MAX_ETAG_BYTES || !response.body) return;
+			const contentLength = response.headers.get('Content-Length') ?? '';
+			const length = Number(contentLength);
+			// JSON streams can remain open. Hash only bodies with a valid, bounded length.
+			if (!/^\d+$/.test(contentLength) || length <= 0 || length > MAX_ETAG_BYTES || !response.body)
+				return;
 			const body = await readEtagBody(response);
 			if (!body?.byteLength) return;
 			const digest = new Uint8Array(await crypto.subtle.digest('SHA-1', body));
