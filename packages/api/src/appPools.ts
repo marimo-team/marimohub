@@ -1,6 +1,7 @@
 import {
 	AppPoolService,
 	AppPoolStore,
+	DEFAULT_APP_POOL_POLICY,
 	mapWithConcurrency,
 	routeAppRetirement,
 	logOperationalError,
@@ -73,13 +74,44 @@ export async function sweepAppPools(
 				if (!snapshot) return;
 				let poolVisits = snapshot.assignments.length;
 				visits += poolVisits;
-				if (snapshot.deleted_at !== undefined && snapshot.members.length === 0) return;
+				if (
+					snapshot.deleted_at !== undefined &&
+					snapshot.members.length === 0 &&
+					snapshot.assignments.length === 0
+				)
+					return;
 				if (
 					snapshot.members.length === 0 &&
 					snapshot.assignments.length === 0 &&
 					!(await readSessions(pid)).some((session) => session.notebook_id === nid)
 				)
 					return;
+				const notebook = paths.project(pid).notebook(nid);
+				let metaKey = notebook.meta;
+				let metaObject = await deps.bucket.get(metaKey);
+				if (!metaObject) {
+					metaKey = notebook.previewMeta;
+					metaObject = await deps.bucket.get(metaKey);
+				}
+				const isRuntime = metaKey === notebook.previewMeta && !!metaObject;
+				const meta = metaObject
+					? await readStored(
+							isRuntime ? PreviewRuntimeMetaSchema : NotebookMetaSchema,
+							metaObject,
+							metaKey,
+						).catch((error) => {
+							if (!(error instanceof StoredObjectError)) throw error;
+							logOperationalError(
+								'app_pool_metadata_unreadable',
+								{ operation: 'app_pool.sweep', project_id: pid, notebook_id: nid },
+								error,
+							);
+							return null;
+						})
+					: null;
+				// A corrupt runtime must retain preview bounds and startup protection.
+				const isPreview = isRuntime || !!meta?.preview;
+				const policy = isPreview ? previewPolicy : (deps.policy.appPool ?? DEFAULT_APP_POOL_POLICY);
 				const now = Date.now();
 				const needsSync =
 					snapshot.deleted_at !== undefined ||
@@ -90,7 +122,7 @@ export async function sweepAppPools(
 								!snapshot.assignments.some(
 									(assignment) => assignment.session_id === member.session_id,
 								)) ||
-							routeAppRetirement(snapshot, member, previewPolicy, now) !== 'retain'
+							routeAppRetirement(snapshot, member, policy, now) !== 'retain'
 						);
 					}) ||
 					snapshot.assignments.some(
@@ -122,32 +154,6 @@ export async function sweepAppPools(
 						} else deps.metrics?.gauge(name, value, tags);
 					},
 				};
-				const notebook = paths.project(pid).notebook(nid);
-				let metaKey = notebook.meta;
-				let metaObject = await deps.bucket.get(metaKey);
-				if (!metaObject) {
-					metaKey = notebook.previewMeta;
-					metaObject = await deps.bucket.get(metaKey);
-				}
-				const isRuntime = metaKey === notebook.previewMeta && !!metaObject;
-				const meta = metaObject
-					? await readStored(
-							isRuntime ? PreviewRuntimeMetaSchema : NotebookMetaSchema,
-							metaObject,
-							metaKey,
-						).catch((error) => {
-							if (!(error instanceof StoredObjectError)) throw error;
-							logOperationalError(
-								'app_pool_metadata_unreadable',
-								{ operation: 'app_pool.sweep', project_id: pid, notebook_id: nid },
-								error,
-							);
-							return null;
-						})
-					: null;
-				// A corrupt runtime must retain preview bounds and startup protection.
-				const isPreview = isRuntime || !!meta?.preview;
-				const policy = isPreview ? previewPolicy : deps.policy.appPool;
 				const pool = new AppPoolService(deps.bucket, sweepSessions, policy, metrics);
 				await pool.reconcile(pid, nid, {
 					probe: async (member) => {

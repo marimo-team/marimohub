@@ -7,18 +7,21 @@ import { withDeadline } from '../../async';
 import { Millis } from '../../duration';
 import { mapWithConcurrency } from '../../concurrency';
 import type { SandboxId, SessionId } from '../../ids';
+import { NotebookId, ProjectId } from '../../ids';
+import { NotFoundError } from '../../errors';
+import { EtagRecordCache } from '../../etagRecordCache';
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import type { SandboxProvider } from '../../ports/sandbox';
-import { readStored } from '../../schema';
-import type { RunStatus, Session } from '../../schema';
+import { AppClaimSchema, readStored } from '../../schema';
+import type { AppClaim, RunStatus, Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { isTerminalRunStatus } from '../jobs/runState';
 import { RECLAIM_PROVISION_GRACE_MS, SessionRetirer } from './SessionRetirer';
 import { AppPoolStore } from './AppPoolStore';
 import { SandboxDiagnosticLease } from './SandboxDiagnosticLease';
 import { isTerminal } from './sessionState';
-import { listAllKeys, listAllObjects } from '../catalog/storage';
+import { listAllKeys } from '../catalog/storage';
 import type { SessionService } from './SessionService';
 
 /**
@@ -39,7 +42,8 @@ class ReclaimTimeoutError extends Error {
 }
 
 const OrphanMarkerSchema = z.object({ first_seen: z.number() });
-const ClaimReferenceSchema = z.object({ session_id: z.string().nullable() });
+const CLAIM_CLEANUP_PAGE_SIZE = 100;
+const CLAIM_CLEANUP_BUDGET_MS = Millis.seconds(5);
 
 /** A second accounting source: sandboxes held by active job runs (see JobRunService). */
 export interface ActiveSandboxSource {
@@ -69,7 +73,9 @@ export interface ReconcileResult {
 
 /** Reclaims terminal sessions even without provider enumeration, then reconciles live sandboxes. */
 export class ReconciliationService {
-	private claimIndex = new Map<string, { etag: string; sessionId: string | null }>();
+	private readonly claimIndex = new EtagRecordCache<AppClaim>();
+	private readonly claimCursors = new Map<string, string>();
+	private claimCleanup: Promise<void> | undefined;
 	private readonly retirer: SessionRetirer;
 	private readonly diagnosticLeases: SandboxDiagnosticLease;
 	/**
@@ -122,9 +128,6 @@ export class ReconciliationService {
 		let unreclaimedTerminal = 0;
 		let oldestUnreclaimedAgeMs: number | null = null;
 		const sessions = await this.sessions.listSessions();
-		await this.releaseReclaimedClaims(sessions).catch((error) => {
-			logOperationalError('reclaimed_claim_scan_failed', {}, error);
-		});
 		const candidates = sessions.filter(
 			(session) =>
 				session.sandbox_id &&
@@ -172,49 +175,90 @@ export class ReconciliationService {
 				Date.now() - Date.parse(session.last_heartbeat),
 			);
 		});
+		await this.releaseReclaimedClaims();
 		return { reclaimed, unreclaimedTerminal, oldestUnreclaimedAgeMs };
 	}
 
-	private async releaseReclaimedClaims(sessions: Session[]): Promise<void> {
-		const reclaimed = new Map(
-			sessions
-				.filter((session) => session.sandbox_reclaimed_at)
-				.map((session) => [
-					`${session.project_id}/${session.notebook_id}/${session.session_id}`,
-					session,
-				]),
-		);
-		if (reclaimed.size === 0) return;
-		const objects = (
-			await Promise.all([
-				listAllObjects(this.bucket, '_system/editors/'),
-				listAllObjects(this.bucket, '_system/apps/'),
-			])
-		).flat();
-		const next = new Map<string, { etag: string; sessionId: string | null }>();
-		await mapWithConcurrency(objects, 8, async (listed) => {
-			try {
-				let claim = this.claimIndex.get(listed.key);
-				if (!listed.etag || claim?.etag !== listed.etag) {
-					const object = await this.bucket.get(listed.key);
-					if (!object) return;
-					const record = await readStored(ClaimReferenceSchema, object, listed.key);
-					claim = { etag: object.etag, sessionId: record.session_id };
-				}
-				next.set(listed.key, claim);
-				if (!claim.sessionId) return;
-				const match = /^_system\/(?:editors|apps)\/([^/]+)\/([^/]+)\.json$/.exec(listed.key);
-				const session = match && reclaimed.get(`${match[1]}/${match[2]}/${claim.sessionId}`);
-				if (!session) return;
-				// Claim release can fail after the reclaimed stamp. Retry only outstanding claims.
-				if (listed.key.startsWith('_system/editors/'))
-					await this.sessions.releaseEditorFor(session);
-				else await this.sessions.releaseAppFor(session);
-			} catch (error) {
-				logOperationalError('reclaimed_claim_release_failed', { object: listed.key }, error);
-			}
+	private async releaseReclaimedClaims(): Promise<void> {
+		if (this.claimCleanup) return;
+		const deadline = Date.now() + CLAIM_CLEANUP_BUDGET_MS;
+		const pending = Promise.all(
+			['_system/editors/', '_system/apps/'].map((prefix) =>
+				this.releaseClaimPage(prefix, deadline).catch((error) => {
+					logOperationalError('reclaimed_claim_scan_failed', { prefix }, error);
+				}),
+			),
+		).then(() => {});
+		this.claimCleanup = pending;
+		void pending.finally(() => {
+			this.claimCleanup = undefined;
 		});
-		this.claimIndex = next;
+		// Timed-out I/O retains the guard until it settles; later ticks still reclaim sandboxes.
+		await withDeadline(pending, {
+			timeoutMs: CLAIM_CLEANUP_BUDGET_MS,
+			timeoutError: () => new Error('Claim cleanup timed out'),
+		}).catch((error) => logOperationalError('reclaimed_claim_scan_failed', {}, error));
+	}
+
+	private async releaseClaimPage(prefix: string, deadline: number): Promise<void> {
+		const page = await this.bucket.list({
+			prefix,
+			startAfter: this.claimCursors.get(prefix),
+			limit: CLAIM_CLEANUP_PAGE_SIZE,
+		});
+		for (let start = 0; start < page.objects.length; start += 8) {
+			if (Date.now() >= deadline) return;
+			const batch = page.objects.slice(start, start + 8);
+			await mapWithConcurrency(batch, 8, async (listed) => {
+				try {
+					const match = /^_system\/(editors|apps)\/([^/]+)\/([^/]+)\.json$/.exec(listed.key);
+					if (!match || !ProjectId.is(match[2]) || !NotebookId.is(match[3])) return;
+					let claim = this.claimIndex.get(listed.key, listed.etag);
+					if (!claim) {
+						const object = await this.bucket.get(listed.key);
+						if (!object) return;
+						claim = await readStored(AppClaimSchema, object, listed.key);
+						this.claimIndex.set(listed.key, object.etag, claim);
+					}
+					if (!claim.session_id || Date.now() >= deadline) return;
+					const session = await this.sessions
+						.getSession(match[2], claim.session_id)
+						.catch((error) => {
+							if (error instanceof NotFoundError) return null;
+							throw error;
+						});
+					if (Date.now() >= deadline) return;
+					if (session && (!session.sandbox_reclaimed_at || session.notebook_id !== match[3]))
+						return;
+					// A claim can precede session publication. Fresh recordless claims retain ownership.
+					if (!session) {
+						const object = await this.bucket.get(listed.key);
+						if (!object) return;
+						const current = await readStored(AppClaimSchema, object, listed.key);
+						if (
+							current.session_id !== claim.session_id ||
+							Date.now() - Date.parse(current.claimed_at) < DEFAULT_ORPHAN_GRACE_MS ||
+							Date.now() >= deadline
+						)
+							return;
+					}
+					const holder = session ?? {
+						project_id: match[2],
+						notebook_id: match[3],
+						session_id: claim.session_id,
+						mode: match[1] === 'editors' ? ('edit' as const) : ('app' as const),
+					};
+					if (match[1] === 'editors') await this.sessions.releaseEditorFor(holder);
+					else await this.sessions.releaseAppFor(holder);
+				} catch (error) {
+					logOperationalError('reclaimed_claim_release_failed', { object: listed.key }, error);
+				}
+			});
+			// Revisit deferred claims on wrap so a slow batch cannot starve later claims.
+			this.claimCursors.set(prefix, batch[batch.length - 1].key);
+			if (Date.now() >= deadline) return;
+		}
+		if (!page.truncated) this.claimCursors.delete(prefix);
 	}
 
 	async reconcile(opts?: { orphanGraceMs?: number }): Promise<ReconcileResult> {

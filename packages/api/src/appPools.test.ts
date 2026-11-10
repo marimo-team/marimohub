@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	AppPoolService,
+	AppPoolStore,
+	createPreviewId,
 	createNotebookId,
 	createProjectId,
 	createSandboxId,
@@ -8,7 +10,7 @@ import {
 } from '@marimo-hub/core';
 import { createInitializedBucket, makeTestDeps } from './testing';
 import { sweepAppPools } from './appPools';
-import { makeSession } from '@marimo-hub/core/testing';
+import { makeNotebookMeta, makeSession } from '@marimo-hub/core/testing';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -100,6 +102,110 @@ describe('sweepAppPools operation budget', () => {
 			expect(gauge.mock.calls.filter(([name]) => name === 'app_pool.visits')).toEqual([
 				['app_pool.visits', expired ? 0 : 2],
 			]);
+		},
+	);
+
+	it.each([false, true])(
+		'cleans assignments from retained tombstones (expired: %s)',
+		async (expired) => {
+			const bucket = await createInitializedBucket();
+			const deps = makeTestDeps(bucket);
+			const session = makeSession();
+			const pid = session.project_id;
+			const nid = session.notebook_id;
+			const key = paths.appPool(pid, nid);
+			await bucket.put(
+				key,
+				JSON.stringify({
+					schema_version: 1,
+					deleted_at: 1,
+					members: [],
+					assignments: [
+						{
+							session_id: session.session_id,
+							user_id: session.user_id,
+							visit_id: 'visit',
+							generation: 'test',
+							visits: [{ visit_id: 'visit', expires_at: Date.now() + (expired ? -1 : 60_000) }],
+						},
+					],
+				}),
+			);
+			const remove = vi.spyOn(bucket, 'delete');
+			const gauge = vi.fn();
+			deps.metrics = { gauge, increment: vi.fn() };
+
+			await sweepAppPools(deps);
+
+			expect(await new AppPoolStore(bucket).read(pid, nid)).toMatchObject({
+				deleted_at: 1,
+				members: [],
+				assignments: [],
+			});
+			expect(remove).not.toHaveBeenCalled();
+			expect(gauge).toHaveBeenCalledExactlyOnceWith('app_pool.visits', 0);
+		},
+	);
+
+	it.each([
+		{ kind: 'normal', idleMinutes: 10, due: false },
+		{ kind: 'normal', idleMinutes: 30, due: true },
+		{ kind: 'preview', idleMinutes: 4, due: false },
+		{ kind: 'preview', idleMinutes: 5, due: true },
+		{ kind: 'corrupt preview', idleMinutes: 5, due: true },
+	])(
+		'applies the $kind idle deadline at $idleMinutes minutes',
+		async ({ kind, idleMinutes, due }) => {
+			const now = Date.now();
+			vi.spyOn(Date, 'now').mockReturnValue(now);
+			vi.spyOn(console, 'error').mockImplementation(() => {});
+			const bucket = await createInitializedBucket();
+			const deps = makeTestDeps(bucket);
+			const session = makeSession({
+				mode: 'app',
+				status: 'running',
+				sandbox_id: createSandboxId(),
+				app_pool: true,
+			});
+			const pid = session.project_id;
+			const nid = session.notebook_id;
+			await bucket.put(paths.session(pid, session.session_id), JSON.stringify(session));
+			const notebook = paths.project(pid).notebook(nid);
+			const meta = makeNotebookMeta({
+				id: nid,
+				project_id: pid,
+				...(kind === 'normal'
+					? {}
+					: { preview: { notebook_id: createNotebookId(), preview_id: createPreviewId() } }),
+			});
+			await bucket.put(
+				kind === 'normal' ? notebook.meta : notebook.previewMeta,
+				kind === 'corrupt preview' ? '{broken' : JSON.stringify(meta),
+			);
+			await bucket.put(
+				paths.appPool(pid, nid),
+				JSON.stringify({
+					schema_version: 1,
+					members: [
+						{
+							session_id: session.session_id,
+							sandbox_id: session.sandbox_id,
+							user_id: session.user_id,
+							state: 'ready',
+							created_at: now,
+							operation_token: 'test',
+							operation_expires_at: now,
+							idle_since: now - idleMinutes * 60_000,
+						},
+					],
+					assignments: [],
+				}),
+			);
+			const reconcile = vi.spyOn(AppPoolService.prototype, 'reconcile').mockResolvedValue();
+
+			await sweepAppPools(deps);
+
+			expect(reconcile).toHaveBeenCalledTimes(due ? 1 : 0);
 		},
 	);
 

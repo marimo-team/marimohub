@@ -28,16 +28,23 @@ the image".
 
 `/api/health/maintenance` responds with one of:
 
-| Body                                       | HTTP  | Meaning                                                                                |
-| ------------------------------------------ | ----- | -------------------------------------------------------------------------------------- |
-| `{ "status": "ok", "loops": {…} }`         | `200` | No loop is currently `failing` or `stalled`, including before a first attempt ends.    |
-| `{ "status": "degraded", "loops": {…} }`   | `200` | At least one loop is `failing`. A restart would not fix this.                          |
-| `{ "status": "stalled", "loops": {…} }`    | `503` | At least one loop is `stalled`. Restarting the pod can recover.                        |
-| `{ "status": "unavailable", "loops": {} }` | `200` | This process runs no loops (`MARIMOHUB_RUN_MAINTENANCE` is not `true`, e.g. API pods). |
+| Body                                       | HTTP  | Meaning                                                                                               |
+| ------------------------------------------ | ----- | ----------------------------------------------------------------------------------------------------- |
+| `{ "status": "ok", "loops": {…} }`         | `200` | No loop is `failing` or `stalled`, and no successful retention attempt triggers the duration warning. |
+| `{ "status": "degraded", "loops": {…} }`   | `200` | A loop is `failing`, or a successful retention attempt reached 80% of its deadline.                   |
+| `{ "status": "stalled", "loops": {…} }`    | `503` | At least one loop is `stalled`. Restarting the pod can recover.                                       |
+| `{ "status": "unavailable", "loops": {} }` | `200` | This process runs no loops (`MARIMOHUB_RUN_MAINTENANCE` is not `true`, e.g. API pods).                |
 
 A dependency outage (storage, compute) makes a loop `failing`, so the pod stays
-up and keeps retrying. Only a wedged loop returns `503`. The Helm chart and the
-example Kubernetes manifests wire the maintenance Deployment's `livenessProbe`
+up and keeps retrying. A successful `retention_*` loop also makes the response
+`degraded` when `last_duration_ms >= 0.8 × deadline_ms`: 12 minutes with the
+15-minute retention deadline. Its per-loop status remains `ok`. This warning
+intentionally returns `200` because a restart cannot fix slow work that still
+completes. Before any attempt completes, the response remains `ok` unless a
+loop stalls.
+
+Only a stalled loop returns `503`. The Helm chart and the example Kubernetes
+manifests wire the maintenance Deployment's `livenessProbe`
 to this endpoint (`initialDelaySeconds: 10`, `periodSeconds: 20`,
 `timeoutSeconds: 5`, `failureThreshold: 3`). API pods keep `/api/health`.
 
@@ -137,24 +144,34 @@ New starts stay blocked until the compute backend confirms that the sandbox is d
 
 ## Background loops
 
-The maintenance replica runs these loops. Each leased loop takes its own
-bucket-CAS lease per attempt, so only one replica does the work even when
-several run maintenance.
+The maintenance replica runs these loops. Each loop starts immediately, then
+repeats at its interval. Each leased loop takes its own bucket-CAS lease per
+attempt, so only one replica does the work even when several run maintenance.
 
-| Loop                  | Interval                                                  | Lease                             | Runs when                     |
-| --------------------- | --------------------------------------------------------- | --------------------------------- | ----------------------------- |
-| `maintenance`         | 5 min                                                     | `_system/_maintenance.lock`       | Always                        |
-| `session_lifecycle`   | `MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS` (default 60 s) | `_system/_session_lifecycle.lock` | Session lifetimes are enabled |
-| `warm_pool`           | 5 s (5 min while warm pools are disabled)                 | `_system/_warm_pool.lock`         | A warm pool is configured     |
-| `job_scheduler`       | `MARIMOHUB_JOBS_TICK_SECONDS` (default 60 s)              | `_system/_jobs.lock`              | `MARIMOHUB_JOBS=on`           |
-| `search_indexing`     | 5 s                                                       | `_system/search/lock.json`        | Search is configured          |
-| `preview_preparation` | 15 s                                                      | None                              | Source control is configured  |
+| Loop                        | Interval                                                                 | Lease                                         | Runs when                     |
+| --------------------------- | ------------------------------------------------------------------------ | --------------------------------------------- | ----------------------------- |
+| `maintenance`               | 5 min                                                                    | `_system/_maintenance.lock`                   | Always                        |
+| `app_pools`                 | Session sweep interval (default 60 s), or 60 s without session lifetimes | `_system/app-pool-maintenance-lock.json`      | Always                        |
+| `retention_notebook_gc`     | 1 hour                                                                   | `_system/retention-notebook_gc-lock.json`     | Always                        |
+| `retention_snapshot_expiry` | 1 hour                                                                   | `_system/retention-snapshot_expiry-lock.json` | Always                        |
+| `retention_jobs`            | 1 hour                                                                   | `_system/retention-jobs-lock.json`            | `MARIMOHUB_JOBS=on`           |
+| `session_lifecycle`         | `MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS` (default 60 s)                | `_system/_session_lifecycle.lock`             | Session lifetimes are enabled |
+| `warm_pool`                 | 5 s (5 min while warm pools are disabled)                                | `_system/_warm_pool.lock`                     | A warm pool is configured     |
+| `job_scheduler`             | `MARIMOHUB_JOBS_TICK_SECONDS` (default 60 s)                             | `_system/_jobs.lock`                          | `MARIMOHUB_JOBS=on`           |
+| `search_indexing`           | 5 s                                                                      | `_system/search/lock.json`                    | Search is configured          |
+| `preview_preparation`       | 15 s                                                                     | None                                          | Source control is configured  |
 
-Search indexing has a 30-second deadline; [Search](./search.md) covers its
-configuration and index freshness. Other attempts have a deadline of
-`max(3 × interval, 10 min)`, covering lease
-acquisition, the work, and lease release. When an attempt passes its deadline,
-the runner aborts it, logs `<loop>_stalled` (`level: error`, with `holder`,
+The `app_pools` loop uses `MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS` when session
+lifetimes are enabled. App-pool sweeps run only in this loop. The hourly retention
+loops run independently of maintenance and each other. `retention_notebook_gc`
+cleans deleted projects, then deleted notebooks and their orphaned filesystem snapshots.
+Each non-empty retention attempt emits `retention_cycle` with its step and counts.
+
+Each retention attempt has a 15-minute deadline. Search indexing has a 30-second
+deadline. [Search](./search.md) covers its configuration and index freshness.
+Other attempts have a deadline of `max(3 × interval, 10 min)`.
+The deadline covers lease acquisition, the work, and lease release.
+When an attempt passes its deadline, the runner aborts it, logs `<loop>_stalled` (`level: error`, with `holder`,
 `deadline_ms`, and `duration_ms`), and starts no new attempt for that loop until
 the abandoned work settles, so a loop never has two writers. When the work
 settles, the runner logs `<loop>_recovered` (`level: debug`), discards the late
