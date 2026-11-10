@@ -1,6 +1,6 @@
 import { updateCrc32 } from '../internal/crc32';
 import { Gunzip, Inflate, strFromU8 } from 'fflate';
-import { MAX_WORKSPACE_FILE_BYTES } from '../constants';
+import { MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_BYTES, MAX_WORKSPACE_FILES } from '../constants';
 import { BadRequestError } from '../errors';
 import { isSafeWorkspacePath } from './remoteWorkspace';
 
@@ -20,8 +20,8 @@ export interface ParseWorkspaceArchiveOptions {
 }
 
 /** Guard against a decompression bomb: cap the inflated tar before we parse it. */
-export const MAX_DECOMPRESSED_ARCHIVE_BYTES = 100 * 1024 * 1024;
-const MAX_ARCHIVE_FILES = 1000;
+export const MAX_DECOMPRESSED_ARCHIVE_BYTES = MAX_WORKSPACE_BYTES;
+const MAX_ARCHIVE_FILES = MAX_WORKSPACE_FILES;
 
 interface ArchiveLimitState {
 	fileCount: number;

@@ -250,6 +250,25 @@ export class SessionService {
 		return value;
 	}
 
+	async acknowledgeWorkingBranchSave(
+		projectId: ProjectId,
+		id: SessionId,
+		notebookId: NotebookId,
+		expected: VersionId,
+		version: VersionId,
+	): Promise<Session> {
+		return this.mutate(projectId, id, (session) => {
+			if (session.notebook_id !== notebookId)
+				throw new ConflictError('Session belongs to another notebook');
+			if (session.status !== 'running') return null;
+			if (session.working_branch_version_id === version) return null;
+			if ((session.working_branch_version_id ?? session.source_version_id) !== expected) {
+				throw new ConflictError('Session save baseline changed');
+			}
+			return { ...session, working_branch_version_id: version };
+		});
+	}
+
 	async createSession(input: CreateSessionInput): Promise<Session> {
 		return (await this.createSessionWithEtag(input)).value;
 	}
@@ -930,6 +949,11 @@ export class SessionService {
 		const sessions = await this.listActiveByProject(projectId);
 		const pool = await new AppPoolStore(this.bucket).read(projectId, notebookId);
 		return new Set([
+			...sessions
+				.filter((session) => session.notebook_id === notebookId)
+				.flatMap((session) =>
+					session.working_branch_version_id ? [session.working_branch_version_id] : [],
+				),
 			...sessions
 				.filter((session) => session.notebook_id === notebookId && session.source_version_id)
 				.map((session) => session.source_version_id as VersionId),

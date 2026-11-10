@@ -35,6 +35,7 @@ import notebooksApp from './routes/notebooks';
 import previewsApp from './routes/previews';
 import thumbnailsApp from './routes/thumbnails';
 import changeRequestsApp from './routes/changeRequests';
+import workingBranchesApp from './routes/workingBranches';
 import projectsApp from './routes/projects';
 import projectAlertsApp from './routes/projectAlerts';
 import integrationsApp from './routes/integrations';
@@ -610,6 +611,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, previewsApp);
 	app.route(API_PREFIX, appsApp);
 	app.route(API_PREFIX, changeRequestsApp);
+	app.route(API_PREFIX, workingBranchesApp);
 	app.route(API_PREFIX, sessionsApp);
 	app.route(API_PREFIX, jobsApp);
 	app.route(API_PREFIX, integrationsApp);

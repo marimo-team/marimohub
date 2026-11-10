@@ -516,6 +516,7 @@ describe('NotebookProposalService', () => {
 					` ${shellQuote('/workspace')} ${shellQuote('dashboard.py')} ${MAX_REQUEST_BYTES}$`,
 				),
 			),
+			{ timeout: 60_000 },
 		);
 	});
 
@@ -571,7 +572,9 @@ describe('NotebookProposalService', () => {
 		});
 
 		await expect(capture(instance)).rejects.toThrow('Could not securely read changed file');
-		expect(exec).toHaveBeenCalledWith(expect.stringContaining('os.O_NOFOLLOW'));
+		expect(exec).toHaveBeenCalledWith(expect.stringContaining('os.O_NOFOLLOW'), {
+			timeout: 60_000,
+		});
 	});
 
 	it('rejects changed files beneath symlinked directories without reading through them', async () => {
@@ -582,7 +585,9 @@ describe('NotebookProposalService', () => {
 		});
 
 		await expect(capture(instance)).rejects.toThrow('Could not securely read changed file');
-		expect(exec).toHaveBeenCalledWith(expect.stringContaining('os.O_DIRECTORY'));
+		expect(exec).toHaveBeenCalledWith(expect.stringContaining('os.O_DIRECTORY'), {
+			timeout: 60_000,
+		});
 	});
 
 	it('captures changed files through no-follow directory descriptors', async () => {
@@ -600,6 +605,7 @@ describe('NotebookProposalService', () => {
 					`os\\.O_NOFOLLOW[\\s\\S]* ${shellQuote('/workspace')} ${shellQuote('nested/new.txt')} ${MAX_REQUEST_BYTES}$`,
 				),
 			),
+			{ timeout: 60_000 },
 		);
 	});
 
@@ -683,7 +689,9 @@ describe('NotebookProposalService', () => {
 			await expect(capture({ ...sandbox.instance, exec }, { workdir })).rejects.toThrow(
 				'Could not securely read changed file pipe',
 			);
-			expect(exec).toHaveBeenCalledWith(expect.stringContaining('os.O_NONBLOCK'));
+			expect(exec).toHaveBeenCalledWith(expect.stringContaining('os.O_NONBLOCK'), {
+				timeout: 60_000,
+			});
 		} finally {
 			rmSync(workdir, { recursive: true, force: true });
 		}

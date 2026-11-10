@@ -269,6 +269,7 @@ async function runScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
 		projects,
 		notebooks,
 		proposals,
+		workingBranches,
 		idempotency,
 		jobRuns,
 		hostRetries,
@@ -313,6 +314,7 @@ async function runScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
 			await idempotency.prune();
 			await hostRetries.compactExpired();
 			await proposals.pruneExpiredPayloads();
+			await workingBranches.pruneExpiredPayloads();
 			await projects.claimPendingInvites();
 		} finally {
 			await lock.release('cloudflare-scheduled');

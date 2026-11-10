@@ -63,7 +63,9 @@ export function refPath(value: string): string {
 	return value.split('/').map(encodeURIComponent).join('/');
 }
 
-function validateChanges(changes: unknown): asserts changes is OpenChangeRequestInput['changes'] {
+export function validateChanges(
+	changes: unknown,
+): asserts changes is OpenChangeRequestInput['changes'] {
 	if (!Array.isArray(changes) || changes.length === 0) {
 		throw new ValidationError('A pull request requires at least one change');
 	}

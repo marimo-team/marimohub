@@ -165,6 +165,7 @@ export function startMaintenance(
 				const idempotencyPruned = await step(() => idempotency.prune());
 				const hostRetriesCompacted = await step(() => deps.services.hostRetries.compactExpired());
 				const proposalPayloadsPruned = await step(() => proposals.pruneExpiredPayloads());
+				await step(() => deps.services.workingBranches.pruneExpiredPayloads());
 				const inviteRowsClaimed = await step(() => projects.claimPendingInvites());
 				return {
 					holder,

@@ -201,6 +201,12 @@ These CAS-managed records also have one writer each:
   at `_system/preview-automations/{pid}/{automation_key}.json` before leaving the project head. It also owns removable active-project markers at `_system/preview-active-projects/{pid}/{work_id}.json`.
   Marker removal must CAS-fence the project head first; each activation uses a new work ID.
   Retain these CAS heads; remove individual preview records after confirmed cleanup.
+- `WorkingBranchService` owns `_system/working-branches/`: immutable creation receipts,
+  notebook `head.json` CAS records, save `receipt.json` CAS records, immutable captured
+  source payloads, and the bounded cleanup cursor. Head records fence publication and
+  retain deletion tombstones. Keep creation and save receipts after payload expiry;
+  unresolved dispatched saves retain their capture and baseline. `WorkingBranchStore`
+  implements its CAS claims; notebook deletion retires the claim through that store.
 - `NotebookProposalService` owns each proposal publication at
   `projects/{pid}/notebooks/{nid}/proposals/{proposal-id}/publication.json`.
 - `ProjectIntegrationsStore` owns each project integration head at

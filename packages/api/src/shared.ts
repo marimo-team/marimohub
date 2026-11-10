@@ -43,6 +43,7 @@ import {
 	EDITOR_SANDBOX_SHARING_VALUES,
 	VIEWER_MODES,
 	SurfaceForbiddenError,
+	GitSourceSchema,
 } from '@marimo-hub/core';
 import { appendJobRunFinishEvent, isTerminalRunStatus } from '@marimo-hub/core/jobs';
 import type {
@@ -278,7 +279,7 @@ export async function loadAuthorizedNotebookMeta(
 }
 
 /** Notebook overrides constrain both the requested action and read visibility. */
-async function authorizeNotebookMeta(
+export async function authorizeNotebookMeta(
 	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity'>,
 	project: Project,
 	meta: NotebookMeta,
@@ -1346,6 +1347,7 @@ export const GitSourceConfigResponseSchema = z
 	.openapi('GitSourceConfig');
 
 export const GitSourceResponseSchema = z.object({
+	working_branch: GitSourceSchema.shape.working_branch,
 	type: z.literal('git'),
 	// Null when the repo's host isn't a recognized provider (links can't be built).
 	provider: z.string().min(1).nullable().openapi({
@@ -1487,12 +1489,18 @@ export const SessionResponseSchema = z
 		 * present in responses; stored records may omit it (= `edit`).
 		 */
 		mode: z.enum(SESSION_MODES),
-		/**
-		 * `app` only: the notebook's head version when the app was provisioned.
-		 * Compare against the notebook's current head to show "app is stale —
-		 * restart to update".
-		 */
-		source_version_id: z.string().optional(),
+		source_version_id: z
+			.string()
+			.optional()
+			.describe(
+				'Version used to provision the session. Working-branch saves preserve this launch provenance.',
+			),
+		working_branch_version_id: z
+			.string()
+			.optional()
+			.describe(
+				'Latest source version acknowledged by a working-branch save. Omitted for app-only access and preview sessions.',
+			),
 		head_version_id: z
 			.string()
 			.nullable()
@@ -1704,6 +1712,7 @@ export const CapabilitiesResponseSchema = z
 		federation: z.object({ available: z.boolean(), default_enabled: z.boolean() }),
 		integrations: z.object({ available: z.boolean() }),
 		source_control: z.object({
+			working_branch_providers: z.array(z.string()).optional(),
 			preview_providers: z.array(z.string()).openapi({
 				description: 'Provider ids configured to publish notebook previews through a GitHub App.',
 				example: ['github'],

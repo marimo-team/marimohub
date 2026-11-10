@@ -6,6 +6,7 @@ import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
 import {
 	SESSION_START_POLL_INTERVAL_MS,
 	SESSION_START_SLOW_POLL_AFTER_MS,
+	SESSION_STATUS_INTERVAL_MS,
 	sessionStartPollDelayMs,
 } from '@/lib/sessions';
 import { useNotebookSession } from './useNotebookSession';
@@ -80,6 +81,43 @@ afterEach(() => {
 });
 
 describe('useNotebookSession', () => {
+	it('acknowledges a save only for the current running session', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => jsonOk(makeSession({ source_version_id: 'a' }))),
+		);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		await waitFor(() => expect(result.current.isRunning).toBe(true));
+		await act(async () => result.current.acknowledgeWorkingBranchSave('other-session', 'b'));
+		expect(result.current.session?.working_branch_version_id).toBeUndefined();
+		await act(async () => result.current.acknowledgeWorkingBranchSave('sess-1', 'b'));
+		expect(result.current.session).toMatchObject({
+			source_version_id: 'a',
+			working_branch_version_id: 'b',
+		});
+		await act(async () => result.current.acknowledgeWorkingBranchSave('sess-1', 'a'));
+		expect(result.current.session?.working_branch_version_id).toBe('b');
+	});
+	it('preserves the saved baseline when an older session poll completes', async () => {
+		vi.useFakeTimers();
+		const pending = deferred<Response>();
+		const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
+			init?.method === 'POST' ? jsonOk(makeSession({ source_version_id: 'a' })) : pending.promise,
+		);
+		vi.stubGlobal('fetch', fetchMock);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		await settleHook();
+		await act(() => vi.advanceTimersByTimeAsync(SESSION_STATUS_INTERVAL_MS));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		await act(async () => result.current.acknowledgeWorkingBranchSave('sess-1', 'b'));
+		await act(async () => {
+			pending.resolve(jsonOk(makeSession({ source_version_id: 'a' })));
+		});
+		expect(result.current.session).toMatchObject({
+			source_version_id: 'a',
+			working_branch_version_id: 'b',
+		});
+	});
 	it('starts a session on mount and exposes the running state', async () => {
 		const fetchMock = vi.fn(async (..._args: Parameters<typeof fetch>) => jsonOk(makeSession()));
 		vi.stubGlobal('fetch', fetchMock);

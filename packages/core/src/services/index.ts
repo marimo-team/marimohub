@@ -22,6 +22,8 @@ import { IdentityService } from './identity/IdentityService';
 import { MaintenanceService } from './catalog/MaintenanceService';
 import { NotebookService } from './content/NotebookService';
 import { DeepLinkService } from './content/DeepLinkService';
+import { WorkingBranchService } from './content/WorkingBranchService';
+import type { SourceControlRegistry } from '../ports/sourceControl';
 import { NotebookProposalService } from './content/NotebookProposalService';
 import { ProjectService } from './content/ProjectService';
 import { HostRetryStore } from './runtime/HostRetryStore';
@@ -518,6 +520,7 @@ export interface CreateServicesOptions {
 	repositoryHosts?: GitProviderHosts;
 	/** Select a fresh generation only after all legacy project-access writers stop. */
 	projectAccessGeneration?: string;
+	sourceControl?: SourceControlRegistry;
 	/**
 	 * Wrap the bucket and every service in OTEL spans (one per method call).
 	 * Enable only when a global tracer provider is registered — otherwise the
@@ -715,6 +718,15 @@ export function createServices(
 		notebooks,
 		proposals,
 		previews,
+		workingBranches: wrap(
+			'WorkingBranchService',
+			new WorkingBranchService({
+				bucket,
+				notebooks,
+				sessions,
+				sourceControl: options?.sourceControl,
+			}),
+		),
 		moves: wrap(
 			'NotebookMoveService',
 			new NotebookMoveService(bucket, catalog, {
@@ -854,3 +866,14 @@ export { ResumableUploads, uploadStatus } from './content/ResumableUploads';
 export type { UploadRecord } from './content/ResumableUploads';
 
 export * from './content/previewAutomation';
+export { WorkingBranchService } from './content/WorkingBranchService';
+export type {
+	WorkingBranchDependencies,
+	SaveWorkingBranchInput,
+} from './content/WorkingBranchService';
+export {
+	WorkingBranchSaveSchema,
+	WorkingBranchRecordSchema,
+	WorkingBranchChangeRequestSchema,
+} from './content/workingBranchRecords';
+export type { WorkingBranchSave, WorkingBranchRecord } from './content/workingBranchRecords';

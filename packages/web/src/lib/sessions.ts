@@ -52,14 +52,11 @@ export interface NotebookSessions {
  * warning when cached notebook detail trails the version used to start a session.
  */
 export function isSessionStale(
-	session: Pick<Session, 'source_version_id'>,
+	session: Pick<Session, 'source_version_id' | 'working_branch_version_id'>,
 	currentVersionId: string | null | undefined,
 ): boolean {
-	return (
-		!!session.source_version_id &&
-		!!currentVersionId &&
-		currentVersionId > session.source_version_id
-	);
+	const baseline = session.working_branch_version_id ?? session.source_version_id;
+	return !!baseline && !!currentVersionId && currentVersionId > baseline;
 }
 
 /**

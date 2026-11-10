@@ -847,7 +847,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Create a git-synced workspace notebook
-		 * @description Requires project manager access because this selects a server-side repository.
+		 * @description Ordinary Git sources require manager access. With fork, editors can create a working branch when enabled; Idempotency-Key is required and the head branch is generated.
 		 */
 		post: operations['notebooks.create-git'];
 		delete?: never;
@@ -1597,6 +1597,120 @@ export interface paths {
 		 * @description A proposal is an immutable set of notebook changes captured with its exact source revision. This operation captures a proposal from a running persistent editor session and publishes it as a pull request, merge request, or equivalent through the configured source-control provider. Set target_proposal_id to update the change request published by that proposal; omit it to create a new change request. The Idempotency-Key header is required; retry with the same key to resume the same operation. If the error code is PROPOSAL_RETRY_REQUIRED, retry with a new key instead.
 		 */
 		post: operations['notebooks.change-requests.open'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/saves': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Commit source changes to the working branch
+		 * @description Requires working-branch.write and access to the session. Reuse Idempotency-Key to resume the same captured changes. The returned state distinguishes confirmed commits from pending synchronization and conflicts. Does not save excluded runtime files.
+		 */
+		post: operations['notebooks.working-branch.save'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/working-branch': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Inspect the working branch and latest save */
+		get: operations['notebooks.working-branch.get'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/saves/{save_id}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Inspect a captured save operation */
+		get: operations['notebooks.working-branch.saves.get'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/saves/{save_id}/recovery': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Download captured source changes for recovery
+		 * @description Returns a ZIP containing a manifest of modifications/deletions and captured file bytes. Requires current notebook authorization. Payloads expire at the time shown on the save receipt.
+		 */
+		get: operations['notebooks.working-branch.saves.recovery'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/saves/{save_id}/retry': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Resume an existing save operation
+		 * @description Only the save author can resume. Reuses its immutable capture and commit; does not require the original Idempotency-Key.
+		 */
+		post: operations['notebooks.working-branch.saves.retry'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/change-requests': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Open the working branch pull request
+		 * @description Opens or returns the one pull request associated with this working branch. Does not capture or commit unsaved session edits.
+		 */
+		post: operations['notebooks.working-branch.change-requests.open'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -2791,6 +2905,7 @@ export interface components {
 				available: boolean;
 			};
 			source_control: {
+				working_branch_providers?: string[];
 				/**
 				 * @description Provider ids configured to publish notebook previews through a GitHub App.
 				 * @example [
@@ -3449,6 +3564,7 @@ export interface components {
 					| 'integration.write'
 					| 'integration.manage'
 					| 'change-request.publish'
+					| 'working-branch.write'
 					| 'security-labels.raise'
 					| 'security-labels.lower'
 					| 'session.attach'
@@ -3643,6 +3759,7 @@ export interface components {
 								| 'integration.write'
 								| 'integration.manage'
 								| 'change-request.publish'
+								| 'working-branch.write'
 								| 'security-labels.raise'
 								| 'security-labels.lower'
 								| 'session.attach'
@@ -3678,6 +3795,7 @@ export interface components {
 				| 'integration.write'
 				| 'integration.manage'
 				| 'change-request.publish'
+				| 'working-branch.write'
 				| 'security-labels.raise'
 				| 'security-labels.lower'
 				| 'session.attach'
@@ -3916,6 +4034,12 @@ export interface components {
 					current_version_id: string;
 			  }
 			| {
+					working_branch?: {
+						id: string;
+						base_branch: string;
+						fork_commit: string;
+						created_by: string;
+					};
 					/** @enum {string} */
 					type: 'git';
 					/**
@@ -4248,7 +4372,10 @@ export interface components {
 			ended_by_user_id?: string;
 			/** @enum {string} */
 			mode: 'edit' | 'app';
+			/** @description Version used to provision the session. Working-branch saves preserve this launch provenance. */
 			source_version_id?: string;
+			/** @description Latest source version acknowledged by a working-branch save. Omitted for app-only access and preview sessions. */
+			working_branch_version_id?: string;
 			/** @description Current head version of the notebook source. Sent only in heartbeat responses for running or starting app sessions. Omitted for app users, credentials without project.read, preview runtimes, and edit sessions. Start, get, and list responses never include it. */
 			head_version_id?: string | null;
 			/** @description True when a persistent editor holds the notebook editor claim. Sent and omitted under the same rules as head_version_id. */
@@ -4326,6 +4453,68 @@ export interface components {
 			 * @example prop-7h2k9qm4xz7rp3w8
 			 */
 			target_proposal_id?: string;
+		};
+		WorkingBranchSave: {
+			id: string;
+			project_id: string;
+			notebook_id: string;
+			session_id: string;
+			author: string;
+			message: string;
+			created_at: string;
+			expires_at: string;
+			base_version_id: string;
+			base_commit: string;
+			/** @enum {string} */
+			state:
+				| 'claimed'
+				| 'captured'
+				| 'commit_prepared'
+				| 'ref_dispatched'
+				| 'remote_committed'
+				| 'hub_synced'
+				| 'complete'
+				| 'no_changes'
+				| 'conflict'
+				| 'expired';
+			/** @default [] */
+			changes: (
+				| {
+						path: string;
+						/** @enum {string} */
+						operation: 'add' | 'modify';
+						size_bytes: number;
+						sha256: string;
+				  }
+				| {
+						path: string;
+						/** @enum {string} */
+						operation: 'delete';
+				  }
+			)[];
+			commit?: string;
+			version_id?: string;
+			error?: string;
+		};
+		WorkingBranchStatus: {
+			base_branch: string;
+			branch: string;
+			commit: string | null;
+			remote_commit: string | null;
+			change_request?: {
+				number: number;
+				/** Format: uri */
+				url: string;
+				/** @enum {string} */
+				state: 'open' | 'closed' | 'merged';
+				headBranch: string;
+				baseBranch: string;
+			};
+			checked_at?: string;
+			last_save?: components['schemas']['WorkingBranchSave'];
+			active_save?: string;
+			/** @enum {string} */
+			ended_reason?: 'branch_deleted' | 'pr_closed' | 'pr_merged' | 'pr_retargeted';
 		};
 		SessionPage: {
 			items: components['schemas']['Session'][];
@@ -4969,6 +5158,7 @@ export interface components {
 							| 'integration.write'
 							| 'integration.manage'
 							| 'change-request.publish'
+							| 'working-branch.write'
 							| 'security-labels.raise'
 							| 'security-labels.lower'
 							| 'session.attach'
@@ -5184,6 +5374,7 @@ export interface operations {
 									| 'integration.write'
 									| 'integration.manage'
 									| 'change-request.publish'
+									| 'working-branch.write'
 									| 'security-labels.raise'
 									| 'security-labels.lower'
 									| 'session.attach'
@@ -10981,7 +11172,10 @@ export interface operations {
 	'notebooks.create-git': {
 		parameters: {
 			query?: never;
-			header?: never;
+			header?: {
+				/** @description Stable client-generated key reused for retries of the same operation. */
+				'idempotency-key'?: string;
+			};
 			path: {
 				pid: string;
 			};
@@ -11002,7 +11196,10 @@ export interface operations {
 					/** @example marimo-team/marimohub */
 					repo: string;
 					/** @example main */
-					branch: string;
+					branch?: string;
+					fork?: {
+						base_branch: string;
+					};
 					/** @example apps */
 					root_path?: string;
 					/** @example my_app.py */
@@ -11269,6 +11466,12 @@ export interface operations {
 						success: true;
 						data: {
 							source: {
+								working_branch?: {
+									id: string;
+									base_branch: string;
+									fork_commit: string;
+									created_by: string;
+								};
 								/** @enum {string} */
 								type: 'git';
 								/**
@@ -17129,6 +17332,692 @@ export interface operations {
 						/** @enum {boolean} */
 						success: true;
 						data: components['schemas']['OpenNotebookChangeRequestResult'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.working-branch.save': {
+		parameters: {
+			query?: never;
+			header: {
+				/** @description Stable client-generated key reused for retries of the same operation. */
+				'idempotency-key': string;
+			};
+			path: {
+				pid: string;
+				nid: string;
+				sid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					message?: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Save operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['WorkingBranchSave'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.working-branch.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Working branch status */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['WorkingBranchStatus'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.working-branch.saves.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				save_id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Save operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['WorkingBranchSave'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.working-branch.saves.recovery': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				save_id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Recovery archive */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/zip': string;
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.working-branch.saves.retry': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				save_id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Save operation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['WorkingBranchSave'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.working-branch.change-requests.open': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					title?: string;
+					body?: string;
+					/** @default true */
+					draft?: boolean;
+				};
+			};
+		};
+		responses: {
+			/** @description Working branch pull request */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							number: number;
+							/** Format: uri */
+							url: string;
+							/** @enum {string} */
+							state: 'open' | 'closed' | 'merged';
+							headBranch: string;
+							baseBranch: string;
+						};
 					};
 				};
 			};
@@ -23773,6 +24662,7 @@ export interface operations {
 									| 'integration.write'
 									| 'integration.manage'
 									| 'change-request.publish'
+									| 'working-branch.write'
 									| 'security-labels.raise'
 									| 'security-labels.lower'
 									| 'session.attach'
@@ -23921,6 +24811,7 @@ export interface operations {
 									| 'integration.write'
 									| 'integration.manage'
 									| 'change-request.publish'
+									| 'working-branch.write'
 									| 'security-labels.raise'
 									| 'security-labels.lower'
 									| 'session.attach'
@@ -24287,6 +25178,7 @@ export interface operations {
 									| 'integration.write'
 									| 'integration.manage'
 									| 'change-request.publish'
+									| 'working-branch.write'
 									| 'security-labels.raise'
 									| 'security-labels.lower'
 									| 'session.attach'
@@ -24323,6 +25215,7 @@ export interface operations {
 									| 'integration.write'
 									| 'integration.manage'
 									| 'change-request.publish'
+									| 'working-branch.write'
 									| 'security-labels.raise'
 									| 'security-labels.lower'
 									| 'session.attach'
@@ -24611,6 +25504,7 @@ export interface operations {
 													| 'integration.write'
 													| 'integration.manage'
 													| 'change-request.publish'
+													| 'working-branch.write'
 													| 'security-labels.raise'
 													| 'security-labels.lower'
 													| 'session.attach'
@@ -24755,6 +25649,7 @@ export interface operations {
 									| 'integration.write'
 									| 'integration.manage'
 									| 'change-request.publish'
+									| 'working-branch.write'
 									| 'security-labels.raise'
 									| 'security-labels.lower'
 									| 'session.attach'
@@ -24990,6 +25885,7 @@ export interface operations {
 									| 'integration.write'
 									| 'integration.manage'
 									| 'change-request.publish'
+									| 'working-branch.write'
 									| 'security-labels.raise'
 									| 'security-labels.lower'
 									| 'session.attach'

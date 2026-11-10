@@ -223,6 +223,10 @@ components:
         source_control:
           type: object
           properties:
+            working_branch_providers:
+              type: array
+              items:
+                type: string
             preview_providers:
               type: array
               items:
@@ -1837,6 +1841,7 @@ components:
                   - integration.write
                   - integration.manage
                   - change-request.publish
+                  - working-branch.write
                   - security-labels.raise
                   - security-labels.lower
                   - session.attach
@@ -2300,6 +2305,7 @@ components:
                           - integration.write
                           - integration.manage
                           - change-request.publish
+                          - working-branch.write
                           - security-labels.raise
                           - security-labels.lower
                           - session.attach
@@ -2354,6 +2360,7 @@ components:
             - integration.write
             - integration.manage
             - change-request.publish
+            - working-branch.write
             - security-labels.raise
             - security-labels.lower
             - session.attach
@@ -2909,6 +2916,25 @@ components:
             - current_version_id
         - type: object
           properties:
+            working_branch:
+              type: object
+              properties:
+                id:
+                  type: string
+                  pattern: ^[a-f0-9]{64}$
+                base_branch:
+                  type: string
+                  minLength: 1
+                fork_commit:
+                  type: string
+                  minLength: 1
+                created_by:
+                  type: string
+              required:
+                - id
+                - base_branch
+                - fork_commit
+                - created_by
             type:
               type: string
               enum:
@@ -3640,6 +3666,12 @@ components:
             - app
         source_version_id:
           type: string
+          description: Version used to provision the session. Working-branch saves
+            preserve this launch provenance.
+        working_branch_version_id:
+          type: string
+          description: Latest source version acknowledged by a working-branch save.
+            Omitted for app-only access and preview sessions.
         head_version_id:
           type:
             - string
@@ -3800,6 +3832,157 @@ components:
           description: Published proposal whose existing change request should receive
             this new proposal. Omit to create a new change request.
           example: prop-7h2k9qm4xz7rp3w8
+    WorkingBranchSave:
+      type: object
+      properties:
+        id:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        project_id:
+          type: string
+        notebook_id:
+          type: string
+        session_id:
+          type: string
+        author:
+          type: string
+        message:
+          type: string
+        created_at:
+          type: string
+        expires_at:
+          type: string
+        base_version_id:
+          type: string
+        base_commit:
+          type: string
+        state:
+          type: string
+          enum:
+            - claimed
+            - captured
+            - commit_prepared
+            - ref_dispatched
+            - remote_committed
+            - hub_synced
+            - complete
+            - no_changes
+            - conflict
+            - expired
+        changes:
+          type: array
+          items:
+            oneOf:
+              - type: object
+                properties:
+                  path:
+                    type: string
+                    minLength: 1
+                  operation:
+                    type: string
+                    enum:
+                      - add
+                      - modify
+                  size_bytes:
+                    type: integer
+                    minimum: 0
+                  sha256:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+                required:
+                  - path
+                  - operation
+                  - size_bytes
+                  - sha256
+              - type: object
+                properties:
+                  path:
+                    type: string
+                    minLength: 1
+                  operation:
+                    type: string
+                    enum:
+                      - delete
+                required:
+                  - path
+                  - operation
+          default: []
+        commit:
+          type: string
+        version_id:
+          type: string
+        error:
+          type: string
+      required:
+        - id
+        - project_id
+        - notebook_id
+        - session_id
+        - author
+        - message
+        - created_at
+        - expires_at
+        - base_version_id
+        - base_commit
+        - state
+    WorkingBranchStatus:
+      type: object
+      properties:
+        base_branch:
+          type: string
+        branch:
+          type: string
+        commit:
+          type:
+            - string
+            - 'null'
+        remote_commit:
+          type:
+            - string
+            - 'null'
+        change_request:
+          type: object
+          properties:
+            number:
+              type: integer
+              exclusiveMinimum: 0
+            url:
+              type: string
+              format: uri
+            state:
+              type: string
+              enum:
+                - open
+                - closed
+                - merged
+            headBranch:
+              type: string
+            baseBranch:
+              type: string
+          required:
+            - number
+            - url
+            - state
+            - headBranch
+            - baseBranch
+        checked_at:
+          type: string
+        last_save:
+          $ref: '#/components/schemas/WorkingBranchSave'
+        active_save:
+          type: string
+        ended_reason:
+          type: string
+          enum:
+            - branch_deleted
+            - pr_closed
+            - pr_merged
+            - pr_retargeted
+      required:
+        - base_branch
+        - branch
+        - commit
+        - remote_commit
     SessionPage:
       type: object
       properties:
@@ -5344,6 +5527,7 @@ components:
                       - integration.write
                       - integration.manage
                       - change-request.publish
+                      - working-branch.write
                       - security-labels.raise
                       - security-labels.lower
                       - session.attach
@@ -5686,6 +5870,7 @@ paths:
                               - integration.write
                               - integration.manage
                               - change-request.publish
+                              - working-branch.write
                               - security-labels.raise
                               - security-labels.lower
                               - session.attach
@@ -11889,8 +12074,9 @@ paths:
       tags:
         - Notebooks
       summary: Create a git-synced workspace notebook
-      description: Requires project manager access because this selects a server-side
-        repository.
+      description: Ordinary Git sources require manager access. With fork, editors can
+        create a working branch when enabled; Idempotency-Key is required and
+        the head branch is generated.
       parameters:
         - schema:
             type: string
@@ -11899,6 +12085,17 @@ paths:
           required: true
           name: pid
           in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+            description: Stable client-generated key reused for retries of the same
+              operation.
+            example: a1b2c3d4-e5f6-7890
+          required: false
+          description: Stable client-generated key reused for retries of the same operation.
+          name: idempotency-key
+          in: header
       requestBody:
         required: true
         content:
@@ -11927,6 +12124,14 @@ paths:
                   type: string
                   minLength: 1
                   example: main
+                fork:
+                  type: object
+                  properties:
+                    base_branch:
+                      type: string
+                      minLength: 1
+                  required:
+                    - base_branch
                 root_path:
                   type: string
                   example: apps
@@ -11973,7 +12178,6 @@ paths:
                 - title
                 - description
                 - repo
-                - branch
                 - entry_notebook
       responses:
         '201':
@@ -12222,6 +12426,25 @@ paths:
                       source:
                         type: object
                         properties:
+                          working_branch:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                                pattern: ^[a-f0-9]{64}$
+                              base_branch:
+                                type: string
+                                minLength: 1
+                              fork_commit:
+                                type: string
+                                minLength: 1
+                              created_by:
+                                type: string
+                            required:
+                              - id
+                              - base_branch
+                              - fork_commit
+                              - created_by
                           type:
                             type: string
                             enum:
@@ -19570,6 +19793,690 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/saves:
+    post:
+      operationId: notebooks.working-branch.save
+      tags: &a6
+        - Working branches
+      summary: Commit source changes to the working branch
+      description: Requires working-branch.write and access to the session. Reuse
+        Idempotency-Key to resume the same captured changes. The returned state
+        distinguishes confirmed commits from pending synchronization and
+        conflicts. Does not save excluded runtime files.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^sess-[0-9a-z]{16}$
+            example: sess-9qm4xz7rp3w8h2k9
+          required: true
+          name: sid
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+            description: Stable client-generated key reused for retries of the same
+              operation.
+            example: a1b2c3d4-e5f6-7890
+          required: true
+          description: Stable client-generated key reused for retries of the same operation.
+          name: idempotency-key
+          in: header
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                  minLength: 1
+                  maxLength: 65536
+      responses:
+        '200':
+          description: Save operation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/WorkingBranchSave'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/working-branch:
+    get:
+      operationId: notebooks.working-branch.get
+      tags: *a6
+      summary: Inspect the working branch and latest save
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+      responses:
+        '200':
+          description: Working branch status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/WorkingBranchStatus'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/saves/{save_id}:
+    get:
+      operationId: notebooks.working-branch.saves.get
+      tags: *a6
+      summary: Inspect a captured save operation
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[a-f0-9]{64}$
+          required: true
+          name: save_id
+          in: path
+      responses:
+        '200':
+          description: Save operation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/WorkingBranchSave'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/saves/{save_id}/recovery:
+    get:
+      operationId: notebooks.working-branch.saves.recovery
+      tags: *a6
+      summary: Download captured source changes for recovery
+      description: Returns a ZIP containing a manifest of modifications/deletions and
+        captured file bytes. Requires current notebook authorization. Payloads
+        expire at the time shown on the save receipt.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[a-f0-9]{64}$
+          required: true
+          name: save_id
+          in: path
+      responses:
+        '200':
+          description: Recovery archive
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/saves/{save_id}/retry:
+    post:
+      operationId: notebooks.working-branch.saves.retry
+      tags: *a6
+      summary: Resume an existing save operation
+      description: Only the save author can resume. Reuses its immutable capture and
+        commit; does not require the original Idempotency-Key.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[a-f0-9]{64}$
+          required: true
+          name: save_id
+          in: path
+      responses:
+        '200':
+          description: Save operation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/WorkingBranchSave'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/change-requests:
+    post:
+      operationId: notebooks.working-branch.change-requests.open
+      tags: *a6
+      summary: Open the working branch pull request
+      description: Opens or returns the one pull request associated with this working
+        branch. Does not capture or commit unsaved session edits.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                body:
+                  type: string
+                  maxLength: 65536
+                draft:
+                  type: boolean
+                  default: true
+      responses:
+        '200':
+          description: Working branch pull request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      number:
+                        type: integer
+                        exclusiveMinimum: 0
+                      url:
+                        type: string
+                        format: uri
+                      state:
+                        type: string
+                        enum:
+                          - open
+                          - closed
+                          - merged
+                      headBranch:
+                        type: string
+                      baseBranch:
+                        type: string
+                    required:
+                      - number
+                      - url
+                      - state
+                      - headBranch
+                      - baseBranch
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/sessions:
     get:
       operationId: sessions.list
@@ -26693,6 +27600,7 @@ paths:
                               - integration.write
                               - integration.manage
                               - change-request.publish
+                              - working-branch.write
                               - security-labels.raise
                               - security-labels.lower
                               - session.attach
@@ -26866,6 +27774,7 @@ paths:
                               - integration.write
                               - integration.manage
                               - change-request.publish
+                              - working-branch.write
                               - security-labels.raise
                               - security-labels.lower
                               - session.attach
@@ -27265,6 +28174,7 @@ paths:
                               - integration.write
                               - integration.manage
                               - change-request.publish
+                              - working-branch.write
                               - security-labels.raise
                               - security-labels.lower
                               - session.attach
@@ -27323,6 +28233,7 @@ paths:
                               - integration.write
                               - integration.manage
                               - change-request.publish
+                              - working-branch.write
                               - security-labels.raise
                               - security-labels.lower
                               - session.attach
@@ -27658,6 +28569,7 @@ paths:
                                         - integration.write
                                         - integration.manage
                                         - change-request.publish
+                                        - working-branch.write
                                         - security-labels.raise
                                         - security-labels.lower
                                         - session.attach
@@ -27825,6 +28737,7 @@ paths:
                               - integration.write
                               - integration.manage
                               - change-request.publish
+                              - working-branch.write
                               - security-labels.raise
                               - security-labels.lower
                               - session.attach
@@ -28091,6 +29004,7 @@ paths:
                               - integration.write
                               - integration.manage
                               - change-request.publish
+                              - working-branch.write
                               - security-labels.raise
                               - security-labels.lower
                               - session.attach

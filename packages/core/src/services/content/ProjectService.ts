@@ -1,3 +1,4 @@
+import { WorkingBranchStore } from './workingBranchRecords';
 import { ResumableUploads } from './ResumableUploads';
 import { cachedRead } from '../../async';
 import { MetadataCache } from './metadataCache';
@@ -978,6 +979,7 @@ export class ProjectService {
 			: null;
 
 		await this.retireAppPoolsForDeletion(id);
+		await new WorkingBranchStore(this.bucket).retireProject(id);
 		await retireThumbnails();
 		await this.deepLinks.releaseProject(id).catch((error) => {
 			logOperationalError('deep_links.cleanup_failed', { operation: 'releaseProject' }, error);
@@ -1021,6 +1023,7 @@ export class ProjectService {
 			);
 		}
 
+		await new WorkingBranchStore(this.bucket).retireProject(id);
 		await this.retireAppPoolsForDeletion(id);
 		await this.deepLinks.releaseProject(id);
 		await deleteByPrefix(this.bucket, paths.appClaimsForProject(id));

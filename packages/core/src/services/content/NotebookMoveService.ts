@@ -346,6 +346,9 @@ export class NotebookMoveService {
 		const previous = replay ? existing : pending;
 		const context = await this.context(source, destination, nid, previous);
 		await input.authorize(context);
+		if (context.source.type === 'git' && context.source.working_branch) {
+			throw new ConflictError('Working branch notebooks cannot move between projects');
+		}
 		if (replay) {
 			await this.owners.notebooks.pruneVersionsAfterMove(destination, nid);
 			return movedNotebookMeta(existing);

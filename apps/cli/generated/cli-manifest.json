@@ -3528,8 +3528,17 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/notebooks/git",
 			"summary": "Create a git-synced workspace notebook",
-			"description": "Requires project manager access because this selects a server-side repository.",
+			"description": "Ordinary Git sources require manager access. With fork, editors can create a working branch when enabled; Idempotency-Key is required and the head branch is generated.",
 			"parameters": [
+				{
+					"name": "idempotency-key",
+					"cli_name": "idempotency-key",
+					"in": "header",
+					"required": false,
+					"description": "Stable client-generated key reused for retries of the same operation.",
+					"value_type": "string",
+					"repeatable": false
+				},
 				{
 					"name": "pid",
 					"cli_name": "pid",
@@ -3559,7 +3568,7 @@
 					{
 						"name": "branch",
 						"cli_name": "branch",
-						"required": true,
+						"required": false,
 						"value_type": "string",
 						"repeatable": false
 					},
@@ -3582,6 +3591,13 @@
 						"cli_name": "entry-notebook",
 						"required": true,
 						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "fork",
+						"cli_name": "fork",
+						"required": false,
+						"value_type": "object",
 						"repeatable": false
 					},
 					{
@@ -3647,7 +3663,7 @@
 			"paginated": false,
 			"response_kind": "json",
 			"accepts_if_match": false,
-			"accepts_idempotency_key": false
+			"accepts_idempotency_key": true
 		},
 		{
 			"id": "notebooks.delete",
@@ -4862,6 +4878,269 @@
 				}
 			],
 			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.working-branch.change-requests.open",
+			"command": ["notebooks", "working-branch", "change-requests", "open"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/change-requests",
+			"summary": "Open the working branch pull request",
+			"description": "Opens or returns the one pull request associated with this working branch. Does not capture or commit unsaved session edits.",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "body",
+						"cli_name": "body",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "draft",
+						"cli_name": "draft",
+						"required": false,
+						"value_type": "boolean",
+						"repeatable": false
+					},
+					{
+						"name": "title",
+						"cli_name": "title",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.working-branch.get",
+			"command": ["notebooks", "working-branch", "get"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/working-branch",
+			"summary": "Inspect the working branch and latest save",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.working-branch.save",
+			"command": ["notebooks", "working-branch", "save"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/saves",
+			"summary": "Commit source changes to the working branch",
+			"description": "Requires working-branch.write and access to the session. Reuse Idempotency-Key to resume the same captured changes. The returned state distinguishes confirmed commits from pending synchronization and conflicts. Does not save excluded runtime files.",
+			"parameters": [
+				{
+					"name": "idempotency-key",
+					"cli_name": "idempotency-key",
+					"in": "header",
+					"required": true,
+					"description": "Stable client-generated key reused for retries of the same operation.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "sid",
+					"cli_name": "sid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "message",
+						"cli_name": "message",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": true
+		},
+		{
+			"id": "notebooks.working-branch.saves.get",
+			"command": ["notebooks", "working-branch", "saves", "get"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/saves/{save_id}",
+			"summary": "Inspect a captured save operation",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "save_id",
+					"cli_name": "save-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.working-branch.saves.recovery",
+			"command": ["notebooks", "working-branch", "saves", "recovery"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/saves/{save_id}/recovery",
+			"summary": "Download captured source changes for recovery",
+			"description": "Returns a ZIP containing a manifest of modifications/deletions and captured file bytes. Requires current notebook authorization. Payloads expire at the time shown on the save receipt.",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "save_id",
+					"cli_name": "save-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "raw",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.working-branch.saves.retry",
+			"command": ["notebooks", "working-branch", "saves", "retry"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/saves/{save_id}/retry",
+			"summary": "Resume an existing save operation",
+			"description": "Only the save author can resume. Reuses its immutable capture and commit; does not require the original Idempotency-Key.",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "save_id",
+					"cli_name": "save-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
 			"accepts_if_match": false,

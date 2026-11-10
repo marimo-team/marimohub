@@ -36,11 +36,12 @@ import {
 	modeComputeProfiles,
 } from '@/components/Notebook/computeProfiles';
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
+import { WorkingBranchActions } from '@/components/NotebookPage/WorkingBranchActions';
 import { ChangeRequestActions } from '@/components/NotebookPage/ChangeRequestActions';
 import { sessionConnectionHint, isSessionStale } from '@/lib/sessions';
 import { useTheme } from '@/context/ThemeContext';
 import { useNotebookFrameLocation } from '@/hooks/useNotebookFrameLocation';
-import { canManageProject, canUseApps } from '@/lib/roles';
+import { canEditProject, canManageProject, canUseApps } from '@/lib/roles';
 import { OpenMenu } from './OpenMenu';
 import { NotebookMenu } from './NotebookMenu';
 import { SessionControl } from './SessionControl';
@@ -179,6 +180,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 	const surfaceActions = useSurfaceActions(pid!, nid!);
 
 	const {
+		acknowledgeWorkingBranchSave,
 		session,
 		diagnosticSession,
 		error,
@@ -418,6 +420,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		canManageProject(project.your_role);
 	const canRunApp = canUseApps(project.your_role, capabilities);
 	return {
+		acknowledgeWorkingBranchSave,
 		appStale,
 		applicationTabs,
 		author,
@@ -616,14 +619,34 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 				</div>
 				<div className="ml-auto flex flex-wrap items-center justify-end gap-2 max-md:gap-1">
 					<HelpMenu linkRole={model.linkRole} session={supportSession} />
-					<ChangeRequestActions
-						projectId={pid!}
-						notebookId={nid!}
-						sessionId={session?.session_id}
-						notebookTitle={title}
-						provider={sourceProvider}
-						canPublish={canOpenChangeRequest}
-					/>
+					{notebook?.source.type === 'git' && notebook.source.working_branch ? (
+						<WorkingBranchActions
+							onSaved={model.acknowledgeWorkingBranchSave}
+							projectId={pid!}
+							notebookId={nid!}
+							sessionId={
+								session?.status === 'running' && !session.ephemeral && !isApp
+									? session.session_id
+									: undefined
+							}
+							canWrite={
+								!isApp &&
+								canEditProject(model.linkRole ?? null) &&
+								!!capabilities?.source_control?.working_branch_providers?.includes(
+									sourceProvider ?? '',
+								)
+							}
+						/>
+					) : (
+						<ChangeRequestActions
+							projectId={pid!}
+							notebookId={nid!}
+							sessionId={session?.session_id}
+							notebookTitle={title}
+							provider={sourceProvider}
+							canPublish={canOpenChangeRequest}
+						/>
+					)}
 					{!staticView && (
 						<SessionControl
 							session={session}
@@ -937,7 +960,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 					isOpen={confirmEditRestart.isOpen}
 					onClose={confirmEditRestart.close}
 					title={sharedPersistentEditor ? 'Restart Shared Sandbox' : 'Restart Session'}
-					description={`Restart the session for "${title}" to load the latest synced version? Changes made in this sandbox aren't synced back and will be lost.${
+					description={`Restart the session for "${title}" to load the latest synced version? ${notebook?.source.type === 'git' && notebook.source.working_branch ? 'Edits not saved to the working branch or exported will be lost.' : "Changes made in this sandbox aren't synced back and will be lost."}${
 						sharedPersistentEditor
 							? ` All connected editors will be disconnected.${sessionConnectionHint(session ?? undefined)}`
 							: ''
@@ -955,7 +978,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 					isOpen={confirmEditStop.isOpen}
 					onClose={confirmEditStop.close}
 					title="Stop Shared Sandbox"
-					description={`Stop the shared sandbox for "${title}"? All connected editors will be disconnected.${sessionConnectionHint(session ?? undefined)}`}
+					description={`Stop the shared sandbox for "${title}"? All connected editors will be disconnected.${notebook?.source.type === 'git' && notebook.source.working_branch ? ' Edits not saved to the working branch or exported will be lost.' : ''}${sessionConnectionHint(session ?? undefined)}`}
 					confirmLabel="Stop Sandbox"
 					onConfirm={() => {
 						confirmEditStop.close();

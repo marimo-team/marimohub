@@ -24,7 +24,7 @@ import { createApi } from '../createApi';
  */
 export function makeTestDeps(bucket: MemoryBucket, overrides: Partial<ApiDeps> = {}): ApiDeps {
 	return {
-		services: createServices(bucket),
+		services: createServices(bucket, undefined, { sourceControl: overrides.sourceControl }),
 		bucket,
 		compute: noopCompute,
 		authenticator: { authenticate: async () => null },

@@ -113,9 +113,61 @@ export function sourceControlPublishFailure(
 	return error instanceof Error ? sourceControlPublishFailures.get(error) : undefined;
 }
 
+export interface WorkingBranchInspection {
+	headCommit: string | null;
+	/** True only when the inspected head equals or descends from the requested commit. */
+	containsCommit: boolean;
+	changeRequest?: {
+		number: number;
+		url: string;
+		state: 'open' | 'closed' | 'merged';
+		headBranch: string;
+		baseBranch: string;
+	};
+}
+
+export interface WorkingBranchWriter {
+	/** Existing refs are a conflict, even when they point at fromCommit. */
+	createBranch(input: {
+		repository: string;
+		branch: string;
+		fromCommit: string;
+	}): Promise<{ commit: string }>;
+	/** Creates immutable Git objects without changing any reference. */
+	prepareCommit(input: {
+		repository: string;
+		parentCommit: string;
+		message: string;
+		coAuthor?: SourceControlCommitIdentity;
+		changes: readonly SourceControlChange[];
+	}): Promise<{ commit: string }>;
+	/** Exact expected-head compare-and-swap; never allows non-fast-forward updates. */
+	advanceBranch(input: {
+		repository: string;
+		branch: string;
+		expectedHead: string;
+		commit: string;
+	}): Promise<{ commit: string }>;
+	openBranchChangeRequest(input: {
+		repository: string;
+		headBranch: string;
+		baseBranch: string;
+		title: string;
+		body: string;
+		draft: boolean;
+	}): Promise<OpenChangeRequestResult>;
+	inspectBranch(input: {
+		repository: string;
+		branch: string;
+		commit?: string;
+		changeRequestNumber?: number;
+	}): Promise<WorkingBranchInspection>;
+}
+
 export interface SourceControlPublisher {
 	/** Stable id stored on source revisions, such as `github` or `gitlab`. */
 	readonly provider: string;
+	readonly workingBranches?: WorkingBranchWriter;
 	openChangeRequest(input: OpenChangeRequestInput): Promise<OpenChangeRequestResult>;
 	/** Update an existing open change request, when supported by the provider. */
 	updateChangeRequest?(input: UpdateChangeRequestInput): Promise<OpenChangeRequestResult>;
@@ -261,6 +313,8 @@ export interface SourceControlReader {
 
 /** Server-side source-control capabilities configured for this deployment. */
 export interface SourceControlRegistry {
+	readonly workingBranchesEnabled?: boolean;
+	workingBranchProviders?(): readonly string[];
 	/** Required for notebook moves involving a recognized provider; moves fail closed without it. */
 	assertRepositoryAllowed?(provider: string, repository: string, projectId: ProjectId): void;
 	readonly repositoryHosts?: GitProviderHosts;

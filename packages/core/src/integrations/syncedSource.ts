@@ -57,6 +57,7 @@ export interface SyncNotebookInput {
 	 * for its commit.
 	 */
 	expected_source_version?: VersionId | null;
+	working_branch_fence?: { operation?: string; creation?: string; check: () => Promise<void> };
 }
 
 export type UpdateSyncedNotebookSourceInput = GitSourceConfig & {
@@ -189,6 +190,11 @@ export function applyGitSourceUpdate(
 	}
 	const resolved = resolveUpdatedConfig(current, desired, hosts);
 	const active = gitSourceConfig(current);
+	if (current.working_branch && !gitSourceConfigsEqual(active, resolved)) {
+		throw new ConflictError(
+			'Working branch coordinates cannot change; create a new working notebook',
+		);
+	}
 	if (current.pending_config && gitSourceConfigsEqual(current.pending_config, resolved))
 		return null;
 	const { pending_config: _pendingConfig, ...withoutPending } = current;

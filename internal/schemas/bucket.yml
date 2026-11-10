@@ -1059,6 +1059,51 @@ paths:
       responses:
         '204':
           description: Stored.
+  /projects/{pid}/notebooks/{nid}/versions/{vid}/workspace-manifest.json:
+    summary: Immutable synced workspace paths, byte sizes, and SHA-256 digests.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: vid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    get:
+      operationId: read_projects_notebooks_versions_workspace_manifest_json
+      summary: Read WorkspaceManifest
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceManifest'
+    put:
+      operationId: write_projects_notebooks_versions_workspace_manifest_json
+      summary: Write WorkspaceManifest
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceManifest'
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/notebooks/{nid}/proposals/{proposal_id}/proposal.json:
     summary: Immutable synced-session change proposal.
     parameters:
@@ -1147,6 +1192,211 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/ProposalPublication'
+      responses:
+        '204':
+          description: Stored.
+  /_system/working-branches/notebooks/{pid}/{nid}/head.json:
+    summary: Claimed branch identity, publication lease, save and PR association;
+      retain deletion tombstones.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: WorkingBranchService
+    get:
+      operationId: read_system_working_branches_notebooks_head_json
+      summary: Read WorkingBranch
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkingBranch'
+    put:
+      operationId: write_system_working_branches_notebooks_head_json
+      summary: Write WorkingBranch
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkingBranch'
+      responses:
+        '204':
+          description: Stored.
+  /_system/working-branches/notebooks/{pid}/{nid}/saves/{save_id}/receipt.json:
+    summary: Resumable save receipt; retain after payload expiry to prevent replay.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: save_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: WorkingBranchService
+    get:
+      operationId: read_system_working_branches_notebooks_saves_receipt_json
+      summary: Read WorkingBranchSave
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkingBranchSave'
+    put:
+      operationId: write_system_working_branches_notebooks_saves_receipt_json
+      summary: Write WorkingBranchSave
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkingBranchSave'
+      responses:
+        '204':
+          description: Stored.
+  /_system/working-branches/creations/{pid}/{creation_id}.json:
+    summary: Immutable idempotency receipt pinning notebook identity and fork commit.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: creation_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    get:
+      operationId: read_system_working_branches_creations_json
+      summary: Read WorkingBranchCreation
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkingBranchCreation'
+    put:
+      operationId: write_system_working_branches_creations_json
+      summary: Write WorkingBranchCreation
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkingBranchCreation'
+      responses:
+        '204':
+          description: Stored.
+  /_system/working-branches/notebooks/{pid}/{nid}/saves/{save_id}/capture.json:
+    summary: Immutable captured source changes with base64 content; bounded recovery
+      retention.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: save_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    get:
+      operationId: read_system_working_branches_notebooks_saves_capture_json
+      summary: Read WorkingBranchCapture
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkingBranchCapture'
+    put:
+      operationId: write_system_working_branches_notebooks_saves_capture_json
+      summary: Write WorkingBranchCapture
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkingBranchCapture'
+      responses:
+        '204':
+          description: Stored.
+  /_system/working-branches/cleanup.json:
+    summary: Bounded working-branch recovery cleanup cursor.
+    parameters: []
+    x-mutability: cas
+    x-owner: WorkingBranchService
+    get:
+      operationId: read_system_working_branches_cleanup_json
+      summary: Read WorkingBranchCleanup
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkingBranchCleanup'
+    put:
+      operationId: write_system_working_branches_cleanup_json
+      summary: Write WorkingBranchCleanup
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkingBranchCleanup'
       responses:
         '204':
           description: Stored.
@@ -3221,6 +3471,25 @@ components:
                       format: date-time
                       pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
                     - type: 'null'
+                working_branch:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      pattern: ^[a-f0-9]{64}$
+                    base_branch:
+                      type: string
+                      minLength: 1
+                    fork_commit:
+                      type: string
+                      minLength: 1
+                    created_by:
+                      type: string
+                  required:
+                    - id
+                    - base_branch
+                    - fork_commit
+                    - created_by
               required:
                 - schema_version
                 - type
@@ -5630,6 +5899,25 @@ components:
                   format: date-time
                   pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
                 - type: 'null'
+            working_branch:
+              type: object
+              properties:
+                id:
+                  type: string
+                  pattern: ^[a-f0-9]{64}$
+                base_branch:
+                  type: string
+                  minLength: 1
+                fork_commit:
+                  type: string
+                  minLength: 1
+                created_by:
+                  type: string
+              required:
+                - id
+                - base_branch
+                - fork_commit
+                - created_by
           required:
             - schema_version
             - type
@@ -5729,6 +6017,24 @@ components:
         - author
         - message
         - parent_id
+    WorkspaceManifest:
+      type: array
+      items:
+        type: object
+        properties:
+          path:
+            type: string
+          size_bytes:
+            type: integer
+            minimum: 0
+            maximum: 9007199254740991
+          sha256:
+            type: string
+            pattern: ^[0-9a-f]{64}$
+        required:
+          - path
+          - size_bytes
+          - sha256
     NotebookProposal:
       type: object
       properties:
@@ -5885,6 +6191,306 @@ components:
             - updated_at
             - change_request
           additionalProperties: {}
+    WorkingBranch:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        id:
+          type: string
+        project_id:
+          type: string
+        notebook_id:
+          type: string
+        provider:
+          type: string
+        source:
+          type: object
+          properties:
+            repo:
+              type: string
+            branch:
+              type: string
+            root_path:
+              type: string
+            entry_notebook:
+              type: string
+          required:
+            - repo
+            - branch
+            - root_path
+            - entry_notebook
+        base_branch:
+          type: string
+        fork_commit:
+          type: string
+        created_by:
+          type: string
+        created_at:
+          type: string
+        state:
+          type: string
+          enum:
+            - claimed
+            - branch_dispatched
+            - branch_created
+            - ready
+            - deleted
+        active_save:
+          type: string
+        last_save:
+          type: string
+        change_request:
+          type: object
+          properties:
+            number:
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            url:
+              type: string
+              format: uri
+            state:
+              type: string
+              enum:
+                - open
+                - closed
+                - merged
+            headBranch:
+              type: string
+            baseBranch:
+              type: string
+          required:
+            - number
+            - url
+            - state
+            - headBranch
+            - baseBranch
+        ended_reason:
+          type: string
+          enum:
+            - branch_deleted
+            - pr_closed
+            - pr_merged
+            - pr_retargeted
+        checked_at:
+          type: string
+        remote_commit:
+          anyOf:
+            - type: string
+            - type: 'null'
+        lease:
+          type: object
+          properties:
+            owner:
+              type: string
+            until:
+              type: number
+          required:
+            - owner
+            - until
+      required:
+        - schema_version
+        - id
+        - project_id
+        - notebook_id
+        - provider
+        - source
+        - base_branch
+        - fork_commit
+        - created_by
+        - created_at
+        - state
+    WorkingBranchSave:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        id:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        project_id:
+          type: string
+        notebook_id:
+          type: string
+        session_id:
+          type: string
+        author:
+          type: string
+        fingerprint:
+          type: string
+        message:
+          type: string
+        co_author:
+          type: object
+          properties:
+            name:
+              type: string
+            email:
+              type: string
+          required:
+            - name
+            - email
+        created_at:
+          type: string
+        expires_at:
+          type: string
+        base_version_id:
+          type: string
+        base_commit:
+          type: string
+        state:
+          type: string
+          enum:
+            - claimed
+            - captured
+            - commit_prepared
+            - ref_dispatched
+            - remote_committed
+            - hub_synced
+            - complete
+            - no_changes
+            - conflict
+            - expired
+        changes:
+          default: []
+          type: array
+          items:
+            oneOf:
+              - type: object
+                properties:
+                  path:
+                    type: string
+                    minLength: 1
+                  operation:
+                    type: string
+                    enum:
+                      - add
+                      - modify
+                  size_bytes:
+                    type: integer
+                    minimum: 0
+                    maximum: 9007199254740991
+                  sha256:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+                required:
+                  - path
+                  - operation
+                  - size_bytes
+                  - sha256
+              - type: object
+                properties:
+                  path:
+                    type: string
+                    minLength: 1
+                  operation:
+                    type: string
+                    const: delete
+                required:
+                  - path
+                  - operation
+        commit:
+          type: string
+        version_id:
+          type: string
+        error:
+          type: string
+      required:
+        - schema_version
+        - id
+        - project_id
+        - notebook_id
+        - session_id
+        - author
+        - fingerprint
+        - message
+        - created_at
+        - expires_at
+        - base_version_id
+        - base_commit
+        - state
+    WorkingBranchCreation:
+      type: object
+      properties:
+        fingerprint:
+          type: string
+        notebook_id:
+          type: string
+        id:
+          type: string
+        fork_commit:
+          type: string
+        source:
+          type: object
+          properties:
+            repo:
+              type: string
+            branch:
+              type: string
+            root_path:
+              type: string
+            entry_notebook:
+              type: string
+          required:
+            - repo
+            - branch
+            - root_path
+            - entry_notebook
+      required:
+        - fingerprint
+        - notebook_id
+        - id
+        - fork_commit
+        - source
+    WorkingBranchCapture:
+      type: array
+      items:
+        oneOf:
+          - type: object
+            properties:
+              content:
+                type: string
+              path:
+                type: string
+                minLength: 1
+              operation:
+                type: string
+                enum:
+                  - add
+                  - modify
+              size_bytes:
+                type: integer
+                minimum: 0
+                maximum: 9007199254740991
+              sha256:
+                type: string
+                pattern: ^[0-9a-f]{64}$
+            required:
+              - path
+              - operation
+              - size_bytes
+              - sha256
+          - type: object
+            properties:
+              content:
+                type: string
+              path:
+                type: string
+                minLength: 1
+              operation:
+                type: string
+                const: delete
+            required:
+              - path
+              - operation
+    WorkingBranchCleanup:
+      type: object
+      properties:
+        cursor:
+          type: string
     ProposalPayloadMarker:
       type: object
       properties:
@@ -6444,6 +7050,8 @@ components:
             - edit
             - app
         source_version_id:
+          type: string
+        working_branch_version_id:
           type: string
         app_pool:
           type: boolean
@@ -7343,6 +7951,7 @@ components:
                       - integration.write
                       - integration.manage
                       - change-request.publish
+                      - working-branch.write
                       - security-labels.raise
                       - security-labels.lower
                       - session.attach

@@ -67,6 +67,23 @@ async function setup(
 }
 
 describe('sync_notebook_source', () => {
+	it('compares restart state with the saved baseline while preserving launch provenance', async () => {
+		const { deps, project, notebook, sync, createSession } = await setup();
+		await sync();
+		const { source } = await deps.services.notebooks.getNotebook(project.id, notebook.id);
+		const launched = createVersionId();
+		const session = await createSession('edit', launched);
+		vi.spyOn(deps.services.sessions, 'listActiveByProject').mockResolvedValue([
+			{ ...session, working_branch_version_id: source.current_version_id! },
+		]);
+		expect(await sync()).toMatchObject({
+			structuredContent: {
+				restart_needed: false,
+				sessions: [{ source_version_id: launched, restart_needed: false }],
+			},
+		});
+	});
+
 	it.each([undefined, new Error('Connection closed')])(
 		'does not sync an already cancelled request with reason %s',
 		async (reason) => {

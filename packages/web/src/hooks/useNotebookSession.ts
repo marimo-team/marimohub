@@ -74,6 +74,7 @@ export interface NotebookSession {
 	stop: () => void;
 	/** Replace the selected app sandbox or restart the editor, then re-enter through admission. */
 	restart: () => void;
+	acknowledgeWorkingBranchSave: (sessionId: string, versionId: string) => void;
 }
 
 /** Synchronize a notebook page with session startup, presence, and termination. */
@@ -138,10 +139,20 @@ export function useNotebookSession(
 		) {
 			startingSinceRef.current = Date.now();
 		}
-		const committed =
+		let committed =
 			next && next.session_id === sessionRef.current?.session_id && !next.app_assignment
 				? { ...next, app_assignment: sessionRef.current.app_assignment }
 				: next;
+		const acknowledged = sessionRef.current?.working_branch_version_id;
+		// A poll started before save completion must not erase the acknowledged baseline.
+		if (
+			committed &&
+			committed.session_id === sessionRef.current?.session_id &&
+			acknowledged &&
+			(!committed.working_branch_version_id || committed.working_branch_version_id < acknowledged)
+		) {
+			committed = { ...committed, working_branch_version_id: acknowledged };
+		}
 		sessionRef.current = committed;
 		setSession(committed);
 	}, []);
@@ -512,10 +523,23 @@ export function useNotebookSession(
 		};
 	}, [mode, projectId, notebookId]);
 
+	const acknowledgeWorkingBranchSave = useCallback(
+		(sessionId: string, versionId: string) => {
+			const current = sessionRef.current;
+			if (!mountedRef.current || current?.session_id !== sessionId || current.status !== 'running')
+				return;
+			if (current.working_branch_version_id && current.working_branch_version_id >= versionId)
+				return;
+			commitSession({ ...current, working_branch_version_id: versionId });
+		},
+		[commitSession],
+	);
+
 	const isProvisioning = restarting || starting || session?.status === 'starting';
 	const isRunning = session?.status === 'running' && !!session.sandbox_url;
 
 	return {
+		acknowledgeWorkingBranchSave,
 		session,
 		diagnosticSession,
 		error,

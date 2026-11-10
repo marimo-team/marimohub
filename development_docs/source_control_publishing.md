@@ -206,3 +206,89 @@ See the [provider extension checklist](architecture.md#39-source-control) for th
 
 Additional capture strategies are capture-policy extensions, not provider rewrites. They must emit
 the same bounded, immutable change model and define how they identify generated or runtime files.
+
+## Working-branch publication
+
+`WorkingBranchService` coordinates the optional `SourceControlPublisher.workingBranches`
+port. Config advertises it only when the provider supports Git workspace reads and
+branch writes. The [deployment opt-in](../docs/configuration.md#working-branches)
+grants editors this workflow. Legacy proposals remain manager-only and reject working notebooks.
+
+Creation pins the notebook ID, generated branch, and fork SHA before the remote write.
+An unexplained existing ref cannot be adopted. After an ambiguous response, creation
+resumes only after inspection of the pinned ref. The same idempotency key resumes
+notebook and catalog publication.
+
+### Save protocol
+
+The branch CAS lease serializes saves, manual sync, and PR creation. Its update
+callback checks lease ownership on every write. `active_save` prevents unrelated
+operations from advancing the source while a save remains incomplete.
+
+1. Persist the receipt before publishing its ID in the branch head.
+2. Capture source bytes once, with paths, operations, sizes, and SHA-256 hashes.
+3. Validate the resulting workspace against import limits, then prepare provider objects and persist the commit SHA.
+4. Persist the dispatch marker, then advance the exact expected head without force.
+5. Import the exact commit through `SyncedNotebookService`, then acknowledge the session baseline.
+
+GitHub uses `beforeOid` for its conditional ref update. After dispatch, retries first
+inspect whether the branch contains the prepared SHA. If it does, import that commit.
+If the head still equals the recorded base and publication remains active, retry the same conditional update.
+Do not prepare another commit or recapture files. A different head remains fenced unless ancestry confirms the commit.
+A null `updateRefs` result with only `UNPROCESSABLE`, `FORBIDDEN`, or `NOT_FOUND` errors
+at that mutation is a definite rejection of that request. On the first dispatch, it releases admission as a terminal conflict.
+After an ambiguous dispatch, even a definite rejection of its retry cannot rule out the original request still completing.
+Keep that operation fenced until a later retry confirms its commit.
+Mixed, untyped, malformed, and transport errors retain the dispatch fence.
+GitHub documents [atomic ref updates](https://docs.github.com/en/graphql/reference/git#updaterefs).
+
+Current authorization and repository policy apply before remote mutations and hub sync.
+Creation replay authorizes the current notebook metadata before returning it, including through MCP.
+If a dispatched creation has no remote ref, retry create-if-absent with the same branch name and pinned fork commit.
+
+Capture discovers tracked and untracked paths through Git, then compares live bytes
+against the immutable bucket version. Descriptor-relative reads reject symlinks and
+special files. Capture never rewrites live HEAD or the index. Later edits remain
+available for the next save. Baseline files use the workspace read limit; only changed
+bytes count toward the capture limit. Before dispatch, baseline object sizes and captured
+changes determine the resulting file count and total size. Oversized results retain their
+captures as terminal conflicts, so corrected saves can proceed.
+
+Synced versions include `workspace-manifest.json` with file sizes and SHA-256 digests.
+Capture hashes the live tree in bounded batches, then reads only changed payloads.
+Unchanged files require no bucket body reads. Versions without a manifest fall back to
+reading baseline bytes when sizes match. Each hash command has a 60-second timeout;
+batches contain at most 256 paths and approximately 32 KiB of path arguments.
+Capture renews the branch lease between operations when 30 seconds have elapsed.
+A lost lease stops publication. A payload that changes after hashing fails capture.
+
+A single stage table drives save handlers, transition ordering, expiry, and cleanup.
+An ambiguous dispatch returns immediately; a later request enters the verification handler.
+Retry loads the current receipt under the lease and does not construct a synthetic save request.
+
+A failed capture releases admission with a terminal receipt. A new save can retire an abandoned
+`claimed` receipt without a capture after acquiring the branch lease. An existing immutable capture must be resumed.
+Status caches the observed remote head and PR for one minute in the branch record.
+Concurrent refreshes share one provider read per service instance. Save admission invalidates the cache;
+publication and PR mutations always inspect the provider directly.
+
+`source_version_id` preserves launch provenance. `working_branch_version_id` records
+the last acknowledged save and supplies the next capture baseline. Active sessions
+protect both versions from pruning. An incomplete save also protects its baseline
+after session teardown.
+
+### PR lifecycle and maintenance
+
+PR creation does not capture edits. It reuses the branch association after a lost
+response. GitHub searches the head branch across all PR bases. Observed closure,
+merge, branch deletion, or base retargeting permanently blocks new publication.
+Reopening the PR or recreating the ref does not clear this restriction.
+
+The [bucket contract](bucket_spec.md#working-branches) defines record ownership,
+retention, and cleanup. Maintenance never publishes captured work. Explicit retries
+require the original author and current authorization.
+
+`working_branch.save` events contain operation IDs, stages, commit IDs, and file counts.
+Sync failures emit `working_branch.sync_pending`. Logs exclude source bytes and provider credentials.
+The [user guide](../docs/syncing.md#working-notebooks) covers limits and recovery.
+Periodic checkpoints and commit-on-end remain deferred.

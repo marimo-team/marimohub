@@ -8,6 +8,7 @@ export type PermissionRequest = Pick<
 
 export interface GatedTool {
 	name: string;
+	consentInput?: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
 	annotations?: {
 		readOnlyHint?: boolean;
 		destructiveHint?: boolean;
@@ -73,6 +74,51 @@ const ACTIONS: Record<
 	string,
 	{ action: string; label: string; fields: [string, string, number?][]; remember?: false }
 > = {
+	create_branch_notebook: {
+		action: 'Create a remote working branch',
+		label: 'creating working branches',
+		remember: false,
+		fields: [
+			['Title', 'title'],
+			['Repository', 'repo'],
+			['Base branch', 'base_branch'],
+			['Notebook file', 'entry_notebook'],
+			['Start a session', 'launch'],
+		],
+	},
+	save_to_branch: {
+		action: 'Commit notebook changes to Git',
+		label: 'committing working branch changes',
+		fields: [
+			['Notebook', 'notebook'],
+			['Repository', 'repo'],
+			['Working branch', 'branch'],
+			['Session', 'session_id'],
+			['Commit message', 'message'],
+		],
+	},
+	open_change_request: {
+		action: 'Open the working branch pull request',
+		label: 'opening working branch pull requests',
+		fields: [
+			['Notebook', 'notebook'],
+			['Repository', 'repo'],
+			['Working branch', 'branch'],
+			['Base branch', 'base_branch'],
+			['Title', 'title'],
+			['Draft', 'draft'],
+		],
+	},
+	retry_branch_save: {
+		action: 'Resume a captured branch save',
+		label: 'resuming working branch saves',
+		fields: [
+			['Notebook', 'notebook'],
+			['Repository', 'repo'],
+			['Working branch', 'branch'],
+			['Save operation', 'save_id'],
+		],
+	},
 	create_notebook: {
 		action: 'Create a notebook',
 		label: 'creating notebooks',

@@ -94,7 +94,7 @@ export function SyncSettingsDialog({
 		defaultValues: values,
 		validators: schemaValidators(settingsSchema),
 		onSubmit: async ({ value }) => {
-			if (!source || !canManage) return;
+			if (!source || source.working_branch || !canManage) return;
 			try {
 				const data = await updateSource.mutateAsync({
 					notebookId,
@@ -185,72 +185,73 @@ export function SyncSettingsDialog({
 		<p className="text-sm text-muted-foreground">Loading sync settings...</p>
 	);
 
-	const dialog = canManage ? (
-		<FormDialog
-			form={form}
-			isPending={updateSource.isPending}
-			requireDirty
-			submitDisabled={!source}
-			isOpen={isOpen}
-			onClose={onClose}
-			title={`Sync settings — ${title}`}
-			submitLabel="Save"
-			pendingLabel="Saving..."
-			cancelLabel="Close"
-			width="lg"
-		>
-			<div className="grid gap-4 sm:grid-cols-2">
-				<form.AppField name="repo">
-					{(f) => (
-						<f.TextField
-							label="Repository"
-							placeholder="owner/repo or https://gitlab.example.com/group/project"
-							isDisabled={!source}
-						/>
-					)}
-				</form.AppField>
-				<form.AppField name="branch">
-					{(f) => <f.TextField label="Branch" placeholder="main" isDisabled={!source} />}
-				</form.AppField>
-				<form.AppField name="rootPath">
-					{(f) => (
-						<f.TextField
-							label="Folder in repo (optional)"
-							placeholder="apps"
-							isDisabled={!source}
-						/>
-					)}
-				</form.AppField>
-				<form.AppField name="entryNotebook">
-					{(f) => (
-						<f.TextField label="Notebook file" placeholder="dashboard.py" isDisabled={!source} />
-					)}
-				</form.AppField>
-			</div>
-			{sourceStatus}
-			{serverSync}
-			{source?.sync_mode === 'push' && credentials}
-		</FormDialog>
-	) : (
-		<DialogModal isOpen={isOpen} onClose={onClose} title={`Sync settings — ${title}`} width="lg">
-			<div className="flex flex-col gap-4">
+	const dialog =
+		canManage && !source?.working_branch ? (
+			<FormDialog
+				form={form}
+				isPending={updateSource.isPending}
+				requireDirty
+				submitDisabled={!source}
+				isOpen={isOpen}
+				onClose={onClose}
+				title={`Sync settings — ${title}`}
+				submitLabel="Save"
+				pendingLabel="Saving..."
+				cancelLabel="Close"
+				width="lg"
+			>
 				<div className="grid gap-4 sm:grid-cols-2">
-					<TextField label="Repository" value={values.repo} isReadOnly />
-					<TextField label="Branch" value={values.branch} isReadOnly />
-					<TextField label="Folder in repo" value={values.rootPath} isReadOnly />
-					<TextField label="Notebook file" value={values.entryNotebook} isReadOnly />
+					<form.AppField name="repo">
+						{(f) => (
+							<f.TextField
+								label="Repository"
+								placeholder="owner/repo or https://gitlab.example.com/group/project"
+								isDisabled={!source}
+							/>
+						)}
+					</form.AppField>
+					<form.AppField name="branch">
+						{(f) => <f.TextField label="Branch" placeholder="main" isDisabled={!source} />}
+					</form.AppField>
+					<form.AppField name="rootPath">
+						{(f) => (
+							<f.TextField
+								label="Folder in repo (optional)"
+								placeholder="apps"
+								isDisabled={!source}
+							/>
+						)}
+					</form.AppField>
+					<form.AppField name="entryNotebook">
+						{(f) => (
+							<f.TextField label="Notebook file" placeholder="dashboard.py" isDisabled={!source} />
+						)}
+					</form.AppField>
 				</div>
 				{sourceStatus}
 				{serverSync}
 				{source?.sync_mode === 'push' && credentials}
-				<div className="flex justify-end pt-2">
-					<Button variant="primary" onPress={onClose}>
-						Done
-					</Button>
+			</FormDialog>
+		) : (
+			<DialogModal isOpen={isOpen} onClose={onClose} title={`Sync settings — ${title}`} width="lg">
+				<div className="flex flex-col gap-4">
+					<div className="grid gap-4 sm:grid-cols-2">
+						<TextField label="Repository" value={values.repo} isReadOnly />
+						<TextField label="Branch" value={values.branch} isReadOnly />
+						<TextField label="Folder in repo" value={values.rootPath} isReadOnly />
+						<TextField label="Notebook file" value={values.entryNotebook} isReadOnly />
+					</div>
+					{sourceStatus}
+					{serverSync}
+					{source?.sync_mode === 'push' && credentials}
+					<div className="flex justify-end pt-2">
+						<Button variant="primary" onPress={onClose}>
+							Done
+						</Button>
+					</div>
 				</div>
-			</div>
-		</DialogModal>
-	);
+			</DialogModal>
+		);
 
 	return (
 		<>

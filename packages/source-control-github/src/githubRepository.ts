@@ -180,6 +180,15 @@ export class GitHubRepositoryWriter {
 	}
 
 	async forceUpdateRef(branch: string, expectedCommit: string, nextCommit: string): Promise<void> {
+		return this.compareAndSwapRef(branch, expectedCommit, nextCommit, true);
+	}
+
+	async compareAndSwapRef(
+		branch: string,
+		expectedCommit: string,
+		nextCommit: string,
+		force = false,
+	): Promise<void> {
 		const repositoryResponse = await this.client.request(
 			`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}`,
 			this.token,
@@ -198,7 +207,7 @@ export class GitHubRepositoryWriter {
 								name: `refs/heads/${branch}`,
 								beforeOid: expectedCommit,
 								afterOid: nextCommit,
-								force: true,
+								force,
 							},
 						],
 					},
@@ -206,12 +215,35 @@ export class GitHubRepositoryWriter {
 			}),
 		});
 		const payload = await responseJson(response);
+		// updateRefs is atomic. Only explicit mutation rejections prove that no ref moved.
+		if (
+			isRecord(payload) &&
+			isRecord(payload.data) &&
+			payload.data.updateRefs === null &&
+			Array.isArray(payload.errors) &&
+			payload.errors.length > 0 &&
+			payload.errors.every(
+				(error: unknown) =>
+					isRecord(error) &&
+					(error.type === 'UNPROCESSABLE' ||
+						error.type === 'FORBIDDEN' ||
+						error.type === 'NOT_FOUND') &&
+					Array.isArray(error.path) &&
+					error.path.length === 1 &&
+					error.path[0] === 'updateRefs',
+			)
+		) {
+			throw new ConflictError('GitHub rejected the branch update');
+		}
 		if (
 			!isRecord(payload) ||
 			(Array.isArray(payload.errors) && payload.errors.length > 0) ||
 			!isRecord(payload.data) ||
 			!isRecord(payload.data.updateRefs)
 		) {
+			if (!force) {
+				throw new UnavailableError('Could not confirm the GitHub working branch update');
+			}
 			throw new ConflictError('The GitHub proposal branch changed while updating');
 		}
 	}
