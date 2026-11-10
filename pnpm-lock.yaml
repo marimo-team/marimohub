@@ -362,7 +362,7 @@ overrides:
 
 patchedDependencies:
   '@coreweave/cwsandbox@1.0.0':
-    hash: 201343a4ab5d21e5ab10066f4a2c0cd8c7f60a4f1b1985e9e2f6d3bbc6ed01b0
+    hash: aaa9f1cf737aabc4fd0a0b2c66dd7c4dd65b7e51ec8254e89714e990714a1ed2
     path: patches/@coreweave__cwsandbox@1.0.0.patch
   vitepress@1.6.4:
     hash: 3ba46d79d2c2e973e4f6a2f873e0a5dd361d41df9c901fd63d12fc4cc6a323ef
@@ -901,7 +901,7 @@ importers:
     dependencies:
       '@coreweave/cwsandbox':
         specifier: 'catalog:'
-        version: 1.0.0(patch_hash=201343a4ab5d21e5ab10066f4a2c0cd8c7f60a4f1b1985e9e2f6d3bbc6ed01b0)
+        version: 1.0.0(patch_hash=aaa9f1cf737aabc4fd0a0b2c66dd7c4dd65b7e51ec8254e89714e990714a1ed2)
       '@marimo-hub/compute-commons':
         specifier: workspace:*
         version: link:../compute-commons
@@ -9314,7 +9314,7 @@ snapshots:
     dependencies:
       '@bufbuild/protobuf': 2.12.1
 
-  '@coreweave/cwsandbox@1.0.0(patch_hash=201343a4ab5d21e5ab10066f4a2c0cd8c7f60a4f1b1985e9e2f6d3bbc6ed01b0)':
+  '@coreweave/cwsandbox@1.0.0(patch_hash=aaa9f1cf737aabc4fd0a0b2c66dd7c4dd65b7e51ec8254e89714e990714a1ed2)':
     dependencies:
       '@grpc/grpc-js': 1.14.5
       '@peculiar/x509': 2.1.0

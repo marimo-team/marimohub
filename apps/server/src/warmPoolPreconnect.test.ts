@@ -75,6 +75,95 @@ describe('API warm pool preconnection', () => {
 		await Promise.all([first.drain(), second.drain()]);
 	});
 
+	it('shares eight slots across profiles and rotates when profiles exceed that budget', async () => {
+		vi.useFakeTimers();
+		const { deps, store, member } = await fixture();
+		const first = Array.from({ length: 9 }, () => member());
+		const last = member();
+		deps.warmPool!.config.profiles = [
+			...deps.warmPool!.config.profiles,
+			{ key: 'second', image: 'other', resources: {} },
+		];
+		await store.mutate((record) => {
+			record.pools.push({ key: 'configured', failures: 0, retry_at: 0, members: first });
+			record.pools.push({ key: 'second', failures: 0, retry_at: 0, members: [last] });
+		});
+		const connect = vi.fn<Connect>(async () => true);
+		deps.compute.preconnect = connect;
+		const handle = startWarmPoolPreconnect(deps)!;
+		await vi.advanceTimersByTimeAsync(0);
+		expect(connect).toHaveBeenCalledTimes(8);
+		expect(connect.mock.calls.map(([id]) => id)).toContain(last.sandbox_id);
+		handle.stop();
+		await handle.drain();
+		await store.mutate((record) => {
+			record.pools = [];
+			deps.warmPool!.config.profiles = [];
+			for (let i = 0; i < 10; i++) {
+				const key = `profile-${i}`;
+				deps.warmPool!.config.profiles = [
+					...deps.warmPool!.config.profiles,
+					{ key, image: key, resources: {} },
+				];
+				record.pools.push({ key, failures: 0, retry_at: 0, members: [member()] });
+			}
+		});
+		connect.mockClear();
+		const rotating = startWarmPoolPreconnect(deps)!;
+		await vi.advanceTimersByTimeAsync(0);
+		expect(connect).toHaveBeenCalledTimes(8);
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(new Set(connect.mock.calls.map(([id]) => id)).size).toBe(10);
+		rotating.stop();
+		await rotating.drain();
+	});
+
+	it('retains in-flight work during shutdown until every admitted connection settles', async () => {
+		vi.useFakeTimers();
+		const { deps, store, member } = await fixture();
+		await store.mutate((record) =>
+			record.pools.push({
+				key: 'configured',
+				failures: 0,
+				retry_at: 0,
+				members: [member(), member(), member()],
+			}),
+		);
+		let releaseSecond!: () => void;
+		const connect = vi
+			.fn<Connect>()
+			.mockImplementationOnce(
+				async (_id, options) =>
+					new Promise<boolean>((_resolve, reject) => {
+						options.signal.addEventListener('abort', () => reject(new Error('aborted')), {
+							once: true,
+						});
+					}),
+			)
+			.mockImplementationOnce(
+				async () =>
+					new Promise<boolean>((resolve) => {
+						releaseSecond = () => resolve(true);
+					}),
+			);
+		deps.compute.preconnect = connect;
+		const loops = new BackgroundLoops();
+		const handle = startWarmPoolPreconnect(deps, loops)!;
+		await vi.advanceTimersByTimeAsync(0);
+		handle.stop();
+		let drained = false;
+		const draining = loops.drain().then(() => {
+			drained = true;
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(drained).toBe(false);
+		expect(connect).toHaveBeenCalledTimes(2);
+		releaseSecond();
+		await draining;
+		expect(drained).toBe(true);
+		expect(connect).toHaveBeenCalledTimes(2);
+	});
+
 	it('backs off failures, refreshes changed references and skips disabled/unsupported providers', async () => {
 		vi.useFakeTimers();
 		const { deps, store, member } = await fixture();

@@ -1,7 +1,10 @@
 import { createSandboxClient } from '@coreweave/cwsandbox/node';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+	vi.useRealTimers();
+	vi.restoreAllMocks();
+});
 
 function nativeClient(mode: 'auto' | 'direct' | 'gateway' = 'direct') {
 	const client = createSandboxClient({ apiKey: 'test-key', dataPlaneMode: mode });
@@ -13,37 +16,68 @@ function nativeClient(mode: 'auto' | 'direct' | 'gateway' = 'direct') {
 			response: Promise.resolve({ content: new TextEncoder().encode('content') }),
 		})),
 	};
-	const release = vi.fn(async () => {});
+	const close = vi.fn();
+	const channelFactory = vi.fn(() => ({ client: rpc, ready: Promise.resolve(), close }));
 	const issue = vi.fn(async (id: string, permission: number) => ({
 		cacheKey: `${id}:${permission}`,
 		expiresAtMs: Date.now() + 120_000,
 		grantedPermissions: new Set([permission]),
 	}));
-	const acquire = vi.fn(async () => ({ client: rpc, release }));
 	// Inject only credential issuance/channel I/O; exercise the installed SDK's cache and public API.
 	const native = client as unknown as {
 		transport: {
 			get: (request: unknown) => Promise<unknown>;
 			directDataPlane: {
 				stateFor: (id: string) => { retryAtMs: number };
+				acquire: (options: {
+					sandboxId: string;
+					permission: number;
+					dataPlaneMode: string;
+				}) => Promise<unknown>;
 				issueCredential: typeof issue;
-				pool: { acquire: typeof acquire };
+				pool: {
+					constructor: new (
+						limit: number,
+						factory: typeof channelFactory,
+					) => {
+						acquire: (
+							bundle: unknown,
+							timeoutMs: number,
+							signal?: AbortSignal,
+						) => Promise<{ client: typeof rpc; release: () => Promise<void> }>;
+						release: (key: string, entry: unknown, discard: boolean) => void;
+					};
+				};
 			};
 		};
 	};
 	native.transport.directDataPlane.issueCredential = issue;
-	native.transport.directDataPlane.pool = { acquire };
+	const Pool = native.transport.directDataPlane.pool.constructor;
+	const pool = new Pool(64, channelFactory);
+	const acquire = vi.spyOn(pool, 'acquire');
+	const release = vi.spyOn(pool, 'release');
+	native.transport.directDataPlane.pool =
+		pool as unknown as typeof native.transport.directDataPlane.pool;
 	native.transport.get = async () => ({
 		sandboxId: 'sandbox',
 		metadata: { sandboxId: 'sandbox', status: 'running' },
 	});
-	return { client, issue, acquire, release, rpc, dataPlane: native.transport.directDataPlane };
+	return {
+		client,
+		issue,
+		acquire,
+		release,
+		rpc,
+		channelFactory,
+		close,
+		dataPlane: native.transport.directDataPlane,
+	};
 }
 
 describe('installed SDK preconnect extension', () => {
 	it('warms each permission without runner operations, then reuses credentials for real exec/read/write calls', async () => {
 		vi.useFakeTimers();
-		const { client, issue, release, rpc, dataPlane } = nativeClient();
+		const { client, issue, release, rpc, dataPlane, channelFactory } = nativeClient();
 		dataPlane.stateFor('sandbox').retryAtMs = Date.now() + 30_000;
 		const cooldown = dataPlane.stateFor('sandbox').retryAtMs;
 		expect(await client.preconnect('sandbox')).toBe(true);
@@ -57,6 +91,7 @@ describe('installed SDK preconnect extension', () => {
 		expect(await sandbox.files.readText('/tmp/file')).toBe('content');
 		expect(issue).toHaveBeenCalledTimes(5);
 		expect(release).toHaveBeenCalledTimes(8);
+		expect(channelFactory).toHaveBeenCalledTimes(5);
 		expect(await client.preconnect('sandbox')).toBe(true);
 		expect(issue).toHaveBeenCalledTimes(5);
 		await vi.advanceTimersByTimeAsync(65_000);
@@ -64,24 +99,76 @@ describe('installed SDK preconnect extension', () => {
 		expect(issue).toHaveBeenCalledTimes(10);
 	});
 
-	it('honors a shared deadline and cancellation, and performs no work in Gateway mode', async () => {
+	it('enforces a shared deadline while a real channel is pending and discards it', async () => {
 		vi.useFakeTimers();
-		const { client, acquire, release, rpc } = nativeClient();
-		acquire.mockImplementation(async () => {
-			await new Promise((resolve) => setTimeout(resolve, 600));
-			return { client: rpc, release };
-		});
-		const expired = expect(client.preconnect('sandbox', { timeoutMs: 1_000 })).rejects.toThrow(
-			'deadline',
-		);
-		await vi.advanceTimersByTimeAsync(1_200);
+		const { client, acquire, release, channelFactory, close, rpc } = nativeClient();
+		channelFactory
+			.mockImplementationOnce(() => ({
+				client: rpc,
+				ready: new Promise<void>((resolve) => setTimeout(resolve, 600)),
+				close,
+			}))
+			.mockImplementationOnce(() => ({ client: rpc, ready: new Promise<void>(() => {}), close }));
+		let settled = false;
+		const expired = expect(
+			client.preconnect('sandbox', { timeoutMs: 1_000 }).finally(() => {
+				settled = true;
+			}),
+		).rejects.toThrow('Direct data-plane access is unavailable');
+		await vi.advanceTimersByTimeAsync(999);
+		expect(settled).toBe(false);
+		await vi.advanceTimersByTimeAsync(1);
 		await expired;
 		expect(acquire).toHaveBeenCalledTimes(2);
+		expect(acquire.mock.calls[1][1]).toBe(400);
 		expect(release).toHaveBeenCalledTimes(2);
-		const aborted = new AbortController();
-		aborted.abort();
-		await expect(client.preconnect('sandbox', { signal: aborted.signal })).rejects.toThrow();
-		expect(acquire).toHaveBeenCalledTimes(2);
+		expect(close).toHaveBeenCalledTimes(1);
+	});
+
+	it('cancels an in-flight channel wait and releases its lease without preparing more permissions', async () => {
+		const { client, acquire, release, channelFactory, close, rpc } = nativeClient();
+		channelFactory.mockReturnValue({ client: rpc, ready: new Promise<void>(() => {}), close });
+		const controller = new AbortController();
+		const reason = new Error('shutdown');
+		const pending = expect(
+			client.preconnect('sandbox', { signal: controller.signal }),
+		).rejects.toBe(reason);
+		await vi.waitFor(() => expect(acquire).toHaveBeenCalledTimes(1));
+		controller.abort(reason);
+		await pending;
+		expect(release).toHaveBeenCalledTimes(1);
+		expect(close).toHaveBeenCalledTimes(1);
+		expect(acquire).toHaveBeenCalledTimes(1);
+	});
+
+	it('uses the background budget in auto mode without extending the foreground budget', async () => {
+		vi.useFakeTimers();
+		const { client, issue, dataPlane } = nativeClient('auto');
+		const credential = issue.getMockImplementation()!;
+		issue.mockImplementation(async (id, permission) => {
+			await new Promise((resolve) => setTimeout(resolve, 1_200));
+			return credential(id, permission);
+		});
+		// Previously the foreground one-second auto budget made background preparation fall back.
+		const prepared = expect(client.preconnect('sandbox', { timeoutMs: 7_000 })).resolves.toBe(true);
+		await vi.advanceTimersByTimeAsync(6_000);
+		await prepared;
+		expect(dataPlane.stateFor('sandbox').retryAtMs).toBe(0);
+		const foreground = expect(
+			dataPlane.acquire({ sandboxId: 'cold', permission: 1, dataPlaneMode: 'auto' }),
+		).resolves.toBeUndefined();
+		await vi.advanceTimersByTimeAsync(1_000);
+		await foreground;
+		await vi.advanceTimersByTimeAsync(200);
+	});
+
+	it('returns false for auto fallback or Gateway mode without changing the cooldown', async () => {
+		const auto = nativeClient('auto');
+		auto.channelFactory.mockImplementation(() => {
+			throw new Error('endpoint unavailable');
+		});
+		expect(await auto.client.preconnect('sandbox')).toBe(false);
+		expect(auto.dataPlane.stateFor('sandbox').retryAtMs).toBe(0);
 		const gateway = nativeClient('gateway');
 		expect(await gateway.client.preconnect('sandbox')).toBe(false);
 		expect(gateway.issue).not.toHaveBeenCalled();

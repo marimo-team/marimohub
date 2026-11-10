@@ -59,6 +59,7 @@ describe('instrumentCoreWeaveClient', () => {
 	it('spans every client and sandbox operation with endpoint attributes', async () => {
 		const client = instrumentCoreWeaveClient(fakeClient(), 'https://gateway.example:8443/api');
 
+		expect(client).not.toHaveProperty('preconnect');
 		const sandbox = await client.create({});
 		await sandbox.getStatus();
 		await sandbox.commands.run(['sh', '-lc', 'run-marimo-secret']);
@@ -95,6 +96,21 @@ describe('instrumentCoreWeaveClient', () => {
 		const attributes = JSON.stringify(spans.map((span) => span.attributes));
 		expect(attributes).not.toContain('private.txt');
 		expect(attributes).not.toContain('run-marimo-secret');
+	});
+
+	it('preserves optional preconnect support, cancellation options and transport tracing', async () => {
+		const preconnect = vi.fn(async () => true);
+		const client = instrumentCoreWeaveClient(
+			{ ...fakeClient(), preconnect },
+			'https://gateway.example',
+		);
+		const options = { timeoutMs: 5000, signal: new AbortController().signal };
+		expect(await client.preconnect!(SANDBOX_ID, options)).toBe(true);
+		expect(preconnect).toHaveBeenCalledExactlyOnceWith(SANDBOX_ID, options);
+		const spans = exporter.getFinishedSpans();
+		expect(spans).toHaveLength(1);
+		expect(spans[0].name).toBe(`${CLIENT}/preconnect`);
+		expect(spans[0].attributes['coreweave.sandbox_id']).toBe(SANDBOX_ID);
 	});
 
 	it.each([false, true])(

@@ -31,6 +31,9 @@ index e141d203164bde153cc87f4abd4beac6a46a8a9b..a7c3c4d14286c656757549460d861cfa
  	async create(options = {}) {
  		return this.run(DEFAULT_KEEP_ALIVE_COMMAND, options);
  	}
+@@ -11679 +11688 @@ var DirectDataPlane = class {
+-		const modeBudget = options.dataPlaneMode === "direct" ? DIRECT_BUDGET_MS : AUTO_BUDGET_MS;
++		const modeBudget = options.background ? options.timeoutMs ?? 5000 : options.dataPlaneMode === "direct" ? DIRECT_BUDGET_MS : AUTO_BUDGET_MS;
 @@ -11682,10 +11691,10 @@ var DirectDataPlane = class {
  		const deadlineMs = Date.now() + budgetMs;
  		let retryDelayMs = STRICT_RETRY_START_MS;

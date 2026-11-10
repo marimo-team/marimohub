@@ -526,6 +526,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'Prepare Direct credentials and channels in the background on each Node API replica. Requires enabled warm pools and an adapter supporting preconnection. No sandbox commands or files are touched. Gateway-only connections are skipped; failures never block API health. Set false to disable.',
 						default: 'true',
+						optIn: true,
 					},
 
 					{
