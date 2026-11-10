@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BucketGetOptions } from '@marimo-hub/core/ports/bucket';
 import {
 	AppPoolService,
+	NotFoundError,
 	createServices,
 	VIEWER_MODES,
 	createProjectId,
@@ -33,6 +34,9 @@ import {
 	expectOk,
 	expectPage,
 } from '../testing';
+import { encodeCursor, paginate } from '../pagination';
+import type { Page } from '../pagination';
+import type { appSummary } from './apps';
 
 const STAKEHOLDER = uid('user_stakeholder');
 let api: ReturnType<typeof createTestApi>;
@@ -447,9 +451,24 @@ describe('app-user boundaries', () => {
 	});
 });
 
-describe('project-scoped app listing', () => {
+describe('app listing pagination and reads', () => {
+	type AppPage = Page<Awaited<ReturnType<typeof appSummary>>>;
+
+	async function createNotebooks(count: number, projectId = pid): Promise<NotebookId[]> {
+		const ids: NotebookId[] = [];
+		for (let i = 0; i < count; i++) {
+			const notebook = await services.notebooks.createNotebook(
+				projectId,
+				{ title: `App ${i}`, description: '', code: 'pass' },
+				ACTOR,
+			);
+			ids.push(notebook.id);
+		}
+		return ids;
+	}
+
 	async function recordGets(run: () => Response | Promise<Response>) {
-		// Settle the auto-init middleware so only the handler's reads are recorded.
+		// Exclude initialization reads from the count.
 		await expectOk(await api.request('GET', '/me'));
 		const catalogEtag = (await api.bucket.head(paths.catalog))?.etag;
 		expect(catalogEtag).toBeTruthy();
@@ -465,6 +484,248 @@ describe('project-scoped app listing', () => {
 			spy.mockRestore();
 		}
 	}
+
+	it('caps large limits and distinguishes a full final page from a page with lookahead', async () => {
+		const notebooks = [nid, ...(await createNotebooks(500))].sort((a, b) => b.localeCompare(a));
+		const defaultPage = await expectOk<AppPage>(await api.request('GET', '/apps'));
+		expect(defaultPage.items).toHaveLength(100);
+		expect(defaultPage.next_cursor).toEqual(expect.any(String));
+		const capped = await expectOk<AppPage>(await api.request('GET', '/apps?limit=1000'));
+		expect(capped.items.map((item) => item.notebook_id)).toEqual(notebooks.slice(0, 500));
+		expect(capped.next_cursor).toBe(encodeCursor(pid, capped.items[499].notebook_id));
+		const last = await expectOk<AppPage>(
+			await api.request(
+				'GET',
+				`/apps?limit=1000&cursor=${encodeURIComponent(capped.next_cursor!)}`,
+			),
+		);
+		expect(last.items.map((item) => item.notebook_id)).toEqual(notebooks.slice(500));
+		expect(last.next_cursor).toBeNull();
+		const fullFinal = await expectOk<AppPage>(
+			await api.request(
+				'GET',
+				`/apps?limit=500&cursor=${encodeURIComponent(encodeCursor(pid, capped.items[0].notebook_id))}`,
+			),
+		);
+		expect(fullFinal.items).toHaveLength(500);
+		expect(fullFinal.next_cursor).toBeNull();
+	});
+
+	it('keeps the cursor boundary across notebook deletion and insertion', async () => {
+		const notebooks = [nid, ...(await createNotebooks(3))].sort((a, b) => b.localeCompare(a));
+		const first = await expectOk<AppPage>(await api.request('GET', '/apps?limit=2'));
+		expect(first.items.map((item) => item.notebook_id)).toEqual(notebooks.slice(0, 2));
+		await services.notebooks.deleteNotebook(pid, notebooks[1], ACTOR);
+		const inserted = await services.notebooks.createNotebook(
+			pid,
+			{ title: 'Inserted after the first request', description: '', code: 'pass' },
+			ACTOR,
+		);
+		const last = await expectOk<AppPage>(
+			await api.request('GET', `/apps?cursor=${encodeURIComponent(first.next_cursor!)}`),
+		);
+		const remaining = [...notebooks.slice(2), inserted.id]
+			.filter((id) => id.localeCompare(notebooks[1]) < 0)
+			.sort((a, b) => b.localeCompare(a));
+		expect(last.items.map((item) => item.notebook_id)).toEqual(remaining);
+		expect(last.next_cursor).toBeNull();
+	});
+
+	it.each(['q=no-match', 'cursor=after-last'])(
+		'reads no notebook metadata when no candidates remain (%s)',
+		async (query) => {
+			const suffix =
+				query === 'cursor=after-last'
+					? `cursor=${encodeURIComponent(encodeCursor(pid, nid))}`
+					: query;
+			const { response, keys } = await recordGets(() => api.request('GET', `/apps?${suffix}`));
+			expect(await expectOk(response)).toEqual({ items: [], next_cursor: null });
+			expect(keys.filter((key) => key.endsWith('/meta.json'))).toEqual([]);
+		},
+	);
+
+	it.each(['first batch', 'refill'])(
+		'propagates unexpected metadata errors in the %s',
+		async (stage) => {
+			const ordered = [nid, ...(await createNotebooks(2))].sort((a, b) => b.localeCompare(a));
+			const getLabels = api.deps.services.notebooks.getSecurityLabels.bind(
+				api.deps.services.notebooks,
+			);
+			const reads = vi
+				.spyOn(api.deps.services.notebooks, 'getSecurityLabels')
+				.mockImplementation(async (projectId, notebookId, options) => {
+					if (notebookId === ordered[0]) {
+						if (stage === 'first batch') throw new Error('Storage unavailable');
+						throw new NotFoundError('Notebook not found');
+					}
+					if (notebookId === ordered[2]) throw new Error('Storage unavailable');
+					return getLabels(projectId, notebookId, options);
+				});
+			await expectError(await api.request('GET', '/apps?limit=1'), 500);
+			if (stage === 'refill') {
+				expect(reads.mock.calls.map(([, id]) => id)).toEqual(ordered);
+			}
+		},
+	);
+
+	it('returns an empty terminal page when every candidate disappears', async () => {
+		vi.spyOn(api.deps.services.notebooks, 'getSecurityLabels').mockRejectedValue(
+			new NotFoundError('Notebook not found'),
+		);
+		expect(await expectOk(await api.request('GET', '/apps?limit=1'))).toEqual({
+			items: [],
+			next_cursor: null,
+		});
+	});
+
+	it.each(['unavailable', 'incomplete'])(
+		'fails closed and refills with unlabeled apps when label decisions are %s',
+		async (failure) => {
+			const notebooks = [nid, ...(await createNotebooks(2))].sort((a, b) => b.localeCompare(a));
+			for (const notebookId of notebooks.slice(0, 2)) {
+				await services.notebooks.setSecurityLabels(
+					pid,
+					notebookId,
+					{
+						classification: 'SECRET',
+						compartments: ['finance'],
+					},
+					ACTOR,
+				);
+			}
+			const security = localResourceSecurity(['UNCLASSIFIED', 'SECRET'], makeSubjectContext());
+			const decisions = vi.spyOn(security.constraints, 'evaluateMany');
+			if (failure === 'unavailable')
+				decisions.mockRejectedValue(new Error('Constraint service unavailable'));
+			else decisions.mockResolvedValue([]);
+			const client = createTestApi({
+				bucket: api.bucket,
+				userId: STAKEHOLDER,
+				deps: { resourceSecurity: security },
+			});
+			const page = await expectOk<AppPage>(await client.request('GET', '/apps?limit=1'));
+			expect(page.items.map((item) => item.notebook_id)).toEqual(notebooks.slice(2));
+			expect(page.next_cursor).toBeNull();
+			expect(decisions).toHaveBeenCalledOnce();
+		},
+	);
+
+	it.each([false, true])('bounds metadata reads by page size (scoped: %s)', async (scoped) => {
+		const other = await services.projects.createProject({ name: 'Other', description: '' }, ACTOR);
+		await services.projects.addMember(other.id, { user_id: STAKEHOLDER }, 'app-user', ACTOR);
+		const url = `/apps?limit=5${scoped ? `&project_id=${pid}` : ''}`;
+		const counts: number[] = [];
+		for (const count of [8, 32]) {
+			for (const projectId of [pid, other.id]) {
+				for (const notebookId of await createNotebooks(count, projectId)) {
+					await services.catalog.updateNotebookEntry(
+						'test.legacy',
+						ACTOR,
+						projectId,
+						notebookId,
+						() => ({
+							security_labels: undefined,
+						}),
+					);
+				}
+			}
+			await expectPage(await api.request('GET', url));
+			const { response, keys } = await recordGets(() => api.request('GET', url));
+			const page = await expectOk<AppPage>(response);
+			expect(page.items).toHaveLength(5);
+			expect(page.items.every((item) => item.your_role === 'app-user')).toBe(true);
+			expect(page.next_cursor).toEqual(expect.any(String));
+			const metadata = keys.filter((key) => key.endsWith('/meta.json'));
+			expect(metadata).toHaveLength(6);
+			expect(new Set(metadata).size).toBe(6);
+			expect(keys.filter((key) => key.endsWith('/project.json'))).toHaveLength(scoped ? 1 : 4);
+			counts.push(keys.length);
+
+			const next = await recordGets(() =>
+				api.request('GET', `${url}&cursor=${encodeURIComponent(page.next_cursor!)}`),
+			);
+			await expectPage(next.response);
+			expect(next.keys.filter((key) => key.endsWith('/meta.json')).length).toBeLessThanOrEqual(6);
+			for (const key of next.keys.filter((key) => key.endsWith('/meta.json'))) {
+				expect(metadata.slice(0, 5)).not.toContain(key);
+			}
+		}
+		expect(counts).toEqual(scoped ? [8, 8] : [12, 12]);
+	});
+
+	it.each([false, true])(
+		'refills pages across deleted and label-hidden candidates (scoped: %s)',
+		async (scoped) => {
+			const notebooks = [nid, ...(await createNotebooks(8))].sort((a, b) => b.localeCompare(a));
+			const snapshot = await api.deps.services.catalog.getCurrentSnapshot();
+			await expectPage(await api.request('GET', '/apps'));
+			for (const index of [0, 1, 2, 8]) {
+				await services.notebooks.deleteNotebook(pid, notebooks[index], ACTOR);
+			}
+			for (const index of [3, 5]) {
+				await services.notebooks.setSecurityLabels(
+					pid,
+					notebooks[index],
+					{
+						classification: 'SECRET',
+						compartments: ['finance'],
+					},
+					ACTOR,
+				);
+			}
+			// Keep a stale snapshot while metadata records deletion and label changes.
+			vi.spyOn(api.deps.services.catalog, 'getCurrentSnapshot').mockResolvedValue(snapshot);
+			const url = `/apps?limit=2${scoped ? `&project_id=${pid}` : ''}`;
+			const first = await expectOk<AppPage>(await api.request('GET', url));
+			expect(first.items.map((item) => item.notebook_id)).toEqual([notebooks[4], notebooks[6]]);
+			expect(first.next_cursor).toBe(encodeCursor(pid, notebooks[6]));
+			const last = await expectOk<AppPage>(
+				await api.request('GET', `${url}&cursor=${encodeURIComponent(first.next_cursor!)}`),
+			);
+			expect(last.items.map((item) => item.notebook_id)).toEqual([notebooks[7]]);
+			expect(last.next_cursor).toBeNull();
+		},
+	);
+
+	it('keeps the existing cursor order across projects and search results', async () => {
+		const other = await services.projects.createProject({ name: 'Other', description: '' }, ACTOR);
+		await services.projects.addMember(other.id, { user_id: STAKEHOLDER }, 'app-user', ACTOR);
+		const expected = [{ project_id: pid, notebook_id: nid }];
+		for (const projectId of [pid, other.id]) {
+			for (const title of ['Sales forecast', 'Unrelated', 'Sales history']) {
+				const notebook = await services.notebooks.createNotebook(
+					projectId,
+					{ title, description: '', code: 'pass' },
+					ACTOR,
+				);
+				if (title.startsWith('Sales'))
+					expected.push({ project_id: projectId, notebook_id: notebook.id });
+			}
+		}
+		let cursor: string | null = null;
+		do {
+			const query: { limit: number; cursor?: string } = {
+				limit: 2,
+				...(cursor ? { cursor } : {}),
+			};
+			const expectedPage = paginate(expected, query, {
+				key: (item) => item.project_id,
+				tiebreak: (item) => item.notebook_id,
+			});
+			const actual = await expectOk<AppPage>(
+				await api.request(
+					'GET',
+					`/apps?q=sAlEs&limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+				),
+			);
+			expect(
+				actual.items.map(({ project_id, notebook_id }) => ({ project_id, notebook_id })),
+			).toEqual(expectedPage.items);
+			expect(actual.next_cursor).toBe(expectedPage.next_cursor);
+			cursor = expectedPage.next_cursor;
+		} while (cursor);
+		await expectError(await api.request('GET', '/apps?cursor=invalid'), 400);
+	});
 
 	it('reads only the selected project head and validates the cached snapshot', async () => {
 		const others = await Promise.all(
@@ -500,7 +761,7 @@ describe('project-scoped app listing', () => {
 			api.request('GET', '/apps'),
 		);
 		await expectPage(response);
-		// listProjects validates once; the notebook lists share the second validation.
+		// Project discovery and candidate collection each validate the snapshot once.
 		expect(reads.filter(({ key }) => key === paths.catalog)).toEqual([
 			{ key: paths.catalog, options: { ifNoneMatch: catalogEtag } },
 			{ key: paths.catalog, options: { ifNoneMatch: catalogEtag } },
