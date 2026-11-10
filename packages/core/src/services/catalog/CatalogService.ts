@@ -467,6 +467,7 @@ export class CatalogService {
 				const project = projectsById(snap).get(projectId);
 				if (project === undefined) return snap;
 				const projectPatch = (await patch(project)) ?? {};
+				if (!patchChangesEntry(project, projectPatch)) return snap;
 				return {
 					...snap,
 					projects: snap.projects.map((entry) =>
@@ -566,7 +567,7 @@ export class CatalogService {
 					...resolvedProjectPatch,
 					updated_at: updatedAt,
 					notebooks:
-						notebookPatch === undefined
+						notebookPatch === undefined || !patchChangesEntry(notebook!, notebookPatch)
 							? p.notebooks
 							: p.notebooks.map((entry) =>
 									entry.id === notebookId ? { ...entry, ...notebookPatch } : entry,
@@ -576,4 +577,10 @@ export class CatalogService {
 			context,
 		);
 	}
+}
+
+function patchChangesEntry<T extends object>(entry: T, patch: Partial<T>): boolean {
+	return (Object.keys(patch) as (keyof T)[]).some(
+		(key) => entry[key] !== patch[key] && JSON.stringify(entry[key]) !== JSON.stringify(patch[key]),
+	);
 }

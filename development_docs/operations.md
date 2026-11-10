@@ -178,27 +178,38 @@ rule.
 
 ## 5. Snapshot & event growth
 
-Every commit writes a new immutable snapshot, and every mutation writes an
-immutable event object. At ~20 writes/day that is thousands of objects per year —
-they need their own expiry (the same reason Apache Iceberg has snapshot expiry),
-or every prefix scan slowly degrades.
+Each catalog change creates an immutable snapshot and audit event.
+`MaintenanceService` runs from the maintenance cron (§3):
 
-`MaintenanceService` (`packages/core/src/services/catalog/MaintenanceService.ts`), run by
-the maintenance cron (§3), handles this:
+- **`expireSnapshots`** keeps snapshots for 90 days, plus the newest 20 and the
+  current and previous snapshots. Recency uses object `uploaded` timestamps.
+  Each call scans at most ten pages of 500 objects and persists a cursor.
+  Memory use is bounded by one page plus the newest 20 entries.
+  Expiry can lag by one full scan.
+- **`pruneEvents`** deletes event-day folders (`_system/events/YYYY-MM-DD/`)
+  older than the retention window.
 
-- **`expireSnapshots`** — deletes snapshots older than the retention window
-  (default 90 days), keeping a floor of the most recent `keepLast` (default 20),
-  and **never** the current or previous snapshot (the §2 invariant). Recency is
-  taken from object `uploaded`, since snapshot IDs aren't time-sortable.
-- **`pruneEvents`** — deletes whole event-day folders
-  (`_system/events/YYYY-MM-DD/`) older than the retention window.
+Snapshot retention limits age, not count or bytes. The `snapshots.count` and
+`snapshots.bytes` gauges update after each complete scan and estimate growth
+while writers remain active. Check these gauges before changing the recovery
+window. Service overrides are `retentionMs`, `keepLast`, `pageSize`, and `maxPages`.
 
-Adjacent, already-handled growth: **notebook versions** are pruned per-save by
-`NotebookService.pruneVersions` (last 50). **Session records** are reaped by
-`SessionService.reapTerminated` (24h after going terminal).
+Notebook artifact cleanup uses a separate cursor and bounded concurrency.
+Each five-minute pass visits `ceil(notebook_count / 288)` notebooks, approximately
+one full rotation per day. A deadline limits repeat visits in small catalogs.
+Expired notebook deletions and project upload cleanup run every cycle.
+`NotebookService.pruneVersions` keeps the last 50 versions.
+`SessionService.reapTerminated` removes terminal session records after 24 hours.
 
-Tune retention/floor by passing options to the service if a deployment needs a
-different policy; the defaults suit the spec's 10×100 scale target.
+Unchanged autosaves write no artifacts or catalog snapshots. Code, dependency,
+and metadata changes still advance `updated_at`: listings display it, and
+clients use it for optimistic concurrency. Equal projection patches retain the
+mutation ID and emit no audit event.
+
+HTML/session object metadata stores content hashes and capture timestamps.
+Retries can repair failed descriptor writes without another artifact upload.
+Changed artifacts advance capture timestamps, including within one millisecond.
+Legacy objects and filesystem storage need content reads to compare hashes.
 
 ---
 

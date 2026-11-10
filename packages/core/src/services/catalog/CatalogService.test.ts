@@ -1197,6 +1197,125 @@ describe('CatalogService', () => {
 			return { env, project, notebook };
 		}
 
+		it('preserves the mutation ID and writes no snapshot or audit for equal projection patches', async () => {
+			const { env, project, notebook } = await setupEntry();
+			const before = await env.catalog.getCurrentSnapshot();
+			const put = vi.spyOn(env.bucket, 'put');
+			const projectResult = await env.catalog.updateProjectEntry(
+				'project.update',
+				ACTOR,
+				project.id,
+				(entry) => ({
+					name: entry.name,
+					tags: entry.tags && [...entry.tags],
+					security_labels: entry.security_labels,
+				}),
+			);
+			const notebookResult = await env.catalog.updateNotebookEntry(
+				'notebook.update',
+				ACTOR,
+				project.id,
+				notebook.id,
+				(entry) => ({
+					title: entry.title,
+					tags: entry.tags && [...entry.tags],
+					updated_at: entry.updated_at,
+				}),
+			);
+			const missingResult = await env.catalog.updateNotebookEntry(
+				'notebook.update',
+				ACTOR,
+				project.id,
+				createNotebookId(),
+				vi.fn(),
+			);
+			const undefinedResult = await env.catalog.updateProjectEntry(
+				'project.update',
+				ACTOR,
+				project.id,
+				vi.fn(),
+			);
+			for (const result of [projectResult, notebookResult, missingResult, undefinedResult])
+				expect(result.snapshot_id).toBe(before.snapshot_id);
+			expect(put).not.toHaveBeenCalled();
+		});
+
+		it('turns a losing update into a no-op when the winner already applied the same patch', async () => {
+			const { env, project, notebook } = await setupEntry();
+			const events = new EventService(env.bucket);
+			const append = vi.spyOn(events, 'append');
+			const service = new CatalogService(env.bucket, noopMetrics, events, ZERO_BACKOFF);
+			const realPut = env.bucket.put.bind(env.bucket);
+			let winningSnapshot: Snapshot | undefined;
+			let race = true;
+			const put = vi.spyOn(env.bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (key === paths.catalog && race) {
+					race = false;
+					winningSnapshot = await env.catalog.updateNotebookEntry(
+						'winner',
+						ACTOR,
+						project.id,
+						notebook.id,
+						() => ({ title: 'Renamed' }),
+					);
+				}
+				return realPut(key, value, options);
+			});
+			const patch = vi.fn().mockReturnValue({ title: 'Renamed' });
+			const result = await service.updateNotebookEntry(
+				'loser',
+				ACTOR,
+				project.id,
+				notebook.id,
+				patch,
+			);
+			expect(patch).toHaveBeenCalledTimes(2);
+			expect(result.snapshot_id).toBe(winningSnapshot!.snapshot_id);
+			expect(put.mock.calls.filter(([key]) => key === paths.catalog)).toHaveLength(2);
+			expect(append).not.toHaveBeenCalled();
+		});
+
+		it('leaves the catalog intact when an asynchronous projection fails', async () => {
+			const { env, project, notebook } = await setupEntry();
+			const before = await env.catalog.getCurrentSnapshot();
+			const put = vi.spyOn(env.bucket, 'put');
+			await expect(
+				env.catalog.updateNotebookEntry(
+					'notebook.update',
+					ACTOR,
+					project.id,
+					notebook.id,
+					async () => {
+						throw new Error('metadata unavailable');
+					},
+				),
+			).rejects.toThrow('metadata unavailable');
+			expect(put).not.toHaveBeenCalled();
+			expect((await env.catalog.getCurrentSnapshot()).snapshot_id).toBe(before.snapshot_id);
+		});
+
+		it('commits clearing a projected field and returns a new mutation ID', async () => {
+			const { env, project, notebook } = await setupEntry();
+			const before = await env.catalog.updateNotebookEntry(
+				'notebook.update',
+				ACTOR,
+				project.id,
+				notebook.id,
+				() => ({ security_labels_pending: true }),
+			);
+			const put = vi.spyOn(env.bucket, 'put');
+			const result = await env.catalog.updateNotebookEntry(
+				'notebook.update',
+				ACTOR,
+				project.id,
+				notebook.id,
+				() => ({ security_labels_pending: undefined }),
+			);
+			expect(result.snapshot_id).not.toBe(before.snapshot_id);
+			expect(result.projects[0].notebooks[0].security_labels_pending).toBeUndefined();
+			expect(put.mock.calls.filter(([key]) => key === paths.catalog)).toHaveLength(1);
+		});
+
 		it.each([
 			{
 				name: 'keeps a newer notebook timestamp over an older project patch',
