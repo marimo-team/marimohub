@@ -1,3 +1,6 @@
+import { emitLogRecord } from './logs';
+import { traceContext } from './tracing';
+
 export function safeError(err: unknown): Record<string, unknown> {
 	if (!(err instanceof Error)) return { name: `non-error(${typeof err})` };
 	const value = err as Error & {
@@ -44,10 +47,12 @@ export function logOperationalError(
 	let line: string;
 	try {
 		const context = { ...fields };
-		for (const key of ['ts', 'level', 'event', 'error']) delete context[key];
+		for (const key of ['ts', 'level', 'event', 'error', 'trace_id', 'span_id', 'toJSON'])
+			delete context[key];
 		line = JSON.stringify({
 			...context,
 			ts: new Date().toISOString(),
+			...traceContext(),
 			level: 'error',
 			event,
 			error: safeError(err),
@@ -56,6 +61,7 @@ export function logOperationalError(
 		try {
 			line = JSON.stringify({
 				ts: new Date().toISOString(),
+				...traceContext(),
 				level: 'error',
 				event: 'operational_log_serialization_failed',
 				attempted_event: typeof event === 'string' ? event.slice(0, 128) : 'unknown',
@@ -66,5 +72,9 @@ export function logOperationalError(
 	}
 	try {
 		console.error(line);
+	} catch {}
+	try {
+		// Export the same sanitized payload, including the serialization fallback.
+		emitLogRecord(JSON.parse(line) as Record<string, unknown>);
 	} catch {}
 }
