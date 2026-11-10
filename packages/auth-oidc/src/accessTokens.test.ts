@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import type { JWTPayload, JWK } from 'jose';
 import { expandTokenGrantPreset } from '@marimo-hub/core/token-grants';
+import { configureLogLevel } from '@marimo-hub/core/logs';
 import { groupsExceedingBytes, groupsExceedingCount } from '@marimo-hub/core/testing/auth-groups';
 import { createOidcAccessTokenAuthenticator } from './accessTokens';
 import type { OidcAccessTokenConfig } from './accessTokens';
@@ -53,6 +54,7 @@ beforeAll(async () => {
 	rotatedKey = { ...(await exportJWK(second.publicKey)), kid: 'second', alg: 'ES256' };
 });
 beforeEach(() => {
+	configureLogLevel('debug');
 	publicKeys = [initialKey];
 	fetchMock = vi.fn<typeof fetch>(async (input) => {
 		const url = String(input);
@@ -66,6 +68,7 @@ beforeEach(() => {
 	vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 afterEach(() => {
+	configureLogLevel();
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
