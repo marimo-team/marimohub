@@ -17,7 +17,7 @@ describe('SessionService scan cache', () => {
 	beforeEach(() => {
 		bucket = new RecordingBucket(new MemoryBucket());
 		cache = new EtagRecordCache();
-		sessions = new SessionService(bucket, undefined, cache);
+		sessions = new SessionService(bucket, undefined, cache, 'off');
 	});
 	afterEach(() => {
 		restoreClock();
@@ -207,7 +207,7 @@ describe('SessionService scan cache', () => {
 
 	it('returns every record when the scan exceeds cache capacity', async () => {
 		cache = new EtagRecordCache(1);
-		sessions = new SessionService(bucket, undefined, cache);
+		sessions = new SessionService(bucket, undefined, cache, 'off');
 		await create();
 		await create();
 		await create();

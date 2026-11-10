@@ -1,3 +1,7 @@
+import { MetadataCache } from '../content/metadataCache';
+import type { ReadConsistency } from '../content/metadataCache';
+import { SessionIndex } from './SessionIndex';
+import type { SessionIndexMode, SessionReference } from './SessionIndex';
 import { copyMoveObject } from '../content/moveObjects';
 import { readForInspection } from './inspection';
 import type { Bucket, BucketObject } from '../../ports/bucket';
@@ -150,7 +154,29 @@ const byCapOrder = (a: Session, b: Session) => {
 	);
 };
 
+type CapScope = 'user' | 'project';
+
+function hasUnreclaimedSandbox(session: Session): boolean {
+	return !!session.sandbox_id && !session.sandbox_reclaimed_at;
+}
+
+function needsSessionIndexEntry(session: Session | null): session is Session {
+	return session !== null && (!isTerminal(session.status) || hasUnreclaimedSandbox(session));
+}
+
+function countsTowardCap(session: Session, scope: CapScope): boolean {
+	return (
+		sessionModePolicy(session).capScope === scope &&
+		((ACTIVE_STATUSES as readonly Session['status'][]).includes(session.status) ||
+			(scope === 'project' && hasUnreclaimedSandbox(session)))
+	);
+}
+
 export class SessionService {
+	private readonly index: SessionIndex;
+	private readonly validatedRecords: MetadataCache<Session>;
+	private readonly editorClaims: MetadataCache<EditorClaim>;
+
 	async assertReadyForMove(
 		projectId: ProjectId,
 		notebookIds: ReadonlySet<NotebookId>,
@@ -188,7 +214,12 @@ export class SessionService {
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
 		private readonly recordCache: EtagRecordCache<Session> = new EtagRecordCache(),
-	) {}
+		private readonly indexMode: SessionIndexMode = 'shadow',
+	) {
+		this.index = new SessionIndex(bucket);
+		this.validatedRecords = new MetadataCache(bucket, undefined, recordCache);
+		this.editorClaims = new MetadataCache(bucket);
+	}
 
 	/**
 	 * Compare-and-swap a session record so every status transition is atomic: a
@@ -202,7 +233,7 @@ export class SessionService {
 		apply: (session: Session) => Session | null,
 		known?: KnownObject<Session>,
 	): Promise<Session> {
-		const value = await mutateObject(
+		const { value, written } = await mutateObjectWithOutcome(
 			this.bucket,
 			paths.session(projectId, id),
 			(raw) => parseStored(SessionSchema, raw, paths.session(projectId, id)),
@@ -214,6 +245,7 @@ export class SessionService {
 				onExhausted: () => this.metrics.increment('sessions.cas.exhausted'),
 			},
 		);
+		if (written) await this.removeFinishedIndexEntry(value);
 		return value;
 	}
 
@@ -283,6 +315,20 @@ export class SessionService {
 				);
 			}
 		}
+		if (this.indexMode !== 'off') {
+			try {
+				await this.index.register(session);
+			} catch (error) {
+				this.indexWriteFailed(error);
+				if (this.indexMode === 'on') {
+					await this.failCreatedSession(sessionPath, written.etag, session, {
+						code: 'SESSION_INDEX_UNAVAILABLE',
+						message: 'Session admission could not be registered',
+					});
+					throw error;
+				}
+			}
+		}
 		return { value: session, etag: written.etag };
 	}
 
@@ -298,8 +344,8 @@ export class SessionService {
 			});
 		} catch (cause) {
 			logOperationalError(
-				'session_source_version_rejection_failed',
-				{ operation: 'session.source_version.reject', object: key },
+				'session_creation_rejection_failed',
+				{ operation: 'session.create.reject', object: key },
 				cause,
 			);
 		}
@@ -628,7 +674,7 @@ export class SessionService {
 		id: SessionId,
 		known?: KnownObject<Session>,
 	): Promise<Session> {
-		const result = await this.mutate(
+		return this.mutate(
 			projectId,
 			id,
 			(session) => {
@@ -644,8 +690,6 @@ export class SessionService {
 			},
 			known,
 		);
-		// A no-op returns the known object itself, without a CAS to detect termination or deletion.
-		return result === known?.value ? this.getSession(projectId, id) : result;
 	}
 
 	/**
@@ -756,6 +800,7 @@ export class SessionService {
 				onExhausted: () => this.metrics.increment('sessions.cas.exhausted'),
 			},
 		);
+		if (result.written) await this.removeFinishedIndexEntry(result.value);
 		return { session: result.value, transitioned: result.written };
 	}
 
@@ -781,11 +826,12 @@ export class SessionService {
 		prefix: string,
 		handle: (session: Session, obj: BucketObject, etag: string) => T | Promise<T>,
 		invalidRecords: 'skip' | 'throw' = 'skip',
+		filter: (session: Session) => boolean = () => true,
 	): Promise<Awaited<T>[]> {
 		const objects = await listAllObjects(this.bucket, prefix);
 		const scanned = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (obj) => {
 			const cached = this.recordCache.get(obj.key, obj.etag);
-			if (cached) return handle(structuredClone(cached), obj, obj.etag);
+			if (cached) return filter(cached) ? handle(structuredClone(cached), obj, obj.etag) : SKIP;
 			const body = await this.bucket.get(obj.key);
 			if (!body) {
 				this.recordCache.delete(obj.key);
@@ -805,7 +851,7 @@ export class SessionService {
 				return SKIP;
 			}
 			this.recordCache.set(obj.key, body.etag, session);
-			return handle(structuredClone(session), obj, body.etag);
+			return filter(session) ? handle(structuredClone(session), obj, body.etag) : SKIP;
 		});
 		return scanned.filter((r): r is Awaited<T> => r !== SKIP);
 	}
@@ -1036,39 +1082,131 @@ export class SessionService {
 		return holder ? candidates.find((s) => s.session_id === holder) : undefined;
 	}
 
-	/**
-	 * Count a user's active sessions (`starting`/`running`) — `terminating` is
-	 * excluded so a stop immediately frees a slot. The create-session route uses
-	 * `listActiveForUser` to rank a new record for its concurrent-session cap; the
-	 * per-notebook reuse in `findReusable` keeps refresh loops from tripping it.
-	 */
-	async countActiveForUser(userId: UserId, capScope: 'user' | 'project' = 'user'): Promise<number> {
+	async countActiveForUser(userId: UserId, capScope: CapScope = 'user'): Promise<number> {
 		return (await this.listActiveForUser(userId, capScope)).length;
 	}
 
 	/**
-	 * The sessions `countActiveForUser` counts, in start order — the cap recheck
-	 * needs WHERE in the queue a session landed, not just how many there are.
-	 *
-	 * Scoped per cap: `user` = the caller's edit slots; `project` = the apps this
-	 * user STARTED, deployment-wide — the per-user cost bound that stops fanning
-	 * apps out across projects from creating unbounded sandboxes.
+	 * Rank this user's sessions across projects: editor slots for `user`, app
+	 * sandboxes for `project`. Apps occupy capacity until reclamation completes.
 	 */
-	async listActiveForUser(
-		userId: UserId,
-		capScope: 'user' | 'project' = 'user',
-	): Promise<Session[]> {
-		const active = ACTIVE_STATUSES as readonly Session['status'][];
-		const sessions = await this.listSessions();
-		return sessions
-			.filter(
-				(s) =>
-					s.user_id === userId &&
-					(active.includes(s.status) ||
-						(capScope === 'project' && !!s.sandbox_id && !s.sandbox_reclaimed_at)) &&
-					sessionModePolicy(s).capScope === capScope,
-			)
+	async listActiveForUser(userId: UserId, capScope: CapScope = 'user'): Promise<Session[]> {
+		const matches = (session: Session) =>
+			session.user_id === userId && countsTowardCap(session, capScope);
+		const scan = async () =>
+			(await this.scanPrefix(paths.sessionsPrefix, (s) => s, 'skip', matches)).sort(byCapOrder);
+		if (this.indexMode === 'off') return scan();
+		if (this.indexMode === 'on') return this.listIndexedForUser(userId, capScope);
+		const [scanned, projected] = await Promise.allSettled([
+			scan(),
+			this.listIndexedForUser(userId, capScope),
+		]);
+		if (scanned.status === 'rejected') throw scanned.reason;
+		if (
+			projected.status === 'rejected' ||
+			JSON.stringify(scanned.value.map((s) => s.session_id)) !==
+				JSON.stringify(projected.value.map((s) => s.session_id))
+		) {
+			this.metrics.increment('sessions.index.mismatch');
+		}
+		return scanned.value;
+	}
+
+	private async listIndexedForUser(userId: UserId, scope: CapScope): Promise<Session[]> {
+		const index = await this.index.read(userId);
+		const records = await mapWithConcurrency(index.entries, BUCKET_SCAN_CONCURRENCY, (entry) =>
+			this.readIndexedSession(userId, entry),
+		);
+		if (records.some((session) => !needsSessionIndexEntry(session))) {
+			await this.writeIndex(() => this.reconcileUserIndex(userId, []));
+		}
+		return records
+			.filter((s): s is Session => s !== null && countsTowardCap(s, scope))
 			.sort(byCapOrder);
+	}
+
+	private async writeIndex(write: () => Promise<void>, failOnError = false): Promise<void> {
+		try {
+			await write();
+		} catch (error) {
+			this.indexWriteFailed(error);
+			if (failOnError) throw error;
+		}
+	}
+
+	private indexWriteFailed(error: unknown): void {
+		this.metrics.increment('sessions.index.write_failed');
+		logOperationalError('session_index_write_failed', { operation: 'session.index.write' }, error);
+	}
+
+	private async removeFinishedIndexEntry(session: Session): Promise<void> {
+		if (this.indexMode === 'off' || needsSessionIndexEntry(session)) return;
+		await this.writeIndex(() => this.index.remove(session));
+	}
+
+	private async readIndexedSession(
+		userId: UserId,
+		entry: SessionReference,
+	): Promise<Session | null> {
+		const key = paths.session(entry.project_id, entry.session_id);
+		const session = await this.validatedRecords.read(
+			[key],
+			(object) => readStored(SessionSchema, object, key),
+			'validated',
+		);
+		if (
+			session &&
+			(session.user_id !== userId ||
+				session.project_id !== entry.project_id ||
+				session.session_id !== entry.session_id)
+		)
+			throw new Error('Session index reference mismatch');
+		return session;
+	}
+
+	async reconcileSessionIndexes(
+		records: readonly Session[],
+		options: { failOnError?: boolean } = {},
+	): Promise<void> {
+		if (this.indexMode === 'off') return;
+		const users = new Map<UserId, SessionReference[]>();
+		for (const session of records) {
+			const entries = users.get(session.user_id) ?? [];
+			if (needsSessionIndexEntry(session))
+				entries.push({ session_id: session.session_id, project_id: session.project_id });
+			users.set(session.user_id, entries);
+		}
+		await mapWithConcurrency([...users], BUCKET_SCAN_CONCURRENCY, ([userId, scanned]) =>
+			this.writeIndex(() => this.reconcileUserIndex(userId, scanned), options.failOnError),
+		);
+	}
+
+	private async reconcileUserIndex(userId: UserId, scanned: SessionReference[]): Promise<void> {
+		await this.index.update(userId, async (current) => {
+			const entries = new Map([...current, ...scanned].map((entry) => [entry.session_id, entry]));
+			// Re-read inside each CAS attempt so an old sweep cannot resurrect retired
+			// entries or overwrite registrations made after its deployment scan.
+			const live = await mapWithConcurrency(
+				[...entries.values()],
+				BUCKET_SCAN_CONCURRENCY,
+				async (entry) => {
+					const session = await this.readIndexedSession(userId, entry);
+					return needsSessionIndexEntry(session) ? entry : null;
+				},
+			);
+			return live.filter((entry) => entry !== null);
+		});
+	}
+
+	async rebuildSessionIndex(): Promise<void> {
+		if (this.indexMode === 'off') throw new ConflictError('Session index is disabled');
+		const records = await this.scanPrefix(paths.sessionsPrefix, (session) => session, 'throw');
+		await this.reconcileSessionIndexes(records, { failOnError: true });
+		const users = new Set(records.map((session) => session.user_id));
+		const orphanUsers = (await this.index.listUsers()).filter((userId) => !users.has(userId));
+		await mapWithConcurrency(orphanUsers, BUCKET_SCAN_CONCURRENCY, (userId) =>
+			this.reconcileUserIndex(userId, []),
+		);
 	}
 
 	/** App capacity remains occupied until sandbox reclamation is confirmed. */
@@ -1078,15 +1216,8 @@ export class SessionService {
 
 	/** The sessions `countActiveAppsForProject` counts, in start order. */
 	async listActiveAppsForProject(projectId: ProjectId): Promise<Session[]> {
-		const active = ACTIVE_STATUSES as readonly Session['status'][];
 		const sessions = await this.scanProject(projectId, (session) => session);
-		return sessions
-			.filter(
-				(s) =>
-					(active.includes(s.status) || (!!s.sandbox_id && !s.sandbox_reclaimed_at)) &&
-					sessionModePolicy(s).capScope === 'project',
-			)
-			.sort(byCapOrder);
+		return sessions.filter((session) => countsTowardCap(session, 'project')).sort(byCapOrder);
 	}
 
 	/**
@@ -1110,11 +1241,15 @@ export class SessionService {
 	async getEditorClaim(
 		projectId: ProjectId,
 		notebookId: NotebookId,
+		options: { consistency?: ReadConsistency } = {},
 	): Promise<EditorClaim | undefined> {
 		const key = paths.editorClaim(projectId, notebookId);
-		const obj = await this.bucket.get(key);
-		if (!obj) return undefined;
-		const claim = await readStored(EditorClaimSchema, obj, key);
+		const claim = await this.editorClaims.read(
+			[key],
+			(object) => readStored(EditorClaimSchema, object, key),
+			options.consistency,
+		);
+		if (!claim) return undefined;
 		if (
 			claim.transfer?.phase === 'requested' &&
 			Date.now() - Date.parse(claim.transfer.requested_at) >= TAKEOVER_REQUEST_TTL_MS
@@ -1797,6 +1932,7 @@ export class SessionService {
 				await this.bucket.put(obj.key, JSON.stringify({ ...session, status: target }), {
 					onlyIfEtagMatches: etag,
 				});
+				await this.removeFinishedIndexEntry({ ...session, status: target });
 				return { expired: 1, live: 0 };
 			} catch (err) {
 				if (!(err instanceof PreconditionFailedError)) throw err;
@@ -1824,15 +1960,17 @@ export class SessionService {
 	 */
 	async reapTerminated(retentionMs = TERMINAL_RETENTION_MS): Promise<number> {
 		const now = Date.now();
+		const records: Session[] = [];
 
 		// Bounded-parallel scan; the actual removal is already a single batch delete.
-		const candidates = await this.scanSessions((session, obj) =>
-			isTerminal(session.status) &&
-			(!session.sandbox_id || !!session.sandbox_reclaimed_at) &&
-			now - new Date(session.last_heartbeat).getTime() > retentionMs
+		const candidates = await this.scanSessions((session, obj) => {
+			records.push(session);
+			return isTerminal(session.status) &&
+				(!session.sandbox_id || !!session.sandbox_reclaimed_at) &&
+				now - new Date(session.last_heartbeat).getTime() > retentionMs
 				? obj.key
-				: undefined,
-		);
+				: undefined;
+		});
 		const toDelete = candidates.filter((k): k is string => k !== undefined);
 
 		if (toDelete.length > 0) {
@@ -1840,6 +1978,7 @@ export class SessionService {
 			this.metrics.increment('sessions.reaped', toDelete.length);
 		}
 
+		await this.reconcileSessionIndexes(records);
 		return toDelete.length;
 	}
 }

@@ -195,6 +195,7 @@ export class NotebookService {
 	);
 
 	private readonly metaCache: MetadataCache<NotebookMeta>;
+	private readonly sourceCache: MetadataCache<Source>;
 
 	readonly synced: SyncedNotebookService;
 	readonly thumbnails: ThumbnailService;
@@ -256,6 +257,12 @@ export class NotebookService {
 		private backgroundWork?: BackgroundWork,
 	) {
 		this.metaCache = new MetadataCache(bucket, NOTEBOOK_META_CACHE_MAX_ENTRIES, undefined, metrics);
+		this.sourceCache = new MetadataCache(
+			bucket,
+			NOTEBOOK_META_CACHE_MAX_ENTRIES,
+			undefined,
+			metrics,
+		);
 		this.thumbnails = new ThumbnailService(bucket, this);
 		this.imports = new NotebookImportService(bucket, this);
 		this.synced = new SyncedNotebookService(bucket, catalog, metrics, {
@@ -462,11 +469,19 @@ export class NotebookService {
 		};
 	}
 
-	async getNotebookSource(projectId: ProjectId, notebookId: NotebookId): Promise<Source> {
+	async getNotebookSource(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		options: { consistency?: ReadConsistency } = {},
+	): Promise<Source> {
 		const key = paths.project(projectId).notebook(notebookId).source;
-		const obj = await this.bucket.get(key);
-		if (!obj) throw new NotFoundError(`Notebook ${notebookId} not found`);
-		return readStored(SourceSchema, obj, key);
+		const source = await this.sourceCache.read(
+			[key],
+			(object) => readStored(SourceSchema, object, key),
+			options.consistency,
+		);
+		if (!source) throw new NotFoundError(`Notebook ${notebookId} not found`);
+		return source;
 	}
 
 	/**

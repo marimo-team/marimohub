@@ -1696,6 +1696,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
+						id: 'MARIMOHUB_SESSION_INDEX',
+						name: 'Session index',
+						description:
+							'Per-user cap index: off, shadow, or on. Keep shadow during mixed-version rollout; rebuild the index before enabling on.',
+						default: 'shadow',
+					},
+					{
 						id: 'MARIMOHUB_MAX_SESSIONS_PER_USER',
 						name: 'Max sessions per user',
 						description:

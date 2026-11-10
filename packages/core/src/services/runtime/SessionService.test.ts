@@ -46,7 +46,7 @@ describe('SessionService', () => {
 		sessions = new SessionService(bucket);
 	});
 
-	it('uses the creation ETag for promotion and revalidates a fresh heartbeat', async () => {
+	it('uses the creation ETag for promotion and the request snapshot for a fresh heartbeat', async () => {
 		const created = await sessions.createSessionWithEtag({
 			project_id: projectId,
 			notebook_id: notebookId,
@@ -72,7 +72,7 @@ describe('SessionService', () => {
 		expect(await sessions.heartbeat(projectId, created.value.session_id, known)).toEqual(
 			known.value,
 		);
-		expect(get).toHaveBeenCalledTimes(2);
+		expect(get).toHaveBeenCalledTimes(1);
 		expect(put).not.toHaveBeenCalled();
 	});
 
@@ -758,7 +758,7 @@ describe('SessionService', () => {
 			[61_000, 'terminating'],
 			[61_000, 'terminated'],
 			[61_000, 'deleted'],
-		] as const)('revalidates a known heartbeat aged %i ms after %s', async (ageMs, state) => {
+		] as const)('only revalidates a due heartbeat aged %i ms after %s', async (ageMs, state) => {
 			const running = await createRunningSession();
 			const known = await sessions.getSessionWithEtag(projectId, running.session_id);
 			if (state === 'terminating') await sessions.beginTerminating(projectId, running.session_id);
@@ -767,7 +767,9 @@ describe('SessionService', () => {
 			vi.useFakeTimers({ toFake: ['Date'] });
 			vi.setSystemTime(Date.parse(running.last_heartbeat) + ageMs);
 			try {
-				if (state === 'deleted') {
+				if (ageMs < 60_000) {
+					expect(await sessions.heartbeat(projectId, running.session_id, known)).toBe(known.value);
+				} else if (state === 'deleted') {
 					await expectNotFound(() => sessions.heartbeat(projectId, running.session_id, known));
 				} else {
 					expect(await sessions.heartbeat(projectId, running.session_id, known)).toMatchObject({
@@ -780,29 +782,26 @@ describe('SessionService', () => {
 			}
 		});
 
-		it.each([59_999, 60_000])(
-			'reuses the known ETag only when renewal is due at %i ms',
-			async (ageMs) => {
-				const running = await createRunningSession();
-				const known = await sessions.getSessionWithEtag(projectId, running.session_id);
-				vi.useFakeTimers({ toFake: ['Date'] });
-				vi.setSystemTime(Date.parse(running.last_heartbeat) + ageMs);
-				try {
-					const get = vi.spyOn(bucket, 'get');
-					const put = vi.spyOn(bucket, 'put');
-					const result = await sessions.heartbeat(projectId, running.session_id, known);
-					expect(get).toHaveBeenCalledTimes(ageMs < 60_000 ? 1 : 0);
-					expect(put).toHaveBeenCalledTimes(ageMs < 60_000 ? 0 : 1);
-					expect(result.last_heartbeat).toBe(
-						ageMs < 60_000 ? running.last_heartbeat : new Date().toISOString(),
-					);
-				} finally {
-					restoreClock();
-				}
-			},
-		);
+		it.each([59_999, 60_000])('uses the request read for a heartbeat aged %i ms', async (ageMs) => {
+			const running = await createRunningSession();
+			const known = await sessions.getSessionWithEtag(projectId, running.session_id);
+			vi.useFakeTimers({ toFake: ['Date'] });
+			vi.setSystemTime(Date.parse(running.last_heartbeat) + ageMs);
+			try {
+				const get = vi.spyOn(bucket, 'get');
+				const put = vi.spyOn(bucket, 'put');
+				const result = await sessions.heartbeat(projectId, running.session_id, known);
+				expect(get).not.toHaveBeenCalled();
+				expect(put).toHaveBeenCalledTimes(ageMs < 60_000 ? 0 : 1);
+				expect(result.last_heartbeat).toBe(
+					ageMs < 60_000 ? running.last_heartbeat : new Date().toISOString(),
+				);
+			} finally {
+				restoreClock();
+			}
+		});
 
-		it('revalidates a known session at its exact authorization deadline', async () => {
+		it('does not renew a known session at its exact authorization deadline', async () => {
 			const deadline = Date.now() + 61_000;
 			const running = await createRunningSession(sessions, new Date(deadline).toISOString());
 			const known = await sessions.getSessionWithEtag(projectId, running.session_id);
@@ -812,7 +811,7 @@ describe('SessionService', () => {
 			try {
 				const put = vi.spyOn(bucket, 'put');
 				expect(await sessions.heartbeat(projectId, running.session_id, known)).toMatchObject({
-					status: 'terminated',
+					status: 'running',
 				});
 				expect(put).not.toHaveBeenCalled();
 			} finally {
@@ -820,13 +819,13 @@ describe('SessionService', () => {
 			}
 		});
 
-		it('propagates a failed revalidation of a coalesced heartbeat', async () => {
+		it('does not issue a second read for a coalesced heartbeat', async () => {
 			const running = await createRunningSession();
 			const known = await sessions.getSessionWithEtag(projectId, running.session_id);
 			const error = new Error('session store unavailable');
 			vi.spyOn(bucket, 'get').mockRejectedValueOnce(error);
 			const put = vi.spyOn(bucket, 'put');
-			await expect(sessions.heartbeat(projectId, running.session_id, known)).rejects.toBe(error);
+			expect(await sessions.heartbeat(projectId, running.session_id, known)).toBe(known.value);
 			expect(put).not.toHaveBeenCalled();
 		});
 

@@ -1005,6 +1005,14 @@ export const SessionSchema = z.looseObject({
 
 export type Session = z.infer<typeof SessionSchema>;
 
+export const SessionIndexSchema = z.object({
+	user_id: UserIdSchema,
+	entries: z
+		.array(z.object({ session_id: SessionIdSchema, project_id: ProjectIdSchema }))
+		.refine((entries) => new Set(entries.map((entry) => entry.session_id)).size === entries.length),
+});
+export type SessionIndexRecord = z.infer<typeof SessionIndexSchema>;
+
 export const VersionPruneCutoffSchema = z.object({
 	cutoff_version_id: VersionIdSchema,
 });

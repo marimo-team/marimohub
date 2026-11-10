@@ -512,6 +512,7 @@ const bucketAttrs: AttrExtractors<Bucket> = {
 };
 
 export interface CreateServicesOptions {
+	sessionIndex?: 'off' | 'shadow' | 'on';
 	backgroundWork?: BackgroundWork;
 	workspaceLimits?: WorkspaceLimits;
 	repositoryHosts?: GitProviderHosts;
@@ -588,29 +589,33 @@ export function createServices(
 			claimPendingInvites: () => ({}),
 		},
 	);
-	const sessions = wrap('SessionService', new SessionService(bucket, metrics), {
-		createSession: (input) => ({
-			...notebook(input.project_id, input.notebook_id),
-			...user(input.user_id),
-		}),
-		getSession: session,
-		setRunning: session,
-		extendExpiry: session,
-		markSnapshotted: session,
-		markSandboxReclaimed: session,
-		heartbeat: session,
-		beginTerminating: session,
-		markTerminated: session,
-		terminate: session,
-		markFailed: session,
-		listSessions: (notebookId) => ({ 'marimohub.notebook_id': notebookId }),
-		listActiveByProject: project,
-		advanceVersionPruneCutoff: notebook,
-		listProtectedVersionIds: notebook,
-		countActiveAppsForProject: project,
-		listActiveAppsForProject: project,
-		countActiveForUser: user,
-	});
+	const sessions = wrap(
+		'SessionService',
+		new SessionService(bucket, metrics, undefined, options?.sessionIndex),
+		{
+			createSession: (input) => ({
+				...notebook(input.project_id, input.notebook_id),
+				...user(input.user_id),
+			}),
+			getSession: session,
+			setRunning: session,
+			extendExpiry: session,
+			markSnapshotted: session,
+			markSandboxReclaimed: session,
+			heartbeat: session,
+			beginTerminating: session,
+			markTerminated: session,
+			terminate: session,
+			markFailed: session,
+			listSessions: (notebookId) => ({ 'marimohub.notebook_id': notebookId }),
+			listActiveByProject: project,
+			advanceVersionPruneCutoff: notebook,
+			listProtectedVersionIds: notebook,
+			countActiveAppsForProject: project,
+			listActiveAppsForProject: project,
+			countActiveForUser: user,
+		},
+	);
 	const runtimeInspection = wrap(
 		'RuntimeInspectionService',
 		new RuntimeInspectionService(bucket, sessions, catalog),

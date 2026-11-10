@@ -6,6 +6,7 @@
 	"type": "module",
 	"scripts": {
 		"start": "node dist/index.mjs",
+		"session-index:rebuild": "tsx src/session-index-rebuild.ts",
 		"catalog:recover": "tsx src/catalog-recovery.ts",
 		"test": "vp test",
 		"typecheck": "tsc --noEmit"
