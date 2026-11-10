@@ -410,6 +410,13 @@ because the storage outcome is uncertain. Routine projections preserve those IDs
 When no IDs remain, configured writers publish a fresh summary with their generation.
 Offline catalog recovery rebuilds unversioned summaries after all writers stop.
 Those summaries require metadata reads until a configured project mutation refreshes them.
+After upgrading every writer, set `MARIMOHUB_PROJECT_ACCESS_GENERATION` to the same
+fresh value on all replicas and run `pnpm --filter @marimo-hub/server project-access:rebuild`
+with the deployment's storage environment and generation. Packaged installations can
+run `node dist/project-access-rebuild.mjs`. The command rereads authoritative metadata
+inside each catalog CAS attempt. It does not change project timestamps or clear
+pending access/security mutations. It is safe to rerun after a partial failure;
+unresolved pending mutations still require metadata reads.
 
 **Security-label projection.** Project and notebook entries carry a tri-state
 `security_labels`: an object (labeled), `null` (known unlabeled), or absent

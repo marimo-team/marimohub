@@ -797,6 +797,28 @@ export class ProjectService {
 		}
 	}
 
+	/** Run after all legacy writers have stopped, using the deployment's access generation. */
+	async rebuildAccessSummaries(): Promise<void> {
+		if (!this.accessGeneration?.trim()) {
+			throw new ValidationError('Project access generation is required to rebuild summaries');
+		}
+		const snapshot = await this.catalog.getCurrentSnapshot();
+		for (const project of snapshot.projects) {
+			await this.catalog.updateProjectEntry(
+				'project.access.rebuild',
+				SYSTEM_ACTOR,
+				project.id,
+				async (entry) => {
+					const patch = await loadProjectCatalogPatch(this.bucket, project.id, entry, {
+						accessGeneration: this.accessGeneration,
+					});
+					if (!patch) throw new NotFoundError(`Project ${project.id} metadata not found`);
+					return patch;
+				},
+			);
+		}
+	}
+
 	private syncProjectEntry(
 		operation: string,
 		actor: UserId,

@@ -72,7 +72,7 @@ Session index: on and backfilled. Access summaries: refreshed with matching gene
 | GET /search?q=&project_id= | warm | deferred | 0 | 0 | 0 | — | — |
 | POST …/sessions (edit; cold=create, warm=reuse) | cold | response | 234 | 33 | 825 | get: 224, head: 1, list: 1, put: 8 | 1×6, 4, 1×2, 16×12, 11, 2, 1×6, 3, 4, 1, 3 |
 | POST …/sessions (edit; cold=create, warm=reuse) | cold | deferred | 0 | 0 | 0 | — | — |
-| POST …/sessions (edit; cold=create, warm=reuse) | warm | response | 8 | 5 | 125 | get: 6, get304: 1, list: 1 | 4, 1×4 |
+| POST …/sessions (edit; cold=create, warm=reuse) | warm | response | 7 | 4 | 100 | get: 6, get304: 1 | 4, 1×3 |
 | POST …/sessions (edit; cold=create, warm=reuse) | warm | deferred | 0 | 0 | 0 | — | — |
 | POST …/sessions (edit; new notebook each call) | cold | response | 234 | 33 | 825 | get: 224, head: 1, list: 1, put: 8 | 1×6, 4, 1×2, 16×12, 11, 2, 1×6, 3, 4, 1, 3 |
 | POST …/sessions (edit; new notebook each call) | cold | deferred | 0 | 0 | 0 | — | — |
@@ -98,9 +98,9 @@ Session index: on and backfilled. Access summaries: refreshed with matching gene
 | POST …/sessions (app; cold=admit, warm=re-admit) | cold | deferred | 1 | 1 | 25 | put: 1 | 1 |
 | POST …/sessions (app; cold=admit, warm=re-admit) | warm | response | 8 | 5 | 125 | get: 7, get304: 1 | 4, 1×4 |
 | POST …/sessions (app; cold=admit, warm=re-admit) | warm | deferred | 0 | 0 | 0 | — | — |
-| POST …/sessions (edit; existing claimed editor) | cold | response | 217 | 23 | 575 | get: 214, head: 1, list: 1, put: 1 | 1×6, 4, 1×2, 16×12, 12, 1 |
+| POST …/sessions (edit; existing claimed editor) | cold | response | 13 | 10 | 250 | get: 11, head: 1, put: 1 | 1×6, 4, 1×3 |
 | POST …/sessions (edit; existing claimed editor) | cold | deferred | 0 | 0 | 0 | — | — |
-| POST …/sessions (edit; existing claimed editor) | warm | response | 7 | 4 | 100 | get: 5, get304: 1, list: 1 | 4, 1×3 |
+| POST …/sessions (edit; existing claimed editor) | warm | response | 7 | 4 | 100 | get: 6, get304: 1 | 4, 1×3 |
 | POST …/sessions (edit; existing claimed editor) | warm | deferred | 0 | 0 | 0 | — | — |
 | periodic save: unchanged code (live editor) | cold | response | 6 | 3 | 75 | get: 6 | 3, 1, 2 |
 | periodic save: unchanged code (live editor) | cold | deferred | 0 | 0 | 0 | — | — |

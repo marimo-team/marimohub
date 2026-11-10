@@ -1016,6 +1016,20 @@ export class SessionService {
 		takeoverInProgress?: boolean;
 		sharing: EditorSandboxSharing;
 	}> {
+		const initialClaim = temporary
+			? known
+			: (known ?? { claim: await this.getEditorClaim(projectId, notebookId) });
+		if (!temporary) {
+			const claim = initialClaim?.claim;
+			// The claim is authoritative; unrelated session history cannot change its holder.
+			if (claim?.session_id && !claim.transfer) {
+				const holder = await this.getLiveEditorHolder(projectId, notebookId, claim.session_id);
+				if (!holder || !isReusableSession(holder, Date.now())) return { sharing: claim.sharing };
+				return claim.sharing === 'shared' || holder.user_id === userId
+					? { sharing: claim.sharing, session: holder }
+					: { sharing: claim.sharing, ownedByOther: holder };
+			}
+		}
 		const now = Date.now();
 		const sessions = await this.scanProject(projectId, (session) => session);
 		const live = sessions.filter(

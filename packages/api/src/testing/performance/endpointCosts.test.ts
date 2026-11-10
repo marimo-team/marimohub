@@ -242,10 +242,7 @@ test.each([
 		if (scale.ready) {
 			const services = createServices(seeded.bucket, undefined, READY_OPTIONS);
 			await services.sessions.rebuildSessionIndex();
-			for (const project of seeded.projects) {
-				const current = await services.projects.getProject(project.id);
-				await services.projects.updateProject(project.id, { name: current.name }, OWNER);
-			}
+			await services.projects.rebuildAccessSummaries();
 		}
 		const index = new MemorySearchIndex();
 		for (const user of [OWNER, ...Object.values(USERS)]) {
@@ -291,7 +288,7 @@ test.each([
 						setup: startEditor,
 						call: async (a, s) => {
 							const response = await a.request('POST', `${nbBase(s)}/sessions`);
-							const body = await response.clone().json();
+							const body = (await response.clone().json()) as { data: { session_id: string } };
 							expect(body.data.session_id).toBe(a.editSession);
 							return response;
 						},

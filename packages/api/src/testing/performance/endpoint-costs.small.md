@@ -70,7 +70,7 @@ Cold uses fresh services; warm repeats on the same services. Each scenario start
 | GET /search?q=&project_id= | warm | deferred | 0 | 0 | 0 | — | — |
 | POST …/sessions (edit; cold=create, warm=reuse) | cold | response | 2447 | 178 | 4450 | get: 2024, get304: 406, head: 1, list: 7, put: 9 | 1×6, 4, 1×2, 16×25, 3, 2, 1×6, 16×100, 3, 16×25, 3, 1×4, 4, 5, 1×2, 3 |
 | POST …/sessions (edit; cold=create, warm=reuse) | cold | deferred | 0 | 0 | 0 | — | — |
-| POST …/sessions (edit; cold=create, warm=reuse) | warm | response | 8 | 5 | 125 | get: 6, get304: 1, list: 1 | 4, 1×4 |
+| POST …/sessions (edit; cold=create, warm=reuse) | warm | response | 7 | 4 | 100 | get: 6, get304: 1 | 4, 1×3 |
 | POST …/sessions (edit; cold=create, warm=reuse) | warm | deferred | 0 | 0 | 0 | — | — |
 | POST …/sessions (edit; new notebook each call) | cold | response | 2447 | 178 | 4450 | get: 2024, get304: 406, head: 1, list: 7, put: 9 | 1×6, 4, 1×2, 16×25, 3, 2, 1×6, 16×100, 3, 16×25, 3, 1×4, 4, 5, 1×2, 3 |
 | POST …/sessions (edit; new notebook each call) | cold | deferred | 0 | 0 | 0 | — | — |

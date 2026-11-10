@@ -3,10 +3,25 @@
 Run `pnpm test:perf` from the repository root. These tests also run with the
 normal API suite and `pnpm test`; they do not require credentials or a server.
 
-The checked-in reports are [small](./endpoint-costs.small.md) (50 notebooks) and
+The default/legacy reports are [small](./endpoint-costs.small.md) (50 notebooks) and
 [large](./endpoint-costs.large.md) (10,000 notebooks). Both include 2,000 reclaimed
 session records and five live sessions. Memberships vary between editor, viewer,
 app-user, and no access. Each scenario starts from its own copy of the data.
+
+The steady-state reports are [small](./endpoint-costs.steady.small.md) and
+[large](./endpoint-costs.steady.large.md). They enable the session index after
+backfill, rebuild access summaries with a matching deployment generation, and
+provide core services with a background-work queue. Setup runs outside measurement.
+Run only these profiles with `pnpm test:perf -t steady`.
+These profiles also cover reopening a claimed editor on a fresh replica and
+unchanged periodic saves. Use them to judge routine user-facing costs.
+
+The default profile retains shadow session-index mode and missing persistent indexes.
+Its first session admission includes migration work. Keep this profile for comparison;
+do not replace it with the steady-state profile to hide migration costs.
+Service options are explicit: environment variables do not configure these tests.
+Project-list assertions check exact visible IDs, and `/me` checks app-only status,
+so skipping authorized projects cannot appear as a performance improvement.
 
 Each report records:
 
