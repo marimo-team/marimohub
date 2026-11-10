@@ -1709,7 +1709,12 @@ class ScopedIntegrationsStore {
 			() =>
 				provider.resolve(source, {
 					probe,
-					...(federatedCredentials ? { federatedCredentials } : {}),
+					...(federatedCredentials
+						? {
+								federatedCredentials,
+								federatedSourceIdentity: resolveFederatedCredentials?.sourceIdentity,
+							}
+						: {}),
 					...(signal ? { signal } : {}),
 				}),
 			'Package registry authentication failed.',

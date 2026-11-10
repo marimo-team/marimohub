@@ -23,6 +23,7 @@ import type {
 	WorkloadRef,
 } from '@marimo-hub/core';
 import type { JobRunContext } from '@marimo-hub/core/jobs';
+import type { FederatedCredentialResolver } from '@marimo-hub/core/ports/integrations';
 import { federationFor } from './federation';
 import type { ApiDeps } from './context';
 import { errorMetadata, logEvent } from './log';
@@ -68,7 +69,7 @@ export function composeSessionEnv(layers: {
 	return env;
 }
 
-export type FederatedCredentials = () => Promise<TempS3Creds>;
+export type FederatedCredentials = FederatedCredentialResolver<TempS3Creds>;
 
 /**
  * The WIF config fixes the issuer and target; project and workload kind bound credential reuse.
@@ -81,11 +82,12 @@ export function federatedCredentialsFor(
 ): FederatedCredentials | undefined {
 	const wif = federationFor(project, deps.wif, options);
 	if (!wif) return;
+	const cache = wifCredentialCacheFor(wif);
 	let exchange: Promise<TempS3Creds> | undefined;
-	return () =>
-		(exchange ??= wifCredentialCacheFor(wif).getShared(
-			JSON.stringify([project.id, workload.kind]),
-			() =>
+	const key = JSON.stringify([project.id, workload.kind]);
+	return Object.assign(
+		() =>
+			(exchange ??= cache.getShared(key, () =>
 				exchangeFederatedStorageCredentials(
 					wif.issuer,
 					wif.issuerUrl,
@@ -93,7 +95,9 @@ export function federatedCredentialsFor(
 					project.id,
 					workload,
 				),
-		));
+			)),
+		{ sourceIdentity: JSON.stringify([cache.scopeId, key]) },
+	);
 }
 
 export interface FederatedVarsOptions {

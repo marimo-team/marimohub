@@ -778,6 +778,39 @@ describe('project WIF reuse', () => {
 		getShared.mockRestore();
 	});
 
+	it('keeps source identities stable across refreshes and isolates WIF scopes', async () => {
+		vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00Z'), toFake: ['Date'] });
+		try {
+			const exchange = vi.fn(async () => ({
+				accessKeyId: `AK${exchange.mock.calls.length}`,
+				secretAccessKey: 'SK',
+				expiration: new Date(Date.now() + 60 * 60_000).toISOString(),
+			}));
+			const wif = makeTestWif({ exchange });
+			const project = makeProject({ federation: { enabled: true } });
+			const session = () => ({ kind: 'session' as const, id: createSessionId() });
+			const first = federatedCredentialsFor({ wif }, project, session())!;
+			expect((await first()).accessKeyId).toBe('AK1');
+			vi.setSystemTime(new Date('2026-01-01T00:40:00Z'));
+			const next = federatedCredentialsFor({ wif }, project, session())!;
+			expect((await next()).accessKeyId).toBe('AK2');
+			expect(next.sourceIdentity).toBe(first.sourceIdentity);
+			const identities = [
+				first.sourceIdentity,
+				federatedCredentialsFor({ wif }, makeProject({ federation: { enabled: true } }), session())!
+					.sourceIdentity,
+				federatedCredentialsFor({ wif }, project, { kind: 'job-run', id: createRunId() })!
+					.sourceIdentity,
+				federatedCredentialsFor({ wif: makeTestWif({ exchange }) }, project, session())!
+					.sourceIdentity,
+			];
+			expect(identities.every(Boolean)).toBe(true);
+			expect(new Set(identities).size).toBe(4);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('primes each session endpoint from the same project exchange', async () => {
 		const exchange = vi.fn(async () => ({
 			accessKeyId: 'AK',

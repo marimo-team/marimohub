@@ -139,6 +139,30 @@ describe('CodeArtifact integration', () => {
 		expect(s.resolve.mock.calls[0][1].federatedCredentials).toEqual(credentials);
 	});
 
+	it('passes the trusted WIF source identity through to the token provider', async () => {
+		const s = packageIndexStores();
+		await s.org.create({ kind: 'aws_codeartifact', name: 'private', config: ambientConfig }, actor);
+		const credentials = { accessKeyId: 'PROJECT', secretAccessKey: 'project-secret' };
+		const resolveFederatedCredentials = Object.assign(async () => credentials, {
+			sourceIdentity: 'config/project/session',
+		});
+		await s.project.resolveForSession(s.projectId, { ...context, resolveFederatedCredentials });
+		expect(s.resolve).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				federatedCredentials: credentials,
+				federatedSourceIdentity: resolveFederatedCredentials.sourceIdentity,
+			}),
+		);
+		await s.project.test(s.projectId, draft(ambientConfig), {
+			user_id: actor,
+			user_email: 'test@example.com',
+			allow_server_ambient: {},
+			federation: { provider: 's3', credentials, storage: {} },
+		});
+		expect(s.resolve.mock.calls[1][1].federatedSourceIdentity).toBeUndefined();
+	});
+
 	it('merges multiple CodeArtifact indexes', async () => {
 		const s = packageIndexStores();
 		await s.org.create({ kind: 'aws_codeartifact', name: 'company', config }, actor);
@@ -286,6 +310,36 @@ describe('CodeArtifact failure boundaries', () => {
 		expect(s.resolve).not.toHaveBeenCalled();
 		expect(s.fetch).not.toHaveBeenCalled();
 	});
+
+	it.each(['unavailable', 'missing'] as const)(
+		'rechecks WIF after a successful render and fails closed when credentials are %s',
+		async (failure) => {
+			const s = packageIndexStores();
+			await s.org.create(
+				{ kind: 'aws_codeartifact', name: 'private', config: ambientConfig },
+				actor,
+			);
+			const resolve = vi.fn<NonNullable<typeof context.resolveFederatedCredentials>>(async () => ({
+				accessKeyId: 'AK',
+				secretAccessKey: 'secret',
+			}));
+			const resolveFederatedCredentials = Object.assign(resolve, {
+				sourceIdentity: 'config/project/session',
+			});
+			const renderContext = { ...context, resolveFederatedCredentials };
+			await s.project.resolveForSession(s.projectId, renderContext);
+			if (failure === 'unavailable') resolve.mockRejectedValueOnce(new Error('secret'));
+			else resolve.mockResolvedValueOnce(undefined);
+			await expect(s.project.resolveForSession(s.projectId, renderContext)).rejects.toThrow(
+				failure === 'unavailable'
+					? 'CodeArtifact could not obtain project AWS cloud access.'
+					: 'CodeArtifact requires project AWS cloud access.',
+			);
+			expect(s.resolve).toHaveBeenCalledOnce();
+			await s.project.resolveForSession(s.projectId, renderContext);
+			expect(s.resolve).toHaveBeenCalledTimes(2);
+		},
+	);
 
 	it('does not contact AWS when an external secret is unavailable', async () => {
 		const s = packageIndexStores({
