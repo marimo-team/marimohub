@@ -15,6 +15,62 @@ import {
 } from './cas';
 
 describe('withCasRetry', () => {
+	it('jitters each retry delay and does not sleep after exhaustion', async () => {
+		vi.useFakeTimers();
+		const random = vi.spyOn(Math, 'random').mockReturnValueOnce(0).mockReturnValueOnce(0.51);
+		try {
+			const bucket = new MemoryBucket();
+			await bucket.put('k', 'seed');
+			const attempt = vi.fn(async (cas: Parameters<Parameters<typeof withCasRetry>[1]>[0]) =>
+				cas.put('k', 'loser', { onlyIfEtagMatches: 'stale' }),
+			);
+			const result = expect(withCasRetry(bucket, attempt, { retries: 3 })).rejects.toBeInstanceOf(
+				ConflictError,
+			);
+			await vi.advanceTimersByTimeAsync(24);
+			expect(attempt).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(attempt).toHaveBeenCalledTimes(2);
+			await vi.advanceTimersByTimeAsync(74);
+			expect(attempt).toHaveBeenCalledTimes(2);
+			await vi.advanceTimersByTimeAsync(1);
+			await result;
+			expect(attempt).toHaveBeenCalledTimes(3);
+			expect(random).toHaveBeenCalledTimes(2);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			random.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it.each([
+		{ random: 0, delay: 25 },
+		{ random: 0.999999, delay: 49 },
+	])('keeps retry delays integral at the jitter boundary $random', async ({ random, delay }) => {
+		vi.useFakeTimers();
+		const draw = vi.spyOn(Math, 'random').mockReturnValue(random);
+		try {
+			const bucket = new MemoryBucket();
+			await bucket.put('key', 'seed');
+			let attempts = 0;
+			const pending = withCasRetry(bucket, async (cas) => {
+				if (attempts++ === 0) await cas.put('key', 'value', { onlyIfNotExists: true });
+				return 'done';
+			});
+			await vi.advanceTimersByTimeAsync(delay - 1);
+			expect(attempts).toBe(1);
+			await vi.advanceTimersByTimeAsync(1);
+			await expect(pending).resolves.toBe('done');
+			expect(attempts).toBe(2);
+			expect(draw).toHaveBeenCalledOnce();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			draw.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
 	it('returns the first successful attempt', async () => {
 		const bucket = new MemoryBucket();
 		const attempt = vi.fn().mockResolvedValue('ok');

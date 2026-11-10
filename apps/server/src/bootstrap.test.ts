@@ -1,3 +1,4 @@
+import { configureLogLevel, logEvent } from '@marimo-hub/core/logs';
 import { ACTOR } from '@marimo-hub/core/testing';
 import { gunzipSync } from 'node:zlib';
 import type { ServerType } from '@hono/node-server';
@@ -100,6 +101,38 @@ describe('bootstrap', () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		vi.useRealTimers();
+	});
+
+	it('configures the shared logger from LOG_LEVEL', async () => {
+		const harness = makeHarness(deps);
+		const handle = await bootstrap({ ...BASE_ENV, LOG_LEVEL: 'warn' }, harness.overrides);
+		try {
+			vi.mocked(console.log).mockClear();
+			logEvent({ level: 'info', event: 'filtered' });
+			logEvent({ level: 'warn', event: 'visible' });
+			expect(console.log).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('visible'));
+		} finally {
+			await handle!.drain();
+			configureLogLevel();
+		}
+	});
+
+	it('flushes labeled metrics on an API replica and stops the timer on drain', async () => {
+		const harness = makeHarness(deps);
+		const handle = await bootstrap(BASE_ENV, harness.overrides);
+		const metrics = harness.createDeps.mock.calls[0][1]!;
+		metrics.increment('background.failed', 1, { label: 'teardown' });
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(console.log).toHaveBeenCalledWith(expect.stringContaining('counter.background.failed'));
+		const event = vi
+			.mocked(console.log)
+			.mock.calls.map(([line]) => JSON.parse(line as string) as Record<string, unknown>)
+			.find((event) => event.event === 'metrics');
+		expect(event?.['counter.background.failed{"label":"teardown"}']).toBe(1);
+		await handle!.drain();
+		vi.mocked(console.log).mockClear();
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(console.log).not.toHaveBeenCalled();
 	});
 
 	it.each([

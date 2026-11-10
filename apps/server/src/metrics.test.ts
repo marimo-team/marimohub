@@ -120,11 +120,39 @@ describe('fanoutMetrics', () => {
 		expect(target.increment).toHaveBeenCalledWith('catalog.cas.conflict', 2, { source: 'test' });
 		expect(target.gauge).toHaveBeenCalledWith('sessions.live', 7, undefined);
 		expect(wide.collect()).toEqual({
-			'counter.catalog.cas.conflict': 2,
+			'counter.catalog.cas.conflict{"source":"test"}': 2,
 			'gauge.sessions.live': 7,
-			'histogram.object_browser.latency_ms.count': 1,
-			'histogram.object_browser.latency_ms.max': 12,
-			'histogram.object_browser.latency_ms.sum': 12,
+			'histogram.object_browser.latency_ms{"operation":"list_objects"}.count': 1,
+			'histogram.object_browser.latency_ms{"operation":"list_objects"}.max': 12,
+			'histogram.object_browser.latency_ms{"operation":"list_objects"}.sum': 12,
 		});
 	});
+});
+
+it('keeps distinct label sets for counters, gauges, and histograms', () => {
+	const metrics = new WideEventMetrics();
+	for (const label of ['audit', 'teardown']) {
+		metrics.increment('background.failed', 1, { label, retry: false });
+		metrics.increment('background.failed', 2, { retry: false, label });
+		metrics.gauge('background.in_flight', 2, { label });
+		metrics.gauge('background.in_flight', 0, { label });
+		metrics.histogram('background.duration_ms', 5, { label });
+	}
+	const values = metrics.collect();
+	expect(Object.keys(values)).toHaveLength(10);
+	for (const label of ['audit', 'teardown']) {
+		expect(values[`counter.background.failed{"label":"${label}","retry":false}`]).toBe(3);
+		expect(values[`gauge.background.in_flight{"label":"${label}"}`]).toBe(0);
+		expect(values[`histogram.background.duration_ms{"label":"${label}"}.sum`]).toBe(5);
+	}
+});
+
+it('bounds labeled series and reports dropped samples while updating admitted series', () => {
+	const metrics = new WideEventMetrics();
+	for (let i = 0; i < 2049; i++) metrics.gauge('app_pool.visits', 1, { notebook_id: i });
+	metrics.gauge('app_pool.visits', 0, { notebook_id: 0 });
+	const values = metrics.collect();
+	expect(Object.keys(values)).toHaveLength(2049);
+	expect(values['counter.metrics.dropped_samples']).toBe(1);
+	expect(values['gauge.app_pool.visits{"notebook_id":0}']).toBe(0);
 });

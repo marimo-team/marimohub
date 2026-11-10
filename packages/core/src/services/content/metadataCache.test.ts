@@ -1,6 +1,20 @@
-import { describe, expect, it, vi } from 'vitest';
+import { metrics } from '@opentelemetry/api';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { MetadataCache } from './metadataCache';
+
+afterEach(() => vi.restoreAllMocks());
+
+function recordCacheMetrics() {
+	const meter = metrics.getMeter('test');
+	const reads = vi.fn();
+	const conditional = vi.fn();
+	vi.spyOn(meter, 'createCounter').mockImplementation((name) => ({
+		add: name === 'cache.metadata.reads' ? reads : conditional,
+	}));
+	vi.spyOn(metrics, 'getMeter').mockReturnValue(meter);
+	return { reads, conditional };
+}
 
 describe('MetadataCache fallback keys', () => {
 	it('preserves key priority as primary and fallback records appear and disappear', async () => {
@@ -152,4 +166,49 @@ describe('MetadataCache failure and race handling', () => {
 		await bucket.put('a', 'Changed');
 		expect(await read('a')).toBe('Changed');
 	});
+});
+
+it('counts validated hits, misses, and conditional outcomes without object-key labels', async () => {
+	const { reads, conditional } = recordCacheMetrics();
+	const bucket = new MemoryBucket();
+	const cache = new MetadataCache<string>(bucket);
+	const read = () => cache.read(['private-key'], (object) => object.text(), 'validated');
+	await bucket.put('private-key', 'first');
+	await read();
+	await read();
+	await bucket.put('private-key', 'second');
+	await read();
+	await bucket.delete('private-key');
+	await read();
+	await read();
+	expect(reads.mock.calls).toEqual(
+		['miss', 'hit', 'miss', 'miss', 'miss'].map((result) => [
+			1,
+			{ result, consistency: 'validated' },
+		]),
+	);
+	expect(conditional.mock.calls).toEqual(
+		['not_modified', 'modified', 'missing'].map((result) => [1, { result }]),
+	);
+});
+
+it('does not count a rejected conditional response as a cache hit or valid not-modified response', async () => {
+	const { reads, conditional } = recordCacheMetrics();
+	const bucket = new MemoryBucket();
+	await bucket.put('meta', 'stored');
+	const cache = new MetadataCache<string>(bucket);
+	const read = () => cache.read(['meta'], (object) => object.text(), 'validated');
+	await read();
+	reads.mockClear();
+	vi.spyOn(bucket, 'get').mockResolvedValueOnce({
+		key: 'meta',
+		etag: 'wrong',
+		notModified: true,
+	});
+	await expect(read()).rejects.toThrow('Invalid conditional read response');
+	expect(reads).not.toHaveBeenCalled();
+	expect(conditional).toHaveBeenCalledExactlyOnceWith(1, { result: 'invalid' });
+	expect(await read()).toBe('stored');
+	expect(reads).toHaveBeenCalledExactlyOnceWith(1, { result: 'hit', consistency: 'validated' });
+	expect(conditional).toHaveBeenLastCalledWith(1, { result: 'not_modified' });
 });
