@@ -19,6 +19,7 @@ import {
 import { compressResponse } from './compression';
 import { validateServerEnv } from './env';
 import { BackgroundLoops } from './backgroundLoops';
+import { startWarmPoolPreconnect } from './warmPoolPreconnect';
 import { logEvent } from './log';
 import { fanoutMetrics, OtelMetrics, WideEventMetrics } from './metrics';
 import { buildVersion, startOtel } from './otel';
@@ -197,6 +198,11 @@ export async function bootstrap(
 			stops.push(jobScheduler.stop);
 			runtimeDrains.push(jobScheduler.drain);
 		}
+	}
+
+	if (validatedEnv.MARIMOHUB_RUN_MAINTENANCE !== 'true') {
+		const preconnect = startWarmPoolPreconnect(deps, loops);
+		if (preconnect) stops.push(preconnect.stop);
 	}
 
 	const port = Number(validatedEnv.PORT ?? 3000);

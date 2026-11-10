@@ -371,6 +371,11 @@ export interface SandboxProvider {
 		/** Applies resources.gpu from compute profiles; implies computeProfiles. */
 		gpuProfiles?: boolean;
 	};
+	/** Warm process-local transport state only; never create, execute or modify a sandbox. */
+	preconnect?(
+		id: SandboxId,
+		options: { reconnectReference: string; timeoutMs: number; signal: AbortSignal },
+	): Promise<boolean>;
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance;
 	/** Attach without creating; a missing or stopped sandbox must fail on first use. */
 	connectExisting?(id: SandboxId, options?: ConnectSandboxOptions): SandboxInstance;

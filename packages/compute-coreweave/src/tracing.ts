@@ -178,6 +178,14 @@ export function instrumentCoreWeaveClient(
 			opRequest(op('fromId'), { ...endpoint, 'coreweave.sandbox_id': sandboxId }, () =>
 				client.fromId(sandboxId),
 			).then((sandbox) => instrumentSandbox(sandbox, endpoint)),
+		...(client.preconnect
+			? {
+					preconnect: (sandboxId: string, options: { timeoutMs: number; signal: AbortSignal }) =>
+						opRequest(op('preconnect'), { ...endpoint, 'coreweave.sandbox_id': sandboxId }, () =>
+							client.preconnect!(sandboxId, options),
+						),
+				}
+			: {}),
 		list: (options) => opRequest(op('list'), endpoint, () => client.list(options)),
 		delete: (sandboxId) =>
 			opRequest(op('delete'), { ...endpoint, 'coreweave.sandbox_id': sandboxId }, () =>

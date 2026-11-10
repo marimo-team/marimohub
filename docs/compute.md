@@ -213,3 +213,33 @@ and [Sandbox image](./sandbox-image.md).
 ## Warm sandbox pools
 
 CoreWeave and Kubernetes support opt-in [warm sandbox pools](./warm-pools.md). Pools keep the default image running for faster editor and app startup.
+
+### Warm pool transport preconnection
+
+With warm pools enabled, Node API replicas prepare CoreWeave Direct connections
+in the background. Each replica uses its own SDK client and cache. Maintenance
+still exclusively creates, checks, hands off, and retires warm sandboxes.
+The loop runs when `MARIMOHUB_RUN_MAINTENANCE` is false or unset.
+Preconnection only prepares credentials and mTLS channels: it does not claim
+sandboxes, run commands, write files, or replace the normal startup health check.
+
+The loop notices newly ready members every five seconds and refreshes every
+30 seconds. It considers at most eight eligible members with saved provider
+references, with two preparation tasks in flight and a five-second budget per
+member. Failed attempts also back off for 30 seconds. Disabled pools, Gateway-only
+connections, and unsupported adapters do not start the loop. Set
+`MARIMOHUB_COMPUTE_WARM_POOL_PRECONNECT=false` to opt out. Preparation failures
+never block API health, and shutdown stops queued work and cancels waiters.
+
+The pinned SDK 1.0.0 does not expose a preconnect API. A version-scoped pnpm patch
+adds `client.preconnect()` using the same bounded credential/channel caches used
+by normal exec, command-stream, log, file-write, and file-read requests. The patch
+releases transport leases, refreshes credentials within 60 seconds of expiry,
+and leaves foreground Gateway-fallback cooldowns unchanged. Shared credential
+issuance retains the SDK's existing five-second RPC bound; canceling a background
+waiter does not cancel credentials a foreground request may also be awaiting.
+Remove the patch when an upstream SDK release provides equivalent behavior.
+
+Logs emit `warm_pool_preconnect` preparation counts and safe per-member failure
+names; `warm_pool.preconnect_ms` records preparation duration. These indicate
+background preparation, not proof that every subsequent request used Direct.
