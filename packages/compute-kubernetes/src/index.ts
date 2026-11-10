@@ -80,6 +80,7 @@ import type {
 	ActiveSandbox,
 	ComputeResources,
 	CreateSandboxOptions,
+	SandboxNotebook,
 	ExecOptions,
 	ExecResult,
 	ExecStreamOptions,
@@ -281,6 +282,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		private readonly config: KubernetesConfig,
 		private readonly client: K8sClient,
 		private readonly existingOnly = false,
+		private readonly notebook?: SandboxNotebook,
 	) {
 		this.name = resourceName(id);
 		this.namespace = config.namespace ?? 'default';
@@ -338,6 +340,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	private async ensurePod(): Promise<void> {
 		this.environment.invalidate();
 		const options: EnsureSandboxOptions = {
+			notebook: this.notebook,
 			podTemplate: this.config.podTemplate,
 			name: this.name,
 			sandboxId: this.id,
@@ -829,7 +832,13 @@ export class KubernetesCompute implements SandboxProvider {
 							: {}),
 					}
 				: this.config;
-		return new KubernetesSandboxInstance(id, config, this.getClient(), existingOnly);
+		return new KubernetesSandboxInstance(
+			id,
+			config,
+			this.getClient(),
+			existingOnly,
+			options?.notebook,
+		);
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {

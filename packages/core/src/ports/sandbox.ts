@@ -1,4 +1,4 @@
-import type { ProjectId, SandboxId, UserId } from '../ids';
+import type { NotebookId, ProjectId, SandboxId, UserId } from '../ids';
 import type { Millis } from '../duration';
 import type { Timings } from '../timing';
 
@@ -318,7 +318,15 @@ export interface SandboxOwner {
 	userId?: UserId;
 }
 
+/** Notebook identity at creation time, for provider-side resource diagnostics. */
+export interface SandboxNotebook {
+	projectId: ProjectId;
+	notebookId: NotebookId;
+	title: string;
+}
+
 export interface CreateSandboxOptions {
+	notebook?: SandboxNotebook;
 	/**
 	 * May the adapter reconnect to an existing sandbox with this id instead of
 	 * creating one? Default true — teardown/reconnect re-resolve by id and need it.

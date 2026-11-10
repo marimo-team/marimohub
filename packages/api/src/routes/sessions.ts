@@ -2005,6 +2005,7 @@ async function startNotebookSessionOnce(
 			userId: user.id,
 			notebookId: nid,
 			hostname,
+			notebook: { projectId: pid, notebookId: nid, title: notebook.meta.title },
 			bucket: sandbox.bucket,
 			bucketHandle,
 			workspaceLimits: notebooks.workspace.limits,
