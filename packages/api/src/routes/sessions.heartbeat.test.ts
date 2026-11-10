@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	AuthorizationService,
+	createVersionId,
 	AppPoolService,
 	ProjectId,
 	NotFoundError,
@@ -317,7 +318,7 @@ describe('heartbeat dependency failures', () => {
 
 describe('fresh heartbeat races', () => {
 	it.each(['terminate', 'delete'] as const)(
-		'observes a concurrent %s on a fresh heartbeat',
+		'observes a concurrent %s on the next heartbeat after a no-op',
 		async (race) => {
 			const f = await fixture();
 			const entered = Promise.withResolvers<void>();
@@ -341,9 +342,10 @@ describe('fresh heartbeat races', () => {
 			} finally {
 				release.resolve();
 			}
-			if (race === 'delete') await expectError(await pending, 404, 'NOT_FOUND');
+			expect((await expectOk(await pending)).status).toBe('running');
+			if (race === 'delete') await expectError(await f.heartbeat(), 404, 'NOT_FOUND');
 			else {
-				const response = await expectOk(await pending);
+				const response = await expectOk(await f.heartbeat());
 				expect(response.status).toBe('terminated');
 				expect(response.sandbox_url).toBeUndefined();
 				expect(response.can.attach).toBe(false);
@@ -496,5 +498,88 @@ describe('app heartbeat freshness', () => {
 			),
 		);
 		expect(await expectOk(await f.heartbeat())).toMatchObject({ edit_active: true });
+	});
+});
+
+describe('heartbeat metadata cache', () => {
+	async function warmMetadataCache() {
+		const f = await fixture();
+		const sourceKey = paths.project(f.project.id).notebook(f.notebook.id).source;
+		const claimKey = paths.editorClaim(f.project.id, f.notebook.id);
+		await f.bucket.put(
+			claimKey,
+			JSON.stringify({
+				session_id: null,
+				sharing: 'exclusive',
+				claimed_at: new Date().toISOString(),
+			}),
+		);
+		await expectOk(await f.heartbeat());
+		return { ...f, sourceKey, claimKey };
+	}
+
+	it.each([
+		{ record: 'source', failure: 'unavailable' },
+		{ record: 'source', failure: 'corrupt' },
+		{ record: 'claim', failure: 'unavailable' },
+		{ record: 'claim', failure: 'corrupt' },
+	] as const)(
+		'does not serve cached $record data after validation is $failure',
+		async ({ record, failure }) => {
+			const f = await warmMetadataCache();
+			const { sourceKey, claimKey } = f;
+			const key = record === 'source' ? sourceKey : claimKey;
+			const original = await (await f.bucket.get(key))!.text();
+			if (failure === 'corrupt') await f.bucket.put(key, 'not json');
+			const get = f.bucket.get.bind(f.bucket);
+			const read = vi.spyOn(f.bucket, 'get').mockImplementation((readKey, options) => {
+				if (readKey === key) {
+					expect(options).toMatchObject({ ifNoneMatch: expect.any(String) });
+					if (failure === 'unavailable') throw new UnavailableError('Metadata unavailable');
+				}
+				return get(readKey, options);
+			});
+			await expectError(await f.heartbeat(), 503, 'SERVICE_UNAVAILABLE');
+			read.mockRestore();
+			if (failure === 'corrupt') await f.bucket.put(key, original);
+			expect((await expectOk(await f.heartbeat())).status).toBe('running');
+		},
+	);
+
+	it('does not serve a cached source after another replica deletes it', async () => {
+		const f = await fixture();
+		await expectOk(await f.heartbeat());
+		await f.bucket.delete(paths.project(f.project.id).notebook(f.notebook.id).source);
+		await expectError(await f.heartbeat(), 404, 'NOT_FOUND');
+	});
+
+	it('uses one session read and validates cached source and editor claim across replicas', async () => {
+		const f = await warmMetadataCache();
+		const { sourceKey, claimKey } = f;
+		const get = vi.spyOn(f.bucket, 'get');
+		await expectOk(await f.heartbeat());
+		expect(get.mock.calls.filter(([key]) => key === f.sessionKey)).toHaveLength(1);
+		for (const key of [sourceKey, claimKey]) {
+			expect(get.mock.calls.filter(([readKey]) => readKey === key)).toEqual([
+				[key, { ifNoneMatch: expect.any(String) }],
+			]);
+		}
+		const source = await f.services.notebooks.getNotebookSource(f.project.id, f.notebook.id);
+		const version = createVersionId();
+		await f.bucket.put(sourceKey, JSON.stringify({ ...source, current_version_id: version }));
+		await f.bucket.put(
+			claimKey,
+			JSON.stringify({
+				session_id: f.session.session_id,
+				sharing: 'exclusive',
+				claimed_at: new Date().toISOString(),
+			}),
+		);
+		expect(await expectOk(await f.heartbeat())).toMatchObject({
+			head_version_id: version,
+			edit_active: true,
+		});
+		await f.bucket.delete(claimKey);
+		expect(await expectOk(await f.heartbeat())).toMatchObject({ edit_active: false });
 	});
 });

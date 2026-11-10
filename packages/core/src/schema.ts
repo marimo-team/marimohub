@@ -1005,6 +1005,18 @@ export const SessionSchema = z.looseObject({
 
 export type Session = z.infer<typeof SessionSchema>;
 
+export const SessionIndexSchema = z.object({
+	user_id: UserIdSchema,
+	entries: z
+		.array(z.object({ session_id: SessionIdSchema, project_id: ProjectIdSchema }))
+		.refine((entries) => new Set(entries.map((entry) => entry.session_id)).size === entries.length)
+		.meta({ 'x-unique-by': 'session_id' })
+		.describe(
+			'Each session_id must occur only once, including across different project_id values.',
+		),
+});
+export type SessionIndexRecord = z.infer<typeof SessionIndexSchema>;
+
 export const VersionPruneCutoffSchema = z.object({
 	cutoff_version_id: VersionIdSchema,
 });

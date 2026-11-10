@@ -785,7 +785,8 @@ async function assertCapAfterCreate(
 	const caps = capsFor(deps, mode, pid, userId);
 	await checkCapQueues(caps, excludedSessionId, (cap) => {
 		const rank = cap.sessions.findIndex((session) => session.session_id === sessionId);
-		// A missing session is already terminal and no longer consumes capacity.
+		// Missing membership cannot prove admission: the index may have lost a live entry.
+		if (rank === -1) throw new ConflictError('Session admission changed. Retry shortly.');
 		if (rank >= cap.max) throw new ResourceExhaustedError(cap.message);
 	});
 }
@@ -2775,8 +2776,8 @@ app.openapi(heartbeatSession, async (c) => {
 		(updated.status === 'running' || updated.status === 'starting')
 	) {
 		const [source, claim] = await Promise.all([
-			deps.services.notebooks.getNotebookSource(pid, nid),
-			sessions.getEditorClaim(pid, nid),
+			deps.services.notebooks.getNotebookSource(pid, nid, { consistency: 'validated' }),
+			sessions.getEditorClaim(pid, nid, { consistency: 'validated' }),
 		]);
 		response.head_version_id = source.current_version_id ?? null;
 		response.edit_active = !!claim?.session_id;

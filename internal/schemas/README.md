@@ -40,6 +40,9 @@ These are not HTTP APIs — OpenAPI is used as a diffable schema container:
 - `x-mutability`/`x-owner` mirror the write-ownership invariants in AGENTS.md.
   `x-secret-paths` tracks where secret envelopes live; moving one requires a
   decrypt-and-reseal migration.
+- `x-unique-by` requires distinct values of the named property across array
+  entries, even when other properties differ. Validators must enforce this
+  extension; JSON Schema `uniqueItems` only compares whole entries.
 - Each integration kind is its own path: retiring a kind is breaking, adding
   one is additive.
 - `x-brand-icon`/`x-brand-color` carry each kind's vendor presentation

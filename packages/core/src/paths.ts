@@ -307,6 +307,9 @@ export const paths = {
 	// still list `sessionsPrefix` recursively.
 	session: (projectId: ProjectId, id: SessionId) => `_system/sessions/${projectId}/${id}.json`,
 	sessionsPrefix: '_system/sessions/',
+	sessionIndexPrefix: '_system/session-index/users/',
+	sessionIndexForUser: (userId: UserId) =>
+		`_system/session-index/users/${encodeURIComponent(userId)}.json`,
 	sessionsForProject: (projectId: ProjectId) => `_system/sessions/${projectId}/`,
 	versionPruneCutoff: (projectId: ProjectId, notebookId: NotebookId) =>
 		`_system/version-prune-cutoffs/${projectId}/${notebookId}.json`,

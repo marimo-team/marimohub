@@ -175,6 +175,9 @@ These CAS-managed records also have one writer each:
   `projects/{pid}/chat-permissions/{uid}.json`.
 - `ProjectAlertStore` owns each project alert configuration at
   `projects/{pid}/alerts.json`.
+- `SessionService` owns each per-user session index at
+  `_system/session-index/users/{user-id}.json`. It is a CAS-managed projection;
+  cap checks validate session records, and lifecycle sweeps reconcile membership.
 - `SessionService` owns each editor claim at
   `_system/editors/{pid}/{nid}.json`.
 - `WarmPoolStore` owns each deployment warm-pool record at `_system/warm-pools/{backend}.json`, including creation reservations, claims, and pending reclamation.

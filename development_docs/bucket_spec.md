@@ -116,6 +116,8 @@ s3-bucket/
 │   ├── sessions/
 │   │   └── {project-id}/
 │   │       └── {session-id}.json            ← kernel session record
+│   ├── session-index/users/
+│   │   └── {encoded-user-id}.json           ← per-user cap projection (CAS)
 │   ├── version-prune-cutoffs/
 │   │   └── {project-id}/
 │   │       └── {notebook-id}.json           ← monotonic version boundary for new sessions (CAS)
@@ -561,11 +563,55 @@ source pointer with CAS.
 
 **Optional snapshot descriptors.** `html_snapshot` and `session_snapshot` record the _presence and metadata_ of a rendered HTML snapshot (`notebook.html`) and a marimo session state file (`session.json`) sitting alongside the code in the version folder. They carry `captured_at` and `size_bytes` — **never a storage path** (clients address notebooks by ID, §13). Each field is **absent** when that artifact wasn't captured; both are written only on session teardown (§8) and only if marimo actually produced the source file, so most versions have neither. Adding these optional fields is forward-tolerant — a reader that doesn't know them ignores them — so it requires no breaking migration of existing `version.json` objects.
 
+### Per-user session index
+
+`SessionService` owns `_system/session-index/users/{encoded-user-id}.json`.
+Each CAS record stores `user_id` and `entries: [{session_id, project_id}]`.
+User IDs use URI encoding. Empty indexes remain in storage.
+
+Cap checks read the index fresh and validate referenced sessions through the ETag cache.
+Ranking remains: running first, then `started_at`, then `session_id`.
+Unreclaimed app sandboxes count until cleanup completes, even for terminal sessions.
+Reads remove stale references. Lifecycle sweeps and terminal reaping also restore missing entries.
+Maintenance repairs at most 32 users per pass, rotating through users across passes.
+Matching membership skips session validation and writes. Changed membership is validated inside each CAS attempt.
+Unchanged results preserve the index ETag. Explicit backfill processes every user.
+Heartbeats do not write the index.
+
+| `MARIMOHUB_SESSION_INDEX` | Behavior                                                                                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `off`                     | Scan sessions. Disable index writes.                                                                                                             |
+| `shadow` (default)        | Write indexes, admit from scans, and compare queue order and membership. Differences or index read failures increment `sessions.index.mismatch`. |
+| `on`                      | Admit from validated indexes. Existing indexes need no deployment-wide session LIST, including on cold replicas.                                 |
+
+A missing index triggers a strict session scan before admission or registration, including for a new user.
+A missing index never means an empty queue. Recovery failures reject admission in `on` mode.
+Registration requires the initialized index to still exist; concurrent deletion rejects the start.
+
+In `on` mode, registration failure rejects creation and attempts to mark the session failed.
+Read failures and missing candidate membership also reject admission.
+Index write failures increment `sessions.index.write_failed`.
+Cleanup and sweep repair continue after index errors. Explicit backfill reports errors, including corrupt records and mismatched owners.
+
+To enable the index:
+
+1. Keep `shadow` until every replica uses the new writers.
+2. Run backfill with the deployment's storage environment: `pnpm --filter @marimo-hub/server session-index:rebuild`.
+   For a packaged server, use `node dist/session-index-rebuild.mjs`.
+3. Validate a completed sweep and investigate mismatch metrics before setting `MARIMOHUB_SESSION_INDEX=on`.
+
+Backfill merges references through CAS and removes orphan references.
+Each missing index requires a fresh session scan, including during maintenance and backfill.
+Repeat backfill after any period in `off` mode.
+
+A no-op heartbeat returns the request's session read. Concurrent termination appears on the next request.
+Due renewals still use CAS. App freshness fields use ETag-validated source and editor-claim caches.
+
 ### 4.8 `_system/sessions/{pid}/{sid}.json`
 
 A session represents a live marimo kernel instance — a running Python process attached to a notebook. Sessions are mutable records (like `catalog.json` and the identity directory, §4.10), but they are independent: session writes never touch the snapshot chain.
 
-Records are partitioned by project (`_system/sessions/{pid}/{sid}.json`) so the interactive reads — `listActiveByProject` (every notebook-table render) and `findReusable` (every session create) — list just that project's prefix instead of scanning every session in the deployment. Deployment-wide sweeps (the stale-expiry and terminal-reap passes, per-user session count) still list the whole `_system/sessions/` prefix recursively. Because the key now carries the project id, the routing token for `proxy` exposure mode encodes `{pid}.{sid}` (see `proxyToken.ts`) so the forwarder can rebuild the key.
+Records are partitioned by project (`_system/sessions/{pid}/{sid}.json`) so the interactive reads — `listActiveByProject` (every notebook-table render) and `findReusable` (every session create) — list just that project's prefix instead of scanning every session in the deployment. Deployment-wide sweeps still list the whole `_system/sessions/` prefix. With the session index enabled, per-user cap checks read only that user’s index and referenced records. Because the key now carries the project id, the routing token for `proxy` exposure mode encodes `{pid}.{sid}` (see `proxyToken.ts`) so the forwarder can rebuild the key.
 
 ```json
 {

@@ -1630,6 +1630,42 @@ paths:
       responses:
         '204':
           description: Stored.
+  /_system/session-index/users/{uid}.json:
+    summary: Per-user session references, validated before cap ranking.
+    parameters:
+      - name: uid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: SessionService
+    get:
+      operationId: read_system_session_index_users_json
+      summary: Read SessionIndex
+      tags:
+        - session
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionIndex'
+    put:
+      operationId: write_system_session_index_users_json
+      summary: Write SessionIndex
+      tags:
+        - session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionIndex'
+      responses:
+        '204':
+          description: Stored.
   /_system/sessions/{pid}/{sid}.json:
     summary: Session lifecycle record, partitioned by project.
     parameters:
@@ -6283,6 +6319,29 @@ components:
         - config
         - created_by
         - created_at
+    SessionIndex:
+      type: object
+      properties:
+        user_id:
+          type: string
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              session_id:
+                type: string
+              project_id:
+                type: string
+            required:
+              - session_id
+              - project_id
+          x-unique-by: session_id
+          description: Each session_id must occur only once, including across different
+            project_id values.
+      required:
+        - user_id
+        - entries
     Session:
       type: object
       properties:

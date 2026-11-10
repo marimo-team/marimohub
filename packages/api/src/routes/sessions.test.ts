@@ -4071,38 +4071,98 @@ describe('Session routes', () => {
 		},
 	);
 
-	it('POST /sessions enforces the per-user concurrent-session cap (429)', async () => {
-		// Cap the owner at 1 concurrent session.
-		const compute = makeFakeCompute();
-		const create = vi.spyOn(compute, 'create');
-		const capped = createTestApi({
-			bucket,
-			userId: ACTOR,
-			compute,
-			maxConcurrentSessionsPerUser: 1,
-		}).request;
+	it.each(['off', 'shadow', 'on'] as const)(
+		'POST /sessions enforces the per-user cap in %s mode (429)',
+		async (sessionIndex) => {
+			// Cap the owner at 1 concurrent session.
+			const compute = makeFakeCompute();
+			const create = vi.spyOn(compute, 'create');
+			const capped = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute,
+				maxConcurrentSessionsPerUser: 1,
+				deps: { services: createServices(bucket, undefined, { sessionIndex }) },
+			}).request;
 
-		// First session succeeds (running, counts toward the cap).
-		await expectOk(await capped('POST', sessionsPath()));
+			// First session succeeds (running, counts toward the cap).
+			await expectOk(await capped('POST', sessionsPath()));
 
-		// A DIFFERENT notebook would be a second concurrent sandbox → rejected with 429.
-		// (Re-POSTing the SAME notebook would RESUME, not be capped.)
-		const otherNb = await createServices(bucket).notebooks.createNotebook(
-			pid,
-			{ title: 'NB2', description: 'd', code: 'import marimo as mo' },
-			ACTOR,
-		);
-		const otherPath = `/projects/${pid}/notebooks/${otherNb.id}/sessions`;
-		const capRes = await capped('POST', otherPath);
-		await expectError(capRes, 429, 'RESOURCE_EXHAUSTED');
-		// A 429 carries a backoff hint so the client doesn't have to guess.
-		expect(capRes.headers.get('Retry-After')).toBe('5');
+			// A DIFFERENT notebook would be a second concurrent sandbox → rejected with 429.
+			// (Re-POSTing the SAME notebook would RESUME, not be capped.)
+			const otherNb = await createServices(bucket).notebooks.createNotebook(
+				pid,
+				{ title: 'NB2', description: 'd', code: 'import marimo as mo' },
+				ACTOR,
+			);
+			const otherPath = `/projects/${pid}/notebooks/${otherNb.id}/sessions`;
+			const capRes = await capped('POST', otherPath);
+			await expectError(capRes, 429, 'RESOURCE_EXHAUSTED');
+			// A 429 carries a backoff hint so the client doesn't have to guess.
+			expect(capRes.headers.get('Retry-After')).toBe('5');
 
-		expect(create).toHaveBeenCalledTimes(2);
-		expect(await createServices(bucket).sessions.listSessions(nid)).toHaveLength(1);
-		expect(
-			await createServices(bucket).sessions.listSessions(otherNb.id as NotebookId),
-		).toMatchObject([{ status: 'failed', sandbox_reclaimed_at: expect.any(String) }]);
+			expect(create).toHaveBeenCalledTimes(2);
+			expect(await createServices(bucket).sessions.listSessions(nid)).toHaveLength(1);
+			expect(
+				await createServices(bucket).sessions.listSessions(otherNb.id as NotebookId),
+			).toMatchObject([{ status: 'failed', sandbox_reclaimed_at: expect.any(String) }]);
+		},
+	);
+
+	it.each([
+		{ mode: 'edit', missing: 'index' },
+		{ mode: 'edit', missing: 'entry' },
+		{ mode: 'app', missing: 'index' },
+		{ mode: 'app', missing: 'entry' },
+	] as const)(
+		'handles an active $mode start missing its $missing before cap ranking',
+		async ({ missing, mode }) => {
+			const services = createServices(bucket, undefined, { sessionIndex: 'on' });
+			const api = createTestApi({
+				bucket,
+				compute: makeFakeCompute(),
+				maxConcurrentSessionsPerUser: 1,
+				deps: { services },
+			});
+			const list = services.sessions.listActiveForUser.bind(services.sessions);
+			vi.spyOn(services.sessions, 'listActiveForUser').mockImplementationOnce(async (...args) => {
+				if (missing === 'index') await bucket.delete(paths.sessionIndexForUser(ACTOR));
+				else
+					await bucket.put(
+						paths.sessionIndexForUser(ACTOR),
+						JSON.stringify({ user_id: ACTOR, entries: [] }),
+					);
+				return list(...args);
+			});
+			if (missing === 'index') {
+				await expectOk(await api.request('POST', sessionsPath(), { mode }));
+				return;
+			}
+			await expectError(await api.request('POST', sessionsPath(), { mode }), 409, 'CONFLICT');
+			expect(await services.sessions.listSessions(nid)).toMatchObject([
+				{ status: 'failed', sandbox_reclaimed_at: expect.any(String) },
+			]);
+			await expectOk(await api.request('POST', sessionsPath(), { mode }));
+		},
+	);
+
+	it('rejects an unregistered start and reclaims its speculative sandbox', async () => {
+		const services = createServices(bucket, undefined, { sessionIndex: 'on' });
+		const api = createTestApi({ bucket, compute: makeFakeCompute(), deps: { services } });
+		const put = bucket.put.bind(bucket);
+		const failure = vi.spyOn(bucket, 'put').mockImplementation((key, value, options) => {
+			if (key === paths.sessionIndexForUser(ACTOR)) throw new Error('index unavailable');
+			return put(key, value, options);
+		});
+		try {
+			await expectError(await api.request('POST', sessionsPath()), 500);
+			expect(await services.sessions.listSessions(nid)).toMatchObject([
+				{ status: 'failed', sandbox_reclaimed_at: expect.any(String) },
+			]);
+		} finally {
+			failure.mockRestore();
+		}
+		await expectOk(await api.request('POST', sessionsPath()));
 	});
 
 	it.each(['full', 'rejected', 'thrown'] as const)(
@@ -4219,12 +4279,12 @@ describe('Session routes', () => {
 	});
 
 	it.each([
-		{ start: 'cold', scans: 1 },
-		{ start: 'warm', scans: 1 },
+		{ start: 'cold', scans: 0 },
+		{ start: 'warm', scans: 0 },
 	] as const)(
-		'scans deployment-wide sessions $scans time(s) for the per-user cap on a $start start',
+		'scans deployment-wide sessions $scans time(s) for an indexed user on a $start start',
 		async ({ start, scans }) => {
-			const services = createServices(bucket);
+			const services = createServices(bucket, undefined, { sessionIndex: 'on' });
 			const unrelatedProject = createProjectId();
 			const unrelated = await services.sessions.createSession({
 				project_id: unrelatedProject,
@@ -4248,6 +4308,7 @@ describe('Session routes', () => {
 				);
 				await warmPool.sweep();
 			}
+			await services.sessions.listActiveForUser(ACTOR);
 			const reserve = warmPool && vi.spyOn(warmPool, 'reserve');
 			const listSpy = vi.spyOn(bucket, 'list');
 			const getSpy = vi.spyOn(bucket, 'get');
@@ -4256,7 +4317,7 @@ describe('Session routes', () => {
 				userId: ACTOR,
 				compute,
 				maxConcurrentSessionsPerUser: 5,
-				deps: { warmPool },
+				deps: { warmPool, services },
 			}).request;
 
 			await expectOk(await capped('POST', sessionsPath()));
@@ -4269,7 +4330,7 @@ describe('Session routes', () => {
 				getSpy.mock.calls.filter(
 					([key]) => key === paths.session(unrelatedProject, unrelated.session_id),
 				),
-			).toHaveLength(1);
+			).toHaveLength(0);
 		},
 	);
 

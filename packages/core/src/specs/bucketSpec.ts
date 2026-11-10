@@ -72,6 +72,7 @@ import {
 	ProjectSchema,
 	ProposalPublicationSchema,
 	SessionSchema,
+	SessionIndexSchema,
 	SnapshotSchema,
 	SourceSchema,
 	TokenSchema,
@@ -482,6 +483,15 @@ const OBJECTS: BucketObject[] = [
 		summary: 'Immutable org integration config revision.',
 		mutability: 'immutable',
 		tag: 'integration',
+	},
+	{
+		name: 'SessionIndex',
+		key: template(paths.sessionIndexForUser(UID)),
+		schema: SessionIndexSchema,
+		summary: 'Per-user session references, validated before cap ranking.',
+		mutability: 'cas',
+		owner: 'SessionService',
+		tag: 'session',
 	},
 	{
 		name: 'Session',

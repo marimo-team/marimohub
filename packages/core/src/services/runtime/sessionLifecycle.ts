@@ -103,6 +103,7 @@ export class SessionLifecycleService {
 	async sweep(now = Date.now()): Promise<SweepResult> {
 		const thumbnailDeadlineAt = Date.now() + THUMBNAIL_MAINTENANCE_BUDGET_MS;
 		const sessions = await this.sessions.listSessions();
+		await this.sessions.reconcileSessionIndexes(sessions);
 		const readPool = new AppPoolStore(this.bucket).reader();
 		// Candidates: `running` sessions, plus any terminal record still holding a
 		// sandbox_id that has not been confirmed destroyed. The `expired` ones are
