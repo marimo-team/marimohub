@@ -1,10 +1,11 @@
 import { gunzipSync, gzipSync, inflateSync } from 'node:zlib';
-import { Hono } from 'hono';
+import { createApp } from '@marimo-hub/api';
+import { createTestApi } from '@marimo-hub/api/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { compressResponse } from './compression';
 
-function compressionApp(): Hono {
-	return new Hono().use('*', compressResponse());
+function compressionApp() {
+	return createApp().use('*', compressResponse());
 }
 
 describe('response compression', () => {
@@ -195,15 +196,100 @@ describe('response compression', () => {
 		);
 	});
 
-	it('compresses unknown-length JSON without probing its size', async () => {
+	it.each(['GET', 'POST', 'PUT', 'DELETE'])('skips small API JSON for %s', async (method) => {
 		const app = compressionApp();
-		app.get('/', (c) => c.json({ ok: true }));
-		const response = await app.request('/', { headers: { 'Accept-Encoding': 'gzip' } });
-		expect(response.headers.get('Content-Encoding')).toBe('gzip');
-		expect(JSON.parse(gunzipSync(Buffer.from(await response.arrayBuffer())).toString())).toEqual({
-			ok: true,
+		app.on(method, '/api/v1/example', (c) => c.json({ ok: true }));
+		using compression = vi.spyOn(globalThis, 'CompressionStream');
+		const response = await app.request('/api/v1/example', {
+			method,
+			headers: { 'Accept-Encoding': 'gzip' },
 		});
+		expect(compression).not.toHaveBeenCalled();
+		expect(response.headers.has('Content-Encoding')).toBe(false);
+		expect(response.headers.get('Content-Length')).toBe('11');
+		expect(await response.json()).toEqual({ ok: true });
 	});
+
+	it.each([1023, 1024, 1025])('uses serialized UTF-8 JSON length at %i bytes', async (size) => {
+		const payload = 'é'.repeat(Math.floor((size - 2) / 2)) + (size % 2 ? 'a' : '');
+		const app = compressionApp();
+		app.post('/api/v1/example', (c) => c.json(payload));
+		const response = await app.request('/api/v1/example', {
+			method: 'POST',
+			headers: { 'Accept-Encoding': 'gzip' },
+		});
+		expect(response.headers.get('Content-Encoding')).toBe(size < 1024 ? null : 'gzip');
+		expect(response.headers.get('Content-Length')).toBe(size < 1024 ? String(size) : null);
+		const bytes = Buffer.from(await response.arrayBuffer());
+		expect(JSON.parse((size < 1024 ? bytes : gunzipSync(bytes)).toString())).toBe(payload);
+	});
+
+	it('skips compression for small API errors', async () => {
+		const app = compressionApp();
+		app.onError((error, c) => c.json({ error: error.message }, 500));
+		app.get('/api/v1/example', () => {
+			throw new Error('failed');
+		});
+		const response = await app.request('/api/v1/example', {
+			headers: { 'Accept-Encoding': 'gzip' },
+		});
+		expect(response.status).toBe(500);
+		expect(response.headers.has('Content-Encoding')).toBe(false);
+		expect(response.headers.get('Content-Length')).toBe('18');
+		expect(await response.json()).toEqual({ error: 'failed' });
+	});
+
+	it('preserves JSON HEAD and 304 metadata through the API and compression stack', async () => {
+		const { app: api } = createTestApi();
+		const app = compressionApp().route('/', api);
+		const headers = { 'Accept-Encoding': 'gzip' };
+		const get = await app.request('/api/v1/projects', { headers });
+		expect(get.status).toBe(200);
+		const etag = get.headers.get('ETag');
+		expect(etag).toBeTruthy();
+		const bytes = await get.arrayBuffer();
+		expect(get.headers.get('Content-Length')).toBe(String(bytes.byteLength));
+		const head = await app.request('/api/v1/projects', { method: 'HEAD', headers });
+		expect(head.status).toBe(200);
+		expect(head.headers.get('ETag')).toBe(etag);
+		expect(head.headers.get('Content-Length')).toBe(String(bytes.byteLength));
+		expect(head.headers.has('Content-Encoding')).toBe(false);
+		expect(await head.text()).toBe('');
+		for (const method of ['GET', 'HEAD']) {
+			const response = await app.request('/api/v1/projects', {
+				method,
+				headers: { ...headers, 'If-None-Match': etag! },
+			});
+			expect(response.status).toBe(304);
+			expect(response.headers.get('ETag')).toBe(etag);
+			expect(response.headers.has('Content-Length')).toBe(false);
+			expect(response.headers.has('Content-Encoding')).toBe(false);
+			expect(response.headers.get('Vary')).toContain('Accept-Encoding');
+			expect(await response.text()).toBe('');
+		}
+	});
+
+	it.each([401, 422, 429, 503] as const)(
+		'leaves small JSON errors uncompressed: %i',
+		async (status) => {
+			const app = compressionApp();
+			app.post('/api/v1/example', (c) =>
+				c.json({ error: 'request failed' }, status, { 'Retry-After': '5' }),
+			);
+			using compression = vi.spyOn(globalThis, 'CompressionStream');
+			const response = await app.request('/api/v1/example', {
+				method: 'POST',
+				headers: { 'Accept-Encoding': 'gzip' },
+			});
+			expect(response.status).toBe(status);
+			expect(compression).not.toHaveBeenCalled();
+			expect(response.headers.has('Content-Encoding')).toBe(false);
+			expect(response.headers.get('Retry-After')).toBe('5');
+			const bytes = await response.arrayBuffer();
+			expect(response.headers.get('Content-Length')).toBe(String(bytes.byteLength));
+			expect(JSON.parse(new TextDecoder().decode(bytes))).toEqual({ error: 'request failed' });
+		},
+	);
 
 	it('leaves already-encoded bodies untouched', async () => {
 		const bytes = gzipSync(JSON.stringify(payload));
