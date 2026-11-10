@@ -28,6 +28,7 @@ import type {
 } from '@marimo-hub/core/search/contracts';
 
 const MAX_PENDING_LOADS = 64;
+const CLEANUP_DELETE_BATCH_SIZE = 10;
 
 interface Cached {
 	snapshot: SearchSnapshot;
@@ -216,7 +217,14 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 	async prune(scope: SearchScope, signal: AbortSignal): Promise<void> {
 		const paths = searchPaths.scope(scope);
 		const { revision, head } = await this.loadHead(scope, signal);
+		signal.throwIfAborted();
 		if (!head) return;
+		const page = await this.bucket.list({ prefix: paths.snapshots, limit: 100 });
+		signal.throwIfAborted();
+		const expired = page.objects.filter(
+			(item) => item.key !== head.key && Date.now() - item.uploaded.getTime() > 24 * 3600_000,
+		);
+		if (expired.length === 0) return;
 		signal.throwIfAborted();
 		try {
 			await this.writeHead(scope, { ...head, fence: crypto.randomUUID() }, revision, signal);
@@ -224,12 +232,13 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 			if (error instanceof PreconditionFailedError) return;
 			throw error;
 		}
-		const page = await this.bucket.list({ prefix: paths.snapshots, limit: 100 });
-		for (const item of page.objects) {
+		for (let offset = 0; offset < expired.length; offset += CLEANUP_DELETE_BATCH_SIZE) {
 			signal.throwIfAborted();
-			if (item.key !== head.key && Date.now() - item.uploaded.getTime() > 24 * 3600_000)
-				await this.bucket.delete(item.key);
+			await this.bucket.delete(
+				expired.slice(offset, offset + CLEANUP_DELETE_BATCH_SIZE).map((item) => item.key),
+			);
 		}
+		signal.throwIfAborted();
 	}
 
 	async candidates(

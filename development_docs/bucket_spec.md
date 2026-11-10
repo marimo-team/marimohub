@@ -1852,13 +1852,14 @@ and source revisions plus a configuration identity. Claiming a newer build, or a
 configuration at equal revisions, fences older publication while preserving the current
 snapshot. Incompatible checkpoints restart.
 Publication cannot overwrite a newer head or resurrect a deletion tombstone.
+The global cursor records crawl position, cleanup position, schedule identity, and the next crawl time.
 The maintenance lease uses `_system/search/lock.json`.
 The `CatalogService.mutateSnapshot` write that publishes a notebook move sets `search_refresh`
 on both project entries in the new snapshot.
 The token is part of each source's configuration identity, so the next crawl claims a new build
 without waiting for the recrawl interval. The crawler reads the token from the snapshot it already holds.
 
-Garbage collection fences heads before removing obsolete snapshots. Active crawl
+Garbage collection lists objects before fencing heads or checkpoints. It writes no fence when nothing is eligible for deletion. Active crawl
 pages and immutable objects younger than 24 hours remain. Deletion CAS-retires the
 crawl to an empty checkpoint after publishing the tombstone. Retain both records
 to fence delayed writers; reclaim detached pages and snapshots after the grace period.

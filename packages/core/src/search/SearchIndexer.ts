@@ -1,4 +1,6 @@
 import { forEachConcurrentUntilFailure } from '../async';
+import { z } from 'zod';
+import { sha256Hex } from '../internal/sha256';
 import { sameSearchBuild, searchSnapshotDigest } from './build';
 import type { Bucket } from '../ports/bucket';
 import type { CatalogService } from '../services/catalog/CatalogService';
@@ -31,26 +33,41 @@ import type {
 	SearchDocument,
 	EmbeddingProvider,
 	SearchBuild,
+	SearchSnapshot,
 } from './contracts';
+
+type IncrementalSearchSource = SearchSource & {
+	readonly incremental?: boolean;
+	page(
+		...args: [...Parameters<SearchSource['page']>, previous?: SearchSnapshot | null]
+	): ReturnType<SearchSource['page']>;
+};
+
+const CrawlCursorSchema = SearchCursorSchema.extend({
+	schedule: z.string().max(64).optional(),
+	next_run_at: z.number().nonnegative().optional(),
+});
+const MAX_TICK_STEPS = 32;
+const TICK_BUDGET_MS = 100;
+const CLEANUP_DELETE_BATCH_SIZE = 10;
 
 export class SearchIndexer {
 	constructor(
 		private readonly bucket: Bucket,
 		private readonly index: SearchSnapshotStore,
-		private readonly sources: readonly SearchSource[],
+		private readonly sources: readonly IncrementalSearchSource[],
 		private readonly catalog: CatalogService,
 		private readonly projects: ProjectService,
 		private readonly embeddings?: EmbeddingProvider,
 		private readonly minRecrawlIntervalMs = MIN_RECRAWL_INTERVAL_MS,
 	) {}
 	/**
-	 * `refresh` is the project's `search_refresh` catalog token (a notebook move sets it); a new
-	 * value starts a new build without waiting for the recrawl interval. `tick` passes it from
-	 * the snapshot it already holds, so a step costs no extra read.
+	 * A changed `search_refresh` token bypasses the recrawl interval.
+	 * `tick` supplies the token from its catalog snapshot to avoid another read.
 	 */
 	async step(
 		projectId: ProjectId,
-		source: SearchSource,
+		source: IncrementalSearchSource,
 		signal: AbortSignal,
 		refresh?: string | null,
 	): Promise<boolean> {
@@ -72,6 +89,11 @@ export class SearchIndexer {
 		const project = await this.liveProject(projectId);
 		if (!project) {
 			const head = await this.index.head(scope, signal);
+			if (head.deleted && stored && stored.size <= MAX_SEARCH_CHECKPOINT_BYTES) {
+				const state = SearchCheckpointSchema.parse(await stored.json());
+				if (state.revision === head.revision && state.pages.length === 0 && !state.ready)
+					return true;
+			}
 			// Keep both CAS records: late first writes must not recreate a deleted scope.
 			if (!head.deleted && !(await this.index.publish(scope, null, head.revision, signal)))
 				return false;
@@ -92,7 +114,7 @@ export class SearchIndexer {
 		}
 		const loaded = await this.index.claim(scope, build, signal);
 		if (!loaded) return true;
-		// Every recrawl writes pages that cleanup retains for a day, even when nothing changed.
+		// Skip fresh scopes before creating pages retained by the cleanup grace period.
 		if (loaded.verifiedAt && Date.now() - Date.parse(loaded.verifiedAt) < this.minRecrawlIntervalMs)
 			return true;
 		const initial = () => emptyCheckpoint(loaded.revision, build);
@@ -105,7 +127,16 @@ export class SearchIndexer {
 			state = initial();
 		let checkpointEtag = stored?.etag;
 		if (!state.ready) {
-			const page = await source.page(project, state.cursor, signal);
+			const previous =
+				(this.embeddings && source.embeddable) || (source.incremental && loaded.verifiedAt)
+					? (await this.index.read(scope, signal)).snapshot
+					: null;
+			const page = await source.page(
+				project,
+				state.cursor,
+				signal,
+				loaded.verifiedAt ? previous : null,
+			);
 			const valid: SearchDocument[] = [];
 			for (const document of page.documents.slice(0, MAX_SOURCE_PAGE_DOCUMENTS)) {
 				const parsed = SearchDocumentSchema.safeParse(document);
@@ -122,11 +153,7 @@ export class SearchIndexer {
 			page.documents = valid;
 			if (this.embeddings && source.embeddable)
 				page.partial =
-					(await this.embed(
-						page.documents,
-						(await this.index.read(scope, signal)).snapshot?.documents ?? [],
-						signal,
-					)) || page.partial;
+					(await this.embed(page.documents, previous?.documents ?? [], signal)) || page.partial;
 			const documents: SearchDocument[] = [];
 			let bytes = state.bytes;
 			for (const document of page.documents) {
@@ -306,14 +333,34 @@ export class SearchIndexer {
 		const key = searchPaths.cursor;
 		const object = await this.bucket.get(key);
 		if (object && object.size > 4096) throw new Error('Search cursor exceeds budget');
-		const cursor = object ? SearchCursorSchema.parse(await object.json()) : { after: '' };
+		const cursor = CrawlCursorSchema.parse(object ? await object.json() : { after: '' });
 		const snapshot = await this.catalog.getCurrentSnapshot();
 		const tasks = snapshot.projects
 			.flatMap((p) =>
-				this.sources.map((source) => ({ projectId: p.id, source, id: `${p.id}/${source.id}` })),
+				this.sources.map((source) => ({
+					projectId: p.id,
+					source,
+					refresh: p.search_refresh ?? null,
+					id: `${p.id}/${source.id}`,
+				})),
 			)
 			.sort((a, b) => a.id.localeCompare(b.id));
-		const task = tasks.find((t) => t.id > cursor.after) ?? tasks[0];
+		const schedule = await sha256Hex(
+			JSON.stringify([
+				tasks.map((task) => [
+					task.id,
+					task.refresh,
+					task.source.revision,
+					task.source.configuration,
+				]),
+				this.embeddings?.space,
+			]),
+		);
+		signal.throwIfAborted();
+		if (cursor.schedule === schedule && (cursor.next_run_at ?? 0) > Date.now()) return;
+		let after = cursor.schedule && cursor.schedule !== schedule ? '' : cursor.after;
+		let position = tasks.findIndex((task) => task.id > after);
+		if (position === -1) position = 0;
 		signal.throwIfAborted();
 		const cleanup = await this.bucket.list({
 			prefix: searchPaths.projects,
@@ -322,47 +369,82 @@ export class SearchIndexer {
 			limit: 1,
 		});
 		signal.throwIfAborted();
-		try {
-			await this.bucket.put(
-				key,
-				JSON.stringify({ after: task?.id ?? '', cleanup: cleanup.cursor }),
-				object ? { onlyIfEtagMatches: object.etag } : { onlyIfNotExists: true },
-			);
-		} catch (error) {
-			if (error instanceof PreconditionFailedError) return;
-			throw error;
-		}
+		let failure: { error: unknown } | undefined;
 		for (const prefix of cleanup.delimitedPrefixes) {
 			const id = prefix.split('/').at(-2);
 			if (!id || !ProjectIdValue.is(id)) continue;
 			for (const source of this.sources) {
-				const scope = { projectId: id, source: source.id };
-				if (!snapshot.projects.some((p) => p.id === id)) await this.step(id, source, signal, null);
-				const checkpoint = await this.bucket.get(searchPaths.scope(scope).checkpoint);
-				if (
-					!checkpoint ||
-					(checkpoint.size <= MAX_SEARCH_CHECKPOINT_BYTES &&
-						SearchCheckpointSchema.parse(await checkpoint.json()).pages.length === 0)
-				) {
-					await this.index.prune?.(scope, signal);
-					await this.prunePages(id, source.id, signal);
+				try {
+					if (!snapshot.projects.some((p) => p.id === id))
+						await this.step(id, source, signal, null);
+					await this.pruneScope(id, source.id, signal);
+				} catch (error) {
+					signal.throwIfAborted();
+					failure ??= { error };
 				}
 			}
 		}
-		if (task) {
-			const refresh =
-				snapshot.projects.find((p) => p.id === task.projectId)?.search_refresh ?? null;
-			for (let i = 0; i < 4; i++) {
+		const cleanupCursor = failure ? cursor.cleanup : cleanup.cursor;
+		const started = performance.now();
+		for (let steps = 0; position < tasks.length && steps < MAX_TICK_STEPS; steps++) {
+			signal.throwIfAborted();
+			const task = tasks[position];
+			try {
+				if (await this.step(task.projectId, task.source, signal, task.refresh)) {
+					after = task.id;
+					position++;
+				}
+			} catch (error) {
 				signal.throwIfAborted();
-				if (await this.step(task.projectId, task.source, signal, refresh)) break;
+				// Retry the failed scope next round without starving the scopes after it.
+				after = task.id;
+				failure ??= { error };
+				break;
+			}
+			// Check the budget between resumable steps, not during publication.
+			if (performance.now() - started >= TICK_BUDGET_MS) break;
+		}
+		const next = {
+			after: position === tasks.length ? '' : after,
+			cleanup: cleanupCursor,
+			schedule,
+			next_run_at:
+				!failure && position === tasks.length ? Date.now() + this.minRecrawlIntervalMs : undefined,
+		};
+		if (JSON.stringify(cursor) !== JSON.stringify(next)) {
+			signal.throwIfAborted();
+			try {
+				await this.bucket.put(
+					key,
+					JSON.stringify(next),
+					object ? { onlyIfEtagMatches: object.etag } : { onlyIfNotExists: true },
+				);
+			} catch (error) {
+				if (!(error instanceof PreconditionFailedError)) throw error;
 			}
 		}
+		if (failure) throw failure.error;
 	}
-	private async prunePages(projectId: ProjectId, source: string, signal: AbortSignal) {
-		const paths = searchPaths.scope({ projectId, source });
+	private async pruneScope(projectId: ProjectId, source: string, signal: AbortSignal) {
+		const scope = { projectId, source };
+		const paths = searchPaths.scope(scope);
+		signal.throwIfAborted();
 		const object = await this.bucket.get(paths.checkpoint);
-		if (!object || object.size > MAX_SEARCH_CHECKPOINT_BYTES) return;
-		const state = SearchCheckpointSchema.parse(await object.json());
+		signal.throwIfAborted();
+		if (object && object.size > MAX_SEARCH_CHECKPOINT_BYTES) return;
+		const state = object ? SearchCheckpointSchema.parse(await object.json()) : null;
+		if (state && state.pages.length > 0) return;
+		await this.index.prune?.(scope, signal);
+		signal.throwIfAborted();
+		if (!object || !state) return;
+		const pages = await this.bucket.list({ prefix: paths.pages, limit: 100 });
+		signal.throwIfAborted();
+		const expired = pages.objects.filter(
+			(page) =>
+				Date.now() - page.uploaded.getTime() > 24 * 3600_000 &&
+				!state.pages.some((id) => page.key === paths.page(id)),
+		);
+		if (expired.length === 0) return;
 		signal.throwIfAborted();
 		try {
 			await this.bucket.put(
@@ -374,15 +456,13 @@ export class SearchIndexer {
 			if (error instanceof PreconditionFailedError) return;
 			throw error;
 		}
-		const pages = await this.bucket.list({ prefix: paths.pages, limit: 100 });
-		for (const page of pages.objects) {
+		for (let offset = 0; offset < expired.length; offset += CLEANUP_DELETE_BATCH_SIZE) {
 			signal.throwIfAborted();
-			if (
-				Date.now() - page.uploaded.getTime() > 24 * 3600_000 &&
-				!state.pages.some((id) => page.key === paths.page(id))
-			)
-				await this.bucket.delete(page.key);
+			await this.bucket.delete(
+				expired.slice(offset, offset + CLEANUP_DELETE_BATCH_SIZE).map((page) => page.key),
+			);
 		}
+		signal.throwIfAborted();
 	}
 }
 

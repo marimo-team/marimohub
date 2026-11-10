@@ -121,5 +121,6 @@ Per-source status identifies failures, timeouts, missing or stale indexes, disab
 An empty result with incomplete coverage does not mean the content is absent.
 
 Global search covers the first 16 projects you can access, in catalog order, among the first 128 projects in the catalog. It reports `truncated` coverage for the `projects` source when more exist. Select a project or set `project_id` for project-scoped search.
-Large projects and catalogs can also have incomplete coverage.
+Large projects and catalogs can also have incomplete coverage. Large descriptions and saved outputs can be truncated. Coverage is partial when extraction exceeds its input budget.
+Final access and freshness checks can reduce the result count below `limit`. Search does not fill those slots with lower-ranked results.
 Keyword search matches whole tokens, including underscores, without case sensitivity. It does not match prefixes, substrings, or word variants.
