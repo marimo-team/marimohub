@@ -432,7 +432,7 @@ export class JobRunner {
 		const { sandbox } = this.deps;
 		const logFallback = (config: string) =>
 			logEvent({
-				level: 'error',
+				level: 'warn',
 				event: 'stored_config_fallback',
 				config,
 				project_id: run.project_id,

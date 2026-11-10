@@ -2650,7 +2650,12 @@ describe('Session routes', () => {
 				const line = log.mock.calls.find((c) =>
 					String(c[0]).includes('stored_config_fallback'),
 				)?.[0] as string;
-				expect(line).toContain('selection_unavailable');
+				expect(JSON.parse(line)).toMatchObject({
+					level: 'warn',
+					config: 'base_image',
+					reason: 'selection_unavailable',
+					recovered: true,
+				});
 				expect(line).not.toContain('img-gone');
 			} finally {
 				log.mockRestore();
@@ -2981,7 +2986,12 @@ describe('Session routes', () => {
 			const line = log.mock.calls.find((call) =>
 				String(call[0]).includes('stored_config_fallback'),
 			)?.[0] as string;
-			expect(line).toContain('selection_unavailable');
+			expect(JSON.parse(line)).toMatchObject({
+				level: 'warn',
+				config: 'compute_profile',
+				reason: 'selection_unavailable',
+				recovered: true,
+			});
 			expect(line).not.toContain('removed');
 		} finally {
 			log.mockRestore();

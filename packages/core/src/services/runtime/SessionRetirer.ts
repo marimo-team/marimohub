@@ -14,6 +14,7 @@ import { paths } from '../../paths';
 import { Millis } from '../../duration';
 import { ConflictError, NotFoundError } from '../../errors';
 import { logOperationalError } from '../../operationalLog';
+import { logEvent } from '../../logs';
 import { captureFilesystemSnapshot } from '../content/filesystemSnapshots';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
@@ -421,7 +422,7 @@ export class SessionRetirer {
 			options.superseded = await this.supersededByLiveEditor(session);
 			if (options.superseded) blocked = reclaimBlockedReason(session, now, options);
 		}
-		if (blocked) return { reclaimed: false, reason: blocked };
+		if (blocked) return this.skipReclaim(session, blocked);
 		if (session.sandbox_reclaimed_at) {
 			await this.finishReclaim(session);
 			return { reclaimed: true, saved: false };
@@ -445,7 +446,7 @@ export class SessionRetirer {
 					{ operation: 'session.reclaim', session_id: session.session_id },
 					error,
 				);
-				return { reclaimed: false, reason: 'attachment_failed' };
+				return this.skipReclaim(session, 'attachment_failed');
 			}
 		}
 		if (probe && existing) {
@@ -458,13 +459,13 @@ export class SessionRetirer {
 			} catch (error) {
 				if (!(error instanceof NotFoundError)) throw error;
 				if (!(await this.destroySandbox(session, existing))) {
-					return { reclaimed: false, reason: 'destroy_failed' };
+					return this.skipReclaim(session, 'destroy_failed');
 				}
 				await this.finishReclaim(session);
 				return { reclaimed: true, saved: false };
 			}
-			if (active === null) return { reclaimed: false, reason: 'kernel_unreachable' };
-			if (active !== 0) return { reclaimed: false, reason: 'kernel_active' };
+			if (active === null) return this.skipReclaim(session, 'kernel_unreachable');
+			if (active !== 0) return this.skipReclaim(session, 'kernel_active');
 		}
 		const { destroyed, saved } =
 			capture && existing
@@ -475,9 +476,25 @@ export class SessionRetirer {
 						existing,
 					)
 				: { destroyed: await this.destroySandbox(session, existing), saved: false };
-		if (!destroyed) return { reclaimed: false, reason: 'destroy_failed' };
+		if (!destroyed) return this.skipReclaim(session, 'destroy_failed');
 		await this.finishReclaim(session);
 		return { reclaimed: true, saved };
+	}
+
+	private skipReclaim(session: Session, reason: ReclaimBlockedReason): ReclaimOutcome {
+		logEvent({
+			level: ['not_terminal', 'teardown_grace', 'provision_grace', 'kernel_active'].includes(reason)
+				? 'info'
+				: 'warn',
+			event: 'session_reclaim_skipped',
+			session_id: session.session_id,
+			project_id: session.project_id,
+			notebook_id: session.notebook_id,
+			sandbox_id: session.sandbox_id,
+			status: session.status,
+			reason,
+		});
+		return { reclaimed: false, reason };
 	}
 
 	private async supersededByLiveEditor(session: Session): Promise<boolean> {

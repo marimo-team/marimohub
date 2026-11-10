@@ -301,7 +301,6 @@ export class CatalogService {
 		previousSnapshotId: Snapshot['snapshot_id'] | null,
 		context: Record<string, unknown>,
 	): Promise<Snapshot> {
-		this.metrics.increment('catalog.cas.attempt');
 		const catalogObj = await this.bucket.get(paths.catalog);
 		if ((catalogObj?.etag ?? null) !== expectedCatalogEtag) {
 			throw new ConflictError('Catalog changed after recovery inspection. Inspect storage again.');
@@ -316,6 +315,7 @@ export class CatalogService {
 			previous_snapshot_id: previousSnapshotId,
 		};
 		try {
+			this.metrics.increment('catalog.cas.attempt');
 			await this.bucket.put(
 				paths.catalog,
 				JSON.stringify(catalog),
@@ -418,6 +418,7 @@ export class CatalogService {
 				};
 
 				try {
+					this.metrics.increment('catalog.cas.attempt');
 					await cas.put(paths.catalog, JSON.stringify(newCatalog), {
 						onlyIfEtagMatches: catalogObj.etag,
 					});
@@ -436,7 +437,6 @@ export class CatalogService {
 			},
 			{
 				...this.casRetry,
-				onAttempt: () => this.metrics.increment('catalog.cas.attempt'),
 				onConflict: () => this.metrics.increment('catalog.cas.conflict'),
 				onExhausted: () => this.metrics.increment('catalog.cas.exhausted'),
 			},

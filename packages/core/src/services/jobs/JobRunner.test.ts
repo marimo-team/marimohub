@@ -799,9 +799,16 @@ describe('JobRunner unhappy paths', () => {
 			},
 		}).execute(await enqueue());
 		expect(fallbackCompute.lastCreateOptions?.resources).toEqual({ cpu: 1 });
-		expect(logSpy.mock.calls.some((c) => String(c[0]).includes('stored_config_fallback'))).toBe(
-			true,
-		);
+		const line = logSpy.mock.calls.find((c) =>
+			String(c[0]).includes('stored_config_fallback'),
+		)?.[0] as string;
+		expect(JSON.parse(line)).toMatchObject({
+			level: 'warn',
+			config: 'compute_profile',
+			reason: 'selection_unavailable',
+			recovered: true,
+		});
+		expect(line).not.toContain('gone');
 	});
 });
 
@@ -867,9 +874,16 @@ describe('JobRunner provenance', () => {
 		}).execute(await enqueue());
 		expect(compute.lastCreateOptions?.image).toBe('ghcr.io/org/default:1');
 		expect(run.image).toBe('ghcr.io/org/default:1');
-		expect(
-			vi.mocked(console.log).mock.calls.some((c) => String(c[0]).includes('"config":"base_image"')),
-		).toBe(true);
+		const line = vi
+			.mocked(console.log)
+			.mock.calls.find((c) => String(c[0]).includes('stored_config_fallback'))?.[0] as string;
+		expect(JSON.parse(line)).toMatchObject({
+			level: 'warn',
+			config: 'base_image',
+			reason: 'selection_unavailable',
+			recovered: true,
+		});
+		expect(line).not.toContain('ghcr.io/org/retired:1');
 	});
 
 	it('records the default profile name when the notebook stores none', async () => {

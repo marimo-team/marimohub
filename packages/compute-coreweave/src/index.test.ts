@@ -19,6 +19,7 @@ import {
 	NOT_A_DIRECTORY_MARKER,
 } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core/ids';
+import { NotFoundError } from '@marimo-hub/core/errors';
 import { withDeadline } from '@marimo-hub/core/async';
 import type { SandboxProvider } from '@marimo-hub/core/ports/sandbox';
 import {
@@ -2633,11 +2634,38 @@ describe('CoreWeave warm sandbox reconnect', () => {
 		const source = makeCompute(world).create(SANDBOX_ID, { reuse: false });
 		await source.ready!();
 		expect(source.reconnectReference).toBeUndefined();
+		const fromId = world.client.fromId.bind(world.client);
+		const get = vi.spyOn(world.client, 'fromId').mockImplementation(async (id) => ({
+			...(await fromId(id)),
+			status: undefined,
+		}));
 		expectExecResult(await makeCompute(world).connectExisting(SANDBOX_ID).exec('true'), {
 			success: true,
 		});
+		expect(get).toHaveBeenCalledExactlyOnceWith('cw-1');
 		expect(world.listCalls).toEqual([[ID_TAG]]);
+		expect(world.created).toHaveLength(1);
 	});
+
+	it.each(['paused', 'completed'] as const)(
+		'rejects a discovered running sandbox whose Get reports %s',
+		async (status) => {
+			const world = makeWorld();
+			await makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!();
+			const fromId = world.client.fromId.bind(world.client);
+			vi.spyOn(world.client, 'fromId').mockImplementation(async (id) => ({
+				...(await fromId(id)),
+				status,
+			}));
+
+			await expect(makeCompute(world).connectExisting(SANDBOX_ID).exec('true')).rejects.toThrow(
+				'no longer available',
+			);
+			expect(world.registry.get('cw-1')!.fake.runCalls).toEqual([]);
+			expect(world.listCalls).toEqual([[ID_TAG]]);
+			expect(world.created).toHaveLength(1);
+		},
+	);
 
 	it('reports direct Get time separately from creation and discovery', async () => {
 		vi.useFakeTimers();
@@ -2682,7 +2710,13 @@ describe('CoreWeave warm sandbox reconnect', () => {
 			const sandbox = makeCompute(world).connectExisting(SANDBOX_ID, {
 				reconnectReference: reference,
 			});
-			await expect(sandbox.exec('true')).rejects.toThrow('no longer available');
+			const error = await sandbox.exec('true').catch((error: unknown) => error);
+			expect(error).toBeInstanceOf(Error);
+			if (['completed', 'terminated', 'failed'].includes(status)) {
+				expect(error).toBeInstanceOf(NotFoundError);
+			} else {
+				expect(error).not.toBeInstanceOf(NotFoundError);
+			}
 			await expect(sandbox.exec('true')).rejects.toThrow('no longer available');
 			expect(get.mock.calls).toEqual([['cw-1'], ['cw-1']]);
 			expect(sandbox.reconnectReference).toBeUndefined();
@@ -2704,7 +2738,7 @@ describe('CoreWeave warm sandbox reconnect', () => {
 			makeCompute(world)
 				.connectExisting(SANDBOX_ID, { reconnectReference: reference })
 				.exec('true'),
-		).rejects.toBeInstanceOf(CWSandboxNotFoundError);
+		).rejects.toBeInstanceOf(NotFoundError);
 		expect(get).toHaveBeenCalledExactlyOnceWith('cw-1');
 		expect(world.listCalls).toEqual([]);
 		expect(world.created).toHaveLength(1);
@@ -2816,7 +2850,7 @@ describe('CoreWeave warm sandbox reconnect', () => {
 		const sandbox = makeCompute(world).connectExisting(SANDBOX_ID, {
 			reconnectReference: reference,
 		});
-		await expect(sandbox.ready!()).rejects.toBe(error);
+		await expect(sandbox.ready!()).rejects.toBeInstanceOf(NotFoundError);
 		expect(get).toHaveBeenCalledExactlyOnceWith(sandboxId);
 		expect(world.listCalls).toEqual([]);
 		expect(world.created).toEqual([]);
@@ -2866,17 +2900,38 @@ describe('CoreWeave warm sandbox reconnect', () => {
 		expect(world.created).toHaveLength(1);
 	});
 
+	it('reports a sandbox disappearing between discovery and attachment as missing', async () => {
+		const world = makeWorld();
+		await makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!();
+		vi.spyOn(world.client, 'fromId').mockRejectedValue(new CWSandboxNotFoundError('gone'));
+
+		await expect(
+			makeCompute(world).connectExisting(SANDBOX_ID).exec('true'),
+		).rejects.toBeInstanceOf(NotFoundError);
+		expect(world.created).toHaveLength(1);
+	});
+
+	it('preserves temporary lookup failures instead of reporting a missing sandbox', async () => {
+		const world = makeWorld();
+		const error = new CWSandboxUnavailableError('temporarily unavailable');
+		vi.spyOn(world.client, 'list').mockRejectedValue(error);
+
+		await expect(makeCompute(world).connectExisting(SANDBOX_ID).exec('true')).rejects.toBe(error);
+		expect(world.created).toHaveLength(0);
+		expect(world.deleted).toHaveLength(0);
+	});
+
 	it('fails without creating when the sandbox is absent or deleted', async () => {
 		const world = makeWorld();
-		await expect(makeCompute(world).connectExisting(SANDBOX_ID).ready!()).rejects.toThrow(
-			'no longer available',
+		await expect(makeCompute(world).connectExisting(SANDBOX_ID).ready!()).rejects.toBeInstanceOf(
+			NotFoundError,
 		);
 		expect(world.created).toHaveLength(0);
 		await makeCompute(world).create(SANDBOX_ID).exec('true');
 		await makeCompute(world).create(SANDBOX_ID).destroy();
-		await expect(makeCompute(world).connectExisting(SANDBOX_ID).exec('true')).rejects.toThrow(
-			'no longer available',
-		);
+		await expect(
+			makeCompute(world).connectExisting(SANDBOX_ID).exec('true'),
+		).rejects.toBeInstanceOf(NotFoundError);
 		expect(world.created).toHaveLength(1);
 	});
 });
