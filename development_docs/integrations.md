@@ -301,7 +301,7 @@ update cannot bypass it.
 
 The sandbox adapter renders only the selected integration. It uses
 `MARIMOHUB_DATA_PREVIEW_IMAGE` and injects applicable WIF credentials.
-The first preview validates the image's runtime dependencies. Replica startup
+The first sandbox preview validates the image's runtime dependencies. Replica startup
 does not create a sandbox for this check. Missing or incompatible Python imports
 produce an error that identifies the import and points to the image setting.
 DuckDB-Wasm still initializes during replica preflight.
