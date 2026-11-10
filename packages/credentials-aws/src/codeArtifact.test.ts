@@ -20,6 +20,23 @@ const source: CodeArtifactSource = {
 	},
 };
 
+const federatedSource: CodeArtifactSource = { ...source, auth: { method: 'ambient' } };
+
+type ProbeResponse = Awaited<ReturnType<IntegrationProbe['fetch']>>;
+
+function federatedOptions(probe: IntegrationProbe, accessKeyId = 'AK') {
+	return {
+		probe,
+		federatedSourceIdentity: 'config/project/session',
+		federatedCredentials: {
+			accessKeyId,
+			secretAccessKey: `secret-${accessKeyId}`,
+			sessionToken: `session-${accessKeyId}`,
+			expiration: new Date(Date.now() + 60 * 60_000).toISOString(),
+		},
+	};
+}
+
 function tokenResponse(authorizationToken = 'registry-token', lifetimeSeconds = 43_200) {
 	return {
 		ok: true,
@@ -56,6 +73,123 @@ describe('AWS CodeArtifact credentials', () => {
 		vi.setSystemTime(new Date('2026-01-01T02:00:00.001Z'));
 		await adapter.resolve(source, { probe });
 		expect(probe.fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it('reuses a federated token across STS rotations until its refresh boundary', async () => {
+		const start = new Date('2026-01-01T00:00:00Z').getTime();
+		vi.useFakeTimers({ now: start, toFake: ['Date'] });
+		const probe = makeProbe();
+		const adapter = new AwsCodeArtifactCredentials();
+		const resolve = (rotation: number) =>
+			adapter.resolve(federatedSource, federatedOptions(probe, `AK${rotation}`));
+		const first = await resolve(0);
+		for (let rotation = 1; rotation <= 3; rotation++) {
+			vi.setSystemTime(start + rotation * 40 * 60_000);
+			expect(await resolve(rotation)).toEqual(first);
+			expect(probe.fetch).toHaveBeenCalledOnce();
+		}
+		vi.setSystemTime(start + 120 * 60_000 + 1);
+		await Promise.all([resolve(3), resolve(3)]);
+		expect(probe.fetch).toHaveBeenCalledTimes(2);
+		expect(probe.fetch.mock.calls[1][1]?.headers?.authorization).toContain('Credential=AK3/');
+	});
+
+	it('isolates federated sources and requires credentials even with a cached source identity', async () => {
+		const probe = makeProbe();
+		const adapter = new AwsCodeArtifactCredentials();
+		const federatedCredentials = { accessKeyId: 'AK', secretAccessKey: 'secret' };
+		for (const federatedSourceIdentity of [
+			'config/project/session',
+			'config/other/session',
+			'other/project/session',
+			'config/project/job',
+		]) {
+			await adapter.resolve(federatedSource, {
+				probe,
+				federatedCredentials,
+				federatedSourceIdentity,
+			});
+		}
+		expect(probe.fetch).toHaveBeenCalledTimes(4);
+		await expect(
+			adapter.resolve(federatedSource, {
+				probe,
+				federatedSourceIdentity: 'config/project/session',
+			}),
+		).rejects.toThrow(authenticationError);
+		expect(probe.fetch).toHaveBeenCalledTimes(4);
+	});
+
+	it.each([
+		{ accessKeyId: '', secretAccessKey: 'secret' },
+		{ accessKeyId: 'AK', secretAccessKey: '' },
+	])('rejects incomplete credentials with a warm federated token: %j', async (incomplete) => {
+		const probe = makeProbe();
+		const adapter = new AwsCodeArtifactCredentials();
+		const options = federatedOptions(probe);
+		const first = await adapter.resolve(federatedSource, options);
+		await expect(
+			adapter.resolve(federatedSource, { ...options, federatedCredentials: incomplete }),
+		).rejects.toThrow(authenticationError);
+		expect(await adapter.resolve(federatedSource, options)).toEqual(first);
+		expect(probe.fetch).toHaveBeenCalledOnce();
+	});
+
+	it.each(['transport', 'http', 'malformed', 'expired'] as const)(
+		'shares a federated refresh %s failure across rotating credentials and retries without stale tokens',
+		async (failure) => {
+			vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00Z'), toFake: ['Date'] });
+			const probe = makeProbe();
+			const adapter = new AwsCodeArtifactCredentials();
+			const resolve = (accessKeyId: string) =>
+				adapter.resolve(federatedSource, federatedOptions(probe, accessKeyId));
+			await resolve('initial');
+			vi.setSystemTime(new Date('2026-01-01T02:00:00.001Z'));
+			const response = Promise.withResolvers<ProbeResponse>();
+			probe.fetch.mockReturnValueOnce(response.promise);
+			const results = Promise.allSettled([resolve('rotation1'), resolve('rotation2')]);
+			await vi.waitFor(() => expect(probe.fetch).toHaveBeenCalledTimes(2));
+			if (failure === 'transport') response.reject(new Error('secret registry-token'));
+			else if (failure === 'http') response.resolve({ ...tokenResponse(), ok: false, status: 403 });
+			else
+				response.resolve(
+					tokenResponse(
+						failure === 'malformed' ? '' : 'expired',
+						failure === 'expired' ? 0 : 43_200,
+					),
+				);
+			expect(await results).toEqual([
+				{ status: 'rejected', reason: expect.objectContaining({ message: authenticationError }) },
+				{ status: 'rejected', reason: expect.objectContaining({ message: authenticationError }) },
+			]);
+			probe.fetch.mockResolvedValueOnce(tokenResponse('recovered'));
+			expect((await resolve('rotation3')).password).toBe('recovered');
+			expect(probe.fetch).toHaveBeenCalledTimes(3);
+			expect(probe.fetch.mock.calls[2][1]?.headers?.authorization).toContain(
+				'Credential=rotation3/',
+			);
+			expect((await resolve('rotation4')).password).toBe('recovered');
+			expect(probe.fetch).toHaveBeenCalledTimes(3);
+		},
+	);
+
+	it('keys unlabelled federated credentials and static credentials by their secret values', async () => {
+		const probe = makeProbe();
+		const adapter = new AwsCodeArtifactCredentials();
+		for (const secret of ['first', 'second', 'second']) {
+			await adapter.resolve(federatedSource, {
+				probe,
+				federatedCredentials: { accessKeyId: 'AK', secretAccessKey: secret },
+			});
+			await adapter.resolve(
+				{ ...source, auth: { method: 'static', access_key_id: 'AK', secret_access_key: secret } },
+				{
+					probe,
+					federatedSourceIdentity: 'ignored-for-static',
+				},
+			);
+		}
+		expect(probe.fetch).toHaveBeenCalledTimes(4);
 	});
 
 	it('retries rejected mints without caching the failure', async () => {
@@ -108,7 +242,7 @@ describe('AWS CodeArtifact credentials', () => {
 
 	it('shares a failed mint across concurrent starts and retries afterward', async () => {
 		const probe = makeProbe();
-		const response = Promise.withResolvers<Awaited<ReturnType<IntegrationProbe['fetch']>>>();
+		const response = Promise.withResolvers<ProbeResponse>();
 		probe.fetch.mockReturnValueOnce(response.promise);
 		const adapter = new AwsCodeArtifactCredentials();
 		const first = adapter.resolve(source, { probe });
@@ -124,22 +258,29 @@ describe('AWS CodeArtifact credentials', () => {
 		expect(probe.fetch).toHaveBeenCalledTimes(2);
 	});
 
-	it.each(['failure', 'success'] as const)(
-		'an evicted mint settling with %s cannot remove or replace its successor',
-		async (outcome) => {
+	it.each([
+		{ outcome: 'failure', method: 'static' },
+		{ outcome: 'success', method: 'static' },
+		{ outcome: 'failure', method: 'ambient' },
+		{ outcome: 'success', method: 'ambient' },
+	] as const)(
+		'an evicted $method mint settling with $outcome cannot remove or replace its successor',
+		async ({ outcome, method }) => {
 			const probe = makeProbe();
-			const response = Promise.withResolvers<Awaited<ReturnType<IntegrationProbe['fetch']>>>();
+			const mintSource = method === 'static' ? source : federatedSource;
+			const options = federatedOptions(probe);
+			const response = Promise.withResolvers<ProbeResponse>();
 			probe.fetch.mockReturnValueOnce(response.promise);
 			const adapter = new AwsCodeArtifactCredentials(1);
-			const pending = adapter.resolve(source, { probe });
+			const pending = adapter.resolve(mintSource, options);
 			const settled = Promise.allSettled([pending]);
 			await vi.waitFor(() => expect(probe.fetch).toHaveBeenCalledOnce());
-			await adapter.resolve({ ...source, domain: 'other' }, { probe });
-			const replacement = await adapter.resolve(source, { probe });
+			await adapter.resolve({ ...mintSource, domain: 'other' }, options);
+			const replacement = await adapter.resolve(mintSource, options);
 			if (outcome === 'failure') response.reject(new Error('failed'));
 			else response.resolve(tokenResponse('old-token'));
 			expect((await settled)[0].status).toBe(outcome === 'failure' ? 'rejected' : 'fulfilled');
-			expect(await adapter.resolve(source, { probe })).toEqual(replacement);
+			expect(await adapter.resolve(mintSource, options)).toEqual(replacement);
 			expect(probe.fetch).toHaveBeenCalledTimes(3);
 		},
 	);
@@ -172,41 +313,46 @@ describe('AWS CodeArtifact credentials', () => {
 		},
 	);
 
-	it('keeps caller cancellation separate from a concurrent shared mint', async () => {
-		const probe = makeProbe();
-		const sharedResponse = Promise.withResolvers<Awaited<ReturnType<IntegrationProbe['fetch']>>>();
-		probe.fetch.mockReturnValueOnce(sharedResponse.promise);
-		const adapter = new AwsCodeArtifactCredentials();
-		const shared = adapter.resolve(source, { probe });
-		await vi.waitFor(() => expect(probe.fetch).toHaveBeenCalledOnce());
-		const cancelledStarted = Promise.withResolvers<void>();
-		probe.fetch.mockImplementationOnce(
-			async (_url, init) =>
-				new Promise((_resolve, reject) => {
-					init!.signal!.addEventListener('abort', () => reject(new Error('sensitive')), {
-						once: true,
-					});
-					cancelledStarted.resolve();
-				}),
-		);
-		const caller = new AbortController();
-		const cancelled = adapter.resolve(source, { probe, signal: caller.signal });
-		const failure = expect(cancelled).rejects.toMatchObject({
-			name: 'AbortError',
-			message: 'CodeArtifact authentication cancelled.',
-		});
-		await cancelledStarted.promise;
-		caller.abort();
-		await failure;
-		expect(probe.fetch.mock.calls[0][1]?.signal?.aborted).toBe(false);
-		sharedResponse.resolve(tokenResponse('shared-token'));
-		expect((await shared).password).toBe('shared-token');
-		expect((await adapter.resolve(source, { probe })).password).toBe('shared-token');
-		await expect(
-			adapter.resolve(source, { probe, signal: AbortSignal.abort() }),
-		).rejects.toMatchObject({ name: 'AbortError' });
-		expect(probe.fetch).toHaveBeenCalledTimes(2);
-	});
+	it.each(['static', 'ambient'] as const)(
+		'keeps %s caller cancellation separate from a concurrent shared mint',
+		async (method) => {
+			const probe = makeProbe();
+			const mintSource = method === 'static' ? source : federatedSource;
+			const options = federatedOptions(probe);
+			const sharedResponse = Promise.withResolvers<ProbeResponse>();
+			probe.fetch.mockReturnValueOnce(sharedResponse.promise);
+			const adapter = new AwsCodeArtifactCredentials();
+			const shared = adapter.resolve(mintSource, options);
+			await vi.waitFor(() => expect(probe.fetch).toHaveBeenCalledOnce());
+			const cancelledStarted = Promise.withResolvers<void>();
+			probe.fetch.mockImplementationOnce(
+				async (_url, init) =>
+					new Promise((_resolve, reject) => {
+						init!.signal!.addEventListener('abort', () => reject(new Error('sensitive')), {
+							once: true,
+						});
+						cancelledStarted.resolve();
+					}),
+			);
+			const caller = new AbortController();
+			const cancelled = adapter.resolve(mintSource, { ...options, signal: caller.signal });
+			const failure = expect(cancelled).rejects.toMatchObject({
+				name: 'AbortError',
+				message: 'CodeArtifact authentication cancelled.',
+			});
+			await cancelledStarted.promise;
+			caller.abort();
+			await failure;
+			expect(probe.fetch.mock.calls[0][1]?.signal?.aborted).toBe(false);
+			sharedResponse.resolve(tokenResponse('shared-token'));
+			expect((await shared).password).toBe('shared-token');
+			expect((await adapter.resolve(mintSource, options)).password).toBe('shared-token');
+			await expect(
+				adapter.resolve(mintSource, { ...options, signal: AbortSignal.abort() }),
+			).rejects.toMatchObject({ name: 'AbortError' });
+			expect(probe.fetch).toHaveBeenCalledTimes(2);
+		},
+	);
 
 	it('signs the token request with explicit credentials through the guarded probe', async () => {
 		const probe = makeProbe();
@@ -229,12 +375,11 @@ describe('AWS CodeArtifact credentials', () => {
 	it('uses supplied project credentials for ambient auth and never the hub identity', async () => {
 		const probe = makeProbe();
 		const adapter = new AwsCodeArtifactCredentials();
-		const federated = { ...source, auth: { method: 'ambient' as const } };
-		await expect(adapter.resolve(federated, { probe })).rejects.toThrow(
+		await expect(adapter.resolve(federatedSource, { probe })).rejects.toThrow(
 			'CodeArtifact authentication failed',
 		);
 		expect(probe.fetch).not.toHaveBeenCalled();
-		await adapter.resolve(federated, {
+		await adapter.resolve(federatedSource, {
 			probe,
 			federatedCredentials: {
 				accessKeyId: 'PROJECT',
@@ -323,10 +468,7 @@ describe('AWS CodeArtifact credentials', () => {
 		async (federatedCredentials) => {
 			const probe = makeProbe();
 			await expect(
-				new AwsCodeArtifactCredentials().resolve(
-					{ ...source, auth: { method: 'ambient' } },
-					{ probe, federatedCredentials },
-				),
+				new AwsCodeArtifactCredentials().resolve(federatedSource, { probe, federatedCredentials }),
 			).rejects.toThrow('CodeArtifact authentication failed');
 			expect(probe.fetch).not.toHaveBeenCalled();
 		},

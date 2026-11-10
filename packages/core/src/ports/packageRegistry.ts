@@ -43,6 +43,8 @@ export interface PackageRegistryCredentialProvider {
 			probe: IntegrationProbe;
 			/** The project's workload-identity credentials, present only for `ambient` auth. */
 			federatedCredentials?: TempS3Creds;
+			/** Trusted source identity, stable across STS rotation; never derived from user input. */
+			federatedSourceIdentity?: string;
 			signal?: AbortSignal;
 		},
 	): Promise<PackageRegistryCredentials>;
