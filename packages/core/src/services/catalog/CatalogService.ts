@@ -11,6 +11,7 @@ import {
 	ValidationError,
 } from '../../errors';
 import { sleep } from '../../duration';
+import { Semaphore } from '../../concurrency';
 import { createSnapshotId } from '../../ids';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import { paths } from '../../paths';
@@ -65,6 +66,7 @@ export function upgradeSnapshot(raw: Snapshot): Snapshot {
 export class CatalogService {
 	private readonly cache: ReturnType<typeof snapshotCache>;
 	private readonly pointer: MetadataCache<Catalog>;
+	private readonly mutations = new Semaphore(1);
 
 	constructor(
 		private bucket: Bucket,
@@ -364,9 +366,9 @@ export class CatalogService {
 	}
 
 	/**
-	 * `mutateFn` runs inside each catalog CAS attempt and may be asynchronous. It
-	 * must be safe to run again after a lost pointer race. Returning its unchanged
-	 * input skips writes and audit events. In-place edits still commit.
+	 * Each CAS attempt reruns `mutateFn` with a fresh draft. Returning the unchanged
+	 * draft skips writes and audit events. In-place edits commit.
+	 * Callbacks must support retries and must not await another mutation on this instance.
 	 */
 	async mutateSnapshot(
 		operation: string,
@@ -374,78 +376,74 @@ export class CatalogService {
 		mutateFn: (snapshot: Snapshot) => Awaitable<Snapshot>,
 		context?: Record<string, unknown>,
 	): Promise<Snapshot> {
-		// One CAS attempt: read the catalog + its current snapshot, write a new
-		// snapshot, and conditionally swap the catalog pointer onto it. The retry
-		// loop / backoff / conflict accounting lives in `withCasRetry`.
-		const { snapshot, committed } = await withCasRetry(
-			this.bucket,
-			async (cas) => {
-				const catalogObj = await this.bucket.get(paths.catalog);
-				if (!catalogObj)
-					throw new NotInitializedError('Catalog not found — call initialize() first');
-				const catalog = await readStored(CatalogSchema, catalogObj, paths.catalog);
-				const currentSnapshot = await this.readSnapshot(catalog);
+		// One local draft bounds memory use. CAS retries handle writers on other replicas.
+		const { snapshot, committed } = await this.mutations.run(() =>
+			withCasRetry(
+				this.bucket,
+				async (cas) => {
+					const catalogObj = await this.bucket.get(paths.catalog);
+					if (!catalogObj)
+						throw new NotInitializedError('Catalog not found — call initialize() first');
+					const catalog = await readStored(CatalogSchema, catalogObj, paths.catalog);
+					const currentSnapshot = await this.readSnapshot(catalog);
 
-				const draft = structuredClone(currentSnapshot);
-				const result = await mutateFn(draft);
-				if (result === draft && JSON.stringify(result) === snapshotJson(currentSnapshot)) {
-					return { snapshot: currentSnapshot, committed: false };
-				}
-
-				const newSnapshotId = createSnapshotId();
-				const now = new Date().toISOString();
-				const newSnapshot: Snapshot = {
-					...result,
-					snapshot_id: newSnapshotId,
-					// Downgrade-guard: never stamp a version lower than what we read. During
-					// a rolling deploy an old replica (CURRENT_SNAPSHOT_VERSION = 1) may read
-					// a v2 snapshot a newer replica committed; preserving the higher version
-					// (together with the unknown-field-preserving SnapshotSchema) means the
-					// old replica can safely re-commit without downgrading the chain. This is
-					// the "old code tolerates new" rolling-deploy policy (development_docs/migrations.md).
-					schema_version: Math.max(CURRENT_SNAPSHOT_VERSION, currentSnapshot.schema_version),
-					created_at: now,
-					operation,
-					actor,
-				};
-
-				// Serialize before the first yield: callback-owned entries may change during publication.
-				const body = JSON.stringify(newSnapshot);
-				await this.bucket.put(paths.snapshot(newSnapshotId), body, { onlyIfNotExists: true });
-
-				const newCatalog: Catalog = {
-					version: 1,
-					updated_at: now,
-					current_snapshot_id: newSnapshotId,
-					current_snapshot_key: paths.snapshot(newSnapshotId),
-					previous_snapshot_id: catalog.current_snapshot_id,
-				};
-
-				try {
-					this.metrics.increment('catalog.cas.attempt');
-					await cas.put(paths.catalog, JSON.stringify(newCatalog), {
-						onlyIfEtagMatches: catalogObj.etag,
-					});
-					const published = JSON.parse(body) as Snapshot;
-					this.cache.set(newCatalog.current_snapshot_key, published, body);
-					return { snapshot: published, committed: true };
-				} catch (err) {
-					// Only a lost CAS proves the pointer never moved; any other error may follow a
-					// commit whose response was lost, so the snapshot is kept (see initialize()).
-					// `cas.put` wraps the PreconditionFailedError so withCasRetry can retry it.
-					if (err instanceof Error && err.cause instanceof PreconditionFailedError) {
-						await this.bucket.delete(paths.snapshot(newSnapshotId)).catch(() => {});
+					const draft = structuredClone(currentSnapshot);
+					const result = await mutateFn(draft);
+					if (result === draft && JSON.stringify(result) === snapshotJson(currentSnapshot)) {
+						return { snapshot: currentSnapshot, committed: false };
 					}
-					throw err;
-				}
-			},
-			{
-				...this.casRetry,
-				onConflict: () => this.metrics.increment('catalog.cas.conflict'),
-				onExhausted: () => this.metrics.increment('catalog.cas.exhausted'),
-			},
+
+					const newSnapshotId = createSnapshotId();
+					const now = new Date().toISOString();
+					const newSnapshot: Snapshot = {
+						...result,
+						snapshot_id: newSnapshotId,
+						// Preserve newer schema versions during rolling deploys.
+						// SnapshotSchema retains unknown fields; see development_docs/migrations.md.
+						schema_version: Math.max(CURRENT_SNAPSHOT_VERSION, currentSnapshot.schema_version),
+						created_at: now,
+						operation,
+						actor,
+					};
+
+					// Serialize before the first yield: callback-owned entries may change during publication.
+					const body = JSON.stringify(newSnapshot);
+					await this.bucket.put(paths.snapshot(newSnapshotId), body, { onlyIfNotExists: true });
+
+					const newCatalog: Catalog = {
+						version: 1,
+						updated_at: now,
+						current_snapshot_id: newSnapshotId,
+						current_snapshot_key: paths.snapshot(newSnapshotId),
+						previous_snapshot_id: catalog.current_snapshot_id,
+					};
+
+					try {
+						this.metrics.increment('catalog.cas.attempt');
+						await cas.put(paths.catalog, JSON.stringify(newCatalog), {
+							onlyIfEtagMatches: catalogObj.etag,
+						});
+						const published = JSON.parse(body) as Snapshot;
+						this.cache.set(newCatalog.current_snapshot_key, published, body);
+						return { snapshot: published, committed: true };
+					} catch (err) {
+						// Only a CAS rejection proves the snapshot is unreferenced.
+						// Keep it after other errors: the pointer write may have succeeded.
+						if (err instanceof Error && err.cause instanceof PreconditionFailedError) {
+							await this.bucket.delete(paths.snapshot(newSnapshotId)).catch(() => {});
+						}
+						throw err;
+					}
+				},
+				{
+					retries: 20,
+					...this.casRetry,
+					onConflict: () => this.metrics.increment('catalog.cas.conflict'),
+					onExhausted: () => this.metrics.increment('catalog.cas.exhausted'),
+				},
+			),
 		);
-		// Audit once per WINNING commit, never per CAS attempt.
+		// Audit only committed mutations.
 		if (committed) await this.appendAudit(operation, actor, context);
 		return snapshot;
 	}
