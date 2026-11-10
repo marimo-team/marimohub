@@ -217,6 +217,11 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 		const paths = searchPaths.scope(scope);
 		const { revision, head } = await this.loadHead(scope, signal);
 		if (!head) return;
+		const page = await this.bucket.list({ prefix: paths.snapshots, limit: 100 });
+		const expired = page.objects.filter(
+			(item) => item.key !== head.key && Date.now() - item.uploaded.getTime() > 24 * 3600_000,
+		);
+		if (expired.length === 0) return;
 		signal.throwIfAborted();
 		try {
 			await this.writeHead(scope, { ...head, fence: crypto.randomUUID() }, revision, signal);
@@ -224,12 +229,8 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 			if (error instanceof PreconditionFailedError) return;
 			throw error;
 		}
-		const page = await this.bucket.list({ prefix: paths.snapshots, limit: 100 });
-		for (const item of page.objects) {
-			signal.throwIfAborted();
-			if (item.key !== head.key && Date.now() - item.uploaded.getTime() > 24 * 3600_000)
-				await this.bucket.delete(item.key);
-		}
+		signal.throwIfAborted();
+		await this.bucket.delete(expired.map((item) => item.key));
 	}
 
 	async candidates(

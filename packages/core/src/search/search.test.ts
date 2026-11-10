@@ -160,7 +160,7 @@ describe('authorized search', () => {
 		await f.services.notebooks.deleteNotebook(f.project.id, f.notebook.id, owner.id);
 		expect((await f.search.search(owner, f.query)).items).toEqual([]);
 	});
-	it('applies notebook labels before ranking', async () => {
+	it('applies notebook labels before returning results', async () => {
 		const f = await setup();
 		const key = paths.project(f.project.id).notebook(f.notebook.id).meta;
 		const meta = await (await f.bucket.get(key))!.json<Record<string, unknown>>();

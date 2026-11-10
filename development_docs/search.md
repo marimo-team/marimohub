@@ -32,7 +32,7 @@ To add a searchable type:
 
 1. Extend hit kinds, resource references, and link construction.
 2. Implement `SearchSource.page` with bounded discovery and a resumable cursor.
-3. Implement `validate` for both `rank` and `return`, using current resource state and caller authorization. Return validated documents and a partial flag. `rank` may skip expensive upstream probes; `return` must not.
+3. Implement `validate` for `rank` and `return`. The `return` phase must check current permissions and freshness. The `rank` phase can defer expensive reads.
 4. Register the source and test revocation, deletion, freshness, cancellation, and budget exhaustion.
 5. Run `pnpm schemas:generate`.
 
@@ -43,25 +43,22 @@ Include relevant source options in its configuration identity; never include cre
 
 A query backend implements `SearchRetriever`; requests include text, kind filters, and an optional query vector with its model identity.
 The bucket adapter also implements `SearchSnapshotStore` for the existing crawler.
-Its `head`, `claim`, and `touch` operations do not load documents. Only embedding reuse needs the previous snapshot during discovery.
+Its `head`, `claim`, and `touch` operations do not load documents. Notebook document reuse and embedding reuse read the previous snapshot.
 An incremental engine can supply its own ingestion path without implementing whole-corpus replacement.
 Design that ingestion port with a concrete backend; preserve revision checks, deletion fences, and bounded retrieval.
 
 ## Authorization and ranking
 
-Each query checks project access before index retrieval. Sources then check resources before ranking.
-After selecting the highest-ranked results, project access is checked again. Sources then recheck resources and content freshness against that freshly read project.
-Both project checks reread current state. Authorization decisions are never cached.
+Each query checks current project access before index retrieval and again after result selection.
+Sources check permissions and freshness against that freshly read project before returning results. Authorization decisions are never cached.
 
-Notebook checks include security labels and credential grants.
-Final checks compare metadata, source, code, and output ETags with the indexed fingerprint.
-Changed content is excluded until a later crawl publishes a matching document. Live checks exclude deleted resources.
+Notebook candidates use snapshot content for ranking. Only the selected page reads current notebook metadata, security labels, and artifact ETags.
+These checks exclude deleted, inaccessible, or changed content. A later crawl must publish matching documents before changed content appears again.
 HTML extraction excludes hidden attributes and literal inline `display:none` or `visibility:hidden` declarations.
 It does not evaluate stylesheets or browser layout.
 
 Integration checks require `integration.use`, an enabled and unshadowed integration, and matching version/update time.
 Live namespace and schema probes run only before returning results, using the caller's upstream identity.
-Ranking therefore admits table, namespace, and column documents without probes. `SearchService` cuts to `limit` before the final check, so a stale document can take a slot and shrink the response. This keeps upstream probes to one round per query.
 A failed probe drops only the documents that depend on it. Errors other than not-found also mark coverage partial.
 Indexed fields contain names, kinds, and column types. Configuration, credentials, and rows are excluded.
 Budget exhaustion preserves validated results and marks coverage partial. Failed project reads and revoked final access also mark coverage incomplete.
@@ -104,7 +101,12 @@ The head records a digest of the published documents and partial flag.
 If a completed crawl has the same digest, the indexer writes no snapshot. It CAS-updates the head's `verified_at` instead.
 Publication also sets `verified_at`; claiming a new build clears it.
 A visit within five minutes (`MIN_RECRAWL_INTERVAL_MS`) of `verified_at` returns without reading the source or writing pages or the checkpoint.
-The interval is below the 15-minute stale threshold, so skipped visits alone cannot make a scope stale.
+Notebook crawls reuse complete document groups from a compatible snapshot when the content fingerprint matches.
+The fingerprint covers metadata and source ETags, plus code and output keys and ETags. Missing ETags disable reuse.
+Each document stores `{content-hash}:{document-count}:{coverage}`, where coverage is `complete`, `partial`, or `retry`.
+The count detects groups cut off by snapshot limits. Intentional truncation remains reusable, but failed reads require another extraction.
+Source or configuration changes disable document reuse until the new build completes.
+
 A losing publication CAS leaves the checkpoint untouched.
 Readers retain the previous snapshot throughout the crawl. A changed head or build identity resets the checkpoint before reading its source cursor.
 Unversioned checkpoints also restart. Superseded workers skip discovery; workers already in flight lose publication CAS.
@@ -116,13 +118,22 @@ After tombstoning, the indexer CAS-replaces the crawl with an empty checkpoint. 
 Both records remain: a delayed writer cannot recreate a first checkpoint or publish against the current tombstone.
 Live checks filter deleted resources until the next snapshot excludes them.
 
-Cleanup fences CAS records before deleting obsolete objects.
-It preserves current snapshots, active crawl pages, objects younger than 24 hours, and deletion heads.
-Each cleanup pass examines at most 100 snapshots and 100 pages per source.
-Detached objects become eligible after the grace period; storage failures or maintenance downtime delay reclamation.
+Cleanup lists objects before writing a CAS fence. Empty deletion batches write no fence.
+A successful fence permits one batch deletion of the expired objects. A lost CAS deletes nothing.
+Cleanup preserves current snapshots, active crawl pages, objects younger than 24 hours, and deletion heads.
+Each pass examines at most 100 snapshots and 100 pages per source.
+Storage failures or maintenance downtime delay reclamation.
 
 Maintenance uses a lease and visits project/source pairs in round-robin order.
-Attempts run every five seconds, process at most four pages, and have a 30-second deadline.
+Attempts run every five seconds with a 30-second deadline. Each attempt starts at most 32 crawl steps.
+After 100 ms, the crawler starts no further steps. One step includes page assembly and publication, so it can exceed this budget.
+A completed round pauses for five minutes. During this pause, ticks read only the cursor and catalog.
+Adding or removing projects wakes the crawler. Changes to refresh tokens, source revisions, source configuration, or embedding identity also wake it.
+The cursor persists the schedule identity and pause deadline across process restarts. Unchanged cursor state requires no write.
+
+A failed scope advances the cursor before the error propagates, so later scopes can proceed on the next tick.
+Cleanup failures also permit indexing to continue. Failed work remains eligible for retry, and errors prevent the tick from entering an idle pause.
+Cancellation rejects the tick without advancing the cursor. Checkpoints preserve completed work.
 Final assembly reads at most eight pages concurrently, preserves page order, and stops scheduling after a failure.
 The ready checkpoint preserves discovery progress, but assembly restarts on each retry.
 Persistent deadline exhaustion can prevent publication. [Resumable assembly is deferred](#deferred-resumable-assembly).
@@ -145,25 +156,26 @@ Embedding and catalog calls receive cancellation signals where supported.
 
 ## Resource budgets
 
-| Resource                  | Bound                                                                                |
-| ------------------------- | ------------------------------------------------------------------------------------ |
-| Project/source snapshot   | 16 MiB and 20,000 documents                                                          |
-| Notebook artifacts        | 2 MiB per metadata, source, code, or output artifact                                 |
-| Indexed text              | 8,192 characters per hit type per resource                                           |
-| Cross-project discovery   | First 16 accessible projects within 128 scanned; more reports `projects` `truncated` |
-| Query concurrency         | Eight project checks during selection; two projects or final-validation batches      |
-| Notebook checks           | Eight per batch                                                                      |
-| Query deadline            | Three seconds: half for retrieval, half for final validation                         |
-| Candidates                | 200 per project/source, before authorization and ranking                             |
-| Results                   | At most 50, with snippets of at most 400 characters                                  |
-| Catalog validation        | At most 32 probes per source validation phase                                        |
-| Catalog crawl             | 500 queued tasks, 500 visited namespaces, 25 entries per page, 100 columns per table |
-| Crawl assembly            | Eight concurrent page reads; retries restart assembly                                |
-| Crawl checkpoint          | 1,000 pages, 65,536 cursor characters, and 128 KiB of serialized checkpoint state    |
-| Concurrent snapshot loads | 64 distinct snapshots per adapter instance; duplicate loads share work               |
-| Index cache               | 64 MiB of estimated cache weight per process                                         |
-| Re-crawl interval         | Five minutes after the last publication or verification                              |
-| Stale status              | Last publication or verification older than 15 minutes; does not set `partial`       |
+| Resource                  | Bound                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------- |
+| Project/source snapshot   | 16 MiB and 20,000 documents                                                                       |
+| Notebook artifacts        | 2 MiB per metadata, source, code, or output artifact                                              |
+| HTML extraction           | 32,768 input characters per description or HTML artifact; saved session outputs share this budget |
+| Indexed text              | 8,192 characters per hit type per resource                                                        |
+| Cross-project discovery   | First 16 accessible projects within 128 scanned; more reports `projects` `truncated`              |
+| Query concurrency         | Eight project checks during selection; two projects or final-validation batches                   |
+| Notebook checks           | Eight per batch                                                                                   |
+| Query deadline            | Three seconds: half for retrieval, half for final validation                                      |
+| Candidates                | 200 per project/source, before authorization and ranking                                          |
+| Results                   | At most 50, with snippets of at most 400 characters                                               |
+| Catalog validation        | At most 32 probes per source validation phase                                                     |
+| Catalog crawl             | 500 queued tasks, 500 visited namespaces, 25 entries per page, 100 columns per table              |
+| Crawl assembly            | Eight concurrent page reads; retries restart assembly                                             |
+| Crawl checkpoint          | 1,000 pages, 65,536 cursor characters, and 128 KiB of serialized checkpoint state                 |
+| Concurrent snapshot loads | 64 distinct snapshots per adapter instance; duplicate loads share work                            |
+| Index cache               | 64 MiB of estimated cache weight per process                                                      |
+| Re-crawl interval         | At least five minutes per scope; a completed round pauses for five minutes                        |
+| Stale status              | Last publication or verification older than 15 minutes; does not set `partial`                    |
 
 ## Tradeoffs and scalability
 
@@ -205,7 +217,7 @@ Pagination, provider permissions, and crawl limits can leave catalog content uni
 | Large snapshots or cache churn         | Persist partitioned postings                                          | Atomic manifests and deletion fences                      |
 | Full crawls dominate traffic           | Dirty-resource scheduling, reusable segments, periodic reconciliation | Resumability and deletion discovery                       |
 | Concurrent cold loads                  | Coalesce reads and add admission limits                               | Independent cancellation and live authorization           |
-| Broad queries lose authorized matches  | Bounded candidate pagination                                          | Authorization before scoring and total work limits        |
+| Broad queries lose authorized matches  | Bounded candidate pagination                                          | Live authorization and total work limits                  |
 | Cross-project coverage is insufficient | Paginated discovery or an authorized project directory                | Current membership checks and explicit coverage           |
 | Catalog checks dominate latency        | Targeted integration lookups and batch schema checks                  | Caller identity and current permissions                   |
 | Semantic recall needs larger corpora   | Vector-capable backend                                                | Content opt-in, compatible vectors, and final live checks |
@@ -214,7 +226,7 @@ The audit log is not a durable change feed: appends are best-effort after catalo
 Future indexing notifications must remain hints with periodic reconciliation, unless a durable outbox or equivalent delivery mechanism is added.
 
 These are follow-ups, not implemented capabilities. Raising limits alone increases memory, traffic, and deadline pressure.
-A richer full-text library must still separate candidate retrieval from authorized scoring.
+A richer full-text library must still separate candidate retrieval from final authorization.
 
 ### Deferred: resumable assembly
 
@@ -225,7 +237,7 @@ Discovery, parsing, and publication consume additional time.
 
 Retries repeat completed page reads. The previous snapshot remains available subject to live authorization and freshness checks.
 Without a previous snapshot, search continues to report `not_indexed`. An existing snapshot reports `stale` after 15 minutes without publication or verification.
-Each pair is visited once per round-robin cycle of five-second attempts, so deployments with more than 180 project/source pairs can report `stale` between visits.
+Large corpora or slow steps can extend a round beyond 15 minutes, so scopes can report `stale` between visits.
 Retrying alone does not resolve persistent deadline exhaustion.
 
 The follow-up is resumable compaction or an atomic manifest over immutable segments.
@@ -253,7 +265,21 @@ These tests establish bounded scheduling and safe failure, not progress under pe
 Deployment benchmarks still need remote storage, real catalogs, concurrent callers, uneven project sizes, and cache churn.
 Measure tail latency, storage/catalog calls, bytes, peak heap, crawl lag, coverage, and authorized recall before setting production targets.
 
-### Local benchmark
+### Operation-count regression
+
+The audit harness uses an in-memory bucket and index with 200 projects, 10,000 notebooks, and a 20-result limit.
+The November 10, 2026 run recorded these warm storage-call counts:
+
+| Query                 | Before | After |
+| --------------------- | ------ | ----- |
+| Cross-project search  | 977    | 157   |
+| Project-scoped search | 172    | 102   |
+
+Both queries read 20 notebook metadata objects. Project authorization accounts for additional cross-project reads.
+These counts measure storage calls, not remote latency or concurrent capacity.
+Colocated tests enforce page-sized metadata reads, idle crawling across 200 projects, and recovery after read, write, cleanup, and cancellation failures.
+
+### Historical filesystem benchmark
 
 Run the opt-in benchmark:
 
@@ -263,7 +289,7 @@ SEARCH_BENCH=1 pnpm --filter @marimo-hub/config test src/search.performance.test
 
 The benchmark seeds filesystem objects and runs the configured indexer and authorized query service. It writes `.context/search-performance.json`. Cold queries use fresh application caches. The OS cache may remain warm. The warm median averages the two middle samples. Warm p95 is the largest of ten subsequent samples.
 
-Measured on macOS with Node 24.22.1 and local filesystem storage, November 2, 2026.
+This baseline predates document reuse and page-only notebook checks. It used macOS, Node 24.22.1, and local filesystem storage on November 2, 2026.
 Other checks ran on the same host, so these measurements include host contention:
 
 | Notebooks | Query     | Cold     | Warm median | Warm p95 | Cold GET / HEAD | Warm GET / HEAD | Coverage               |

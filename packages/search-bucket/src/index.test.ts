@@ -25,6 +25,59 @@ function snapshot(count = 1): SearchSnapshot {
 afterEach(() => vi.restoreAllMocks());
 searchIndexContract('BucketSearchIndex', () => new BucketSearchIndex(new MemoryBucket()));
 describe('bucket search index', () => {
+	it('does not fence a head when cleanup has nothing expired to delete', async () => {
+		const bucket = new MemoryBucket();
+		const index = new BucketSearchIndex(bucket);
+		await index.publish(scope, snapshot(), null, signal());
+		const previous = await index.head(scope, signal());
+		await index.publish(scope, snapshot(2), previous.revision, signal());
+		const put = vi.spyOn(bucket, 'put');
+		const remove = vi.spyOn(bucket, 'delete');
+		await index.prune(scope, signal());
+		expect(put).not.toHaveBeenCalled();
+		expect(remove).not.toHaveBeenCalled();
+	});
+	it('batches expired snapshot deletions behind one fence', async () => {
+		const bucket = new MemoryBucket();
+		const index = new BucketSearchIndex(bucket);
+		for (let i = 0; i < 4; i++)
+			await index.publish(
+				scope,
+				snapshot(i + 1),
+				(await index.head(scope, signal())).revision,
+				signal(),
+			);
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2 * 24 * 3600_000);
+		const put = vi.spyOn(bucket, 'put');
+		const remove = vi.spyOn(bucket, 'delete');
+		await index.prune(scope, signal());
+		expect(put).toHaveBeenCalledOnce();
+		expect(remove).toHaveBeenCalledOnce();
+		expect(remove.mock.calls[0][0]).toHaveLength(3);
+		expect((await index.read(scope, signal())).snapshot?.documents).toHaveLength(4);
+	});
+	it('does not delete after a publisher wins the cleanup fence race', async () => {
+		const bucket = new MemoryBucket();
+		const index = new BucketSearchIndex(bucket);
+		await index.publish(scope, snapshot(), null, signal());
+		await index.publish(scope, snapshot(2), (await index.head(scope, signal())).revision, signal());
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2 * 24 * 3600_000);
+		const list = bucket.list.bind(bucket);
+		vi.spyOn(bucket, 'list').mockImplementationOnce(async (options) => {
+			const result = await list(options);
+			await index.publish(
+				scope,
+				snapshot(3),
+				(await index.head(scope, signal())).revision,
+				signal(),
+			);
+			return result;
+		});
+		const remove = vi.spyOn(bucket, 'delete');
+		await index.prune(scope, signal());
+		expect(remove).not.toHaveBeenCalled();
+		expect((await index.read(scope, signal())).snapshot?.documents).toHaveLength(3);
+	});
 	it('rejects a head pointing outside its own project/source snapshot prefix', async () => {
 		const bucket = new MemoryBucket();
 		const index = new BucketSearchIndex(bucket);
