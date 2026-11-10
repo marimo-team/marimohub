@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { brotliCompressSync, brotliDecompressSync, gzipSync, gunzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Hono } from 'hono';
@@ -19,10 +19,23 @@ afterEach(() => {
 	for (const root of temporaryRoots.splice(0)) rmSync(root, { force: true, recursive: true });
 });
 
-function staticApp(appBaseUrl?: string, indexHtml = '<!doctype html><base href="/" />'): Hono {
+function staticRoot(files: Record<string, string | Uint8Array> = {}): string {
 	const root = mkdtempSync(join(tmpdir(), 'marimohub-static-'));
 	temporaryRoots.push(root);
-	writeFileSync(join(root, 'index.html'), indexHtml);
+	for (const [name, contents] of Object.entries(files)) {
+		const path = join(root, name);
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, contents);
+	}
+	return root;
+}
+
+function staticAssetApp(files: Record<string, string | Uint8Array>): Hono {
+	return new Hono().use('*', serveStaticWithCache({ root: staticRoot(files) }));
+}
+
+function staticApp(appBaseUrl?: string, indexHtml = '<!doctype html><base href="/" />'): Hono {
+	const root = staticRoot({ 'index.html': indexHtml });
 	const app = new Hono();
 	app.get('*', serveSpaFallback(root, appBaseUrl));
 	return app;
@@ -32,15 +45,11 @@ describe('cacheControlForStaticPath', () => {
 	it.each([false, true])(
 		'falls back when a preferred compressed sibling is absent (gzip: %s)',
 		async (hasGzip) => {
-			const root = mkdtempSync(join(tmpdir(), 'marimohub-static-'));
-			temporaryRoots.push(root);
-			mkdirSync(join(root, 'assets'));
 			const body = 'console.log("fallback");'.repeat(100);
-			const file = join(root, 'assets', 'index-hash.js');
-			writeFileSync(file, body);
-			if (hasGzip) writeFileSync(`${file}.gz`, gzipSync(body));
-			const app = new Hono();
-			app.use('*', serveStaticWithCache({ root }));
+			const app = staticAssetApp({
+				'assets/index-hash.js': body,
+				...(hasGzip ? { 'assets/index-hash.js.gz': gzipSync(body) } : {}),
+			});
 			const response = await app.request('/assets/index-hash.js', {
 				headers: { 'Accept-Encoding': 'br, gzip' },
 			});
@@ -54,16 +63,12 @@ describe('cacheControlForStaticPath', () => {
 	);
 
 	it('serves compressed HEAD metadata and valid byte ranges without changing the representation', async () => {
-		const root = mkdtempSync(join(tmpdir(), 'marimohub-static-'));
-		temporaryRoots.push(root);
-		mkdirSync(join(root, 'assets'));
 		const body = 'console.log("range");'.repeat(100);
 		const encoded = brotliCompressSync(body);
-		const file = join(root, 'assets', 'index-hash.js');
-		writeFileSync(file, body);
-		writeFileSync(`${file}.br`, encoded);
-		const app = new Hono();
-		app.use('*', serveStaticWithCache({ root }));
+		const app = staticAssetApp({
+			'assets/index-hash.js': body,
+			'assets/index-hash.js.br': encoded,
+		});
 		const head = await app.request('/assets/index-hash.js', {
 			method: 'HEAD',
 			headers: { 'Accept-Encoding': 'br' },
@@ -82,16 +87,12 @@ describe('cacheControlForStaticPath', () => {
 	it.each(['br', 'gzip', 'identity'])(
 		'serves precompressed assets with cache headers: %s',
 		async (encoding) => {
-			const root = mkdtempSync(join(tmpdir(), 'marimohub-static-'));
-			temporaryRoots.push(root);
-			mkdirSync(join(root, 'assets'));
 			const source = 'console.log("asset");'.repeat(200);
-			const file = join(root, 'assets', 'index-hash.js');
-			writeFileSync(file, source);
-			writeFileSync(`${file}.br`, brotliCompressSync(source));
-			writeFileSync(`${file}.gz`, gzipSync(source));
-			const app = new Hono();
-			app.use('*', serveStaticWithCache({ root }));
+			const app = staticAssetApp({
+				'assets/index-hash.js': source,
+				'assets/index-hash.js.br': brotliCompressSync(source),
+				'assets/index-hash.js.gz': gzipSync(source),
+			});
 			const response = await app.request('/assets/index-hash.js', {
 				headers: { 'Accept-Encoding': encoding },
 			});
@@ -113,11 +114,11 @@ describe('cacheControlForStaticPath', () => {
 	);
 
 	it('rewrites the HTML shell even when compressed siblings exist', async () => {
-		const root = mkdtempSync(join(tmpdir(), 'marimohub-static-'));
-		temporaryRoots.push(root);
 		const html = '<!doctype html><base href="/" />';
-		writeFileSync(join(root, 'index.html'), html);
-		writeFileSync(join(root, 'index.html.br'), brotliCompressSync(html));
+		const root = staticRoot({
+			'index.html': html,
+			'index.html.br': brotliCompressSync(html),
+		});
 		const app = new Hono();
 		app.get('*', serveSpaFallback(root, 'https://hub.example/app'));
 		const response = await app.request('/projects', { headers: { 'Accept-Encoding': 'br' } });
@@ -150,11 +151,10 @@ describe('cacheControlForStaticPath', () => {
 	});
 
 	it('applies the policy to static responses and SPA fallbacks', async () => {
-		const root = mkdtempSync(join(tmpdir(), 'marimohub-static-'));
-		temporaryRoots.push(root);
-		mkdirSync(join(root, 'assets'));
-		writeFileSync(join(root, 'index.html'), '<!doctype html><base href="/" />');
-		writeFileSync(join(root, 'assets', 'index-C8a1b2.js'), 'console.log(1);');
+		const root = staticRoot({
+			'index.html': '<!doctype html><base href="/" />',
+			'assets/index-C8a1b2.js': 'console.log(1);',
+		});
 
 		const app = new Hono();
 		const spaFallback = serveSpaFallback(root, 'https://hub.example.com/marimohub');
@@ -233,8 +233,7 @@ describe('serveSpaFallback', () => {
 	});
 
 	it('returns 404 when the SPA shell is missing', async () => {
-		const root = mkdtempSync(join(tmpdir(), 'marimohub-static-'));
-		temporaryRoots.push(root);
+		const root = staticRoot();
 		const app = new Hono();
 		app.get('*', serveSpaFallback(root, 'https://hub.example.com/marimohub/'));
 

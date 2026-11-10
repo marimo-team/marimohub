@@ -49,6 +49,9 @@ jobs:
       - name: Verify Deployment annotations
         run: bash charts/marimohub/ci/check-deployment-annotations.sh
 
+      - name: Verify kernel compression
+        run: bash charts/marimohub/ci/check-kernel-compression.sh
+
       - name: Verify sandbox pre-puller configuration
         run: |
           if error=$(helm template test charts/marimohub \

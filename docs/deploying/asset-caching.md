@@ -45,6 +45,12 @@ The frontend build emits Brotli and gzip files when they reduce asset size.
 The static server selects these files and retains immutable caching for
 fingerprinted assets. The HTML shell stays uncompressed for base URL insertion.
 
+Eligible `/api/v1` JSON GET responses up to 256 KiB receive weak ETags unless the route
+already sets one. Matching `If-None-Match` requests return `304 Not Modified`
+with cache metadata and no body. `Cache-Control: no-store` disables revalidation
+and ETag generation. Generated ETags hash the uncompressed body, allowing reuse
+across encodings. Compression weakens strong ETags.
+
 Before rollout, check these behaviors through the deployed ingress:
 
 - API JSON larger than 1 KiB returns gzip when requested and decodes once.
