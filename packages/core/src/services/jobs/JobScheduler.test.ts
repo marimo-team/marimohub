@@ -854,6 +854,110 @@ describe('JobScheduler', () => {
 		expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
 	});
 
+	it.each([
+		{ legacy: false, rollback: false },
+		{ legacy: false, rollback: true },
+		{ legacy: true, rollback: false },
+		{ legacy: true, rollback: true },
+	])(
+		'waits for reschedule publication (legacy=$legacy, rollback=$rollback)',
+		async ({ legacy, rollback }) => {
+			const job = await createJob({ schedule: { cron: '55 5 * * *', timezone: 'UTC' } });
+			if (legacy) {
+				await env.catalog.updateNotebookEntry('test.jobs.legacy', ACTOR, pid, nid, (notebook) => ({
+					jobs: notebook.jobs!.map((entry) => ({ ...entry, updated_at: undefined })),
+				}));
+			}
+			const publishing = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const publicationError = new Error('snapshot publication failed');
+			const publish = env.catalog.updateNotebookEntry.bind(env.catalog);
+			vi.spyOn(env.catalog, 'updateNotebookEntry').mockImplementationOnce(async (...args) => {
+				publishing.resolve();
+				await release.promise;
+				if (rollback) throw publicationError;
+				return publish(...args);
+			});
+			const updating = env.jobs
+				.updateJob(
+					pid,
+					nid,
+					job.id,
+					{
+						schedule: { cron: '0 6 * * *', timezone: 'UTC' },
+					},
+					ACTOR,
+				)
+				.then(
+					() => null,
+					(error) => error,
+				);
+			const claim = vi.spyOn(env.jobRuns, 'claimOccurrence');
+			const clock = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
+			try {
+				await publishing.promise;
+				const head = await env.jobs.getJob(pid, nid, job.id);
+				expect(head.updated_at).not.toBe(job.updated_at);
+				expect(head.schedule).toEqual({ cron: '0 6 * * *', timezone: 'UTC' });
+				expect(await clock.tick()).toMatchObject({ fired: 0, skipped: 0, repaired: 0, errors: 0 });
+				expect(claim).not.toHaveBeenCalled();
+				expect(await env.jobRuns.listRuns(pid, nid, job.id)).toEqual([]);
+			} finally {
+				release.resolve();
+				await updating;
+			}
+			expect(await updating).toBe(rollback ? publicationError : null);
+			expect(await clock.tick()).toMatchObject({ fired: 1, errors: 0 });
+			expect(await clock.tick()).toMatchObject({ fired: 0, skipped: 0, repaired: 0, errors: 0 });
+			expect(await env.jobRuns.listRuns(pid, nid, job.id)).toMatchObject([
+				{
+					scheduled_for: rollback ? '2026-09-02T05:55:00.000Z' : '2026-09-02T06:00:00.000Z',
+				},
+			]);
+		},
+	);
+
+	it('rejects a stale snapshot version even when the schedule has not changed', async () => {
+		const job = await createJob();
+		const snapshot = await env.catalog.getCurrentSnapshot();
+		await env.jobs.updateJob(pid, nid, job.id, { parameters: { value: 'new' } }, ACTOR);
+		vi.spyOn(env.catalog, 'getCurrentSnapshot').mockResolvedValueOnce(snapshot);
+		const claim = vi.spyOn(env.jobRuns, 'claimOccurrence');
+		const clock = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
+
+		expect(await clock.tick()).toMatchObject({ fired: 0, errors: 0 });
+		expect(claim).not.toHaveBeenCalled();
+		expect(await clock.tick()).toMatchObject({ fired: 1, errors: 0 });
+		expect(await env.jobRuns.listRuns(pid, nid, job.id)).toMatchObject([
+			{ parameters: { value: 'new' } },
+		]);
+	});
+
+	it.each([false, true])('checks legacy snapshot timezones (changed=%s)', async (changed) => {
+		const job = await createJob();
+		await env.catalog.updateNotebookEntry('test.jobs.legacy', ACTOR, pid, nid, (notebook) => ({
+			jobs: notebook.jobs!.map((entry) => ({ ...entry, updated_at: undefined })),
+		}));
+		const snapshot = await env.catalog.getCurrentSnapshot();
+		if (changed) {
+			await env.jobs.updateJob(
+				pid,
+				nid,
+				job.id,
+				{
+					schedule: { cron: '* * * * *', timezone: 'Asia/Kathmandu' },
+				},
+				ACTOR,
+			);
+		}
+		vi.spyOn(env.catalog, 'getCurrentSnapshot').mockResolvedValueOnce(snapshot);
+		const clock = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
+
+		expect(await clock.tick()).toMatchObject({ fired: changed ? 0 : 1, errors: 0 });
+		expect(await clock.tick()).toMatchObject({ fired: changed ? 1 : 0, errors: 0 });
+		expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
+	});
+
 	it('scans active-run storage a constant number of times per tick', async () => {
 		for (let index = 0; index < 3; index++) await createJob({ name: `job ${index}` });
 		const listActive = vi.spyOn(env.jobRuns, 'listActiveSnapshot');

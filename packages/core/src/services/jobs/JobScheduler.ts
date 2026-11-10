@@ -11,7 +11,7 @@ import type { ProjectId, RunId, VersionId } from '../../ids';
 import { logEvent } from '../../logs';
 import { logOperationalError } from '../../operationalLog';
 import { notificationRouter } from '../../notifications';
-import type { JobDefinition, JobRun } from '../../schema';
+import type { JobDefinition, JobRun, SnapshotJobEntry } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import type { EventService } from '../catalog/EventService';
 import type { NotebookService } from '../content/NotebookService';
@@ -206,7 +206,7 @@ export class JobScheduler {
 					const fired = await this.fire(
 						projectId,
 						notebookId,
-						entry.id,
+						entry,
 						now,
 						activeJobs.has(jobKey),
 						fireReads,
@@ -346,17 +346,25 @@ export class JobScheduler {
 	private async fire(
 		projectId: ProjectId,
 		notebookId: JobRun['notebook_id'],
-		jobId: JobRun['job_id'],
+		entry: SnapshotJobEntry,
 		now: number,
 		hasActive: boolean,
 		cache: PromiseMemo,
 	): Promise<'fired' | 'repaired' | 'skipped' | 'none'> {
+		const jobId = entry.id;
 		const jobRef = { project_id: projectId, notebook_id: notebookId, id: jobId };
 		return this.deps.runs.withJobMutation(jobRef, async () => {
 			if (await this.deps.jobs.isDeleting(jobRef)) return 'none';
-			// The definition may have changed since snapshot filtering.
 			const job = await this.loadJob(projectId, notebookId, jobId, cache);
 			if (!job) return 'none';
+			// Heads precede snapshot publication and can roll back if publication fails.
+			const published =
+				entry.updated_at === undefined
+					? job.enabled === entry.enabled &&
+						job.schedule?.cron === entry.schedule?.cron &&
+						job.schedule?.timezone === entry.schedule?.timezone
+					: job.updated_at === entry.updated_at;
+			if (!published) return 'none';
 			const occurrence = this.dueOccurrence(job, now);
 			if (occurrence === null) return 'none';
 			const scheduledFor = new Date(occurrence).toISOString();
