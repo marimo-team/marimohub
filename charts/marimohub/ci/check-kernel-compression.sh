@@ -8,7 +8,7 @@ helm template test charts/marimohub | ruby -ryaml -e '
   abort "kernel compression must be opt-in" if documents.any? { |doc| doc["kind"] == "Middleware" }
   documents.select { |doc| doc["kind"] == "Deployment" }.each do |deployment|
     env = deployment.dig("spec", "template", "spec", "containers").first.fetch("env")
-    abort "middleware wiring must be opt-in" if env.any? { |entry| entry["name"] == "MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES" }
+    abort "middleware wiring must be opt-in" if env.any? { |entry| entry["name"] == "MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE" }
   end
 '
 
@@ -41,8 +41,9 @@ helm template test charts/marimohub \
       container = deployment.dig("spec", "template", "spec", "containers").first
       env = container.fetch("env").to_h { |entry| [entry["name"], entry["value"]] }
       abort "incorrect kernel ingress namespace" unless env["MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE"] == namespace
-      abort "middleware reference does not match the resource" unless env["MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES"] == expected
+      abort "middleware reference does not match the resource" unless env["MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE"] == expected
       abort "external annotations overridden" if env.key?("MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS")
+      abort "external middlewares overridden" if env.key?("MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES")
       abort "external Secret missing" unless container.fetch("envFrom").include?({"secretRef" => {"name" => "external-config", "optional" => true}})
     end
   '
@@ -68,14 +69,14 @@ for source in config secrets.data; do
   grep -Fq 'must match sandboxIngress.namespace' <<< "$error"
   if error=$(helm template test charts/marimohub \
     -f charts/marimohub/ci/kernel-compression-values.yaml \
-    --set-string "$source.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES=other@file" 2>&1); then
+    --set-string "$source.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE=other@file" 2>&1); then
     echo "Accepted middleware override in $source" >&2
     exit 1
   fi
   grep -Fq 'is managed by sandboxIngress.compression' <<< "$error"
 done
 
-for key in MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES; do
+for key in MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE; do
   if error=$(helm template test charts/marimohub \
     -f charts/marimohub/ci/kernel-compression-values.yaml \
     --set-string "extraEnv[0].name=$key" \

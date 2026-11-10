@@ -1198,7 +1198,7 @@ describe('optional compute configuration', () => {
 				' sandboxes-auth@kubernetescrd, sandboxes-compress@kubernetescrd ',
 				'sandboxes-auth@kubernetescrd,sandboxes-compress@kubernetescrd',
 			],
-		])('merges chart middlewares with existing annotations: %s', (existing, expected) => {
+		])('merges middleware references with existing annotations: %s', (existing, expected) => {
 			const createPublisher = vi.spyOn(coreweave, 'createKernelIngressPublisher');
 			const annotation = 'traefik.ingress.kubernetes.io/router.middlewares';
 			try {
@@ -1225,16 +1225,22 @@ describe('optional compute configuration', () => {
 			}
 		});
 
-		it('rejects middleware references without an ingress namespace', () => {
+		it.each([
+			'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES',
+			'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE',
+		])('rejects %s without an ingress namespace', (variable) => {
 			expect(() =>
 				makeCompute({
 					...env,
-					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES: 'sandboxes-compress@kubernetescrd',
+					[variable]: 'sandboxes-compress@kubernetescrd',
 				}),
-			).toThrow(/INGRESS_MIDDLEWARES requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE/);
+			).toThrow(`${variable} requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE`);
 		});
 
-		it('checks the annotation size after appending middleware references', () => {
+		it.each([
+			'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES',
+			'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE',
+		])('checks the combined annotation size after appending %s', (variable) => {
 			const error = getConfigError(() =>
 				makeCompute({
 					...env,
@@ -1242,7 +1248,7 @@ describe('optional compute configuration', () => {
 					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: JSON.stringify({
 						a: 'x'.repeat(256 * 1024 - 1),
 					}),
-					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES: 'sandboxes-compress@kubernetescrd',
+					[variable]: 'sandboxes-compress@kubernetescrd',
 				}),
 			);
 			expect(error.message).toMatch(/Invalid combined CoreWeave ingress annotations.*256 KiB/);

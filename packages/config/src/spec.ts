@@ -719,7 +719,15 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES',
 						name: 'CoreWeave kernel Ingress middlewares',
 						description:
-							'Comma-separated Traefik middleware references appended to the kernel Ingress middleware annotation. Preserves existing annotations and removes duplicate references. Requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE. The Helm chart supplies this value when sandboxIngress.compression.enabled is true.',
+							'Comma-separated Traefik middleware references appended to the kernel Ingress middleware annotation. Preserves existing annotations and removes duplicate references. Requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE.',
+						example: 'sandboxes-auth@kubernetescrd',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE',
+						name: 'CoreWeave kernel Ingress compression middleware',
+						description:
+							'Traefik compression middleware reference appended after the configured kernel Ingress middlewares. Preserves existing annotations and middleware references, including values from external Secrets. Requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE. The Helm chart supplies this value when sandboxIngress.compression.enabled is true.',
 						example: 'sandboxes-marimohub-kernel-compress@kubernetescrd',
 						optIn: true,
 					},

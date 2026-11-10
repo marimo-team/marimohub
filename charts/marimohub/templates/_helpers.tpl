@@ -83,17 +83,17 @@ Call with: (dict "root" $ "maintenance" true|false)
 {{- if $v.sandboxIngress.compression.enabled -}}
 {{- $namespace := required "sandboxIngress.namespace is required for kernel compression" $v.sandboxIngress.namespace -}}
 {{- $namespaceKey := "MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE" -}}
-{{- $middlewaresKey := "MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES" -}}
+{{- $compressionKey := "MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE" -}}
 {{- range $source, $values := dict "config" $v.config "secrets.data" $v.secrets.data -}}
 {{- if and (hasKey ($values | default dict) $namespaceKey) (ne (get $values $namespaceKey) $namespace) -}}
 {{- fail (printf "%s.%s must match sandboxIngress.namespace when compression is enabled" $source $namespaceKey) -}}
 {{- end -}}
-{{- if hasKey ($values | default dict) $middlewaresKey -}}
-{{- fail (printf "%s.%s is managed by sandboxIngress.compression; put other middleware references in MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS" $source $middlewaresKey) -}}
+{{- if hasKey ($values | default dict) $compressionKey -}}
+{{- fail (printf "%s.%s is managed by sandboxIngress.compression; put other middleware references in MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS" $source $compressionKey) -}}
 {{- end -}}
 {{- end -}}
 {{- range $v.extraEnv -}}
-{{- if or (eq .name $namespaceKey) (eq .name $middlewaresKey) -}}
+{{- if or (eq .name $namespaceKey) (eq .name $compressionKey) -}}
 {{- fail (printf "extraEnv.%s is managed by sandboxIngress.compression" .name) -}}
 {{- end -}}
 {{- end -}}
@@ -221,7 +221,7 @@ spec:
         {{- if $v.sandboxIngress.compression.enabled }}
         - name: MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE
           value: {{ $v.sandboxIngress.namespace | quote }}
-        - name: MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES
+        - name: MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE
           value: {{ printf "%s-%s-kernel-compress@kubernetescrd" $v.sandboxIngress.namespace (include "marimohub.fullname" $root) | quote }}
         {{- end }}
         {{- if .maintenance }}

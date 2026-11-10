@@ -5,3 +5,7 @@ sandboxIngress:
     enabled: true
 secrets:
   existingSecret: external-config
+config:
+  MARIMOHUB_COMPUTE_BACKEND: coreweave
+  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: '{"example.com/source":"config-map"}'
+  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES: sandboxes-config-only@kubernetescrd
