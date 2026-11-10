@@ -1484,8 +1484,8 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/**
-		 * Request deferred preview preparation
-		 * @description Queues preparation without starting compute. Requires permission to run an app or temporary editor.
+		 * Request preview preparation
+		 * @description Queues deferred preparation or retries failed preparation without starting compute. Retry requests respect the existing backoff. Requires permission to run an app or temporary editor.
 		 */
 		post: operations['notebooks.previews.prepare'];
 		delete?: never;

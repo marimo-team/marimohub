@@ -112,9 +112,9 @@ const requestPreparation = createRoute({
 	path: `${base}/{prid}/prepare`,
 	operationId: 'notebooks.previews.prepare',
 	tags: ['Previews'],
-	summary: 'Request deferred preview preparation',
+	summary: 'Request preview preparation',
 	description:
-		'Queues preparation without starting compute. Requires permission to run an app or temporary editor.',
+		'Queues deferred preparation or retries failed preparation without starting compute. Retry requests respect the existing backoff. Requires permission to run an app or temporary editor.',
 	request: { params: Params },
 	responses: { 202: jsonContent(Response, 'Preparation requested'), ...errors },
 });

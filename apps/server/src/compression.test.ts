@@ -3,14 +3,17 @@ import { Hono } from 'hono';
 import { describe, expect, it, vi } from 'vitest';
 import { compressResponse } from './compression';
 
+function compressionApp(): Hono {
+	return new Hono().use('*', compressResponse());
+}
+
 describe('response compression', () => {
 	it.each([
 		['Origin', 'Origin, Accept-Encoding'],
 		['*', '*'],
 		['Origin, accept-encoding', 'Origin, accept-encoding'],
 	])('preserves encoding variation on 304 responses: %s', async (vary, expected) => {
-		const app = new Hono();
-		app.use('*', compressResponse());
+		const app = compressionApp();
 		app.get('/', () => new Response(null, { status: 304, headers: { Vary: vary } }));
 		const response = await app.request('/', { headers: { 'Accept-Encoding': 'gzip' } });
 		expect(response.status).toBe(304);
@@ -23,8 +26,7 @@ describe('response compression', () => {
 		'does not wait for an open body when compression is declined: %s',
 		async (encoding) => {
 			let controller!: ReadableStreamDefaultController<Uint8Array>;
-			const app = new Hono();
-			app.use('*', compressResponse());
+			const app = compressionApp();
 			app.get(
 				'/',
 				() =>
@@ -65,8 +67,7 @@ describe('response compression', () => {
 		['text/html', '<p>first</p>'],
 	])('returns headers before an open %s stream ends: %j', async (contentType, body) => {
 		let controller!: ReadableStreamDefaultController<Uint8Array>;
-		const app = new Hono();
-		app.use('*', compressResponse());
+		const app = compressionApp();
 		app.get(
 			'/',
 			() =>
@@ -101,8 +102,7 @@ describe('response compression', () => {
 		'uses the declared byte threshold for a %i-byte body',
 		async (size) => {
 			const body = 'é'.repeat(Math.floor(size / 2)) + (size % 2 ? 'a' : '');
-			const app = new Hono();
-			app.use('*', compressResponse());
+			const app = compressionApp();
 			app.get('/', (c) => c.text(body, 200, { 'Content-Length': String(size) }));
 			const response = await app.request('/', { headers: { 'Accept-Encoding': 'gzip' } });
 			expect(response.headers.get('Content-Encoding')).toBe(size < 1024 ? null : 'gzip');
@@ -114,12 +114,12 @@ describe('response compression', () => {
 	it.each<Record<string, string>>([
 		{ 'Cache-Control': 'private, No-Transform' },
 		{ 'Content-Type': 'application/octet-stream' },
+		{ 'Transfer-Encoding': 'chunked' },
 	])('does not read excluded streaming responses: %j', async (headers) => {
 		const pull = vi.fn(() => {
 			throw new Error('unexpected body read');
 		});
-		const app = new Hono();
-		app.use('*', compressResponse());
+		const app = compressionApp();
 		app.get(
 			'/',
 			() =>
@@ -134,10 +134,40 @@ describe('response compression', () => {
 		await response.body!.cancel();
 	});
 
+	it('preserves byte ranges without compressing the selected bytes', async () => {
+		const body = 'partial '.repeat(200);
+		const app = compressionApp();
+		app.get('/', (c) =>
+			c.text(body, 206, {
+				'Content-Length': String(body.length),
+				'Content-Range': `bytes 0-${body.length - 1}/${body.length * 2}`,
+			}),
+		);
+		const response = await app.request('/', { headers: { 'Accept-Encoding': 'gzip' } });
+		expect(response.status).toBe(206);
+		expect(response.headers.has('Content-Encoding')).toBe(false);
+		expect(response.headers.get('Content-Length')).toBe(String(body.length));
+		expect(response.headers.get('Content-Range')).toBe(
+			`bytes 0-${body.length - 1}/${body.length * 2}`,
+		);
+		expect(await response.text()).toBe(body);
+	});
+
+	it('preserves HEAD metadata without adding an encoding to an absent body', async () => {
+		const app = compressionApp();
+		app.get('/', (c) => c.text('body '.repeat(300), 200, { 'Content-Length': '1500' }));
+		const response = await app.request('/', {
+			method: 'HEAD',
+			headers: { 'Accept-Encoding': 'gzip' },
+		});
+		expect(response.headers.has('Content-Encoding')).toBe(false);
+		expect(response.headers.get('Content-Length')).toBe('1500');
+		expect(await response.text()).toBe('');
+	});
+
 	it('honors explicit refusal over a wildcard and preserves an error response', async () => {
 		const body = 'unavailable '.repeat(200);
-		const app = new Hono();
-		app.use('*', compressResponse());
+		const app = compressionApp();
 		app.get('/', (c) =>
 			c.text(body, 503, { ETag: '"revision"', Vary: 'Origin', 'Retry-After': '5' }),
 		);
@@ -154,8 +184,7 @@ describe('response compression', () => {
 
 	const payload = { value: 'data'.repeat(1024) };
 	it.each(['gzip', 'identity', 'gzip;q=0'])('negotiates API JSON: %s', async (encoding) => {
-		const app = new Hono();
-		app.use('*', compressResponse());
+		const app = compressionApp();
 		app.get('/', (c) => c.json(payload));
 		const response = await app.request('/', { headers: { 'Accept-Encoding': encoding } });
 		expect(response.headers.get('Content-Encoding')).toBe(encoding === 'gzip' ? 'gzip' : null);
@@ -167,8 +196,7 @@ describe('response compression', () => {
 	});
 
 	it('compresses unknown-length JSON without probing its size', async () => {
-		const app = new Hono();
-		app.use('*', compressResponse());
+		const app = compressionApp();
 		app.get('/', (c) => c.json({ ok: true }));
 		const response = await app.request('/', { headers: { 'Accept-Encoding': 'gzip' } });
 		expect(response.headers.get('Content-Encoding')).toBe('gzip');
@@ -179,8 +207,7 @@ describe('response compression', () => {
 
 	it('leaves already-encoded bodies untouched', async () => {
 		const bytes = gzipSync(JSON.stringify(payload));
-		const app = new Hono();
-		app.use('*', compressResponse());
+		const app = compressionApp();
 		app.get(
 			'/',
 			() =>
@@ -195,8 +222,7 @@ describe('response compression', () => {
 	it.each(['/api/v1/projects/p/conversations/c/stream', '/api/host/v1/events'])(
 		'does not buffer an open SSE stream: %s',
 		async (path) => {
-			const app = new Hono();
-			app.use('*', compressResponse());
+			const app = compressionApp();
 			app.get(
 				path,
 				() =>

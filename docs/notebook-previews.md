@@ -38,8 +38,7 @@ Closing or merging the PR retires its managed previews.
 Deleting the notebook or project closes its PR groups.
 
 With `eager` off, each new target waits for an authorized visit.
-After that visit, preparation retries failures without another visit.
-A later visit does not shorten the retry delay.
+After that visit, preparation retries automatically within the [retry limits](#preparation-retries).
 Compute starts when a user opens an app or editor.
 
 Managed previews share the project preview limit with manual previews.
@@ -193,4 +192,13 @@ Reservations remain until cleanup confirms reclamation. Unpublished artifacts ha
 A project can retain up to 1,000 idempotency receipts within the seven-day window.
 After a capacity rejection, retry with the same key once capacity becomes available.
 Each retry gets a fresh creation deadline; deleted previews cannot be recreated with their retained key.
-Limits return `429 RESOURCE_EXHAUSTED`; preparation failures retry after backoff.
+Limits return `429 RESOURCE_EXHAUSTED`.
+
+### Preparation retries
+
+Preparation uses increasing retry delays and stops after five consecutive failures, including expired worker leases.
+It then logs `preview_preparation_exhausted`.
+The last prepared revision remains available.
+
+**Prepare latest**, the preparation API, or a deferred preview visit can restart attempts after the retry delay.
+PR automation resets the failure count only when the target commit changes.

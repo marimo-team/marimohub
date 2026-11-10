@@ -190,6 +190,16 @@ each tagged `loop=<loop>`.
 The single-writer design behind these leases is in the
 [operations runbook](https://github.com/marimo-team/marimohub/blob/main/development_docs/operations.md#3-the-single-cron-guarantee).
 
+### Deleted project cleanup
+
+Maintenance purges soft-deleted projects after 30 days, using project metadata
+even if the catalog still marks them active. Missing metadata triggers cleanup
+of the remaining objects. Unreadable or invalid metadata logs
+`projects.cleanup_failed` and leaves the project intact.
+
+The catalog entry remains until cleanup succeeds, so later sweeps can retry failures.
+App pool tombstones and preview records follow separate retention rules.
+
 ## Reclaim a stuck editor sandbox
 
 Cleanup of a retired editor session normally finishes on its own; see
@@ -415,6 +425,10 @@ include `MaintenanceLock.acquire`, `MaintenanceLock.release`, and
 the acquire span adds `marimohub.lock.acquired` (boolean). Lock contention does
 not mark the acquisition span as an error.
 
+The Node server omits background `Bucket.*`, `SessionService.getSession`, and lock
+spans unless they have ERROR status or a recorded exception. This filter leaves
+loop summaries, other operations, and foreground spans unchanged.
+
 `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER` /
 `OTEL_TRACES_SAMPLER_ARG`, `OTEL_EXPORTER_OTLP_HEADERS`, and
 `OTEL_SDK_DISABLED` behave per the [OTEL spec](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/).
@@ -517,6 +531,8 @@ restart or redeploy instead of living only in `kubectl logs`. This covers both
 the server's own events (`boot_failed`, `otel_started`, maintenance cycles) and
 the request-path events from the API layer (rejections, best-effort failures).
 Work that fails after the response logs `background_work_failed`.
+Core operational errors also export the sanitized payload written to stderr,
+including a fallback event if serialization fails.
 Each record carries the wide event's `level` as its severity, its `event` (or
 `message`) as the body, and every field as an attribute; while tracing is on it
 also joins its trace via `trace_id` / `span_id`.
