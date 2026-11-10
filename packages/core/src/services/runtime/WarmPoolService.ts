@@ -36,6 +36,7 @@ export interface WarmPoolProfile {
 	resources: ComputeResources;
 }
 export interface WarmPoolConfig {
+	preconnect?: boolean;
 	enabled: boolean;
 	size: number;
 	profiles: readonly WarmPoolProfile[];

@@ -213,3 +213,50 @@ and [Sandbox image](./sandbox-image.md).
 ## Warm sandbox pools
 
 CoreWeave and Kubernetes support opt-in [warm sandbox pools](./warm-pools.md). Pools keep the default image running for faster editor and app startup.
+
+### Warm pool transport preconnection
+
+With warm pools enabled, Node API replicas prepare CoreWeave Direct credentials
+and mTLS channels before session startup. Each replica uses its own SDK client
+and cache. Maintenance creates pool members, performs periodic health checks,
+and retires idle members. API replicas claim, probe, and hand off members during
+session startup, and retire failed claims. Preconnection does not change pool
+ownership, run commands, write files, or replace the startup health check.
+
+When `MARIMOHUB_RUN_MAINTENANCE` is false or unset, the loop polls every five seconds.
+Disabled pools, Gateway-only connections, and unsupported adapters skip the loop.
+Set `MARIMOHUB_COMPUTE_WARM_POOL_PRECONNECT=false` to disable preconnection.
+
+Each pass selects members round-robin across profiles, with a global eight-member
+limit. When more than eight profiles are eligible, the loop rotates the starting
+profile at 30-second intervals. Only ready, unexpired members with saved provider references are eligible.
+At most two member attempts run concurrently, each with a five-second budget.
+Each completed attempt starts a 30-second cooldown, including failures.
+
+Preparation failures do not block API health. Shutdown cancels queued work and
+waits for active attempts to settle.
+
+A version-pinned patch adds `client.preconnect()` to SDK 1.0.0. It prepares the
+five permission scopes for exec, command streams, logs, file writes, and file reads.
+Background preparation shares its five-second budget across all scopes, including
+in `auto` mode. Foreground connection attempts in `auto` mode retain their one-second budget.
+
+Background preparation uses the same bounded caches as foreground requests.
+It renews credentials within 60 seconds of expiry and preserves foreground fallback
+cooldowns. Background renewal publishes a replacement credential only after its
+channel is ready. A failed background renewal preserves the current credential and channel.
+
+Speculative entries have a 40-channel limit and cannot displace idle foreground
+entries. A foreground request promotes a speculative entry to foreground priority.
+`client.preconnect()` returns `false` for capacity skips, Gateway mode, or unavailable
+Direct connections in `auto` mode. Connection failures in `direct` mode still reject.
+
+Shared credential issuance retains its five-second RPC bound. Cancellation stops
+the background waiter without canceling issuance that a foreground request can share.
+When an upstream release provides equivalent behavior, remove the patch.
+
+The `warm_pool_preconnect` log reports preparation counts. Per-member failure logs
+include the error name. The `warm_pool.preconnect_ms` histogram records the duration
+of each completed member attempt, including attempts that reuse SDK caches.
+Members skipped during the 30-second cooldown produce no duration sample.
+These measurements do not establish which transport a subsequent request uses.

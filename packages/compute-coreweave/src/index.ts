@@ -461,6 +461,10 @@ export interface CoreWeaveConfig {
  * tests pass a fake, production passes the real client.
  */
 export interface CoreWeaveClient {
+	preconnect?(
+		sandboxId: string,
+		options: { timeoutMs: number; signal: AbortSignal },
+	): Promise<boolean>;
 	create(options?: SandboxRunOptions): Promise<CoreWeaveSandbox>;
 	runFromTemplate(
 		templateId: string,
@@ -1679,6 +1683,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 	 * surface) works exactly when it was pre-declared via `extraPorts`.
 	 */
 	readonly capabilities: { multiPort: boolean };
+	readonly preconnect?: SandboxProvider['preconnect'];
 	private client?: CoreWeaveClient;
 	private readonly fileWriteSlots: SandboxFileWriteSlots;
 	/**
@@ -1695,6 +1700,14 @@ export class CoreWeaveCompute implements SandboxProvider {
 		this.client = client;
 		this.fileWriteSlots = new SandboxFileWriteSlots(fileWriteLimit(config.dataPlaneMode));
 		this.capabilities = { multiPort: (config.extraPorts?.length ?? 0) > 0 };
+		if (config.dataPlaneMode !== 'gateway' && (!client || client.preconnect)) {
+			this.preconnect = async (id, options) => {
+				options.signal.throwIfAborted();
+				const providerId = reconnectSandboxId(options.reconnectReference, id);
+				if (!providerId) return false;
+				return this.getClient().preconnect!(providerId, options);
+			};
+		}
 	}
 
 	private getClient(): CoreWeaveClient {

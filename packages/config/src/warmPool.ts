@@ -98,6 +98,7 @@ export function parseWarmPoolConfig(
 		backend: options.backend,
 		config: {
 			enabled,
+			preconnect: parseBool(env, 'MARIMOHUB_COMPUTE_WARM_POOL_PRECONNECT', true),
 			size,
 			creationTimeoutMs,
 			minimumRemainingMs,

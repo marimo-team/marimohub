@@ -521,6 +521,15 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
+						id: 'MARIMOHUB_COMPUTE_WARM_POOL_PRECONNECT',
+						name: 'Warm pool transport preconnection',
+						description:
+							'Prepare Direct credentials and channels in the background on each Node API replica. Requires enabled warm pools and an adapter supporting preconnection. No sandbox commands or files are touched. Gateway-only connections are skipped; failures never block API health. Set false to disable.',
+						default: 'true',
+						optIn: true,
+					},
+
+					{
 						id: 'MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE',
 						name: 'Preview compute profile',
 						description:

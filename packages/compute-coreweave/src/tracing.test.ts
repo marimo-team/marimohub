@@ -56,6 +56,72 @@ function fakeClient(sandbox: CoreWeaveSandbox = fakeSandbox()) {
 }
 
 describe('instrumentCoreWeaveClient', () => {
+	it.each([true, false])('traces preconnection and forwards its result (%s)', async (result) => {
+		const preconnect = vi.fn<NonNullable<CoreWeaveClient['preconnect']>>(async () => result);
+		const raw = { ...fakeClient(), preconnect };
+		const client = instrumentCoreWeaveClient(raw, 'https://gateway.example:8443/api');
+		const options = { timeoutMs: 1234, signal: new AbortController().signal };
+		let parentSpanId = '';
+
+		await provider.getTracer('test').startActiveSpan('warm_pool_preconnect', async (parent) => {
+			parentSpanId = parent.spanContext().spanId;
+			await expect(client.preconnect!(SANDBOX_ID, options)).resolves.toBe(result);
+			parent.end();
+		});
+
+		expect(preconnect).toHaveBeenCalledExactlyOnceWith(SANDBOX_ID, options);
+		expect(preconnect.mock.calls[0][1]).toBe(options);
+		expect(preconnect.mock.contexts).toEqual([raw]);
+		const spans = exporter
+			.getFinishedSpans()
+			.filter((span) => span.name === `${CLIENT}/preconnect`);
+		expect(spans).toHaveLength(1);
+		const span = spans[0];
+		expect(span.kind).toBe(SpanKind.CLIENT);
+		expect(span.parentSpanContext?.spanId).toBe(parentSpanId);
+		expect(span.attributes).toEqual({
+			'server.address': 'gateway.example',
+			'server.port': 8443,
+			'coreweave.sandbox_id': SANDBOX_ID,
+		});
+		expect(span.status.code).toBe(SpanStatusCode.UNSET);
+		expect(span.events).toEqual([]);
+	});
+
+	it('records preconnection failures and preserves the original error', async () => {
+		const failure = new Error('connection unavailable');
+		const preconnect = vi.fn<NonNullable<CoreWeaveClient['preconnect']>>(async () => {
+			throw failure;
+		});
+		const client = instrumentCoreWeaveClient(
+			{ ...fakeClient(), preconnect },
+			'https://gateway.example',
+		);
+		await expect(
+			client.preconnect!(SANDBOX_ID, { timeoutMs: 1234, signal: new AbortController().signal }),
+		).rejects.toBe(failure);
+
+		const spans = exporter.getFinishedSpans();
+		expect(spans).toHaveLength(1);
+		const span = spans[0];
+		expect(span.name).toBe(`${CLIENT}/preconnect`);
+		expect(span.attributes['coreweave.sandbox_id']).toBe(SANDBOX_ID);
+		expect(span.attributes['error.type']).toBe('Error');
+		expect(span.status.code).toBe(SpanStatusCode.ERROR);
+		expect(span.events).toContainEqual(
+			expect.objectContaining({
+				name: 'exception',
+				attributes: expect.objectContaining({ 'exception.message': failure.message }),
+			}),
+		);
+	});
+
+	it('omits preconnection when the client does not support it', () => {
+		const client = instrumentCoreWeaveClient(fakeClient(), 'https://gateway.example');
+		expect(client).not.toHaveProperty('preconnect');
+		expect(exporter.getFinishedSpans()).toEqual([]);
+	});
+
 	it('spans every client and sandbox operation with endpoint attributes', async () => {
 		const client = instrumentCoreWeaveClient(fakeClient(), 'https://gateway.example:8443/api');
 

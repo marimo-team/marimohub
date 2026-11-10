@@ -11,6 +11,9 @@ import {
 	InFlightWork,
 	ProxyExposure,
 	SubdomainExposure,
+	WarmPoolService,
+	WarmPoolStore,
+	createSandboxId,
 } from '@marimo-hub/core';
 import { bootstrap } from './bootstrap';
 import type { BootstrapOverrides } from './bootstrap';
@@ -190,6 +193,57 @@ describe('bootstrap', () => {
 			'service.version': '1.2.3',
 		});
 	});
+
+	it.each(['false', 'true'])(
+		'preconnects only API replicas and keeps health non-blocking (maintenance=%s)',
+		async (maintenance) => {
+			const connect = vi.fn(async () => {
+				throw new Error('Direct endpoint unavailable');
+			});
+			deps.compute = { ...deps.compute, preconnect: connect };
+			const store = new WarmPoolStore(deps.bucket, 'coreweave');
+			deps.warmPool = new WarmPoolService(store, deps.compute, deps.services.sessions, {
+				enabled: true,
+				size: 1,
+				profiles: [{ key: 'configured', resources: {} }],
+				creationTimeoutMs: 300_000,
+				minimumRemainingMs: 0,
+			});
+			await store.mutate((record) =>
+				record.pools.push({
+					key: 'configured',
+					failures: 0,
+					retry_at: 0,
+					members: [
+						{
+							sandbox_id: createSandboxId(),
+							state: 'ready',
+							token: 'token',
+							assigned: false,
+							created_at: Date.now(),
+							checked_at: Date.now(),
+							ready_until: Date.now() + 60_000,
+							operation_until: 0,
+							reconnect_reference: 'reference',
+						},
+					],
+				}),
+			);
+			const harness = makeHarness(deps);
+			const handle = await bootstrap(
+				{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: maintenance },
+				harness.overrides,
+			);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(connect).toHaveBeenCalledTimes(maintenance === 'false' ? 1 : 0);
+			const response = (await harness.serveFn.mock.calls[0][0].fetch(
+				new Request('http://localhost/api/health'),
+				{} as never,
+			)) as Response;
+			expect(response.status).toBe(200);
+			await handle!.drain();
+		},
+	);
 
 	it('reports maintenance health as unavailable when loops are disabled', async () => {
 		const harness = makeHarness(deps);

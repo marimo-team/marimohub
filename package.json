@@ -73,7 +73,8 @@
 			"vitepress>vite": "^8.0.0"
 		},
 		"patchedDependencies": {
-			"vitepress@1.6.4": "patches/vitepress@1.6.4.patch"
+			"vitepress@1.6.4": "patches/vitepress@1.6.4.patch",
+			"@coreweave/cwsandbox@1.0.0": "patches/@coreweave__cwsandbox@1.0.0.patch"
 		}
 	}
 }
