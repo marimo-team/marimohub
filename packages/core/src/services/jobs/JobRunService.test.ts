@@ -1,12 +1,16 @@
+import { ulid } from 'ulidx';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { NotFoundError } from '../../errors';
-import { createRunId, SandboxId } from '../../ids';
+import { createRunId, RunId, SandboxId } from '../../ids';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import type { JobDefinition } from '../../schema';
 import { ACTOR, MemoryBucket, setupTestEnv, uid } from '../../testing';
 import { DANGLING_MARKER_GRACE_MS, JobRunService } from './JobRunService';
+import { occurrenceKey } from './cron';
+
+const runIdAt = (at: number) => RunId.parse(`run_${ulid(at)}`);
 
 const SB = SandboxId.parse('sb-0123456789abcdef');
 
@@ -31,8 +35,22 @@ describe('JobRunService', () => {
 		job = await env.jobs.createJob(pid, nid, { name: 'nightly' }, ACTOR);
 	});
 
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	const enqueue = (overrides: Partial<Parameters<JobRunService['enqueue']>[0]> = {}) =>
 		runs.enqueue({ job, trigger: 'manual', triggeredBy: ACTOR, timeoutSeconds: 600, ...overrides });
+
+	async function finalizedRun(queuedAt: number, finishedAt = queuedAt, runId = runIdAt(queuedAt)) {
+		const run = await enqueue({ runId });
+		const { run: finished } = await runs.transition(run, 'fail', () => ({
+			queued_at: new Date(queuedAt).toISOString(),
+			finished_at: new Date(finishedAt).toISOString(),
+		}));
+		await runs.deleteMarker(finished);
+		return finished;
+	}
 
 	it('writes a queued record and an active-run marker', async () => {
 		const run = await enqueue({ parameters: { name: 'Alice' } });
@@ -378,9 +396,7 @@ describe('JobRunService', () => {
 
 	it('prunes terminal runs and occurrence claims past retention, keeping active ones', async () => {
 		const now = Date.parse('2026-09-02T12:00:00.000Z');
-		const old = await enqueue();
-		await runs.transition(old, 'fail', () => ({ finished_at: '2026-07-01T00:00:00.000Z' }));
-		await runs.deleteMarker(old);
+		const old = await finalizedRun(Date.parse('2026-07-01T00:00:00.000Z'));
 		const recent = await enqueue();
 		await runs.transition(recent, 'fail', () => ({ finished_at: '2026-09-02T11:00:00.000Z' }));
 		const active = await enqueue();
@@ -406,6 +422,160 @@ describe('JobRunService', () => {
 		expect(await env.bucket.head(jobPaths.occurrence('20260720T0600Z'))).not.toBeNull();
 		expect(await env.bucket.head(jobPaths.occurrence('20260902T0600Z'))).not.toBeNull();
 	});
+
+	it('prunes 10 expired runs without reading 1,000 retained runs', async () => {
+		const now = Date.now();
+		const retention = 60_000;
+		for (let i = 0; i < 1010; i++) {
+			const at = now - (i < 1000 ? 1000 : retention + 1000);
+			await finalizedRun(at);
+		}
+		const get = vi.spyOn(env.bucket, 'get');
+		const head = vi.spyOn(env.bucket, 'head');
+		const list = vi.spyOn(env.bucket, 'list');
+		const remove = vi.spyOn(env.bucket, 'delete');
+		const put = vi.spyOn(env.bucket, 'put');
+
+		expect(await runs.pruneJob(job, retention, now)).toBe(10);
+
+		expect(get).toHaveBeenCalledTimes(10);
+		expect(head).toHaveBeenCalledTimes(10);
+		expect(list).toHaveBeenCalledTimes(12);
+		expect(remove).toHaveBeenCalledTimes(20);
+		expect(put).not.toHaveBeenCalled();
+		expect(await runs.listRuns(pid, nid, job.id)).toHaveLength(1000);
+	});
+
+	it('prunes across history pages while skipping missing and corrupt records', async () => {
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		const now = Date.now();
+		const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+		for (let i = 0; i < 505; i++) {
+			const at = now - 10_000 - i;
+			await finalizedRun(at);
+		}
+		const missing = runIdAt(now - 11_000);
+		const corrupt = runIdAt(now - 12_000);
+		await env.bucket.put(jobPaths.runIndex(missing), '');
+		await env.bucket.put(jobPaths.runIndex(corrupt), '');
+		await env.bucket.put(jobPaths.run(corrupt).record, 'invalid');
+
+		expect(await runs.pruneJob(job, 1000, now)).toBe(505);
+		expect(
+			(await env.bucket.list({ prefix: jobPaths.runIndexPrefix })).objects.map((o) => o.key),
+		).toEqual([jobPaths.runIndex(missing), jobPaths.runIndex(corrupt)]);
+	});
+
+	it('uses a strict cutoff and retains older runs that finished recently', async () => {
+		const now = Date.now();
+		const cutoff = now - 60_000;
+		await finalizedRun(cutoff - 1);
+		const at = await finalizedRun(
+			cutoff,
+			cutoff,
+			RunId.parse(`run_${ulid(cutoff).slice(0, 10)}${'0'.repeat(16)}`),
+		);
+		const after = await finalizedRun(cutoff + 1);
+		const longRunning = await finalizedRun(cutoff - 10_000, cutoff);
+
+		expect(await runs.pruneJob(job, 60_000, now)).toBe(1);
+		expect((await runs.listRuns(pid, nid, job.id)).map((run) => run.run_id)).toEqual([
+			after.run_id,
+			at.run_id,
+			longRunning.run_id,
+		]);
+	});
+
+	it('continues past short index pages containing only missing or corrupt records', async () => {
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		const now = Date.now();
+		const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+		for (let i = 0; i < 6; i++) {
+			const at = now - 10_000 - i;
+			const run = await finalizedRun(at);
+			if (i < 2) await env.bucket.delete(jobPaths.run(run.run_id).record);
+			else if (i < 4) await env.bucket.put(jobPaths.run(run.run_id).record, 'invalid');
+		}
+		const list = env.bucket.list.bind(env.bucket);
+		const listing = vi.spyOn(env.bucket, 'list').mockImplementation((options) =>
+			list({
+				...options,
+				limit: options?.prefix === jobPaths.runIndexPrefix ? 2 : options?.limit,
+			}),
+		);
+
+		expect(await runs.pruneJob(job, 1000, now)).toBe(2);
+		expect(
+			listing.mock.calls.filter(([options]) => options?.prefix === jobPaths.runIndexPrefix),
+		).toHaveLength(3);
+		expect(await runs.listRuns(pid, nid, job.id)).toEqual([]);
+	});
+
+	it.each([-1, 0, 0.5])('handles a cutoff of %s milliseconds after the epoch', async (cutoff) => {
+		await finalizedRun(0);
+
+		expect(await runs.pruneJob(job, 1000, 1000 + cutoff)).toBe(cutoff > 0 ? 1 : 0);
+		expect(await runs.listRuns(pid, nid, job.id)).toHaveLength(cutoff > 0 ? 0 : 1);
+	});
+
+	it('uses queued_at for terminal records without a finish timestamp', async () => {
+		const now = Date.now();
+		const old = await enqueue({ runId: runIdAt(now - 10_000) });
+		const repaired = await enqueue({ runId: runIdAt(now - 20_000) });
+		for (const [run, queuedAt] of [
+			[old, now - 10_000],
+			[repaired, now],
+		] as const) {
+			await runs.transition(run, 'fail', () => ({ queued_at: new Date(queuedAt).toISOString() }));
+			await runs.deleteMarker(run);
+		}
+
+		expect(await runs.pruneJob(job, 1000, now)).toBe(1);
+		expect((await runs.listRuns(pid, nid, job.id)).map((run) => run.run_id)).toEqual([
+			repaired.run_id,
+		]);
+	});
+
+	it.each(['index list', 'record read', 'marker head', 'output list', 'output delete'] as const)(
+		'preserves history and occurrence claims after a failed %s and retries safely',
+		async (failure) => {
+			const now = Date.now();
+			const at = now - 120_000;
+			const run = await finalizedRun(at);
+			await runs.putOutputs(run, { html: '<p>output</p>', logs: 'logs' });
+			const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+			const runPaths = jobPaths.run(run.run_id);
+			const occurrence = occurrenceKey(at);
+			await runs.claimOccurrence(job, occurrence, run.run_id, new Date(at).toISOString());
+			const error = new Error('storage unavailable');
+			const list = env.bucket.list.bind(env.bucket);
+			vi.spyOn(env.bucket, 'list').mockImplementation((options) => {
+				if (
+					(failure === 'index list' && options?.prefix === jobPaths.runIndexPrefix) ||
+					(failure === 'output list' && options?.prefix === runPaths.base)
+				)
+					throw error;
+				return list(options);
+			});
+			if (failure === 'record read') vi.spyOn(env.bucket, 'get').mockRejectedValueOnce(error);
+			if (failure === 'marker head') vi.spyOn(env.bucket, 'head').mockRejectedValueOnce(error);
+			if (failure === 'output delete') vi.spyOn(env.bucket, 'delete').mockRejectedValueOnce(error);
+
+			await expect(runs.pruneJob(job, 1000, now)).rejects.toThrow(error);
+			vi.restoreAllMocks();
+			expect(await runs.readHtml(run)).toBe('<p>output</p>');
+			expect(await runs.readLogs(run)).toBe('logs');
+			expect(await runs.getRun(pid, nid, job.id, run.run_id)).toMatchObject({ status: 'failed' });
+			expect(await env.bucket.head(jobPaths.runIndex(run.run_id))).not.toBeNull();
+			expect(await env.bucket.head(jobPaths.occurrence(occurrence))).not.toBeNull();
+
+			expect(await runs.pruneJob(job, 1000, now)).toBe(1);
+			expect(await env.bucket.list({ prefix: runPaths.base })).toMatchObject({ objects: [] });
+			expect(await env.bucket.head(jobPaths.runIndex(run.run_id))).toBeNull();
+			expect(await env.bucket.head(jobPaths.occurrence(occurrence))).toBeNull();
+			expect(await runs.pruneJob(job, 1000, now)).toBe(0);
+		},
+	);
 
 	it('drops markers whose run is terminal or missing past the grace window', async () => {
 		const bucket = new MemoryBucket();
@@ -454,10 +624,6 @@ describe('JobRunService', () => {
 	});
 
 	describe('unhappy paths', () => {
-		afterEach(() => {
-			vi.restoreAllMocks();
-		});
-
 		it('continues pruning after a stale marker cleanup fails', async () => {
 			const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 			const stale = [await enqueue(), await enqueue()];
@@ -606,7 +772,7 @@ describe('JobRunService', () => {
 		});
 
 		it('keeps a terminal run while its finalization marker exists', async () => {
-			const run = await enqueue();
+			const run = await enqueue({ runId: runIdAt(Date.parse('2026-01-01T00:00:00.000Z')) });
 			await runs.transition(run, 'fail', () => ({ finished_at: '2026-01-01T00:00:00.000Z' }));
 
 			expect(await runs.pruneJob(job, 1_000, Date.parse('2026-09-02T00:00:00.000Z'))).toBe(0);

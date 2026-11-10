@@ -1,3 +1,4 @@
+import { encodeTime } from 'ulidx';
 import { copyMovePrefix, moveJson } from '../content/moveObjects';
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
@@ -356,16 +357,24 @@ export class JobRunService {
 		return (await this.bucket.head(key)) !== null;
 	}
 
-	/** Every run of a job, newest first. Intended for retention and internal maintenance. */
 	async listRuns(projectId: ProjectId, notebookId: NotebookId, jobId: JobId): Promise<JobRun[]> {
 		const runs: JobRun[] = [];
-		let afterRunId: RunId | undefined;
-		do {
-			const page = await this.listRunsPage(projectId, notebookId, jobId, 500, afterRunId);
-			runs.push(...page.items);
-			afterRunId = page.nextRunId ?? undefined;
-		} while (afterRunId);
+		for await (const run of this.iterateRuns(projectId, notebookId, jobId)) runs.push(run);
 		return runs;
+	}
+
+	private async *iterateRuns(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		jobId: JobId,
+		afterRunId?: RunId,
+	): AsyncGenerator<JobRun> {
+		let cursor = afterRunId;
+		do {
+			const page = await this.listRunsPage(projectId, notebookId, jobId, 500, cursor);
+			yield* page.items;
+			cursor = page.nextRunId ?? undefined;
+		} while (cursor);
 	}
 
 	/** Read one newest-first history page without fetching records outside that page. */
@@ -714,8 +723,8 @@ export class JobRunService {
 	}
 
 	/**
-	 * Retain runs and occurrence claims for the longer of `retentionMs` and
-	 * `occurrenceRetentionMs`, so catch-up never repairs a pruned completed run.
+	 * Keep runs and occurrence claims through both retention windows so catch-up
+	 * cannot recreate a completed run.
 	 */
 	async pruneJob(
 		job: Pick<JobDefinition, 'project_id' | 'notebook_id' | 'id'>,
@@ -725,9 +734,18 @@ export class JobRunService {
 	): Promise<number> {
 		const cutoff = now - Math.max(retentionMs, occurrenceRetentionMs);
 		const jobPaths = paths.project(job.project_id).notebook(job.notebook_id).job(job.id);
-		const runs = await this.listRuns(job.project_id, job.notebook_id, job.id);
+		// An all-zero suffix excludes the cutoff millisecond in the reversed index.
+		// Older IDs still need a finish-time check to protect long-running jobs.
+		const cutoffRunId = RunId.parse(
+			`run_${encodeTime(Math.max(0, Math.ceil(cutoff)), 10)}${'0'.repeat(16)}`,
+		);
 		let pruned = 0;
-		for (const run of runs) {
+		for await (const run of this.iterateRuns(
+			job.project_id,
+			job.notebook_id,
+			job.id,
+			cutoffRunId,
+		)) {
 			if (!isTerminalRunStatus(run.status)) continue;
 			const endedAt = Date.parse(run.finished_at ?? run.queued_at);
 			if (!(endedAt < cutoff)) continue;

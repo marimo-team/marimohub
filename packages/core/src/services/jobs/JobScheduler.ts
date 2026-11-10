@@ -195,6 +195,13 @@ export class JobScheduler {
 			4,
 			async ({ projectId, notebookId, entry }) => {
 				try {
+					if (
+						this.dueOccurrence(
+							{ ...entry, project_id: projectId, notebook_id: notebookId },
+							now,
+						) === null
+					)
+						return;
 					const jobKey = `${projectId}:${entry.id}`;
 					const fired = await this.fire(
 						projectId,
@@ -308,6 +315,34 @@ export class JobScheduler {
 		return result;
 	}
 
+	private dueOccurrence(
+		job: Pick<JobDefinition, 'project_id' | 'notebook_id' | 'id' | 'enabled' | 'schedule'>,
+		now: number,
+	): number | null {
+		if (!job.enabled || !job.schedule) return null;
+		try {
+			return previousOccurrence(
+				parseCron(job.schedule.cron),
+				job.schedule.timezone,
+				now,
+				this.deps.config.catchupWindowMs,
+			);
+		} catch (err) {
+			if (!(err instanceof ValidationError)) throw err;
+			logOperationalError(
+				'job_schedule_invalid',
+				{
+					operation: 'job.scheduler.parse',
+					project_id: job.project_id,
+					notebook_id: job.notebook_id,
+					job_id: job.id,
+				},
+				err,
+			);
+			return null;
+		}
+	}
+
 	private async fire(
 		projectId: ProjectId,
 		notebookId: JobRun['notebook_id'],
@@ -319,31 +354,10 @@ export class JobScheduler {
 		const jobRef = { project_id: projectId, notebook_id: notebookId, id: jobId };
 		return this.deps.runs.withJobMutation(jobRef, async () => {
 			if (await this.deps.jobs.isDeleting(jobRef)) return 'none';
-			// An old index entry can precede a newly enabled or rescheduled job head.
+			// The definition may have changed since snapshot filtering.
 			const job = await this.loadJob(projectId, notebookId, jobId, cache);
-			if (!job?.enabled || !job.schedule) return 'none';
-			let occurrence;
-			try {
-				occurrence = previousOccurrence(
-					parseCron(job.schedule.cron),
-					job.schedule.timezone,
-					now,
-					this.deps.config.catchupWindowMs,
-				);
-			} catch (err) {
-				if (!(err instanceof ValidationError)) throw err;
-				logOperationalError(
-					'job_schedule_invalid',
-					{
-						operation: 'job.scheduler.parse',
-						project_id: projectId,
-						notebook_id: notebookId,
-						job_id: jobId,
-					},
-					err,
-				);
-				return 'none';
-			}
+			if (!job) return 'none';
+			const occurrence = this.dueOccurrence(job, now);
 			if (occurrence === null) return 'none';
 			const scheduledFor = new Date(occurrence).toISOString();
 			const outcome = job.concurrency_policy === 'forbid' && hasActive ? 'skip' : 'run';

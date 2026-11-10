@@ -1,6 +1,7 @@
+import { ulid } from 'ulidx';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Millis } from '../../duration';
-import { createRunId, SandboxId } from '../../ids';
+import { createRunId, RunId, SandboxId } from '../../ids';
 import type { NotebookId, ProjectId } from '../../ids';
 import type { ProjectAlertDispatcher } from '../../ports/projectAlerts';
 import { paths } from '../../paths';
@@ -24,6 +25,17 @@ const CONFIG: JobSchedulerConfig = {
 	maxTimeoutMs: Millis.hours(4),
 	watchdogGraceMs: MINUTE,
 };
+
+const NO_DISPATCH_CONFIG = { ...CONFIG, maxConcurrentRuns: 0 };
+const IDLE_JOBS = [
+	{ state: 'disabled', enabled: false, schedule: { cron: '* * * * *', timezone: 'UTC' } },
+	{ state: 'manual', enabled: true, schedule: undefined },
+	{ state: 'rescheduled', enabled: true, schedule: { cron: '0 0 * * *', timezone: 'UTC' } },
+];
+const invalidSchedule = (field: 'cron' | 'timezone') => ({
+	cron: field === 'cron' ? 'bad cron' : '* * * * *',
+	timezone: field === 'timezone' ? 'Mars/Olympus_Mons' : 'UTC',
+});
 
 /** A runner double: records dispatches and completes each run with the chosen outcome. */
 function fakeRunner(
@@ -111,47 +123,60 @@ describe('JobScheduler', () => {
 		await s.drain();
 	};
 
-	it('checks idle job heads while sharing their parent reads', async () => {
+	it('performs no per-job bucket operations when no indexed jobs are due', async () => {
 		for (let i = 0; i < 50; i++)
 			await createJob({ name: `idle-${i}`, schedule: { cron: '0 0 * * *', timezone: 'UTC' } });
-		await env.catalog.mutateSnapshot('test.index-lag', ACTOR, (snapshot) => {
-			for (const project of snapshot.projects)
-				for (const notebook of project.notebooks) {
-					for (const entry of notebook.jobs ?? [])
-						entry.updated_at = new Date(T0 - DAY).toISOString();
-				}
-			return snapshot;
-		});
+		await createJob({ name: 'disabled', enabled: false });
+		await createJob({ name: 'manual', schedule: undefined });
+		const get = vi.spyOn(env.bucket, 'get');
+		const head = vi.spyOn(env.bucket, 'head');
+		const put = vi.spyOn(env.bucket, 'put');
+		const remove = vi.spyOn(env.bucket, 'delete');
 		const getJob = vi.spyOn(env.jobs, 'getJob');
 		const getProject = vi.spyOn(env.projects, 'getProject');
 		const getNotebook = vi.spyOn(env.notebooks, 'getNotebookMeta');
-		const runner = fakeRunner(env);
-		expect(await scheduler(runner).tick()).toMatchObject({ fired: 0, errors: 0 });
-		expect(getJob).toHaveBeenCalledTimes(50);
-		expect(getProject).toHaveBeenCalledTimes(1);
-		expect(getNotebook).toHaveBeenCalledTimes(1);
+
+		expect(await scheduler(fakeRunner(env)).tick()).toMatchObject({ fired: 0, errors: 0 });
+
+		expect(get.mock.calls.every(([key]) => key.startsWith('_system/'))).toBe(true);
+		expect(head).not.toHaveBeenCalled();
+		expect(put).not.toHaveBeenCalled();
+		expect(remove).not.toHaveBeenCalled();
+		expect(getJob).not.toHaveBeenCalled();
+		expect(getProject).not.toHaveBeenCalled();
+		expect(getNotebook).not.toHaveBeenCalled();
 	});
 
-	it.each(['disabled', 'manual', 'rescheduled', 'invalid'] as const)(
-		'checks an old %s index entry against the authoritative due job',
-		async (state) => {
-			const job = await createJob();
-			await env.catalog.updateNotebookEntry('test.index-lag', ACTOR, pid, nid, (notebook) => ({
-				jobs: (notebook.jobs ?? []).map((entry) => ({
-					...entry,
-					enabled: state !== 'disabled',
-					schedule:
-						state === 'manual'
-							? undefined
-							: { cron: state === 'invalid' ? 'bad cron' : '0 0 * * *', timezone: 'UTC' },
-					updated_at: new Date(T0 - DAY).toISOString(),
-				})),
-			}));
-			const clock = scheduler(fakeRunner(env), { config: { ...CONFIG, maxConcurrentRuns: 0 } });
+	it.each(IDLE_JOBS)(
+		'fires after a $state snapshot entry is updated to a due schedule',
+		async ({ enabled, schedule }) => {
+			const job = await createJob({ enabled, schedule });
+			const clock = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
+			expect(await clock.tick()).toMatchObject({ fired: 0, errors: 0 });
+			await env.jobs.updateJob(
+				pid,
+				nid,
+				job.id,
+				{
+					enabled: true,
+					schedule: { cron: '* * * * *', timezone: 'UTC' },
+				},
+				ACTOR,
+			);
 			expect(await clock.tick()).toMatchObject({ fired: 1, errors: 0 });
-			expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
 			expect(await clock.tick()).toMatchObject({ fired: 0, errors: 0 });
 			expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
+		},
+	);
+
+	it.each(IDLE_JOBS)(
+		'revalidates a due snapshot candidate whose definition is now $state',
+		async ({ enabled, schedule }) => {
+			const job = await createJob();
+			const key = paths.project(pid).notebook(nid).job(job.id).head;
+			await env.bucket.put(key, JSON.stringify({ ...job, enabled, schedule }));
+			expect(await scheduler(fakeRunner(env)).tick()).toMatchObject({ fired: 0, errors: 0 });
+			expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(0);
 		},
 	);
 
@@ -167,13 +192,10 @@ describe('JobScheduler', () => {
 				if (failure === 'storage') throw new Error('storage unavailable');
 				return {
 					...job,
-					schedule: {
-						cron: failure === 'cron' ? 'bad cron' : '* * * * *',
-						timezone: failure === 'timezone' ? 'Mars/Olympus_Mons' : 'UTC',
-					},
+					schedule: invalidSchedule(failure),
 				};
 			});
-			const clock = scheduler(fakeRunner(env), { config: { ...CONFIG, maxConcurrentRuns: 0 } });
+			const clock = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
 			expect(await clock.tick()).toMatchObject({ fired: 1, errors: failure === 'cron' ? 0 : 1 });
 			expect(await env.jobRuns.listRuns(pid, nid, healthy.id)).toHaveLength(1);
 			expect(await env.jobRuns.listRuns(pid, nid, broken.id)).toHaveLength(0);
@@ -185,27 +207,62 @@ describe('JobScheduler', () => {
 	);
 
 	it.each([0, 1])(
-		'checks index lag at the catch-up boundary plus %i milliseconds',
+		'includes the catch-up boundary and excludes occurrences %i milliseconds past it',
 		async (offset) => {
-			const job = await createJob();
-			await env.catalog.updateNotebookEntry('test.jobs.boundary', ACTOR, pid, nid, (notebook) => ({
-				jobs: (notebook.jobs ?? []).map((entry) => ({
-					...entry,
-					enabled: false,
-					schedule: undefined,
-					updated_at: new Date(now - CONFIG.catchupWindowMs - offset).toISOString(),
-				})),
-			}));
-			const clock = scheduler(fakeRunner(env), { config: { ...CONFIG, maxConcurrentRuns: 0 } });
-			expect(await clock.tick()).toMatchObject({ fired: 1, errors: 0 });
-			expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
+			const job = await createJob({ schedule: { cron: '0 6 * * *', timezone: 'UTC' } });
+			now = Date.parse('2026-09-02T06:00:00.000Z') + CONFIG.catchupWindowMs + offset;
+			const clock = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
+			expect(await clock.tick()).toMatchObject({ fired: offset === 0 ? 1 : 0, errors: 0 });
+			expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(offset === 0 ? 1 : 0);
 		},
 	);
+
+	it('evaluates snapshot schedules in their configured timezone', async () => {
+		const due = await createJob({
+			schedule: { cron: '0 23 * * *', timezone: 'America/Los_Angeles' },
+		});
+		await createJob({ name: 'utc', schedule: { cron: '0 23 * * *', timezone: 'UTC' } });
+		const getJob = vi.spyOn(env.jobs, 'getJob');
+		const clock = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
+
+		expect(await clock.tick()).toMatchObject({ fired: 1, errors: 0 });
+		expect(getJob.mock.calls.every(([, , id]) => id === due.id)).toBe(true);
+		expect(await env.jobRuns.listRuns(pid, nid, due.id)).toMatchObject([
+			{ scheduled_for: '2026-09-02T06:00:00.000Z' },
+		]);
+	});
+
+	it.each([
+		{
+			change: 'spring-forward',
+			first: '2026-03-29T01:35:00Z',
+			second: '2026-03-29T02:35:00Z',
+			occurrence: '2026-03-29T01:30:00.000Z',
+		},
+		{
+			change: 'fall-back',
+			first: '2026-10-25T00:35:00Z',
+			second: '2026-10-25T01:35:00Z',
+			occurrence: '2026-10-25T00:30:00.000Z',
+		},
+	])('fires exactly once across the $change transition', async ({ first, second, occurrence }) => {
+		const job = await createJob({ schedule: { cron: '30 2 * * *', timezone: 'Europe/Berlin' } });
+		const clock = scheduler(fakeRunner(env), {
+			config: { ...CONFIG, catchupWindowMs: 3 * 60 * MINUTE, maxConcurrentRuns: 0 },
+		});
+		now = Date.parse(first);
+		expect(await clock.tick()).toMatchObject({ fired: 1, errors: 0 });
+		now = Date.parse(second);
+		expect(await clock.tick()).toMatchObject({ fired: 0, repaired: 0, skipped: 0, errors: 0 });
+		expect(await env.jobRuns.listRuns(pid, nid, job.id)).toMatchObject([
+			{ scheduled_for: occurrence },
+		]);
+	});
 
 	it('reads source metadata once and does not load the readme when firing', async () => {
 		await createJob();
 		const get = vi.spyOn(env.bucket, 'get');
-		const s = scheduler(fakeRunner(env), { config: { ...CONFIG, maxConcurrentRuns: 0 } });
+		const s = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
 
 		expect((await s.tick()).fired).toBe(1);
 
@@ -228,7 +285,7 @@ describe('JobScheduler', () => {
 				await blocked.promise;
 				return claimOccurrence(...args);
 			});
-			const s = scheduler(fakeRunner(env), { config: { ...CONFIG, maxConcurrentRuns: 0 } });
+			const s = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
 			const ticking = s.tick();
 			await claiming.promise;
 			if (parent === 'notebook') await env.notebooks.deleteNotebook(pid, nid, ACTOR);
@@ -349,14 +406,13 @@ describe('JobScheduler', () => {
 		const projectReads = vi.spyOn(env.projects, 'getProject');
 		const notebookReads = vi.spyOn(env.notebooks, 'getNotebookMeta');
 		const jobReads = vi.spyOn(env.jobs, 'getJob');
-		const s = scheduler(fakeRunner(env), { config: { ...CONFIG, maxConcurrentRuns: 0 } });
+		const s = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
 
 		expect((await s.tick()).dispatched).toBe(0);
 
-		// Fire and admission each share parent reads; admission rechecks after firing.
-		expect(projectReads).toHaveBeenCalledTimes(2);
-		expect(notebookReads).toHaveBeenCalledTimes(2);
-		expect(jobReads).toHaveBeenCalledTimes(jobs.length * 2);
+		expect(projectReads).toHaveBeenCalledTimes(1);
+		expect(notebookReads).toHaveBeenCalledTimes(1);
+		expect(jobReads).toHaveBeenCalledTimes(jobs.length);
 		await env.notebooks.deleteNotebook(pid, nid, ACTOR);
 		expect((await s.tick()).dispatched).toBe(0);
 		for (const job of jobs) {
@@ -477,7 +533,7 @@ describe('JobScheduler', () => {
 		});
 
 		const s = scheduler(fakeRunner(env), {
-			config: { ...CONFIG, maxConcurrentRuns: 0 },
+			config: NO_DISPATCH_CONFIG,
 		});
 		const ticking = s.tick();
 		await claimed;
@@ -779,7 +835,7 @@ describe('JobScheduler', () => {
 		expect((await scheduler(fakeRunner(env)).tick()).fired).toBe(0);
 	});
 
-	it('loads the authoritative head when the snapshot scheduling fields are stale', async () => {
+	it('waits for snapshot publication before firing a newly enabled job', async () => {
 		const job = await createJob();
 		await env.catalog.updateNotebookEntry('test.jobs.stale', ACTOR, pid, nid, (notebook) => ({
 			jobs: (notebook.jobs ?? []).map((entry) =>
@@ -789,9 +845,11 @@ describe('JobScheduler', () => {
 			),
 		}));
 		const s = scheduler(fakeRunner(env), {
-			config: { ...CONFIG, maxConcurrentRuns: 0 },
+			config: NO_DISPATCH_CONFIG,
 		});
 
+		expect(await s.tick()).toMatchObject({ fired: 0, errors: 0 });
+		await env.jobs.updateJob(pid, nid, job.id, { enabled: true }, ACTOR);
 		expect(await s.tick()).toMatchObject({ fired: 1, errors: 0 });
 		expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
 	});
@@ -800,7 +858,7 @@ describe('JobScheduler', () => {
 		for (let index = 0; index < 3; index++) await createJob({ name: `job ${index}` });
 		const listActive = vi.spyOn(env.jobRuns, 'listActiveSnapshot');
 		const s = scheduler(fakeRunner(env), {
-			config: { ...CONFIG, maxConcurrentRuns: 0 },
+			config: NO_DISPATCH_CONFIG,
 		});
 
 		expect(await s.tick()).toMatchObject({ fired: 3, errors: 0 });
@@ -809,7 +867,12 @@ describe('JobScheduler', () => {
 
 	it('prunes terminal runs past retention and stale markers', async () => {
 		const job = await createJob({ schedule: undefined });
-		const old = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+		const old = await env.jobRuns.enqueue({
+			job,
+			trigger: 'manual',
+			timeoutSeconds: 60,
+			runId: RunId.parse(`run_${ulid(now - 40 * DAY)}`),
+		});
 		await env.jobRuns.transition(old, 'fail', () => ({
 			finished_at: new Date(now - 40 * 24 * 60 * MINUTE).toISOString(),
 		}));
@@ -999,6 +1062,31 @@ describe('JobScheduler', () => {
 						.mocked(console.error)
 						.mock.calls.some((c) => String(c[0]).includes('job_schedule_invalid')),
 				).toBe(true);
+			},
+		);
+
+		it.each(['cron', 'timezone'] as const)(
+			'isolates an invalid snapshot %s before reading its job and recovers after publication',
+			async (field) => {
+				const broken = await createJob({ name: 'broken' });
+				const healthy = await createJob({ name: 'healthy' });
+				const snapshot = structuredClone(await env.catalog.getCurrentSnapshot());
+				const entry = snapshot.projects
+					.find((project) => project.id === pid)!
+					.notebooks.find((notebook) => notebook.id === nid)!
+					.jobs!.find((job) => job.id === broken.id)!;
+				entry.schedule = invalidSchedule(field);
+				vi.spyOn(env.catalog, 'getCurrentSnapshot').mockResolvedValueOnce(snapshot);
+				const getJob = vi.spyOn(env.jobs, 'getJob');
+				const clock = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
+
+				expect(await clock.tick()).toMatchObject({ fired: 1, errors: field === 'cron' ? 0 : 1 });
+				expect(getJob.mock.calls.map(([, , id]) => id)).not.toContain(broken.id);
+				expect(await env.jobRuns.listRuns(pid, nid, healthy.id)).toHaveLength(1);
+				expect(await env.jobRuns.listRuns(pid, nid, broken.id)).toHaveLength(0);
+				expect(await clock.tick()).toMatchObject({ fired: 1, errors: 0 });
+				expect(await env.jobRuns.listRuns(pid, nid, healthy.id)).toHaveLength(1);
+				expect(await env.jobRuns.listRuns(pid, nid, broken.id)).toHaveLength(1);
 			},
 		);
 
@@ -1298,7 +1386,12 @@ describe('JobScheduler', () => {
 			const a = await createJob({ name: 'a', schedule: undefined });
 			const b = await createJob({ name: 'b', schedule: undefined });
 			for (const job of [a, b]) {
-				const run = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+				const run = await env.jobRuns.enqueue({
+					job,
+					trigger: 'manual',
+					timeoutSeconds: 60,
+					runId: RunId.parse(`run_${ulid(now - 60 * DAY)}`),
+				});
 				await env.jobRuns.transition(run, 'fail', () => ({
 					finished_at: new Date(now - 60 * 24 * 60 * MINUTE).toISOString(),
 				}));
