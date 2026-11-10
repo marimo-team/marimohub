@@ -1,6 +1,6 @@
 import { MetadataCache } from '../content/metadataCache';
 import type { ReadConsistency } from '../content/metadataCache';
-import { SessionIndex } from './SessionIndex';
+import { SessionIndex, sameSessionReferences } from './SessionIndex';
 import type { SessionIndexMode, SessionReference } from './SessionIndex';
 import { copyMoveObject } from '../content/moveObjects';
 import { readForInspection } from './inspection';
@@ -160,7 +160,7 @@ function hasUnreclaimedSandbox(session: Session): boolean {
 	return !!session.sandbox_id && !session.sandbox_reclaimed_at;
 }
 
-function needsSessionIndexEntry(session: Session | null): session is Session {
+function needsSessionIndexEntry(session: Session | null): boolean {
 	return session !== null && (!isTerminal(session.status) || hasUnreclaimedSandbox(session));
 }
 
@@ -174,6 +174,7 @@ function countsTowardCap(session: Session, scope: CapScope): boolean {
 
 export class SessionService {
 	private readonly index: SessionIndex;
+	private indexRepairCursor: UserId | undefined;
 	private readonly validatedRecords: MetadataCache<Session>;
 	private readonly editorClaims: MetadataCache<EditorClaim>;
 
@@ -317,6 +318,7 @@ export class SessionService {
 		}
 		if (this.indexMode !== 'off') {
 			try {
+				await this.initializeUserIndex(input.user_id);
 				await this.index.register(session);
 			} catch (error) {
 				this.indexWriteFailed(error);
@@ -1113,7 +1115,12 @@ export class SessionService {
 	}
 
 	private async listIndexedForUser(userId: UserId, scope: CapScope): Promise<Session[]> {
-		const index = await this.index.read(userId);
+		let index = await this.index.read(userId);
+		if (!index) {
+			await this.initializeUserIndex(userId);
+			index = await this.index.read(userId);
+			if (!index) throw new ConflictError('Session index is missing; retry to rebuild it');
+		}
 		const records = await mapWithConcurrency(index.entries, BUCKET_SCAN_CONCURRENCY, (entry) =>
 			this.readIndexedSession(userId, entry),
 		);
@@ -1141,7 +1148,21 @@ export class SessionService {
 
 	private async removeFinishedIndexEntry(session: Session): Promise<void> {
 		if (this.indexMode === 'off' || needsSessionIndexEntry(session)) return;
-		await this.writeIndex(() => this.index.remove(session));
+		await this.writeIndex(() =>
+			this.index.update(
+				session.user_id,
+				async (entries) => {
+					const entry = entries.find((entry) => entry.session_id === session.session_id);
+					// Fence a reconciliation that may still be adding this retired reference.
+					if (!entry) return entries;
+					const current = await this.readIndexedSession(session.user_id, entry);
+					return needsSessionIndexEntry(current)
+						? null
+						: entries.filter((entry) => entry.session_id !== session.session_id);
+				},
+				{ requireExisting: true },
+			),
+		);
 	}
 
 	private async readIndexedSession(
@@ -1164,9 +1185,32 @@ export class SessionService {
 		return session;
 	}
 
+	private async initializeUserIndex(userId: UserId): Promise<void> {
+		await this.index.update(userId, async (_current, exists) =>
+			exists ? null : this.scanUserIndexReferences(userId),
+		);
+	}
+
+	private async scanUserIndexReferences(userId: UserId): Promise<SessionReference[]> {
+		// Missing does not mean empty; even a sweep snapshot may predate index loss.
+		const records = await this.scanPrefix(
+			paths.sessionsPrefix,
+			(session) => session,
+			'throw',
+			(session) => session.user_id === userId,
+		);
+		return this.liveIndexReferences(
+			userId,
+			records.map((session) => ({
+				session_id: session.session_id,
+				project_id: session.project_id,
+			})),
+		);
+	}
+
 	async reconcileSessionIndexes(
 		records: readonly Session[],
-		options: { failOnError?: boolean } = {},
+		options: { failOnError?: boolean; maxUsers?: number } = {},
 	): Promise<void> {
 		if (this.indexMode === 'off') return;
 		const users = new Map<UserId, SessionReference[]>();
@@ -1176,32 +1220,52 @@ export class SessionService {
 				entries.push({ session_id: session.session_id, project_id: session.project_id });
 			users.set(session.user_id, entries);
 		}
-		await mapWithConcurrency([...users], BUCKET_SCAN_CONCURRENCY, ([userId, scanned]) =>
-			this.writeIndex(() => this.reconcileUserIndex(userId, scanned), options.failOnError),
+		const ordered = [...users].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+		const limit = options.maxUsers ?? 32;
+		const after = ordered.findIndex(
+			([userId]) => !this.indexRepairCursor || userId > this.indexRepairCursor,
+		);
+		const start = after === -1 ? 0 : after;
+		const selected = [...ordered.slice(start), ...ordered.slice(0, start)].slice(0, limit);
+		if (selected.length > 0) this.indexRepairCursor = selected[selected.length - 1][0];
+		await mapWithConcurrency(selected, BUCKET_SCAN_CONCURRENCY, ([userId, scanned]) =>
+			this.writeIndex(() => this.reconcileUserIndex(userId, scanned, true), options.failOnError),
 		);
 	}
 
-	private async reconcileUserIndex(userId: UserId, scanned: SessionReference[]): Promise<void> {
-		await this.index.update(userId, async (current) => {
-			const entries = new Map([...current, ...scanned].map((entry) => [entry.session_id, entry]));
-			// Re-read inside each CAS attempt so an old sweep cannot resurrect retired
-			// entries or overwrite registrations made after its deployment scan.
-			const live = await mapWithConcurrency(
-				[...entries.values()],
-				BUCKET_SCAN_CONCURRENCY,
-				async (entry) => {
-					const session = await this.readIndexedSession(userId, entry);
-					return needsSessionIndexEntry(session) ? entry : null;
-				},
-			);
-			return live.filter((entry) => entry !== null);
+	private async reconcileUserIndex(
+		userId: UserId,
+		scanned: SessionReference[],
+		skipMatchingSnapshot = false,
+	): Promise<void> {
+		await this.index.update(
+			userId,
+			async (current, exists) => {
+				if (!exists) return this.scanUserIndexReferences(userId);
+				if (skipMatchingSnapshot && sameSessionReferences(current, scanned)) return null;
+				const entries = new Map([...current, ...scanned].map((entry) => [entry.session_id, entry]));
+				// Revalidate inside every CAS attempt; a stale sweep must not undo a registration.
+				return this.liveIndexReferences(userId, [...entries.values()]);
+			},
+			{ skipUnchanged: true, requireExisting: !skipMatchingSnapshot },
+		);
+	}
+
+	private async liveIndexReferences(
+		userId: UserId,
+		entries: SessionReference[],
+	): Promise<SessionReference[]> {
+		const live = await mapWithConcurrency(entries, BUCKET_SCAN_CONCURRENCY, async (entry) => {
+			const session = await this.readIndexedSession(userId, entry);
+			return needsSessionIndexEntry(session) ? entry : null;
 		});
+		return live.filter((entry) => entry !== null);
 	}
 
 	async rebuildSessionIndex(): Promise<void> {
 		if (this.indexMode === 'off') throw new ConflictError('Session index is disabled');
 		const records = await this.scanPrefix(paths.sessionsPrefix, (session) => session, 'throw');
-		await this.reconcileSessionIndexes(records, { failOnError: true });
+		await this.reconcileSessionIndexes(records, { failOnError: true, maxUsers: Infinity });
 		const users = new Set(records.map((session) => session.user_id));
 		const orphanUsers = (await this.index.listUsers()).filter((userId) => !users.has(userId));
 		await mapWithConcurrency(orphanUsers, BUCKET_SCAN_CONCURRENCY, (userId) =>

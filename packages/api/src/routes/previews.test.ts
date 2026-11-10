@@ -218,7 +218,10 @@ describe('Notebook previews', () => {
 				`/projects/${pid}/notebooks/${session.notebook_id}/sessions/${session.session_id}/heartbeat`,
 			),
 		);
-		expect(get).toHaveBeenCalledTimes(mode === 'app' ? 7 : 6);
+		expect(get).toHaveBeenCalledTimes(mode === 'app' ? 6 : 5);
+		expect(
+			get.mock.calls.filter(([key]) => key === paths.session(pid, session.session_id)),
+		).toHaveLength(1);
 		const projectKey = paths.previewProject(pid);
 		const recordKey = paths.preview(pid, nid, record.id);
 		expect(get.mock.calls.filter(([key]) => key === projectKey)).toHaveLength(1);

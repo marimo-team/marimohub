@@ -1,3 +1,4 @@
+import { ConflictError } from '../../errors';
 import type { Bucket } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
@@ -14,8 +15,8 @@ export type SessionReference = SessionIndexRecord['entries'][number];
 export class SessionIndex {
 	constructor(private readonly bucket: Bucket) {}
 
-	async read(userId: UserId): Promise<SessionIndexRecord> {
-		return (await this.readWithEtag(userId)).value;
+	async read(userId: UserId): Promise<SessionIndexRecord | null> {
+		return (await this.readObject(paths.sessionIndexForUser(userId)))?.value ?? null;
 	}
 
 	async listUsers(): Promise<UserId[]> {
@@ -24,15 +25,6 @@ export class SessionIndex {
 			this.readObject(object.key),
 		);
 		return records.flatMap((record) => (record ? [record.value.user_id] : []));
-	}
-
-	private async readWithEtag(userId: UserId) {
-		return (
-			(await this.readObject(paths.sessionIndexForUser(userId))) ?? {
-				value: { user_id: userId, entries: [] },
-				etag: undefined,
-			}
-		);
 	}
 
 	private async readObject(key: string) {
@@ -46,12 +38,19 @@ export class SessionIndex {
 
 	async update(
 		userId: UserId,
-		apply: (entries: SessionReference[]) => Promise<SessionReference[]>,
+		apply: (entries: SessionReference[], exists: boolean) => Promise<SessionReference[] | null>,
+		options: { requireExisting?: boolean; skipUnchanged?: boolean } = {},
 	): Promise<void> {
 		const key = paths.sessionIndexForUser(userId);
 		await withCasRetry(this.bucket, async (cas) => {
-			const { value, etag } = await this.readWithEtag(userId);
-			const entries = await apply(value.entries);
+			const record = await this.readObject(key);
+			if (!record && options.requireExisting)
+				throw new ConflictError('Session index is missing; retry to rebuild it');
+			const value = record?.value ?? { user_id: userId, entries: [] };
+			const etag = record?.etag;
+			const entries = await apply(value.entries, record !== null);
+			if (entries === null) return;
+			if (record && options.skipUnchanged && sameSessionReferences(value.entries, entries)) return;
 			await cas.put(
 				key,
 				JSON.stringify({ ...value, entries }),
@@ -62,15 +61,19 @@ export class SessionIndex {
 
 	async register(session: Session): Promise<void> {
 		// Even an existing reference needs a CAS to fence concurrent reconciliation.
-		await this.update(session.user_id, async (entries) => [
-			...entries.filter((entry) => entry.session_id !== session.session_id),
-			{ session_id: session.session_id, project_id: session.project_id },
-		]);
-	}
-
-	async remove(session: Session): Promise<void> {
-		await this.update(session.user_id, async (entries) =>
-			entries.filter((entry) => entry.session_id !== session.session_id),
+		await this.update(
+			session.user_id,
+			async (entries) => [
+				...entries.filter((entry) => entry.session_id !== session.session_id),
+				{ session_id: session.session_id, project_id: session.project_id },
+			],
+			{ requireExisting: true },
 		);
 	}
+}
+
+export function sameSessionReferences(a: SessionReference[], b: SessionReference[]): boolean {
+	if (a.length !== b.length) return false;
+	const projects = new Map(a.map((entry) => [entry.session_id, entry.project_id]));
+	return b.every((entry) => projects.get(entry.session_id) === entry.project_id);
 }

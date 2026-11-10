@@ -4115,7 +4115,7 @@ describe('Session routes', () => {
 		{ mode: 'app', missing: 'index' },
 		{ mode: 'app', missing: 'entry' },
 	] as const)(
-		'rejects an active $mode start missing its $missing before cap ranking',
+		'handles an active $mode start missing its $missing before cap ranking',
 		async ({ missing, mode }) => {
 			const services = createServices(bucket, undefined, { sessionIndex: 'on' });
 			const api = createTestApi({
@@ -4134,6 +4134,10 @@ describe('Session routes', () => {
 					);
 				return list(...args);
 			});
+			if (missing === 'index') {
+				await expectOk(await api.request('POST', sessionsPath(), { mode }));
+				return;
+			}
 			await expectError(await api.request('POST', sessionsPath(), { mode }), 409, 'CONFLICT');
 			expect(await services.sessions.listSessions(nid)).toMatchObject([
 				{ status: 'failed', sandbox_reclaimed_at: expect.any(String) },
@@ -4278,7 +4282,7 @@ describe('Session routes', () => {
 		{ start: 'cold', scans: 0 },
 		{ start: 'warm', scans: 0 },
 	] as const)(
-		'scans deployment-wide sessions $scans time(s) for the per-user cap on a $start start',
+		'scans deployment-wide sessions $scans time(s) for an indexed user on a $start start',
 		async ({ start, scans }) => {
 			const services = createServices(bucket, undefined, { sessionIndex: 'on' });
 			const unrelatedProject = createProjectId();
@@ -4304,6 +4308,7 @@ describe('Session routes', () => {
 				);
 				await warmPool.sweep();
 			}
+			await services.sessions.listActiveForUser(ACTOR);
 			const reserve = warmPool && vi.spyOn(warmPool, 'reserve');
 			const listSpy = vi.spyOn(bucket, 'list');
 			const getSpy = vi.spyOn(bucket, 'get');

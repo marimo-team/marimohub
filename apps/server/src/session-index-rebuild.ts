@@ -1,5 +1,6 @@
-import { makeStorage } from '@marimo-hub/config';
+import { loadAdapterLibraries, makeStorage } from '@marimo-hub/config';
 import { SessionService } from '@marimo-hub/core';
 
-await new SessionService(makeStorage(process.env)).rebuildSessionIndex();
+const libraries = await loadAdapterLibraries(process.env);
+await new SessionService(makeStorage(process.env, libraries)).rebuildSessionIndex();
 console.log('Session index rebuilt.');

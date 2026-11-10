@@ -68,7 +68,7 @@ describe('per-user session index', () => {
 		const { bucket, sessions, input, index } = fixture();
 		const other = new SessionService(bucket, undefined, undefined, 'on');
 		const created = await Promise.all([sessions.createSession(input), other.createSession(input)]);
-		expect((await index.read(ACTOR)).entries).toHaveLength(2);
+		expect((await index.read(ACTOR))!.entries).toHaveLength(2);
 		const scanned = await new SessionService(bucket, undefined, undefined, 'off').listActiveForUser(
 			ACTOR,
 		);
@@ -97,9 +97,9 @@ describe('per-user session index', () => {
 		expect((await sessions.listActiveForUser(ACTOR, 'project')).map((s) => s.session_id)).toEqual([
 			app.session_id,
 		]);
-		expect((await index.read(ACTOR)).entries.map((s) => s.session_id)).toEqual([app.session_id]);
+		expect((await index.read(ACTOR))!.entries.map((s) => s.session_id)).toEqual([app.session_id]);
 		await sessions.markSandboxReclaimed(input.project_id, app.session_id, new Date().toISOString());
-		expect((await index.read(ACTOR)).entries).toEqual([]);
+		expect((await index.read(ACTOR))!.entries).toEqual([]);
 	});
 
 	it('fails closed on index or candidate corruption and read errors', async () => {
@@ -116,6 +116,7 @@ describe('per-user session index', () => {
 
 	it('requires registration before returning a new session when enabled', async () => {
 		const { bucket, sessions, input, metrics } = fixture();
+		await sessions.listActiveForUser(ACTOR);
 		failIndexWrites(bucket);
 		const session_id = createSessionId();
 		await expect(sessions.createSession({ ...input, session_id })).rejects.toThrow(
@@ -128,6 +129,7 @@ describe('per-user session index', () => {
 	it('uses the scan in shadow mode and reports drift without failing creation', async () => {
 		const { bucket, input, metrics } = fixture();
 		const sessions = new SessionService(bucket, metrics);
+		await sessions.listActiveForUser(ACTOR);
 		failIndexWrites(bucket);
 		const created = await sessions.createSession(input);
 		expect((await sessions.listActiveForUser(ACTOR)).map((s) => s.session_id)).toEqual([
@@ -147,7 +149,7 @@ describe('per-user session index', () => {
 		const put = vi.spyOn(bucket, 'put');
 		await expect(sessions.rebuildSessionIndex()).rejects.toThrow('Session index owner mismatch');
 		expect(put).not.toHaveBeenCalled();
-		expect((await index.read(wrongUser)).entries).toEqual([]);
+		expect(await index.read(wrongUser)).toBeNull();
 	});
 
 	it('backfills legacy records and clears indexes whose last record was deleted', async () => {
@@ -158,15 +160,16 @@ describe('per-user session index', () => {
 		const gone = await sessions.createSession({ ...input, user_id: uid('gone') });
 		await bucket.delete(paths.session(input.project_id, gone.session_id));
 		await sessions.rebuildSessionIndex();
-		expect((await index.read(ACTOR)).entries).toEqual([
+		expect((await index.read(ACTOR))!.entries).toEqual([
 			{ session_id: legacy.session_id, project_id: input.project_id },
 		]);
-		expect((await index.read(gone.user_id)).entries).toEqual([]);
+		expect((await index.read(gone.user_id))!.entries).toEqual([]);
 	});
 
 	it('does not drop a registration racing reconciliation', async () => {
 		const { bucket, sessions, input, index } = fixture();
 		const first = await sessions.createSession(input);
+		await index.update(ACTOR, async () => []);
 		const gate = pauseNextIndexWrite(bucket);
 		const sweep = sessions.reconcileSessionIndexes([first]);
 		await gate.entered;
@@ -177,14 +180,16 @@ describe('per-user session index', () => {
 			gate.release();
 		}
 		await sweep;
-		expect((await index.read(ACTOR)).entries.map((s) => s.session_id).sort()).toEqual(
+		expect((await index.read(ACTOR))!.entries.map((s) => s.session_id).sort()).toEqual(
 			[first.session_id, second.session_id].sort(),
 		);
 	});
 
 	it('keeps lifecycle repair best-effort but reports a failed backfill', async () => {
-		const { bucket, sessions, input, metrics } = fixture();
+		const { bucket, sessions, input, metrics, index } = fixture();
 		const record = await sessions.createSession(input);
+		await index.update(ACTOR, async () => []);
+		await sessions.listActiveForUser(ACTOR);
 		failIndexWrites(bucket);
 		await expect(sessions.reconcileSessionIndexes([record])).resolves.toBeUndefined();
 		expect(metrics.increment).toHaveBeenCalledWith('sessions.index.write_failed');
@@ -196,7 +201,7 @@ describe('per-user session index', () => {
 		const first = await sessions.createSession(input);
 		await sessions.terminate(input.project_id, first.session_id);
 		await sessions.reconcileSessionIndexes([first]);
-		expect((await index.read(ACTOR)).entries).toEqual([]);
+		expect((await index.read(ACTOR))!.entries).toEqual([]);
 	});
 
 	it('rejects duplicate references and encodes opaque user IDs', () => {
@@ -267,11 +272,11 @@ describe('per-user session index', () => {
 		expect((await sessions.listActiveForUser(ACTOR)).map((s) => s.session_id)).toEqual([
 			live.session_id,
 		]);
-		expect((await index.read(ACTOR)).entries).toHaveLength(2);
+		expect((await index.read(ACTOR))!.entries).toHaveLength(2);
 		expect(metrics.increment).toHaveBeenCalledWith('sessions.index.write_failed');
 		failure.mockRestore();
 		await sessions.listActiveForUser(ACTOR);
-		expect((await index.read(ACTOR)).entries.map((entry) => entry.session_id)).toEqual([
+		expect((await index.read(ACTOR))!.entries.map((entry) => entry.session_id)).toEqual([
 			live.session_id,
 		]);
 	});
@@ -288,13 +293,14 @@ describe('per-user session index', () => {
 			conflict.mock.calls.filter(([key]) => key === paths.sessionIndexForUser(ACTOR)).length,
 		).toBeGreaterThan(1);
 		expect((await sessions.getSession(input.project_id, session_id)).status).toBe('failed');
-		expect((await index.read(ACTOR)).entries.map((entry) => entry.session_id)).toEqual([
+		expect((await index.read(ACTOR))!.entries.map((entry) => entry.session_id)).toEqual([
 			incumbent.session_id,
 		]);
 	});
 
 	it('rejects an uncertain registration and later removes its failed record reference', async () => {
 		const { bucket, sessions, input, index } = fixture();
+		await sessions.listActiveForUser(ACTOR);
 		const put = bucket.put.bind(bucket);
 		const failure = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
 			const written = await put(key, value, options);
@@ -306,15 +312,16 @@ describe('per-user session index', () => {
 			'acknowledgment lost',
 		);
 		expect((await sessions.getSession(input.project_id, session_id)).status).toBe('failed');
-		expect((await index.read(ACTOR)).entries).toHaveLength(1);
+		expect((await index.read(ACTOR))!.entries).toHaveLength(1);
 		failure.mockRestore();
 		expect(await sessions.listActiveForUser(ACTOR)).toEqual([]);
-		expect((await index.read(ACTOR)).entries).toEqual([]);
+		expect((await index.read(ACTOR))!.entries).toEqual([]);
 	});
 
 	it('preserves the registration error when marking the rejected session also fails', async () => {
 		const { bucket, sessions, input } = fixture();
 		const put = bucket.put.bind(bucket);
+		await sessions.listActiveForUser(ACTOR);
 		const session_id = createSessionId();
 		const registrationError = new Error('registration failed');
 		const failure = vi.spyOn(bucket, 'put').mockImplementation((key, value, options) => {
@@ -338,7 +345,7 @@ describe('per-user session index', () => {
 		const second = await legacy.createSession({ ...input, user_id: uid('other') });
 		failIndexWrites(bucket, new Error('one corrupt index'));
 		await sessions.reconcileSessionIndexes([first, second]);
-		expect((await index.read(second.user_id)).entries.map((entry) => entry.session_id)).toEqual([
+		expect((await index.read(second.user_id))!.entries.map((entry) => entry.session_id)).toEqual([
 			second.session_id,
 		]);
 	});
@@ -356,7 +363,7 @@ describe('per-user session index', () => {
 		const put = vi.spyOn(bucket, 'put');
 		await sessions.rebuildSessionIndex();
 		for (const user of [ACTOR, uid('other')]) {
-			expect((await index.read(user)).entries.map((entry) => entry.session_id).sort()).toEqual(
+			expect((await index.read(user))!.entries.map((entry) => entry.session_id).sort()).toEqual(
 				records
 					.filter((s) => s.user_id === user)
 					.map((s) => s.session_id)
@@ -373,10 +380,14 @@ describe('per-user session index', () => {
 		async (race) => {
 			const { bucket, sessions, input, index } = fixture();
 			const record = await sessions.createSession(input);
+			if (race === 'terminate') await index.update(ACTOR, async () => []);
 			if (race === 'republish')
 				await bucket.delete(paths.session(input.project_id, record.session_id));
 			const gate = pauseNextIndexWrite(bucket);
-			const sweep = sessions.reconcileSessionIndexes([record], { failOnError: true });
+			const sweep = sessions.reconcileSessionIndexes(
+				[{ ...record, status: race === 'republish' ? 'terminated' : record.status }],
+				{ failOnError: true },
+			);
 			await gate.entered;
 			try {
 				if (race === 'republish')
@@ -386,7 +397,7 @@ describe('per-user session index', () => {
 				gate.release();
 			}
 			await sweep;
-			expect((await index.read(ACTOR)).entries.map((entry) => entry.session_id)).toEqual(
+			expect((await index.read(ACTOR))!.entries.map((entry) => entry.session_id)).toEqual(
 				race === 'republish' ? [record.session_id] : [],
 			);
 		},

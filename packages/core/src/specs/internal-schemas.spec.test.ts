@@ -3,6 +3,9 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { parse, stringify } from 'yaml';
+import { SessionIndexSchema } from '../schema';
+import { createProjectId, createSessionId } from '../ids';
+import { ACTOR } from '../testing';
 import { buildBucketSpec } from './bucketSpec';
 import { buildIntegrationsSpec } from './integrationsSpec';
 
@@ -97,6 +100,24 @@ describe('bucket schema contracts', () => {
 			);
 			expect(array?.uniqueItems).toBe(true);
 		}
+	});
+
+	it('publishes session-index uniqueness by session ID, independent of project', () => {
+		expect(doc.components.schemas.SessionIndex).toMatchObject({
+			properties: { entries: { 'x-unique-by': 'session_id' } },
+		});
+		const entry = { session_id: createSessionId(), project_id: createProjectId() };
+		for (const duplicate of [entry, { ...entry, project_id: createProjectId() }]) {
+			expect(
+				SessionIndexSchema.safeParse({ user_id: ACTOR, entries: [entry, duplicate] }).success,
+			).toBe(false);
+		}
+		expect(
+			SessionIndexSchema.safeParse({
+				user_id: ACTOR,
+				entries: [entry, { ...entry, session_id: createSessionId() }],
+			}).success,
+		).toBe(true);
 	});
 
 	it('excludes simultaneous manual MCP and OAuth bindings from stored tokens', () => {

@@ -354,7 +354,7 @@ describe('SessionService', () => {
 					reading--;
 				}
 			});
-			await sessions.assertReadyForMove(projectId, new Set([notebookId]));
+			await new SessionService(bucket).assertReadyForMove(projectId, new Set([notebookId]));
 			expect(peak).toBeGreaterThan(1);
 			expect(peak).toBeLessThanOrEqual(BUCKET_SCAN_CONCURRENCY);
 		});
@@ -1589,7 +1589,9 @@ describe('SessionService', () => {
 						? Promise.reject(unavailable)
 						: read(key),
 				);
-			await expect(sessions.listByProject(projectId, notebookId)).rejects.toBe(unavailable);
+			await expect(new SessionService(bucket).listByProject(projectId, notebookId)).rejects.toBe(
+				unavailable,
+			);
 			get.mockRestore();
 		});
 	});

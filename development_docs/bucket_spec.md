@@ -573,14 +573,20 @@ Cap checks read the index fresh and validate referenced sessions through the ETa
 Ranking remains: running first, then `started_at`, then `session_id`.
 Unreclaimed app sandboxes count until cleanup completes, even for terminal sessions.
 Reads remove stale references. Lifecycle sweeps and terminal reaping also restore missing entries.
-Reconciliation validates records inside each CAS attempt to preserve concurrent registrations.
+Maintenance repairs at most 32 users per pass, rotating through users across passes.
+Matching membership skips session validation and writes. Changed membership is validated inside each CAS attempt.
+Unchanged results preserve the index ETag. Explicit backfill processes every user.
 Heartbeats do not write the index.
 
 | `MARIMOHUB_SESSION_INDEX` | Behavior                                                                                                                                         |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `off`                     | Scan sessions. Disable index writes.                                                                                                             |
 | `shadow` (default)        | Write indexes, admit from scans, and compare queue order and membership. Differences or index read failures increment `sessions.index.mismatch`. |
-| `on`                      | Admit from validated indexes with no deployment-wide session LISTs, including on cold replicas.                                                  |
+| `on`                      | Admit from validated indexes. Existing indexes need no deployment-wide session LIST, including on cold replicas.                                 |
+
+A missing index triggers a strict session scan before admission or registration, including for a new user.
+A missing index never means an empty queue. Recovery failures reject admission in `on` mode.
+Registration requires the initialized index to still exist; concurrent deletion rejects the start.
 
 In `on` mode, registration failure rejects creation and attempts to mark the session failed.
 Read failures and missing candidate membership also reject admission.
@@ -594,7 +600,8 @@ To enable the index:
    For a packaged server, use `node dist/session-index-rebuild.mjs`.
 3. Validate a completed sweep and investigate mismatch metrics before setting `MARIMOHUB_SESSION_INDEX=on`.
 
-Backfill scans sessions once, merges references through CAS, and removes orphan references.
+Backfill merges references through CAS and removes orphan references.
+Each missing index requires a fresh session scan, including during maintenance and backfill.
 Repeat backfill after any period in `off` mode.
 
 A no-op heartbeat returns the request's session read. Concurrent termination appears on the next request.

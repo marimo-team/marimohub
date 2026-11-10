@@ -6336,6 +6336,9 @@ components:
             required:
               - session_id
               - project_id
+          x-unique-by: session_id
+          description: Each session_id must occur only once, including across different
+            project_id values.
       required:
         - user_id
         - entries
