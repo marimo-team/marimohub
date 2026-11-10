@@ -1243,7 +1243,7 @@ export class NotebookService {
 			}
 		}
 
-		if (!changed) await this.reconcileSavedNotebook(projectId, notebookId, actor, meta);
+		if (!changed) await this.reconcileSavedNotebook(projectId, notebookId, actor, true);
 
 		return {
 			versionId,
@@ -1257,20 +1257,22 @@ export class NotebookService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		actor: UserId,
-		unchangedMeta?: NotebookMeta,
+		unchanged = false,
 	): Promise<void> {
 		const reconcile = () =>
 			this.catalog.updateNotebookEntry('notebook.update', actor, projectId, notebookId, (entry) =>
 				loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry),
 			);
 		try {
-			if (unchangedMeta) {
+			if (unchanged) {
 				const snapshot = await this.catalog.getCurrentSnapshotEntry();
 				const entry = snapshot.byProjectId
 					.get(projectId)
 					?.notebooks.find((notebook) => notebook.id === notebookId);
-				// updated_at tracks saves because catalog entries have no source version ID.
-				if (!entry || entry.updated_at === unchangedMeta.updated_at) return;
+				if (!entry) return;
+				// Metadata can advance while the catalog lookup is in flight.
+				const patch = await loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry);
+				if (!patch || entry.updated_at === patch.updated_at) return;
 			}
 			await reconcile();
 		} catch (error) {

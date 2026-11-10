@@ -376,11 +376,11 @@ export class CatalogService {
 		mutateFn: (snapshot: Snapshot) => Awaitable<Snapshot>,
 		context?: Record<string, unknown>,
 	): Promise<Snapshot> {
-		// One local draft bounds memory use. CAS retries handle writers on other replicas.
-		const { snapshot, committed } = await this.mutations.run(() =>
-			withCasRetry(
-				this.bucket,
-				async (cas) => {
+		// Serialize snapshot drafts, but let other writes proceed during retry backoff.
+		const { snapshot, committed } = await withCasRetry(
+			this.bucket,
+			(cas) =>
+				this.mutations.run(async () => {
 					const catalogObj = await this.bucket.get(paths.catalog);
 					if (!catalogObj)
 						throw new NotInitializedError('Catalog not found — call initialize() first');
@@ -434,14 +434,13 @@ export class CatalogService {
 						}
 						throw err;
 					}
-				},
-				{
-					retries: 20,
-					...this.casRetry,
-					onConflict: () => this.metrics.increment('catalog.cas.conflict'),
-					onExhausted: () => this.metrics.increment('catalog.cas.exhausted'),
-				},
-			),
+				}),
+			{
+				retries: 20,
+				...this.casRetry,
+				onConflict: () => this.metrics.increment('catalog.cas.conflict'),
+				onExhausted: () => this.metrics.increment('catalog.cas.exhausted'),
+			},
 		);
 		// Audit only committed mutations.
 		if (committed) await this.appendAudit(operation, actor, context);

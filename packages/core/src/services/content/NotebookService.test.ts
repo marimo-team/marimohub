@@ -2296,6 +2296,53 @@ describe('NotebookService', () => {
 			},
 		);
 
+		it('repairs metadata that changes during the unchanged-save catalog lookup', async () => {
+			const { host, service, created } = await saveFixture();
+			const readSnapshot = catalog.getCurrentSnapshotEntry.bind(catalog);
+			vi.spyOn(catalog, 'getCurrentSnapshotEntry').mockImplementationOnce(async () => {
+				const snapshot = await readSnapshot();
+				failNextProjection();
+				await service.updateNotebook(projectId, created.id, { title: 'Concurrent rename' }, ACTOR);
+				return snapshot;
+			});
+
+			await expect(
+				service.commitSession(projectId, created.id, { code: 'v1' }, ACTOR),
+			).resolves.toMatchObject({ newVersion: false });
+
+			const { meta } = await service.getNotebook(projectId, created.id);
+			expect(meta.title).toBe('Concurrent rename');
+			expect(meta.updated_at).not.toBe(created.updated_at);
+			expect(host.labels).toContain('notebook.catalog_reconcile');
+			await expectCatalogMatches(meta);
+			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(1);
+			const repaired = await catalog.getCurrentSnapshot();
+			await host.runAll();
+			expect(await catalog.getCurrentSnapshot()).toEqual(repaired);
+		});
+
+		it('skips unchanged-save repair when the notebook is deleted during catalog lookup', async () => {
+			const { host, service, created } = await saveFixture();
+			const readSnapshot = catalog.getCurrentSnapshotEntry.bind(catalog);
+			vi.spyOn(catalog, 'getCurrentSnapshotEntry').mockImplementationOnce(async () => {
+				const snapshot = await readSnapshot();
+				await service.deleteNotebook(projectId, created.id, ACTOR);
+				await service.hardDeleteNotebook(projectId, created.id);
+				return snapshot;
+			});
+			const update = vi.spyOn(catalog, 'updateNotebookEntry');
+
+			await expect(
+				service.commitSession(projectId, created.id, { code: 'v1' }, ACTOR),
+			).resolves.toMatchObject({ newVersion: false });
+
+			expect(update).toHaveBeenCalledTimes(1);
+			expect(update.mock.calls[0][0]).toBe('notebook.delete');
+			expect((await catalogEntry(created.id)).status).toBe('deleted');
+			expect(await bucket.get(paths.project(projectId).notebook(created.id).meta)).toBeNull();
+			expect(host.labels).not.toContain('notebook.catalog_reconcile');
+		});
+
 		it('defers a failed projection and reads current metadata when the host runs it', async () => {
 			const { host, service, created } = await saveFixture();
 			const update = failNextProjection();
@@ -2405,25 +2452,46 @@ describe('NotebookService', () => {
 			},
 		);
 
-		it('defers repair if the unchanged-save snapshot lookup fails', async () => {
-			const { host, service, created } = await saveFixture();
-			failNextProjection();
-			await service.updateNotebook(projectId, created.id, { title: 'Renamed' }, ACTOR);
-			vi.spyOn(catalog, 'getCurrentSnapshotEntry').mockRejectedValueOnce(
-				new Error('catalog unavailable'),
-			);
-			await expect(
-				service.commitSession(projectId, created.id, { code: 'v1' }, ACTOR),
-			).resolves.toMatchObject({ newVersion: false });
-			expect(host.labels.filter((label) => label === 'notebook.catalog_reconcile')).toHaveLength(2);
-			await host.runAll();
-			const { meta } = await service.getNotebook(projectId, created.id);
-			expect(await catalogEntry(created.id)).toMatchObject({
-				title: 'Renamed',
-				updated_at: meta.updated_at,
-			});
-			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(1);
-		});
+		it.each(['snapshot', 'metadata'] as const)(
+			'defers repair if the unchanged-save %s lookup fails',
+			async (lookup) => {
+				const { host, service, created } = await saveFixture();
+				failNextProjection();
+				await service.updateNotebook(projectId, created.id, { title: 'Renamed' }, ACTOR);
+				let failed = false;
+				const readSnapshot = catalog.getCurrentSnapshotEntry.bind(catalog);
+				vi.spyOn(catalog, 'getCurrentSnapshotEntry').mockImplementationOnce(async () => {
+					if (lookup === 'snapshot') {
+						failed = true;
+						throw new Error('catalog unavailable');
+					}
+					const snapshot = await readSnapshot();
+					const get = bucket.get.bind(bucket);
+					vi.spyOn(bucket, 'get').mockImplementation((key, options) => {
+						if (!failed && key === paths.project(projectId).notebook(created.id).meta) {
+							failed = true;
+							throw new Error('metadata unavailable');
+						}
+						return get(key, options);
+					});
+					return snapshot;
+				});
+				await expect(
+					service.commitSession(projectId, created.id, { code: 'v1' }, ACTOR),
+				).resolves.toMatchObject({ newVersion: false });
+				expect(failed).toBe(true);
+				expect(host.labels.filter((label) => label === 'notebook.catalog_reconcile')).toHaveLength(
+					2,
+				);
+				await host.runAll();
+				const { meta } = await service.getNotebook(projectId, created.id);
+				expect(await catalogEntry(created.id)).toMatchObject({
+					title: 'Renamed',
+					updated_at: meta.updated_at,
+				});
+				expect(await countVersionFolders(bucket, projectId, created.id)).toBe(1);
+			},
+		);
 
 		it.each(['session', 'patch'] as const)(
 			'still rejects authoritative %s write failures',
