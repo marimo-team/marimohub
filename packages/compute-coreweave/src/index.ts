@@ -727,7 +727,10 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		if (this.reconnectId && sandbox.sandboxId !== this.reconnectId) {
 			throw new Error('CoreWeave saved sandbox is no longer available');
 		}
-		if ((this.existingOnly || this.reconnectId) && sandbox.status !== 'running') {
+		if (
+			(this.reconnectId && sandbox.status !== 'running') ||
+			(this.existingOnly && sandbox.status !== undefined && sandbox.status !== 'running')
+		) {
 			if (sandbox.status && isDeadStatus(sandbox.status)) {
 				throw new NotFoundError(`CoreWeave sandbox ${this.id} is no longer available`);
 			}

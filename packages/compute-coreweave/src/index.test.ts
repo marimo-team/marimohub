@@ -2634,11 +2634,38 @@ describe('CoreWeave warm sandbox reconnect', () => {
 		const source = makeCompute(world).create(SANDBOX_ID, { reuse: false });
 		await source.ready!();
 		expect(source.reconnectReference).toBeUndefined();
+		const fromId = world.client.fromId.bind(world.client);
+		const get = vi.spyOn(world.client, 'fromId').mockImplementation(async (id) => ({
+			...(await fromId(id)),
+			status: undefined,
+		}));
 		expectExecResult(await makeCompute(world).connectExisting(SANDBOX_ID).exec('true'), {
 			success: true,
 		});
+		expect(get).toHaveBeenCalledExactlyOnceWith('cw-1');
 		expect(world.listCalls).toEqual([[ID_TAG]]);
+		expect(world.created).toHaveLength(1);
 	});
+
+	it.each(['paused', 'completed'] as const)(
+		'rejects a discovered running sandbox whose Get reports %s',
+		async (status) => {
+			const world = makeWorld();
+			await makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!();
+			const fromId = world.client.fromId.bind(world.client);
+			vi.spyOn(world.client, 'fromId').mockImplementation(async (id) => ({
+				...(await fromId(id)),
+				status,
+			}));
+
+			await expect(makeCompute(world).connectExisting(SANDBOX_ID).exec('true')).rejects.toThrow(
+				'no longer available',
+			);
+			expect(world.registry.get('cw-1')!.fake.runCalls).toEqual([]);
+			expect(world.listCalls).toEqual([[ID_TAG]]);
+			expect(world.created).toHaveLength(1);
+		},
+	);
 
 	it('reports direct Get time separately from creation and discovery', async () => {
 		vi.useFakeTimers();
