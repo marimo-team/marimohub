@@ -78,10 +78,12 @@ describe('SurfaceManager', () => {
 		await manager.ensure(running, 'vscode', options());
 		await manager.stop(running, 'vscode');
 		expect(connect).toHaveBeenCalledTimes(2);
-		expect(connect).toHaveBeenCalledWith(session.sandbox_id, {
+		const expectedOptions = {
 			owner: { projectId: session.project_id, userId: session.user_id },
 			reconnectReference: 'surface-reference',
-		});
+		};
+		expect(connect).toHaveBeenNthCalledWith(1, session.sandbox_id, expectedOptions);
+		expect(connect).toHaveBeenNthCalledWith(2, session.sandbox_id, expectedOptions);
 		expect(create).not.toHaveBeenCalled();
 	});
 
