@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import type { DataQueryExecution } from '@marimo-hub/core/data-query-contracts';
 import type { IntegrationProbe } from '@marimo-hub/core/ports/integrations';
@@ -380,50 +381,64 @@ live('PostgreSQL live conformance', () => {
 		expect(result.rows[0].count).toBe(1);
 	});
 
-	it('terminates a sleeping backend within two seconds', async () => {
+	it.each([
+		{ name: 'plaintext', connection },
+		...(caBundle ? [{ name: 'TLS', connection: cancellationConnection }] : []),
+	])('terminates a sleeping $name backend within two seconds', async ({ connection }) => {
 		const factory = createPostgresDataQueryExecutorFactory({ resolveHost });
 		const executor = await factory.create(new AbortController().signal);
-		const request: DataQueryExecution = {
-			sql: 'SELECT pg_sleep(30)',
-			connection: {
-				files: [],
-				vars: {},
-				integration: { id: 'test' as never, name: 'test', kind: 'postgres', version: 1 },
-				plan: { engine: 'postgres', connection: cancellationConnection },
-			},
-			accessMode: 'read-only',
-			limits: { maxRows: 10, maxBytes: 64 * 1024, deadlineMs: 35_000 },
-		};
-		const running = executor.execute(request, new AbortController().signal);
+		const marker = `cancel-${randomUUID()}`;
+		const request = queryRequest(connection, `SELECT pg_sleep(30) /* ${marker} */`);
+		request.limits.deadlineMs = 35_000;
+		const controller = new AbortController();
+		const running = executor.execute(request, controller.signal);
+		const rejected = expect(running).rejects.toThrow();
 		const observer = new Client({
 			host: '127.0.0.1',
 			port,
 			database: 'hubtest',
 			user: 'postgres',
 			password: 'adminpass',
+			// Another browser connection must not satisfy readiness or block teardown.
+			application_name: 'marimohub-data-browser',
 		});
-		await observer.connect();
-		await waitForBackend(observer, true);
-
-		executor.terminate();
-		await expect(running).rejects.toThrow();
-		await waitForBackend(observer, false);
-		await observer.end();
+		try {
+			await observer.connect();
+			const pid = await waitForSleepingBackend(observer, marker);
+			executor.terminate();
+			await expect
+				.poll(
+					async () => {
+						const result = await observer.query('SELECT pid FROM pg_stat_activity WHERE pid = $1', [
+							pid,
+						]);
+						return result.rows;
+					},
+					{ timeout: 2_000, interval: 25 },
+				)
+				.toEqual([]);
+			await rejected;
+		} finally {
+			controller.abort();
+			executor.terminate();
+			await Promise.all([rejected, observer.end()]);
+		}
 	});
 });
 
-async function waitForBackend(client: InstanceType<typeof pg.Client>, present: boolean) {
+async function waitForSleepingBackend(client: InstanceType<typeof pg.Client>, marker: string) {
 	const deadline = Date.now() + 2_000;
 	do {
-		const result = await client.query(
-			"SELECT count(*)::int AS count FROM pg_stat_activity WHERE application_name = 'marimohub-data-browser'",
+		const result = await client.query<{ pid: number }>(
+			`SELECT pid FROM pg_stat_activity
+			 WHERE application_name = 'marimohub-data-browser'
+			 AND wait_event = 'PgSleep' AND position($1 in query) > 0`,
+			[marker],
 		);
-		if (result.rows[0].count > 0 === present) return;
+		if (result.rows.length === 1) return result.rows[0].pid;
 		await new Promise((resolve) => setTimeout(resolve, 25));
 	} while (Date.now() < deadline);
-	throw new Error(
-		`PostgreSQL backend presence did not become ${String(present)} within two seconds.`,
-	);
+	throw new Error('PostgreSQL query did not start sleeping within two seconds.');
 }
 
 function queryRequest(connection: PostgresConnectionCapability, sql: string): DataQueryExecution {
