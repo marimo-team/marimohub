@@ -49,7 +49,9 @@ describe('API warm pool preconnection', () => {
 				failures: 0,
 				retry_at: 0,
 				members: [
+					member({ state: 'creating' }),
 					member({ state: 'claimed' }),
+					member({ state: 'retiring' }),
 					member({ ready_until: 0 }),
 					member({ reconnect_reference: undefined }),
 					...ready,
@@ -75,127 +77,109 @@ describe('API warm pool preconnection', () => {
 		await Promise.all([first.drain(), second.drain()]);
 	});
 
-	it('shares eight slots across profiles and rotates when profiles exceed that budget', async () => {
+	it('shares the member budget across profiles without cycling prepared members', async () => {
 		vi.useFakeTimers();
 		const { deps, store, member } = await fixture();
-		const first = Array.from({ length: 9 }, () => member());
-		const last = member();
 		deps.warmPool!.config.profiles = [
-			...deps.warmPool!.config.profiles,
-			{ key: 'second', image: 'other', resources: {} },
+			{ key: 'first', resources: {} },
+			{ key: 'second', resources: {} },
 		];
+		const first = Array.from({ length: 8 }, () => member());
+		const second = Array.from({ length: 8 }, () => member());
 		await store.mutate((record) => {
-			record.pools.push({ key: 'configured', failures: 0, retry_at: 0, members: first });
-			record.pools.push({ key: 'second', failures: 0, retry_at: 0, members: [last] });
+			record.pools.push(
+				{ key: 'first', failures: 0, retry_at: 0, members: first },
+				{ key: 'second', failures: 0, retry_at: 0, members: second },
+			);
 		});
 		const connect = vi.fn<Connect>(async () => true);
 		deps.compute.preconnect = connect;
 		const handle = startWarmPoolPreconnect(deps)!;
 		await vi.advanceTimersByTimeAsync(0);
-		expect(connect).toHaveBeenCalledTimes(8);
-		expect(connect.mock.calls.map(([id]) => id)).toContain(last.sandbox_id);
-		handle.stop();
-		await handle.drain();
-		await store.mutate((record) => {
-			record.pools = [];
-			deps.warmPool!.config.profiles = [];
-			for (let i = 0; i < 10; i++) {
-				const key = `profile-${i}`;
-				deps.warmPool!.config.profiles = [
-					...deps.warmPool!.config.profiles,
-					{ key, image: key, resources: {} },
-				];
-				record.pools.push({ key, failures: 0, retry_at: 0, members: [member()] });
-			}
-		});
-		connect.mockClear();
-		const rotating = startWarmPoolPreconnect(deps)!;
-		await vi.advanceTimersByTimeAsync(0);
-		expect(connect).toHaveBeenCalledTimes(8);
-		await vi.advanceTimersByTimeAsync(30_000);
-		expect(new Set(connect.mock.calls.map(([id]) => id)).size).toBe(10);
-		rotating.stop();
-		await rotating.drain();
-	});
-
-	it('retains in-flight work during shutdown until every admitted connection settles', async () => {
-		vi.useFakeTimers();
-		const { deps, store, member } = await fixture();
-		await store.mutate((record) =>
-			record.pools.push({
-				key: 'configured',
-				failures: 0,
-				retry_at: 0,
-				members: [member(), member(), member()],
-			}),
+		expect(connect.mock.calls.map(([id]) => id)).toEqual(
+			first.slice(0, 4).flatMap((item, i) => [item.sandbox_id, second[i].sandbox_id]),
 		);
-		let releaseSecond!: () => void;
-		const connect = vi
-			.fn<Connect>()
-			.mockImplementationOnce(
-				async (_id, options) =>
-					new Promise<boolean>((_resolve, reject) => {
-						options.signal.addEventListener('abort', () => reject(new Error('aborted')), {
-							once: true,
-						});
-					}),
-			)
-			.mockImplementationOnce(
-				async () =>
-					new Promise<boolean>((resolve) => {
-						releaseSecond = () => resolve(true);
-					}),
-			);
-		deps.compute.preconnect = connect;
-		const loops = new BackgroundLoops();
-		const handle = startWarmPoolPreconnect(deps, loops)!;
-		await vi.advanceTimersByTimeAsync(0);
-		handle.stop();
-		let drained = false;
-		const draining = loops.drain().then(() => {
-			drained = true;
-		});
-		await vi.advanceTimersByTimeAsync(0);
-		expect(drained).toBe(false);
-		expect(connect).toHaveBeenCalledTimes(2);
-		releaseSecond();
-		await draining;
-		expect(drained).toBe(true);
-		expect(connect).toHaveBeenCalledTimes(2);
-	});
-
-	it('backs off failures, refreshes changed references and skips disabled/unsupported providers', async () => {
-		vi.useFakeTimers();
-		const { deps, store, member } = await fixture();
-		const ready = member();
-		await store.mutate((record) =>
-			record.pools.push({ key: 'configured', failures: 0, retry_at: 0, members: [ready] }),
-		);
-		expect(startWarmPoolPreconnect(deps)).toBeUndefined();
-		const connect = vi.fn<Connect>(async () => {
-			throw new Error('unreachable');
-		});
-		deps.compute.preconnect = connect;
-		deps.warmPool!.config.preconnect = false;
-		expect(startWarmPoolPreconnect(deps)).toBeUndefined();
-		deps.warmPool!.config.preconnect = true;
-		const loops = new BackgroundLoops();
-		const handle = startWarmPoolPreconnect(deps, loops)!;
 		await vi.advanceTimersByTimeAsync(25_000);
-		expect(connect).toHaveBeenCalledTimes(1);
-		expect(loops.health().loops.warm_pool_preconnect.status).toBe('ok');
-		expect((await store.read()).pools[0].members[0].state).toBe('ready');
-		await store.mutate((record) => {
-			record.pools[0].members[0].reconnect_reference = 'replacement-reference';
-		});
-		await vi.advanceTimersByTimeAsync(5_000);
-		expect(connect).toHaveBeenCalledTimes(2);
-		expect(connect.mock.calls[1][1].reconnectReference).toBe('replacement-reference');
+		expect(connect).toHaveBeenCalledTimes(8);
 		handle.stop();
 		await handle.drain();
 	});
 
-	it('limits concurrent connections and cancels queued work on shutdown', async () => {
+	it('rotates excess profiles every refresh interval without bypassing failure backoff', async () => {
+		vi.useFakeTimers();
+		const { deps, store, member } = await fixture();
+		const profiles = Array.from({ length: 10 }, (_, i) => ({ key: `profile-${i}`, resources: {} }));
+		deps.warmPool!.config.profiles = profiles;
+		const ready = profiles.map(() => member({ ready_until: Date.now() + 180_000 }));
+		await store.mutate((record) => {
+			record.pools.push(
+				...profiles.map((profile, i) => ({
+					key: profile.key,
+					failures: 0,
+					retry_at: 0,
+					members: [ready[i]],
+				})),
+			);
+		});
+		const connect = vi.fn<Connect>(async () => false);
+		deps.compute.preconnect = connect;
+		const handle = startWarmPoolPreconnect(deps)!;
+		await vi.advanceTimersByTimeAsync(0);
+		expect(connect).toHaveBeenCalledTimes(8);
+		await vi.advanceTimersByTimeAsync(25_000);
+		expect(connect).toHaveBeenCalledTimes(8);
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(connect).toHaveBeenCalledTimes(16);
+		expect(new Set(connect.mock.calls.map(([id]) => id))).toEqual(
+			new Set(ready.map((item) => item.sandbox_id)),
+		);
+		await vi.advanceTimersByTimeAsync(25_000);
+		expect(connect).toHaveBeenCalledTimes(16);
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(connect).toHaveBeenCalledTimes(24);
+		handle.stop();
+		await handle.drain();
+	});
+
+	it.each(['reject', 'fallback'])(
+		'backs off %s results, refreshes changed references and skips disabled/unsupported providers',
+		async (failure) => {
+			vi.useFakeTimers();
+			const { deps, store, member } = await fixture();
+			const ready = member();
+			await store.mutate((record) =>
+				record.pools.push({ key: 'configured', failures: 0, retry_at: 0, members: [ready] }),
+			);
+			expect(startWarmPoolPreconnect(deps)).toBeUndefined();
+			const connect = vi.fn<Connect>(async () => {
+				if (failure === 'fallback') return false;
+				throw new Error('unreachable');
+			});
+			deps.compute.preconnect = connect;
+			deps.warmPool!.config.enabled = false;
+			expect(startWarmPoolPreconnect(deps)).toBeUndefined();
+			deps.warmPool!.config.enabled = true;
+			deps.warmPool!.config.preconnect = false;
+			expect(startWarmPoolPreconnect(deps)).toBeUndefined();
+			deps.warmPool!.config.preconnect = true;
+			const loops = new BackgroundLoops();
+			const handle = startWarmPoolPreconnect(deps, loops)!;
+			await vi.advanceTimersByTimeAsync(20_000);
+			expect(connect).toHaveBeenCalledTimes(1);
+			expect(loops.health().loops.warm_pool_preconnect.status).toBe('ok');
+			expect((await store.read()).pools[0].members[0].state).toBe('ready');
+			await store.mutate((record) => {
+				record.pools[0].members[0].reconnect_reference = 'replacement-reference';
+			});
+			await vi.advanceTimersByTimeAsync(5_000);
+			expect(connect).toHaveBeenCalledTimes(2);
+			expect(connect.mock.calls[1][1].reconnectReference).toBe('replacement-reference');
+			handle.stop();
+			await handle.drain();
+		},
+	);
+
+	it('awaits every in-flight cleanup and cancels queued work on shutdown', async () => {
 		vi.useFakeTimers();
 		const { deps, store, member } = await fixture();
 		await store.mutate((record) =>
@@ -207,22 +191,40 @@ describe('API warm pool preconnection', () => {
 			}),
 		);
 		const signals: AbortSignal[] = [];
-		const connect = vi.fn(
+		const cleanup = Promise.withResolvers<void>();
+		const connect = vi.fn<Connect>(
 			(_id, options) =>
 				new Promise<boolean>((_resolve, reject) => {
 					signals.push(options.signal);
-					options.signal.addEventListener('abort', () => reject(new Error('aborted')), {
-						once: true,
-					});
+					const delayCleanup = signals.length === 2;
+					options.signal.addEventListener(
+						'abort',
+						() => {
+							if (delayCleanup) void cleanup.promise.then(() => reject(new Error('aborted')));
+							else reject(new Error('aborted'));
+						},
+						{
+							once: true,
+						},
+					);
 				}),
 		);
 		deps.compute.preconnect = connect;
-		const handle = startWarmPoolPreconnect(deps)!;
+		const loops = new BackgroundLoops();
+		const handle = startWarmPoolPreconnect(deps, loops)!;
 		await vi.advanceTimersByTimeAsync(0);
 		expect(connect).toHaveBeenCalledTimes(2);
 		handle.stop();
 		await handle.drain();
+		const drained = vi.fn();
+		const draining = loops.drain().then(drained);
+		await vi.advanceTimersByTimeAsync(0);
 		expect(signals.every((signal) => signal.aborted)).toBe(true);
+		expect(drained).not.toHaveBeenCalled();
+		expect(connect).toHaveBeenCalledTimes(2);
+		cleanup.resolve();
+		await draining;
+		expect(drained).toHaveBeenCalledTimes(1);
 		await vi.advanceTimersByTimeAsync(30_000);
 		expect(connect).toHaveBeenCalledTimes(2);
 		expect((await store.read()).pools[0].members.every((item) => item.state === 'ready')).toBe(

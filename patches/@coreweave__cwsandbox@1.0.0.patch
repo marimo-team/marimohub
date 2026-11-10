@@ -1,18 +1,18 @@
 diff --git a/dist/client-DpqdEOsC.d.ts b/dist/client-DpqdEOsC.d.ts
-index e1c65ca33b3de5f623366b47ea619200e0f0a839..ecc4188b3db0cb873ec6c59002d320d8c46f9421 100644
+index e1c65ca33b3de5f623366b47ea619200e0f0a839..8ce50ead5f0894e8d13d62497e3bd8cb3ea849a5 100644
 --- a/dist/client-DpqdEOsC.d.ts
 +++ b/dist/client-DpqdEOsC.d.ts
 @@ -731,6 +731,8 @@ declare class SandboxList implements AsyncIterable<Sandbox> {
  type WithSandboxCallback<TResult> = (sandbox: Sandbox) => Promise<TResult> | TResult;
  /** Public interface returned by all CWSandbox client factories. */
  interface SandboxClient {
-+  /** Prepare cached direct credentials/channels without executing sandbox operations. False means Gateway fallback. */
++  /** Prepare cached Direct credentials/channels without sandbox operations. False means skipped or unavailable in auto mode; strict Direct errors, deadlines and cancellation reject. */
 +  preconnect(sandboxId: SandboxId, options?: RequestOptions): Promise<boolean>;
    create(options?: SandboxRunOptions): Promise<Sandbox>;
    run(command: CommandInput, options?: SandboxRunOptions): Promise<Sandbox>;
    get(sandboxId: SandboxId, options?: RequestOptions): Promise<GetSandboxResult>;
 diff --git a/dist/grpc-transport-DlmDQLSO.js b/dist/grpc-transport-DlmDQLSO.js
-index e141d203164bde153cc87f4abd4beac6a46a8a9b..a7c3c4d14286c656757549460d861cfa3b78cce0 100644
+index e141d203164bde153cc87f4abd4beac6a46a8a9b..670f91880ac06b8b1a436d71bac9511b6d09f13c 100644
 --- a/dist/grpc-transport-DlmDQLSO.js
 +++ b/dist/grpc-transport-DlmDQLSO.js
 @@ -2102,6 +2102,15 @@ var SandboxClient = class {
@@ -31,23 +31,154 @@ index e141d203164bde153cc87f4abd4beac6a46a8a9b..a7c3c4d14286c656757549460d861cfa
  	async create(options = {}) {
  		return this.run(DEFAULT_KEEP_ALIVE_COMMAND, options);
  	}
-@@ -11679 +11688 @@ var DirectDataPlane = class {
+@@ -11539,6 +11548,7 @@ const CREDENTIAL_RPC_TIMEOUT_MS = 5e3;
+ const RETRY_COOLDOWN_MS = 3e4;
+ const EXPIRY_SKEW_MS = 3e4;
+ const MAX_IDLE_CHANNELS = 64;
++const MAX_SPECULATIVE_CHANNELS = 40;
+ const MAX_SANDBOX_STATES = 2048;
+ const STRICT_RETRY_START_MS = 200;
+ const FALLBACK_CODES = /* @__PURE__ */ new Set([
+@@ -11559,9 +11569,12 @@ var DirectChannelPool = class {
+ 		this.maxIdleChannels = maxIdleChannels;
+ 		this.channelFactory = channelFactory;
+ 	}
+-	async acquire(bundle, timeoutMs, signal) {
++	async acquire(bundle, timeoutMs, signal, background = false, previousKey) {
++		signal?.throwIfAborted();
+ 		let entry = this.entries.get(bundle.cacheKey);
++		const existing = entry !== void 0;
+ 		if (entry === void 0) {
++			if (background && !this.reserveSpeculative(previousKey)) return;
+ 			let channel;
+ 			try {
+ 				channel = this.channelFactory(bundle);
+@@ -11572,22 +11585,24 @@ var DirectChannelPool = class {
+ 				activeLeases: 0,
+ 				channel,
+ 				closed: false,
+-				discardWhenIdle: false
++				discardWhenIdle: false,
++				speculative: background
+ 			};
+ 			this.entries.set(bundle.cacheKey, entry);
+ 		}
+ 		entry.activeLeases += 1;
+-		this.touch(bundle.cacheKey, entry);
++		if (!background) entry.speculative = false;
++		if (!background || entry.speculative) this.touch(bundle.cacheKey, entry);
+ 		let released = false;
+ 		const release = async (options = {}) => {
+ 			if (released) return;
+ 			released = true;
+-			this.release(bundle.cacheKey, entry, options.discard === true);
++			this.release(bundle.cacheKey, entry, options.discard === true, background);
+ 		};
+ 		try {
+ 			await within(entry.channel.ready, timeoutMs, signal, "Direct data-plane connection timed out");
+ 		} catch (error) {
+-			await release({ discard: true });
++			await release({ discard: !background || !existing && entry.speculative });
+ 			if (signal?.aborted === true) throw signal.reason;
+ 			throw new DirectDataPlaneUnavailable("could not connect to the direct endpoint", { cause: error });
+ 		}
+@@ -11597,6 +11612,24 @@ var DirectChannelPool = class {
+ 			release
+ 		};
+ 	}
++	reserveSpeculative(previousKey) {
++		const entries = [...this.entries.values()];
++		const idle = entries.filter((entry) => entry.activeLeases === 0).length;
++		const speculative = entries.filter((entry) => entry.speculative).length;
++		if (idle < this.maxIdleChannels && speculative < MAX_SPECULATIVE_CHANNELS) return true;
++		for (const [key, entry] of this.entries) {
++			if (entry.activeLeases !== 0 || !entry.speculative || key === previousKey) continue;
++			this.discardEntry(key, entry);
++			return true;
++		}
++		return false;
++	}
++	replace(previousKey, nextKey) {
++		const previous = this.entries.get(previousKey);
++		const next = this.entries.get(nextKey);
++		if (previous && !previous.speculative && next) next.speculative = false;
++		this.discard(previousKey);
++	}
+ 	discard(cacheKey) {
+ 		const entry = this.entries.get(cacheKey);
+ 		if (entry !== void 0) this.discardEntry(cacheKey, entry);
+@@ -11606,11 +11639,11 @@ var DirectChannelPool = class {
+ 		if (this.entries.get(cacheKey) === entry) this.entries.delete(cacheKey);
+ 		if (entry.activeLeases === 0) this.close(entry);
+ 	}
+-	release(cacheKey, entry, discard) {
++	release(cacheKey, entry, discard, background = false) {
+ 		entry.activeLeases = Math.max(0, entry.activeLeases - 1);
+ 		entry.discardWhenIdle ||= discard;
+ 		if (discard && this.entries.get(cacheKey) === entry) this.entries.delete(cacheKey);
+-		else if (this.entries.get(cacheKey) === entry) this.touch(cacheKey, entry);
++		else if (this.entries.get(cacheKey) === entry && (!background || entry.speculative)) this.touch(cacheKey, entry);
+ 		if (entry.activeLeases === 0 && entry.discardWhenIdle) {
+ 			if (this.entries.get(cacheKey) === entry) this.entries.delete(cacheKey);
+ 			this.close(entry);
+@@ -11629,12 +11662,14 @@ var DirectChannelPool = class {
+ 	evictIdle() {
+ 		let idleCount = [...this.entries.values()].filter((entry) => entry.activeLeases === 0).length;
+ 		if (idleCount <= this.maxIdleChannels) return;
+-		for (const [cacheKey, entry] of this.entries) {
+-			if (idleCount <= this.maxIdleChannels) return;
+-			if (entry.activeLeases !== 0) continue;
+-			this.entries.delete(cacheKey);
+-			this.close(entry);
+-			idleCount -= 1;
++		for (const speculative of [true, false]) {
++			for (const [cacheKey, entry] of this.entries) {
++				if (idleCount <= this.maxIdleChannels) return;
++				if (entry.activeLeases !== 0 || entry.speculative !== speculative) continue;
++				this.entries.delete(cacheKey);
++				this.close(entry);
++				idleCount -= 1;
++			}
+ 		}
+ 	}
+ };
+@@ -11677,15 +11712,31 @@ var DirectDataPlane = class {
+ 	async acquireDirect(options) {
+ 		const state = this.stateFor(options.sandboxId);
+ 		if (options.dataPlaneMode === "auto" && Date.now() < state.retryAtMs) throw new DirectDataPlaneUnavailable("direct connection retry is temporarily deferred");
 -		const modeBudget = options.dataPlaneMode === "direct" ? DIRECT_BUDGET_MS : AUTO_BUDGET_MS;
 +		const modeBudget = options.background ? options.timeoutMs ?? 5000 : options.dataPlaneMode === "direct" ? DIRECT_BUDGET_MS : AUTO_BUDGET_MS;
-@@ -11682,10 +11691,10 @@ var DirectDataPlane = class {
+ 		const budgetMs = Math.min(options.timeoutMs ?? modeBudget, modeBudget);
  		const deadlineMs = Date.now() + budgetMs;
  		let retryDelayMs = STRICT_RETRY_START_MS;
  		while (true) try {
 -			const bundle = await within(this.ensureCredential(options.sandboxId, options.permission, state), remainingMs(deadlineMs), options.signal, "Direct data-plane credential request timed out");
-+			const bundle = await within(this.ensureCredential(options.sandboxId, options.permission, state, options.background ? 60000 : EXPIRY_SKEW_MS), remainingMs(deadlineMs), options.signal, "Direct data-plane credential request timed out");
++			const previous = state.credentials.get(options.permission);
++			const bundle = await within(this.ensureCredential(options.sandboxId, options.permission, state, options.background), remainingMs(deadlineMs), options.signal, "Direct data-plane credential request timed out");
  			if (!bundle.grantedPermissions.has(options.permission)) throw new DirectDataPlanePermissionUnavailable(`certificate does not grant permission ${options.permission}`);
- 			const lease = await this.pool.acquire(bundle, remainingMs(deadlineMs), options.signal);
+-			const lease = await this.pool.acquire(bundle, remainingMs(deadlineMs), options.signal);
 -			state.retryAtMs = 0;
++			const lease = await this.pool.acquire(bundle, remainingMs(deadlineMs), options.signal, options.background, previous?.cacheKey);
++			if (lease === void 0) return;
++			if (options.background) {
++				const current = state.credentials.get(options.permission);
++				// A deleted sandbox or newer foreground credential must not be resurrected by a late preparation.
++				if (this.states.get(options.sandboxId) !== state || current !== previous && current !== bundle) {
++					await lease.release({ discard: true });
++					return;
++				}
++				if (options.signal?.aborted || remainingMs(deadlineMs) === 0) {
++					await lease.release({ discard: current !== bundle });
++					options.signal?.throwIfAborted();
++					throw new DirectDataPlaneUnavailable("Direct data-plane connection timed out");
++				}
++				this.cacheCredential(options.permission, state, bundle);
++			}
 +			if (!options.background) state.retryAtMs = 0;
  			return lease;
  		} catch (error) {
  			if (options.dataPlaneMode === "direct" && error instanceof RpcError && error.code === "UNAVAILABLE" && remainingMs(deadlineMs) > retryDelayMs) {
-@@ -11694,15 +11703,15 @@ var DirectDataPlane = class {
+@@ -11694,29 +11745,35 @@ var DirectDataPlane = class {
  				continue;
  			}
  			if (isFallbackError(error)) {
@@ -59,31 +190,71 @@ index e141d203164bde153cc87f4abd4beac6a46a8a9b..a7c3c4d14286c656757549460d861cfa
  		}
  	}
 -	ensureCredential(sandboxId, permission, state) {
-+	ensureCredential(sandboxId, permission, state, refreshBeforeMs = EXPIRY_SKEW_MS) {
++	ensureCredential(sandboxId, permission, state, background = false) {
  		const cached = state.credentials.get(permission);
 -		if (cached !== void 0 && cached.expiresAtMs > Date.now() + EXPIRY_SKEW_MS) return Promise.resolve(cached);
+-		const pending = state.pendingCredentials.get(permission);
+-		if (pending !== void 0) return pending;
+-		const issue = this.issueCredential(sandboxId, permission).then(async (bundle) => {
+-			const replaced = state.credentials.get(permission);
+-			state.credentials.set(permission, bundle);
+-			if (replaced !== void 0 && replaced.cacheKey !== bundle.cacheKey) this.pool.discard(replaced.cacheKey);
++		const refreshBeforeMs = background ? 60000 : EXPIRY_SKEW_MS;
 +		if (cached !== void 0 && cached.expiresAtMs > Date.now() + refreshBeforeMs) return Promise.resolve(cached);
- 		const pending = state.pendingCredentials.get(permission);
- 		if (pending !== void 0) return pending;
- 		const issue = this.issueCredential(sandboxId, permission).then(async (bundle) => {
-@@ -12995,6 +13004,22 @@ var GrpcSandboxTransport = class {
++		let issue = state.pendingCredentials.get(permission);
++		if (issue === void 0) {
++			issue = this.issueCredential(sandboxId, permission);
++			state.pendingCredentials.set(permission, issue);
++			issue.finally(() => {
++				state.pendingCredentials.delete(permission);
++				this.trimStates();
++			}).catch(() => void 0);
++		}
++		// Background refresh publishes only after its replacement channel is ready.
++		return background ? issue : issue.then((bundle) => {
++			this.cacheCredential(permission, state, bundle);
+ 			return bundle;
+ 		});
+-		state.pendingCredentials.set(permission, issue);
+-		issue.finally(() => {
+-			state.pendingCredentials.delete(permission);
+-			this.trimStates();
+-		}).catch(() => void 0);
+-		return issue;
++	}
++	cacheCredential(permission, state, bundle) {
++		const replaced = state.credentials.get(permission);
++		state.credentials.set(permission, bundle);
++		if (replaced !== void 0 && replaced.cacheKey !== bundle.cacheKey) this.pool.replace(replaced.cacheKey, bundle.cacheKey);
+ 	}
+ 	async issueCredential(sandboxId, permission) {
+ 		const algorithm = {
+@@ -12995,6 +13052,30 @@ var GrpcSandboxTransport = class {
  		this.client = this.clients.client;
  		this.directDataPlane = new DirectDataPlane(this.client);
  	}
 +	async preconnect(request) {
 +		const deadline = Date.now() + request.timeoutMs;
-+		// Match exec, command streams, logs, writes and reads without dispatching any RPC to the runner.
-+		for (const permission of [1, 2, 3, 4, 5]) {
-+			request.signal?.throwIfAborted();
-+			const timeoutMs = deadline - Date.now();
-+			if (timeoutMs <= 0) throw new CWSandboxTimeoutError("Sandbox preconnect deadline exceeded", { operation: "Preconnect sandbox data plane", sandboxId: request.sandboxId });
-+			const lease = await this.directDataPlane.acquire({ sandboxId: request.sandboxId, dataPlaneMode: request.dataPlaneMode, permission, timeoutMs, signal: request.signal, background: true });
-+			if (lease === undefined) return false;
-+			await lease.release();
++		const timeoutError = new CWSandboxTimeoutError("Sandbox preconnect deadline exceeded", { operation: "Preconnect sandbox data plane", sandboxId: request.sandboxId });
++		const controller = new AbortController();
++		const signal = request.signal ? AbortSignal.any([request.signal, controller.signal]) : controller.signal;
++		const timer = setTimeout(() => controller.abort(timeoutError), request.timeoutMs);
++		try {
++			// Match exec, command streams, logs, writes and reads without runner RPCs.
++			for (const permission of [1, 2, 3, 4, 5]) {
++				signal.throwIfAborted();
++				const timeoutMs = deadline - Date.now();
++				if (timeoutMs <= 0) throw timeoutError;
++				const lease = await this.directDataPlane.acquire({ sandboxId: request.sandboxId, dataPlaneMode: request.dataPlaneMode, permission, timeoutMs, signal, background: true });
++				if (lease !== void 0) await lease.release();
++				signal.throwIfAborted();
++				if (Date.now() >= deadline) throw timeoutError;
++				if (lease === void 0) return false;
++			}
++			return true;
++		} finally {
++			clearTimeout(timer);
 +		}
-+		request.signal?.throwIfAborted();
-+		if (Date.now() >= deadline) throw new CWSandboxTimeoutError("Sandbox preconnect deadline exceeded", { operation: "Preconnect sandbox data plane", sandboxId: request.sandboxId });
-+		return true;
 +	}
 +
  	async start(request) {
