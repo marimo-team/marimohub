@@ -11,6 +11,7 @@ import {
 import { createJobId, createNotebookId, createRunId, createVersionId } from '../../ids';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
+import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { ACTOR, localResourceSecurity, makeSubjectContext, setupTestEnv } from '../../testing';
 import type { CatalogService } from '../catalog/CatalogService';
 import { MAX_VERSIONS, NotebookService } from './NotebookService';
@@ -3027,9 +3028,10 @@ describe('NotebookService', () => {
 
 		it('bounds concurrent cleanup when a batch exceeds the worker limit', async () => {
 			const { uploads } = await gcFixture(1);
+			const notebookCount = (BUCKET_SCAN_CONCURRENCY + 1) * 288;
 			await catalog.mutateSnapshot('test.seed', ACTOR, (snapshot) => {
 				const project = snapshot.projects[0];
-				project.notebooks = Array.from({ length: 10_000 }, () => ({
+				project.notebooks = Array.from({ length: notebookCount }, () => ({
 					...project.notebooks[0],
 					id: createNotebookId(),
 				}));
@@ -3044,8 +3046,8 @@ describe('NotebookService', () => {
 				active--;
 			});
 			await notebooks.sweepDeletedNotebooks();
-			expect(uploads).toHaveBeenCalledTimes(35);
-			expect(peak).toBe(16);
+			expect(uploads).toHaveBeenCalledTimes(BUCKET_SCAN_CONCURRENCY + 1);
+			expect(peak).toBe(BUCKET_SCAN_CONCURRENCY);
 			expect(active).toBe(0);
 		});
 
