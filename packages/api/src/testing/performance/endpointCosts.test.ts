@@ -16,10 +16,16 @@ import type { Seeded } from './seed';
 
 type Api = ReturnType<typeof makeApi>;
 
-function makeApi(s: Seeded, userId: UserId, index: MemorySearchIndex) {
+const READY_OPTIONS = { sessionIndex: 'on', projectAccessGeneration: 'benchmark-v1' } as const;
+
+function makeApi(s: Seeded, userId: UserId, index: MemorySearchIndex, ready = false) {
 	const background = queuedBackgroundWork();
 	const bucket = new RoundTripBucket(s.bucket);
-	const services = createServices(bucket);
+	const services = createServices(
+		bucket,
+		undefined,
+		ready ? { ...READY_OPTIONS, backgroundWork: background.work } : undefined,
+	);
 	const policy: PolicyConfig = { maxConcurrentSessionsPerUser: 20 };
 	const authz = new AuthorizationService(policy);
 	const source = new NotebookSource(bucket, services.catalog, services.notebooks, authz);
@@ -162,11 +168,17 @@ const ENDPOINTS: Endpoint[] = [
 	},
 ];
 
-async function measure(api: Api, call: () => Response | Promise<unknown>, isSearch: boolean) {
+async function measure(
+	api: Api,
+	call: () => Response | Promise<unknown>,
+	isSearch: boolean,
+	verify?: (data: unknown) => void,
+) {
 	const foreground = await api.measuredBucket.measure(async () => {
 		const result = await call();
 		if (result instanceof Response) {
 			const data = await expectOk<{ items: unknown[]; coverage: { status: string }[] }>(result);
+			verify?.(data);
 			if (isSearch) {
 				expect(data.items.length).toBeGreaterThan(0);
 				expect(data.coverage.map((c) => c.status)).not.toContain('timeout');
@@ -206,8 +218,10 @@ afterEach(() => {
 });
 
 test.each([
-	{ name: 'small', projects: 5, notebooks: 10 },
-	{ name: 'large', projects: 200, notebooks: 50 },
+	{ name: 'small', projects: 5, notebooks: 10, ready: false },
+	{ name: 'steady.small', projects: 5, notebooks: 10, ready: true },
+	{ name: 'large', projects: 200, notebooks: 50, ready: false },
+	{ name: 'steady.large', projects: 200, notebooks: 50, ready: true },
 ])(
 	'$name endpoint storage costs',
 	async (scale) => {
@@ -225,9 +239,17 @@ test.each([
 			).buffer;
 		});
 		const seeded = await seed(scale.projects, scale.notebooks, { terminalSessions: 2000 });
+		if (scale.ready) {
+			const services = createServices(seeded.bucket, undefined, READY_OPTIONS);
+			await services.sessions.rebuildSessionIndex();
+			for (const project of seeded.projects) {
+				const current = await services.projects.getProject(project.id);
+				await services.projects.updateProject(project.id, { name: current.name }, OWNER);
+			}
+		}
 		const index = new MemorySearchIndex();
 		for (const user of [OWNER, ...Object.values(USERS)]) {
-			const api = makeApi(seeded, user, index);
+			const api = makeApi(seeded, user, index, scale.ready);
 			await expectOk(await api.request('GET', '/me'));
 			await api.background.runAll();
 		}
@@ -251,23 +273,87 @@ test.each([
 			'Rounds include the first I/O round. Calls/round lists parallel widths in order; 16×3 means three rounds of 16 calls.',
 			'Cold uses fresh services; warm repeats on the same services. Each scenario starts from an independent copy of the fixture.',
 			'',
+			...(scale.ready
+				? [
+						'Session index: on and backfilled. Access summaries: refreshed with matching generation. Core deferred work: enabled.',
+						'',
+					]
+				: []),
 			'<!-- prettier-ignore -->',
 			'| Endpoint/scenario | Cache | Work | Storage calls | Rounds | Est. ms @25ms | Operations | Calls/round |',
 			'| --- | --- | --- | ---: | ---: | ---: | --- | --- |',
 		];
-		for (const endpoint of ENDPOINTS) {
+		const endpoints: Endpoint[] = scale.ready
+			? [
+					...ENDPOINTS,
+					{
+						name: 'POST …/sessions (edit; existing claimed editor)',
+						setup: startEditor,
+						call: async (a, s) => {
+							const response = await a.request('POST', `${nbBase(s)}/sessions`);
+							const body = await response.clone().json();
+							expect(body.data.session_id).toBe(a.editSession);
+							return response;
+						},
+					},
+					{
+						name: 'periodic save: unchanged code (live editor)',
+						setup: async (a, s) => {
+							await startEditor(a, s);
+							await a.deps.services.notebooks.commitSession(
+								s.pid,
+								s.nid,
+								{ code: 'unchanged = 1\n' },
+								ALICE,
+							);
+							await a.background.runAll();
+						},
+						call: (a, s) =>
+							a.deps.services.notebooks.commitSession(
+								s.pid,
+								s.nid,
+								{ code: 'unchanged = 1\n' },
+								ALICE,
+							),
+					},
+				]
+			: ENDPOINTS;
+		for (const endpoint of endpoints) {
 			const bucket = new MemoryBucket();
 			for (const object of objects) await bucket.put(object.key, object.body);
 			const s = { ...seeded, bucket };
 			const isSearch = endpoint.name.startsWith('GET /search');
 			// Search fingerprints include ETags, which change when the fixture is copied.
 			const scenarioIndex = isSearch ? await buildSearch(s) : index;
-			const setupApi = makeApi(s, endpoint.user ?? ALICE, scenarioIndex);
+			const setupApi = makeApi(s, endpoint.user ?? ALICE, scenarioIndex, scale.ready);
 			await endpoint.setup?.(setupApi, s);
-			const api = makeApi(s, endpoint.user ?? ALICE, scenarioIndex);
+			const api = makeApi(s, endpoint.user ?? ALICE, scenarioIndex, scale.ready);
 			api.editSession = setupApi.editSession;
 			for (const [i, state] of ['cold', 'warm'].entries()) {
-				const costs = await measure(api, () => endpoint.call(api, s, i), isSearch);
+				const costs = await measure(
+					api,
+					() => endpoint.call(api, s, i),
+					isSearch,
+					(data) => {
+						if (endpoint.name.startsWith('GET /me')) {
+							expect((data as { app_only: boolean }).app_only).toBe(endpoint.user === USERS.erin);
+						}
+						if (
+							endpoint.name === 'GET /projects' ||
+							endpoint.name === 'GET /projects (owner of all)'
+						) {
+							const expected = s.projects
+								.filter((_, index) => endpoint.user === OWNER || index % 4 < 2)
+								.map((p) => p.id)
+								.sort()
+								.reverse()
+								.slice(0, 100);
+							expect((data as { items: { id: string }[] }).items.map((p) => p.id)).toEqual(
+								expected,
+							);
+						}
+					},
+				);
 				lines.push(row(endpoint.name, state, 'response', costs.foreground));
 				lines.push(row(endpoint.name, state, 'deferred', costs.background));
 			}
