@@ -2724,7 +2724,7 @@ See the [secret-source guide](./integration-secrets.md).`,
 						id: 'MARIMOHUB_DATA_PREVIEW_IMAGE',
 						name: 'Data-preview image',
 						description:
-							'OCI image for sandbox previews. It must contain Python, PyIceberg, and PyArrow. The compute backend must support OCI image overrides. The local, E2B, none, and noop backends do not support these overrides. The hub verifies the image at startup.',
+							"OCI image for sandbox previews. It must contain Python, PyIceberg, and PyArrow. The compute backend must support OCI image overrides. The local, E2B, none, and noop backends do not support these overrides. The first sandbox preview validates the image's runtime dependencies; replica startup does not validate the image.",
 						example: 'ghcr.io/example/marimohub-data-preview:1',
 					},
 					{
