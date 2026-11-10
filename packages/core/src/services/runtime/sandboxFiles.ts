@@ -214,6 +214,8 @@ export interface WorkspaceRestoreOptions {
 	limits?: WorkspaceLimits;
 	/** Replaces matching workspace files in the first write batch. */
 	overlay?: WorkspaceOverlay;
+	/** Trusted generated files, outside source quotas; added only when absent from the listing and overlay. */
+	defaultFiles?: readonly { path: string; content: Uint8Array }[];
 	requireComplete?: boolean;
 	/** Bucket reads can precede readiness. Sandbox writes must wait. */
 	waitUntilReady?: () => Promise<void>;
@@ -240,6 +242,21 @@ export async function restoreWorkspace(
 	const limits = validateWorkspaceLimits(options.limits ?? WORKSPACE_LIMITS);
 	const writeFiles = options.writeFiles ?? sandbox.writeFiles.bind(sandbox);
 	const objects = await listAllObjects(bucket, sourcePrefix);
+	const existingPaths = new Set([
+		...objects.map((object) => object.key.slice(sourcePrefix.length)),
+		...(options.overlay ?? []).map((file) => file.path),
+	]);
+	const defaultFiles = (options.defaultFiles ?? []).flatMap(({ path, content }) => {
+		if (!isSafeWorkspacePath(path) || isWorkspaceInternalPath(path) || isGitHooksPath(path))
+			throw new Error(`restoreWorkspace: unsafe default path: ${path}`);
+		if (
+			existingPaths.has(path) ||
+			options.excludeRelativeRoots?.some((root) => path === root || path.startsWith(`${root}/`))
+		)
+			return [];
+		existingPaths.add(path);
+		return [{ path: `${workingDir}/${path}`, content }];
+	});
 	let wanted: { key: string; dest: string; size: number }[] = [];
 	const directories: string[] = [];
 	const overlayDestinations = new Set(options.overlay?.map(({ path }) => `${workingDir}/${path}`));
@@ -331,7 +348,7 @@ export async function restoreWorkspace(
 	const overlayFiles = await loadWorkspaceOverlay(bucket, workingDir, options.overlay);
 
 	// File writes create parents, but an empty workspace still needs a working directory.
-	if (wanted.length === 0 && overlayFiles.length === 0) {
+	if (wanted.length === 0 && overlayFiles.length === 0 && defaultFiles.length === 0) {
 		await options.waitUntilReady?.();
 		await createSandboxDirectories(sandbox, directories.length > 0 ? directories : [workingDir]);
 		return { objectCount: 0, bytes: 0 };
@@ -383,7 +400,11 @@ export async function restoreWorkspace(
 			using _reservation = current.reservation;
 			const fetched = await current.loaded;
 			const hasOverlay = overlayFiles.length > 0;
-			const files = [...overlayFiles.splice(0), ...fetched.filter((f) => f !== undefined)];
+			const files = [
+				...overlayFiles.splice(0),
+				...fetched.filter((f) => f !== undefined),
+				...defaultFiles.splice(0),
+			];
 			await options.waitUntilReady?.();
 			ready = true;
 			// Overlay buffers are outside the prefetch budget; do not add lookahead while they are live.

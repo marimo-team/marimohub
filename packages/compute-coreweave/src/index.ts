@@ -90,6 +90,7 @@ import {
 	batchFileWrites,
 	encodeFileWriteBatch,
 	WRITE_BATCH_COMMAND,
+	WRITE_BATCH_CONCURRENCY,
 	readBoundedFile,
 	collectBoundedOutput,
 	LAUNCH_MARKER_GRACE_MS,
@@ -266,11 +267,9 @@ class SandboxFileWriteSlots {
 	}
 }
 
-/**
- * The SDK's `wait()` backs off from 200 ms by 1.5x to a 2 s cap, so it noticed `running` up
- * to 2 s late. A flat interval costs a few extra Gets per cold start.
- */
+// Poll warm boots promptly, then reduce control-plane traffic during image pulls.
 const READY_POLL_INTERVAL_MS = 250;
+const READY_FAST_POLL_MS = 5_000;
 // The SDK `wait()` defaults this loop replaces: overall deadline, per-Get timeout, and the
 // window in which transient Get failures are retried.
 const READY_TIMEOUT_MS = 60_000;
@@ -570,7 +569,9 @@ async function waitUntilRunning(
 			retryUntil ??= Date.now() + READY_POLL_RETRY_BUDGET_MS;
 			if (Date.now() >= retryUntil) throw error;
 		}
-		let delay = READY_POLL_INTERVAL_MS;
+		const elapsed = READY_TIMEOUT_MS - remaining;
+		let delay =
+			elapsed < READY_FAST_POLL_MS ? READY_POLL_INTERVAL_MS : READY_POLL_MAX_RETRY_DELAY_MS;
 		if (status === undefined) {
 			delay = Math.min(READY_POLL_INTERVAL_MS * 2 ** retries++, READY_POLL_MAX_RETRY_DELAY_MS);
 		} else {
@@ -1118,50 +1119,56 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			paths.add(file.path);
 		}
 		const sandbox = await this.ensure();
-		// Use one stream when unary writes would need more than one wave.
 		if (batch.length > fileWriteLimit(this.config.dataPlaneMode) && this.packedWritesAvailable) {
-			// Serial batches fence later writes and keep the bootstrap ahead of every home write.
-			let bootstrap = this.pendingBootstrap;
-			let command = this.takeBootstrap(WRITE_BATCH_COMMAND);
-			let written = 0;
-			try {
-				for (const packed of batchFileWrites(batch)) {
-					let missingReceiver = false;
-					for (let attempt = 0; ; attempt++) {
-						try {
-							const { result, exitCode } = await this.fileWriteSlots.run(
-								sandbox.sandboxId,
-								async () => {
-									this.counters.file_write_waves++;
-									return this.runRaw(command, encodeFileWriteBatch(packed), {
-										timeout: FILE_WRITE_TIMEOUT_MS,
-									});
-								},
-							);
-							missingReceiver = exitCode === 127;
-							if (!result.success && !missingReceiver)
-								throw new Error('Could not write sandbox file batch');
-							break;
-						} catch (error) {
-							const delay = fileWriteRetryDelay(error, attempt);
-							if (delay === undefined) throw exhaustedFileWriteError(error);
-							await sleep(delay);
-						}
-					}
-					if (missingReceiver) {
-						this.packedWritesAvailable = false;
-						this.pendingBootstrap ??= bootstrap;
-						await this.writeUnaryFiles(sandbox, batch.slice(written));
-						return;
-					}
-					bootstrap = undefined;
-					command = WRITE_BATCH_COMMAND;
-					written += packed.length;
+			// Count one packed pipeline per call, plus any retried streams.
+			this.counters.file_write_waves++;
+			const batches = batchFileWrites(batch);
+			const fallback: SandboxFileWrite[] = [];
+			const writePacked = async (packed: readonly SandboxFileWrite[], bootstrap?: string) => {
+				if (!this.packedWritesAvailable) {
+					fallback.push(...packed);
+					return;
 				}
-			} catch (error) {
-				this.pendingBootstrap ??= bootstrap;
-				throw error;
+				const command = bootstrap ? `${bootstrap} ${WRITE_BATCH_COMMAND}` : WRITE_BATCH_COMMAND;
+				for (let attempt = 0; ; attempt++) {
+					try {
+						const { result, exitCode } = await this.fileWriteSlots.run(
+							sandbox.sandboxId,
+							async () => {
+								if (attempt > 0) this.counters.file_write_waves++;
+								return this.runRaw(command, encodeFileWriteBatch(packed), {
+									timeout: FILE_WRITE_TIMEOUT_MS,
+								});
+							},
+						);
+						if (exitCode === 127) {
+							this.packedWritesAvailable = false;
+							fallback.push(...packed);
+							this.pendingBootstrap ??= bootstrap;
+						} else if (!result.success) throw new Error('Could not write sandbox file batch');
+						return;
+					} catch (error) {
+						const delay = fileWriteRetryDelay(error, attempt);
+						if (delay === undefined) {
+							this.pendingBootstrap ??= bootstrap;
+							throw exhaustedFileWriteError(error);
+						}
+						await sleep(delay);
+					}
+				}
+			};
+			// Home writes must not overtake the command that installs the home symlink.
+			if (this.pendingBootstrap) {
+				const bootstrap = this.pendingBootstrap;
+				this.pendingBootstrap = undefined;
+				await writePacked(batches.shift()!, bootstrap);
 			}
+			await forEachConcurrentUntilFailure({
+				items: batches,
+				concurrency: WRITE_BATCH_CONCURRENCY,
+				run: (packed) => writePacked(packed),
+			});
+			if (fallback.length > 0) await this.writeUnaryFiles(sandbox, fallback);
 			return;
 		}
 		await this.writeUnaryFiles(sandbox, batch);

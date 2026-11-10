@@ -293,7 +293,10 @@ Python, PyIceberg, and PyArrow. The compute backend must support per-sandbox
 OCI image overrides. The `local`, `e2b`, `none`, and `noop` backends do not
 support them.
 
-At startup, the hub verifies each configured executor before advertising it.
+At startup, the hub initializes DuckDB-Wasm. The first sandbox preview validates
+the sandbox image's runtime dependencies. Missing or incompatible image dependencies
+fail that preview request.
+
 Each preview receives the selected integration configuration and applicable WIF
 credentials. Concurrency limits and deadlines bound resource use. The hub
 destroys the sandbox after the request, including after a failure.

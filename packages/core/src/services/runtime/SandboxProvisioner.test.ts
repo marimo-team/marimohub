@@ -33,6 +33,7 @@ import type {
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import type { BucketConfig, ProvisionOptions, WorkspaceLoadStrategies } from './SandboxProvisioner';
+import { EMPTY_PYPROJECT } from './marimoLaunch';
 import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { sandboxContextPath } from './sandboxContext';
 import { captureWorkspace } from './sandboxFiles';
@@ -1575,10 +1576,11 @@ describe('SandboxProvisioner', () => {
 					[
 						{ path: `${MOUNT_PATH}/nb.py`, content: new TextEncoder().encode('committed') },
 						{ path: `${MOUNT_PATH}/data.csv`, content: new TextEncoder().encode('data') },
+						{ path: `${MOUNT_PATH}/pyproject.toml`, content: EMPTY_PYPROJECT },
 					],
 				]);
 				expect(calls.mountBucket).toEqual([]);
-				expect(result.counters.files_objects).toBe(withGit ? 3 : 2);
+				expect(result.counters.files_objects).toBe(withGit ? 4 : 3);
 			},
 		);
 
@@ -1654,6 +1656,7 @@ describe('SandboxProvisioner', () => {
 					[
 						{ path: `${MOUNT_PATH}/nb.py`, content: new TextEncoder().encode('committed') },
 						{ path: `${MOUNT_PATH}/data.csv`, content: new TextEncoder().encode('data') },
+						{ path: `${MOUNT_PATH}/pyproject.toml`, content: EMPTY_PYPROJECT },
 					],
 				]);
 				expect(get).not.toHaveBeenCalledWith(nb.workspaceFile('nb.py'));
@@ -2929,7 +2932,7 @@ describe('SandboxProvisioner', () => {
 				expect(launchOptions?.startupTimeout).toBeLessThanOrEqual(120_000);
 			});
 
-			it('a copy-path provision spends one checked setup exec', async () => {
+			it('a dependency-free copy-path provision needs no setup exec', async () => {
 				const { instance, calls } = makeFakeSandbox({ failMount: true });
 				const bucketHandle = new MemoryBucket();
 				const nb = paths.project(projectId).notebook(notebookId);
@@ -2948,8 +2951,7 @@ describe('SandboxProvisioner', () => {
 				});
 
 				// writeFiles creates parents and ready() replaces the reachability exec.
-				expect(calls.exec).toHaveLength(1);
-				expect(calls.exec[0]).toContain('uv sync');
+				expect(calls.exec).toEqual([]);
 				expect(calls.startProcess).toHaveLength(1);
 			});
 
@@ -3441,7 +3443,7 @@ describe('SandboxProvisioner', () => {
 			expect(restored).toContain(`${MOUNT_PATH}/.git/HEAD`);
 			expect(restored).toContain(`${MOUNT_PATH}/.git/objects/pack/pack-a.pack`);
 			expect(restored.some((path) => path.includes('/.git/hooks'))).toBe(false);
-			expect(result.counters).toMatchObject({ files_objects: 3 });
+			expect(result.counters).toMatchObject({ files_objects: 4 });
 			expect(
 				calls.exec.some((command) =>
 					command.includes("git config --global --add safe.directory '/workspace'"),
@@ -3474,7 +3476,7 @@ describe('SandboxProvisioner', () => {
 			const restored = calls.writeFiles.flat().map((file) => file.path);
 			expect(restored).toContain(`${MOUNT_PATH}/python/apps/app.py`);
 			expect(restored).toContain(`${MOUNT_PATH}/.git/HEAD`);
-			expect(result.counters).toMatchObject({ files_objects: 2 });
+			expect(result.counters).toMatchObject({ files_objects: 3 });
 			const gitCommands = calls.exec.filter((command) => command.includes('safe.directory'));
 			expect(gitCommands).toHaveLength(1);
 			expect(gitCommands[0]).toContain("git config --global --add safe.directory '/workspace'\n");
@@ -3802,7 +3804,10 @@ describe('SandboxProvisioner', () => {
 				.find(({ path }) => path === `${MOUNT_PATH}/.git/objects/pack/large.pack`);
 			expect(restored?.content).toBeInstanceOf(Uint8Array);
 			expect(restored?.content).toHaveLength(size);
-			expect(result.counters).toMatchObject({ files_objects: 1, files_bytes: size });
+			expect(result.counters).toMatchObject({
+				files_objects: 2,
+				files_bytes: size + new TextEncoder().encode(EMPTY_PYPROJECT).byteLength,
+			});
 		});
 
 		it('restores Git metadata after a successful workspace mount', async () => {
@@ -4933,7 +4938,7 @@ describe('combined sandbox preparation', () => {
 			);
 			expect(calls.exec).toEqual([]);
 			const setup = vi.mocked(instance.launchProcess).mock.calls[0][1].setup!;
-			expect(setup).toContain('uv sync');
+			expect(setup).not.toContain('uv sync');
 			expect(setup).toContain('agent_context');
 			expect(setup).not.toContain('--install-only');
 			expect(setup).not.toContain('private-instructions');
@@ -5236,6 +5241,7 @@ it.each([false, true])(
 			await vi.waitFor(() => expect(calls.writeFiles).toHaveLength(1));
 			expect(calls.writeFiles[0]).toEqual([
 				{ path: '/workspace/notebook.py', content: new TextEncoder().encode('notebook') },
+				{ path: '/workspace/pyproject.toml', content: EMPTY_PYPROJECT },
 			]);
 			expect(calls.startProcess).toEqual([]);
 		} finally {
@@ -5246,3 +5252,197 @@ it.each([false, true])(
 		expect(calls.writeFiles[1]).toEqual([{ path: '/tmp/credentials', content: 'private' }]);
 	},
 );
+
+it.each([
+	{ deps: undefined, skip: true },
+	{ deps: '', skip: true },
+	{ deps: '[project]\nname = "example"\nversion = "0.1.0"\ndependencies = []\n', skip: true },
+	{ deps: '[project]\ndependencies = ["pandas"]\n', skip: false },
+	{ deps: '[project]\ndependencies = [', skip: false },
+	{ deps: '[tool.ruff]\nline-length = 100\n', skip: false },
+])('selects pyproject setup from the transferred source: $deps', async ({ deps, skip }) => {
+	const { calls, bucketHandle, nb, provisioner, options } = await pyprojectFixture();
+	if (deps !== undefined) await bucketHandle.put(nb.deps, deps);
+	await provisioner.provision(options);
+	expect(calls.exec.some((command) => command.includes('pyproject_layer'))).toBe(!skip);
+	if (skip) expect(calls.exec).toEqual([]);
+	expect(calls.writeFiles).toHaveLength(1);
+});
+
+it('keeps PEP 723 pins and startup-script dependency changes when skipping the empty layer', async () => {
+	const { calls, bucketHandle, nb, provisioner, options } = await pyprojectFixture();
+	await bucketHandle.put(nb.code, '# /// script\n# dependencies = ["cowsay==6.1"]\n# ///');
+	await bucketHandle.put(nb.deps, '');
+	options.launchStrategy = 'uv-script-pins';
+	await provisioner.provision(options);
+	expect(calls.exec.join('\n')).not.toContain('pyproject_layer');
+	expect(calls.exec.join('\n')).toContain('uv export --script');
+	expect(calls.exec.join('\n')).toContain('uv pip install');
+	calls.exec.length = 0;
+	await provisioner.provision({ ...options, sessionEnv: { startupScripts: ['/tmp/setup.sh'] } });
+	expect(calls.exec.join('\n')).toContain('pyproject_layer');
+});
+
+async function pyprojectFixture(combined = false) {
+	const fake = makeFakeSandbox({ failMount: true });
+	const sandbox = { ...fake, instance: { ...fake.instance, supportsLaunchSetupOutput: combined } };
+	sandbox.instance.ready = async () => {};
+	const bucketHandle = new MemoryBucket();
+	const projectId = createProjectId();
+	const notebookId = createNotebookId();
+	const options: ProvisionOptions = {
+		sandboxId: createSandboxId(),
+		projectId,
+		notebookId,
+		bucketHandle,
+		hostname: 'localhost',
+		bucket: bucketConfig,
+		workspaceLoadMode: 'copy-only',
+	};
+	const provisioner = new SandboxProvisioner(fakeComputeFrom(sandbox.instance));
+	const nb = paths.project(projectId).notebook(notebookId);
+	await bucketHandle.put(nb.code, 'import marimo');
+	return {
+		...sandbox,
+		bucketHandle,
+		options,
+		provisioner,
+		nb,
+	};
+}
+
+it.each([false, true])(
+	'replays the generated pyproject after a failed workspace write (combined: %s)',
+	async (combined) => {
+		const { instance, calls, provisioner, options } = await pyprojectFixture(combined);
+		const write = instance.writeFiles.bind(instance);
+		const attempts: Parameters<SandboxInstance['writeFiles']>[0][] = [];
+		instance.writeFiles = async (files) => {
+			attempts.push(files);
+			if (attempts.length === 1) throw new Error('stream reset before writing');
+			await write(files);
+		};
+		await provisioner.provision(options);
+		expect(attempts).toHaveLength(2);
+		expect(attempts[1]).toEqual(attempts[0]);
+		expect(calls.writeFile).toContainEqual({
+			path: '/workspace/pyproject.toml',
+			content: EMPTY_PYPROJECT,
+		});
+		expect(calls.exec).toEqual([]);
+	},
+);
+
+it.each([false, true])(
+	'uses the restore listing without a pyproject HEAD (prefetch: %s)',
+	async (prefetch) => {
+		const { instance, calls, bucketHandle, provisioner, options } = await pyprojectFixture();
+		const head = vi
+			.spyOn(bucketHandle, 'head')
+			.mockRejectedValue(new Error('HEAD must not be used'));
+		await provisioner.provision({
+			...options,
+			...(prefetch ? { workspacePrefetch: provisioner.prefetchWorkspace(instance, options) } : {}),
+		});
+		expect(head).not.toHaveBeenCalled();
+		expect(calls.exec).toEqual([]);
+		expect(calls.writeFiles).toHaveLength(1);
+		expect(calls.writeFiles[0]).toContainEqual({
+			path: '/workspace/pyproject.toml',
+			content: EMPTY_PYPROJECT,
+		});
+	},
+);
+
+it.each(['invalid UTF-8', 'restored snapshot', 'injected dependencies'])(
+	'keeps the dependency probe for %s',
+	async (scenario) => {
+		const { calls, bucketHandle, nb, provisioner, options } = await pyprojectFixture();
+		if (scenario === 'invalid UTF-8') await bucketHandle.put(nb.deps, new Uint8Array([0xff, 0xfe]));
+		if (scenario === 'restored snapshot')
+			options.restoreFilesystemSnapshotId = 'snapshot-with-deps';
+		if (scenario === 'injected dependencies') {
+			await bucketHandle.put(nb.deps, EMPTY_PYPROJECT);
+			options.sessionEnv = {
+				files: [
+					{ path: '/workspace/./pyproject.toml', content: '[project]\ndependencies = ["pandas"]' },
+				],
+			};
+		}
+		await provisioner.provision(options);
+		expect(calls.exec.join('\n')).toContain('pyproject_layer');
+		if (scenario === 'invalid UTF-8')
+			expect(calls.writeFile).toContainEqual({
+				path: '/workspace/pyproject.toml',
+				content: new Uint8Array([0xff, 0xfe]),
+			});
+		expect(calls.startProcess).toHaveLength(1);
+	},
+);
+
+it('destroys the sandbox without launching when dependency validation fails', async () => {
+	const { instance, calls, bucketHandle, nb, provisioner, options } = await pyprojectFixture();
+	await bucketHandle.put(nb.deps, '[project]\ndependencies = [');
+	const exec = instance.exec.bind(instance);
+	instance.exec = async (command, opts) =>
+		command.includes('pyproject_layer')
+			? {
+					success: false,
+					stdout: '',
+					stderr: 'TOMLDecodeError: invalid input',
+					error: { code: 'COMMAND_FAILED' },
+				}
+			: exec(command, opts);
+	await expect(provisioner.provision(options)).rejects.toThrow(
+		'pyproject.toml could not be parsed',
+	);
+	expect(calls.startProcess).toEqual([]);
+	expect(calls.destroy).toBe(1);
+});
+
+it.each([true, false])(
+	'inspects the selected version dependency overlay (dependencies: %s)',
+	async (hasDependencies) => {
+		const { calls, bucketHandle, nb, provisioner, options } = await pyprojectFixture();
+		const withDependencies = '[project]\ndependencies = ["pandas"]';
+		await bucketHandle.put(nb.deps, hasDependencies ? '' : withDependencies);
+		const version = nb.version(createVersionId());
+		await bucketHandle.put(version.deps, hasDependencies ? withDependencies : '');
+		await provisioner.provision({
+			...options,
+			workspaceOverlay: [{ path: 'pyproject.toml', key: version.deps }],
+		});
+		expect(calls.exec.join('\n').includes('pyproject_layer')).toBe(hasDependencies);
+		const written = calls.writeFile.filter((file) => file.path === '/workspace/pyproject.toml');
+		expect(written).toEqual([
+			{
+				path: '/workspace/pyproject.toml',
+				content: hasDependencies ? withDependencies : EMPTY_PYPROJECT,
+			},
+		]);
+	},
+);
+
+it('preserves a UTF-8 BOM for sandbox-side validation', async () => {
+	const { calls, bucketHandle, nb, provisioner, options } = await pyprojectFixture();
+	const content = '\uFEFF[project]\ndependencies = []';
+	await bucketHandle.put(nb.deps, content);
+	await provisioner.provision(options);
+	expect(calls.exec.join('\n')).toContain('pyproject_layer');
+	expect(calls.writeFile).toContainEqual({ path: '/workspace/pyproject.toml', content });
+});
+
+it('replays the generated manifest through retry exhaustion and never launches', async () => {
+	const { instance, calls, provisioner, options } = await pyprojectFixture();
+	const attempts: Parameters<SandboxInstance['writeFiles']>[0][] = [];
+	instance.writeFiles = async (files) => {
+		attempts.push(files);
+		throw new Error('storage transport unavailable');
+	};
+	await expect(provisioner.provision(options)).rejects.toThrow('restoring the notebook workspace');
+	expect(attempts).toHaveLength(3);
+	for (const batch of attempts)
+		expect(batch).toContainEqual({ path: '/workspace/pyproject.toml', content: EMPTY_PYPROJECT });
+	expect(calls.startProcess).toEqual([]);
+	expect(calls.destroy).toBe(1);
+});

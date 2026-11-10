@@ -5,7 +5,7 @@ import { delimiter, join } from 'node:path';
 import { promisify } from 'node:util';
 import { strToU8, zipSync } from 'fflate';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildMarimoLaunch } from './marimoLaunch';
+import { buildMarimoLaunch, EMPTY_PYPROJECT, preparePyproject } from './marimoLaunch';
 
 const exec = promisify(execFile);
 
@@ -107,6 +107,65 @@ describe.runIf(process.env.MARIMOHUB_UV_INTEGRATION === '1')(
 			const { stdout } = await run('sh', ['-c', plan.start]);
 			return JSON.parse(stdout) as Record<string, string>;
 		}
+
+		it.each(['uv-sync-edit', 'uv-script-pins'] as const)(
+			'launches %s from a hub-generated empty pyproject without the sandbox probe',
+			async (strategy) => {
+				await writeFile(join(root, 'pyproject.toml'), EMPTY_PYPROJECT);
+				await writeFile(
+					join(root, 'notebook.py'),
+					header(['mhub_inline_dep==2.0.0', 'marimo==0.0.2']),
+				);
+				const plan = buildMarimoLaunch(
+					{
+						notebookFile: 'notebook.py',
+						port: 2718,
+						host: '127.0.0.1',
+						skipPyprojectSetup: true,
+					},
+					strategy,
+				);
+				expect(plan.setup.some((step) => step.name === 'pyproject_layer')).toBe(false);
+				for (const step of plan.setup) await run('sh', ['-c', step.command]);
+				const { stdout } = await run('sh', ['-c', plan.start]);
+				const packages = JSON.parse(stdout);
+				expect(packages).toMatchObject({ marimo: '0.0.1', mhub_marimo_only: '1.0.0' });
+				if (strategy === 'uv-script-pins')
+					expect(packages).toHaveProperty('mhub_inline_dep', '2.0.0');
+				else expect(packages).not.toHaveProperty('mhub_inline_dep');
+			},
+		);
+
+		it('supports uv add with an explicit Python constraint in the generated manifest', async () => {
+			await writeFile(join(root, 'pyproject.toml'), EMPTY_PYPROJECT);
+			const { stderr } = await run('uv', ['add', '--no-sync', 'mhub_project_dep==1.0.0']);
+			expect(stderr).not.toMatch(/No.*requires-python|defaulting to/i);
+			expect(await readFile(join(root, 'pyproject.toml'), 'utf8')).toContain(
+				'requires-python = ">=3.11"',
+			);
+			expect(await readFile(join(root, 'pyproject.toml'), 'utf8')).toContain(
+				'mhub-project-dep==1.0.0',
+			);
+		});
+
+		it.each([`\uFEFF${EMPTY_PYPROJECT}`, '[project]\ndependencies = ['])(
+			'preserves Python validation errors for a malformed project manifest: %s',
+			async (content) => {
+				const prepared = preparePyproject(content);
+				await writeFile(join(root, 'pyproject.toml'), prepared.content);
+				const plan = buildMarimoLaunch({
+					notebookFile: 'notebook.py',
+					port: 2718,
+					host: '127.0.0.1',
+					skipPyprojectSetup: prepared.skipSetup,
+				});
+				expect(plan.setup).toHaveLength(1);
+				await expect(run('sh', ['-c', plan.setup[0].command])).rejects.toMatchObject({
+					stderr: expect.stringContaining('TOMLDecodeError'),
+				});
+				expect(await readFile(join(root, 'pyproject.toml'), 'utf8')).toBe(content);
+			},
+		);
 
 		it('adds runtime packages without modifying sources or the base env, then removes the layer on restart', async () => {
 			const code = header(['mhub_inline_dep==2.0.0']);

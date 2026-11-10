@@ -357,7 +357,6 @@ function previewService(
 		maxConcurrentPerUser: 1,
 		sandbox: {
 			available,
-			check: async () => {},
 			preview,
 			close: async () => {},
 		},

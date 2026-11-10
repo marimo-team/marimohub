@@ -1797,6 +1797,25 @@ describe('CoreWeaveCompute', () => {
 			}
 		});
 
+		it('switches to two-second polls after five seconds', async () => {
+			vi.useFakeTimers();
+			try {
+				const world = makeWorld({ bootStatus: 'pending' });
+				const waiting = makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!();
+				await vi.advanceTimersByTimeAsync(5_000);
+				const fake = world.registry.get('cw-1')!.fake;
+				expect(fake.statusPolls).toBe(21);
+				fake.status = 'running';
+				await vi.advanceTimersByTimeAsync(1_999);
+				expect(fake.statusPolls).toBe(21);
+				await vi.advanceTimersByTimeAsync(1);
+				await waiting;
+				expect(fake.statusPolls).toBe(22);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
 		it('times out after 60 s of boot polling', async () => {
 			vi.useFakeTimers();
 			try {
@@ -1812,7 +1831,7 @@ describe('CoreWeaveCompute', () => {
 				await vi.advanceTimersByTimeAsync(1);
 				await waiting;
 				expect(error).toBeInstanceOf(CWSandboxTimeoutError);
-				expect(world.registry.get('cw-1')!.fake.statusPolls).toBe(240);
+				expect(world.registry.get('cw-1')!.fake.statusPolls).toBe(48);
 				expect(vi.getTimerCount()).toBe(0);
 			} finally {
 				vi.useRealTimers();
@@ -3019,11 +3038,11 @@ it('stops packed batches after a failed stream and can resend the full transfer'
 	const files = packedFiles(129);
 	await expect(instance.writeFiles(files)).rejects.toThrow('disk full');
 	const fake = world.registry.get('cw-1')!.fake;
-	expect(fake.stdinWrites).toHaveLength(1);
+	expect(fake.stdinWrites).toHaveLength(2);
 	failing = false;
 	await instance.writeFiles(files);
-	expect(fake.stdinWrites).toHaveLength(3);
-	expect(Buffer.from(fake.stdinWrites[1]).equals(Buffer.from(fake.stdinWrites[0]))).toBe(true);
+	expect(fake.stdinWrites).toHaveLength(4);
+	expect(Buffer.from(fake.stdinWrites[2]).equals(Buffer.from(fake.stdinWrites[0]))).toBe(true);
 });
 
 it('retries an unavailable packed stream with identical bytes', async () => {
@@ -3087,7 +3106,7 @@ it.each([CWSandboxUnavailableError, CWSandboxResourceExhaustedError])(
 			const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
 			await instance.ready!();
 			const started = Date.now();
-			const rejected = expect(instance.writeFiles(packedFiles(129))).rejects.toBe(error);
+			const rejected = expect(instance.writeFiles(packedFiles())).rejects.toBe(error);
 			await vi.runAllTimersAsync();
 			await rejected;
 			expect(inputImpl).toHaveBeenCalledOnce();
@@ -3333,10 +3352,10 @@ it.each(['missing stdin', 'write', 'close', 'exit'] as const)(
 			return { ...sandbox, commands: { ...sandbox.commands, start } };
 		};
 		const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
-		await expect(instance.writeFiles(packedFiles(129))).rejects.toThrow();
-		expect(start).toHaveBeenCalledOnce();
-		expect(cancel).toHaveBeenCalledOnce();
-		expect(instance.drainCounters!()).toMatchObject({ file_write_waves: 1, stream_execs: 1 });
+		await expect(instance.writeFiles(packedFiles(257))).rejects.toThrow();
+		expect(start).toHaveBeenCalledTimes(2);
+		expect(cancel).toHaveBeenCalledTimes(2);
+		expect(instance.drainCounters!()).toMatchObject({ file_write_waves: 1, stream_execs: 2 });
 	},
 );
 
@@ -3350,7 +3369,7 @@ it('stops after the packed retry budget is exhausted', async () => {
 			},
 		});
 		const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
-		const rejected = expect(instance.writeFiles(packedFiles(129))).rejects.toBe(unavailable);
+		const rejected = expect(instance.writeFiles(packedFiles())).rejects.toBe(unavailable);
 		await vi.runAllTimersAsync();
 		await rejected;
 		expect(unavailable).toHaveProperty('retryable', false);
@@ -3459,7 +3478,7 @@ it.each([
 	'falls back only for remaining files when python3 is missing (%j)',
 	async ({ completedBatches, rejectClosedStdin }) => {
 		const { world, commands } = packedWriterExits(
-			[...Array(completedBatches).fill(0), 127],
+			[...Array(completedBatches).fill(0), 127, ...Array(1 - completedBatches).fill(127)],
 			rejectClosedStdin,
 		);
 		const instance = makeCompute(world, { ...baseConfig, image: 'custom-without-python' }).create(
@@ -3472,10 +3491,10 @@ it.each([
 		}));
 		await instance.writeFiles(files);
 		const fake = world.registry.get('cw-1')!.fake;
-		expect(commands).toHaveLength(completedBatches + 1);
+		expect(commands).toHaveLength(2);
 		expect(fake.batchWrites.flat()).toEqual(files.slice(completedBatches * 128));
 		await instance.writeFiles(files.slice(0, 9));
-		expect(commands).toHaveLength(completedBatches + 1);
+		expect(commands).toHaveLength(2);
 		expect(fake.batchWrites.flat()).toEqual([
 			...files.slice(completedBatches * 128),
 			...files.slice(0, 9),
@@ -3491,7 +3510,7 @@ it.each([1, 126])(
 		await expect(instance.writeFiles(packedFiles(129))).rejects.toThrow(
 			'Could not write sandbox file batch',
 		);
-		expect(commands).toHaveLength(1);
+		expect(commands).toHaveLength(2);
 		expect(world.registry.get('cw-1')!.fake.batchWrites).toEqual([]);
 	},
 );
@@ -3578,3 +3597,143 @@ it.each(['published', 'failed'] as const)(
 		expect(remove).toHaveBeenCalledExactlyOnceWith('cw-1');
 	},
 );
+
+function blockedPackedWrites() {
+	const release = Promise.withResolvers<void>();
+	const concurrency = { active: 0, peak: 0 };
+	const world = makeWorld({
+		inputImpl: async () => {
+			concurrency.peak = Math.max(concurrency.peak, ++concurrency.active);
+			await release.promise;
+			concurrency.active--;
+		},
+	});
+	return { world, release, concurrency };
+}
+
+it.each(['auto', 'gateway'] as const)(
+	'pipelines packed transfers two-wide in %s mode',
+	async (dataPlaneMode) => {
+		const { world, release, concurrency } = blockedPackedWrites();
+		const instance = makeCompute(world, { ...baseConfig, dataPlaneMode }).create(SANDBOX_ID, {
+			reuse: false,
+		});
+		const writing = instance.writeFiles(packedFiles(257));
+		await vi.waitFor(() => expect(concurrency.active).toBe(2));
+		expect(world.registry.get('cw-1')!.fake.stdinWrites).toHaveLength(2);
+		release.resolve();
+		await writing;
+		expect(concurrency.peak).toBe(2);
+		expect(instance.drainCounters!()).toMatchObject({ file_write_waves: 1, stream_execs: 3 });
+	},
+);
+
+it('disables a missing packed receiver only on that sandbox instance', async () => {
+	const { world, commands } = packedWriterExits([127, 0]);
+	const compute = makeCompute(world);
+	const first = compute.create(SANDBOX_ID, { reuse: false });
+	await first.writeFiles(packedFiles());
+	await first.writeFiles(packedFiles());
+	expect(commands).toHaveLength(1);
+	expect(world.registry.get('cw-1')!.fake.batchWrites.flat()).toEqual([
+		...packedFiles(),
+		...packedFiles(),
+	]);
+	await compute.create('sb-next' as SandboxId, { reuse: false }).writeFiles(packedFiles());
+	expect(commands).toHaveLength(2);
+	expect(world.registry.get('cw-2')!.fake.batchWrites).toEqual([]);
+});
+
+it('drains an in-flight packed sibling before reporting failure and stops queued batches', async () => {
+	const release = Promise.withResolvers<void>();
+	let inputs = 0;
+	const world = makeWorld({
+		inputImpl: async () => {
+			if (++inputs === 1) throw new Error('write failed');
+			await release.promise;
+		},
+	});
+	const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+	let settled = false;
+	const writing = instance.writeFiles(packedFiles(385)).finally(() => {
+		settled = true;
+	});
+	const rejected = expect(writing).rejects.toThrow('write failed');
+	await vi.waitFor(() => expect(inputs).toBe(2));
+	expect(settled).toBe(false);
+	release.resolve();
+	await rejected;
+	expect(inputs).toBe(2);
+});
+
+it('shares the direct-mode slot cap across packed writers for the same sandbox', async () => {
+	const { world, release, concurrency } = blockedPackedWrites();
+	const compute = makeCompute(world);
+	const first = compute.create(SANDBOX_ID, { reuse: false });
+	await first.ready!();
+	const second = compute.connectExisting(SANDBOX_ID);
+	await second.ready!();
+	const writes = Promise.all([
+		first.writeFiles(packedFiles(129)),
+		second.writeFiles(packedFiles(129)),
+	]);
+	await vi.waitFor(() => expect(concurrency.active).toBe(2));
+	expect(world.registry.get('cw-1')!.fake.stdinWrites).toHaveLength(2);
+	release.resolve();
+	await writes;
+	expect(concurrency.peak).toBe(2);
+});
+
+it.each([1, 126])('keeps packed writes enabled after exit %i', async (exitCode) => {
+	const { world, commands } = packedWriterExits([exitCode, 0]);
+	const compute = makeCompute(world);
+	const next = compute.create(SANDBOX_ID, { reuse: false });
+	await expect(next.writeFiles(packedFiles())).rejects.toThrow(
+		'Could not write sandbox file batch',
+	);
+	await next.writeFiles(packedFiles());
+	expect(commands).toHaveLength(2);
+	expect(world.registry.get('cw-1')!.fake.batchWrites).toEqual([]);
+	expect(next.drainCounters!()).toMatchObject({ stream_execs: 2 });
+});
+
+it('waits for the successful sibling before falling back only the missing receiver batch', async () => {
+	const world = makeWorld();
+	const create = world.client.create.bind(world.client);
+	const release = Promise.withResolvers<void>();
+	const starts: string[][] = [];
+	world.client.create = async (options) => {
+		const sandbox = await create(options);
+		return {
+			...sandbox,
+			commands: {
+				...sandbox.commands,
+				start: async (command) => {
+					starts.push([...command]);
+					const missing = starts.length === 1;
+					return {
+						...fakeProcess({ exitCode: missing ? 127 : 0 }),
+						stdin: {
+							write: async () => {
+								if (!missing) await release.promise;
+							},
+							close: async () => {},
+						},
+					};
+				},
+			},
+		};
+	};
+	const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+	const files = Array.from({ length: 129 }, (_, index) => ({
+		path: `/workspace/${index}`,
+		content: 'data',
+	}));
+	const writing = instance.writeFiles(files);
+	await vi.waitFor(() => expect(starts).toHaveLength(2));
+	const fake = world.registry.get('cw-1')!.fake;
+	expect(fake.batchWrites).toEqual([]);
+	release.resolve();
+	await writing;
+	expect(fake.batchWrites.flat()).toEqual(files.slice(0, 128));
+});

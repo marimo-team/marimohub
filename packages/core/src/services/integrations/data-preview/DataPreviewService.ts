@@ -18,7 +18,7 @@ export interface DataPreviewServiceOptions {
 		DuckDBWasmDataPreview,
 		'available' | 'supports' | 'supportsFeatures' | 'status' | 'check' | 'preview' | 'close'
 	>;
-	sandbox?: Pick<SandboxDataPreview, 'available' | 'check' | 'preview' | 'close'>;
+	sandbox?: Pick<SandboxDataPreview, 'available' | 'preview' | 'close'>;
 	maxConcurrent: number;
 	maxConcurrentPerUser: number;
 	metrics?: Metrics;
@@ -56,13 +56,11 @@ export class DataPreviewService extends DrainableService {
 	}
 
 	async check(): Promise<void> {
-		const executors = [this.options.duckdbWasm, this.options.sandbox].filter(
-			(executor) => executor !== undefined,
-		);
-		if (executors.length === 0) return;
-		const results = await Promise.allSettled(executors.map((executor) => executor.check()));
-		if (results.every((result) => result.status === 'rejected')) {
-			throw new UnavailableError('No data-preview runtime is available.');
+		try {
+			await this.options.duckdbWasm?.check();
+		} catch {
+			if (!this.options.sandbox?.available())
+				throw new UnavailableError('No data-preview runtime is available.');
 		}
 	}
 

@@ -42,7 +42,12 @@ import { utf8Tail } from '../../text';
 import { Stopwatch } from '../../timing';
 import type { Timings } from '../../timing';
 import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/filesystemSnapshots';
-import { buildMarimoLaunch, DEFAULT_LAUNCH_STRATEGY } from './marimoLaunch';
+import {
+	buildMarimoLaunch,
+	DEFAULT_LAUNCH_STRATEGY,
+	EMPTY_PYPROJECT,
+	preparePyproject,
+} from './marimoLaunch';
 import type { MarimoLaunchMode, MarimoLaunchPlan, MarimoLaunchStrategyName } from './marimoLaunch';
 import { assertValidKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { shellQuote } from './shell';
@@ -54,7 +59,11 @@ import {
 	restoreWorkspace,
 	sharedWorkspaceListing,
 } from './sandboxFiles';
-import type { WorkspaceOverlay, WorkspaceRestoreStats } from './sandboxFiles';
+import type {
+	WorkspaceOverlay,
+	WorkspaceRestoreOptions,
+	WorkspaceRestoreStats,
+} from './sandboxFiles';
 import { restorePackedWorkspace } from './packedWorkspaceRestore';
 import { sandboxWorkspaceLayout } from './workspaceLayout';
 import type { SandboxWorkspaceLayout } from './workspaceLayout';
@@ -559,6 +568,7 @@ async function withSandboxSpan<T>(
 }
 
 export interface WorkspaceLoadContext {
+	defaultFiles?: WorkspaceRestoreOptions['defaultFiles'];
 	writeFiles?: SandboxInstance['writeFiles'];
 	workspaceLimits?: WorkspaceLimits;
 	overlay?: WorkspaceOverlay;
@@ -600,6 +610,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 	readonly supportsPrefetch = true;
 
 	async load({
+		defaultFiles,
 		sandbox,
 		bucketHandle,
 		workspacePrefix,
@@ -619,6 +630,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		}
 		try {
 			const stats = await restoreWorkspace(sandbox, bucketHandle, workspacePrefix, mountPath, {
+				defaultFiles,
 				limits: workspaceLimits,
 				writeFiles,
 				// Capture treats absent files as deletions, so a session must restore every file.
@@ -983,7 +995,22 @@ export class SandboxProvisioner {
 			sw.timings.inject_files = Date.now() - started;
 			if (options.notebookBridge) sw.timings.bridge_prepare = sw.timings.inject_files;
 		};
-		const workspaceWriter = combineWrites && !options.gitPrefix ? flush : undefined;
+		let skipPyprojectSetup = false;
+		const pyprojectPath = `${mountPath}/pyproject.toml`;
+		const workspaceWriter: SandboxInstance['writeFiles'] = async (files) => {
+			let transferredPyproject: boolean | undefined;
+			const prepared = files.map((file) => {
+				if (file.path !== pyprojectPath) return file;
+				const pyproject = preparePyproject(file.content);
+				transferredPyproject = pyproject.skipSetup;
+				return { ...file, content: pyproject.content };
+			});
+			await (combineWrites && !options.gitPrefix ? flush : writeFiles)(prepared);
+			// Failed transfers must replay synthesized files before setup can be skipped.
+			if (transferredPyproject !== undefined) {
+				skipPyprojectSetup = transferredPyproject;
+			}
+		};
 
 		const ensureReachable = async () => {
 			if (options.bootedSandbox) {
@@ -1003,7 +1030,7 @@ export class SandboxProvisioner {
 					) ??
 						this.loadWorkspace(sandbox, options, layout, prefix, waitUntilReady, workspaceWriter));
 					if (!loaded.overlayApplied) {
-						await this.applyWorkspaceOverlay(sandbox, options, mountPath);
+						await this.applyWorkspaceOverlay(sandbox, options, mountPath, workspaceWriter);
 					}
 					return loaded;
 				});
@@ -1045,6 +1072,7 @@ export class SandboxProvisioner {
 				pythonPath,
 				deferSetup,
 				setupPrefix,
+				skipPyprojectSetup,
 			});
 		const uploadBridge = () =>
 			launchStrategy.then(
@@ -1240,13 +1268,14 @@ export class SandboxProvisioner {
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
 		mountPath: string,
+		writeFiles = sandbox.writeFiles.bind(sandbox),
 	): Promise<void> {
 		const overlay = options.workspaceOverlay;
 		if (!overlay || overlay.length === 0) return;
 		const bucket = options.bucketHandle;
 		if (!bucket) throw new UnavailableError('Bucket access is required for workspace overlay');
 		try {
-			await sandbox.writeFiles(await loadWorkspaceOverlay(bucket, mountPath, overlay));
+			await writeFiles(await loadWorkspaceOverlay(bucket, mountPath, overlay));
 		} catch (err) {
 			throw provisionFailure('restoring the notebook workspace into the sandbox', err);
 		}
@@ -1423,6 +1452,9 @@ export class SandboxProvisioner {
 				: this.workspaceLoadStrategies.mountOrCopy;
 		if (!strategy.supportsPrefetch) await waitUntilReady();
 		const load = strategy.load({
+			defaultFiles: options.restoreFilesystemSnapshotId
+				? undefined
+				: [{ path: 'pyproject.toml', content: new TextEncoder().encode(EMPTY_PYPROJECT) }],
 			writeFiles,
 			overlay: options.workspaceOverlay,
 			workspaceLimits: options.workspaceLimits,
@@ -1630,6 +1662,7 @@ export class SandboxProvisioner {
 			pythonPath?: Promise<string>;
 			deferSetup?: boolean;
 			setupPrefix?: MarimoLaunchPlan['setup'];
+			skipPyprojectSetup?: boolean;
 		},
 	): Promise<MarimoStartup> {
 		const sessionEnv = await options.sessionEnv;
@@ -1644,6 +1677,11 @@ export class SandboxProvisioner {
 		const startup: MarimoStartup = {
 			plan: buildMarimoLaunch(
 				{
+					skipPyprojectSetup:
+						prepared.skipPyprojectSetup &&
+						!sessionEnv?.files?.some(
+							(file) => normalizeAbsoluteSandboxPath(file.path) === `${mountPath}/pyproject.toml`,
+						),
 					notebookFile: options.entryNotebook ?? DEFAULT_LOCAL_ENTRY_NOTEBOOK,
 					port: MARIMO_PORT,
 					host: '0.0.0.0',
@@ -1689,6 +1727,7 @@ export class SandboxProvisioner {
 			else await this.configureGitWorkdir(sandbox, options, layout);
 		}
 		startup.plan.setup.unshift(...(prepared.setupPrefix ?? []));
+		if (startup.plan.setup.length === 0) return startup;
 		if (prepared.deferSetup) {
 			startup.onSetup = (output, elapsed) => {
 				const diagnostics = setupDiagnostics(output.stdout, output.stderr);
@@ -1698,7 +1737,6 @@ export class SandboxProvisioner {
 			};
 			return startup;
 		}
-		if (startup.plan.setup.length === 0) return startup;
 
 		const command = `cd ${shellQuote(mountPath)} && ${instrumentSetup(startup.plan.setup)}`;
 		let diagnostics: SetupDiagnostics | undefined;

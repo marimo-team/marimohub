@@ -288,7 +288,7 @@ describe('JobRunner', () => {
 			const sandbox = makeJobSandbox({ html: '<html/>' });
 			const run = await runner(sandbox).execute(queued);
 			expect(run.status).toBe('succeeded');
-			const setup = sandbox.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
+			const setup = sandbox.calls.exec.join('\n');
 			expect(setup.includes("uv export --script 'notebook.py'")).toBe(inline);
 			const writes = sandbox.calls.writeFile.filter(
 				(file) => file.path === `${WORKDIR}/notebook.py`,
@@ -302,7 +302,7 @@ describe('JobRunner', () => {
 		const sandbox = makeJobSandbox({ html: '<html/>' });
 		const run = await runner(sandbox).execute(await enqueue());
 		expect(run.status).toBe('succeeded');
-		const setup = sandbox.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
+		const setup = sandbox.calls.exec.join('\n');
 		expect(setup).toContain("uv export --script 'notebook.py'");
 		expect(setup).toContain('uv pip install');
 	});
