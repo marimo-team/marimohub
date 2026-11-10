@@ -255,7 +255,14 @@ export default {
 		return executionContext.run(ctx, () => api.fetch(request, env, ctx));
 	},
 	scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-		return executionContext.run(ctx, () => runScheduled(env, ctx));
+		return executionContext.run(ctx, async () => {
+			const { services } = deploymentResources(env);
+			const results = await Promise.allSettled([
+				runScheduled(env, ctx),
+				services.migrations.tick(),
+			]);
+			for (const result of results) if (result.status === 'rejected') throw result.reason;
+		});
 	},
 };
 

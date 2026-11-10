@@ -1790,15 +1790,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						example: 'https://app.example.com',
 					},
 					{
-						id: 'MARIMOHUB_PROJECT_ACCESS_GENERATION',
-						name: 'Project access summary generation',
-						description:
-							'Enables project access summaries from writers using this generation. Unset: read project metadata for roles. ' +
-							'Choose a fresh, unique value only after all legacy writers stop. Use the same value on every replica. ' +
-							'Before rolling back to legacy writers, disable this setting on every replica; select a new value after upgrading again.',
-						optIn: true,
-					},
-					{
 						id: 'MARIMOHUB_DEFAULT_ROLE',
 						name: 'Default role',
 						description:

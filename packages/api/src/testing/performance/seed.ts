@@ -111,7 +111,7 @@ export async function seed(
 			await bucket.put(key, body);
 		}
 		const entry = JSON.parse(rewrite(JSON.stringify(tplEntry))) as SnapshotProjectEntry;
-		entries.push({ ...entry, name, member_ids: members.map((m) => m.user_id) });
+		entries.push({ ...entry, access: undefined, name, member_ids: members.map((m) => m.user_id) });
 		projects.push({ id: pid, notebooks: nids });
 	}
 	await catalog.mutateSnapshot('bench.seed', OWNER, (snap) => ({ ...snap, projects: entries }));

@@ -387,36 +387,27 @@ controls how the service reads the structure.
 > responses. Clients address notebooks by `{project_id, notebook_id}`.
 
 **Project access projection.** Project entries can include `access`, a role
-summary with `members`, `default_role`, and an optional deployment `generation`.
-When `access_pending` is empty or absent, `/projects` and `/me` can use a summary
-whose generation matches `MARIMOHUB_PROJECT_ACCESS_GENERATION`.
-An unset or blank configuration disables summary trust.
-Missing summaries, mismatched generations, and pending mutations require reads
-of `project.json`. These projection fields never appear in project-list responses.
+summary with `members`, `default_role`, and a code-owned `version`.
+When `access_pending` is empty or absent, `/projects` and `/me` use summaries
+with the current supported version. Old `generation` values do not grant trust.
+Missing summaries, unknown versions, and pending mutations require reads of
+`project.json`. These projection fields never appear in project-list responses.
 
-Older writers do not maintain access markers and can leave a summary stale.
-After all legacy writers stop, operators can enable summary trust with a fresh,
-unique generation shared by every writer.
-Before rolling back to legacy writers, disable summary trust on all readers.
-After legacy writers stop again, select another fresh generation before re-enabling trust.
-This prevents readers from trusting summaries left stale by legacy writers.
+The [automatic migration](./migrations.md#project-access-v1) rebuilds existing
+summaries through `CatalogService.mutateSnapshot`. Its completion receipts and
+scheduling are described in the [migration guide](./migrations.md).
 
 Before changing members or the default role, `ProjectService` removes `access`
 and appends a unique mutation ID to `access_pending`. After the metadata write
 succeeds, that mutation removes only its own ID. Default-role mutations also
-remove their IDs after definite no-write failures. Ambiguous failures retain their IDs
-because the storage outcome is uncertain. Routine projections preserve those IDs.
+remove their IDs after definite no-write failures. Ambiguous failures retain their
+IDs because the storage outcome is uncertain. Routine projections and migrations
+preserve those IDs. Migration can complete while these projects still use metadata.
 
-When no IDs remain, configured writers publish a fresh summary with their generation.
-Offline catalog recovery rebuilds unversioned summaries after all writers stop.
-Those summaries require metadata reads until a configured project mutation refreshes them.
-After upgrading every writer, set `MARIMOHUB_PROJECT_ACCESS_GENERATION` to the same
-fresh value on all replicas and run `pnpm --filter @marimo-hub/server project-access:rebuild`
-with the deployment's storage environment and generation. Packaged installations can
-run `node dist/project-access-rebuild.mjs`. The command rereads authoritative metadata
-inside each catalog CAS attempt. It does not change project timestamps or clear
-pending access/security mutations. It is safe to rerun after a partial failure;
-unresolved pending mutations still require metadata reads.
+When no IDs remain, writers publish a current summary. Offline catalog recovery
+rebuilds current summaries with writers stopped. See the migration guide for
+[repair commands](./migrations.md#project-access-v1) and
+[writer compatibility requirements](./migrations.md#upgrade-compatibility).
 
 **Security-label projection.** Project and notebook entries carry a tri-state
 `security_labels`: an object (labeled), `null` (known unlabeled), or absent
@@ -753,7 +744,7 @@ Every event carries a `schema_version` field so the log stays parseable as the e
 
 **Event types (emitted today):** every catalog mutation is appended by `CatalogService` after its winning CAS commit (best-effort: a failed append never fails the mutation, it bumps the `events.append_failed` metric). With background work, the append runs after the response. A process crash before the append drops the event. A failed deferred append logs `background_work_failed` and increments `background.failed{label="catalog.audit"}`. The `event` field is the operation name: `project.create` · `project.update` · `project.members` · `project.delete` · `project.gc` · `notebook.create` · `notebook.update` · `notebook.delete` · `notebook.gc` · `notebook.synced.create` · `notebook.synced.sync`. Context fields (`project_id`, `notebook_id`, …) ride along per operation. Project managers read one day with `GET /api/v1/projects/{pid}/events?date=`. Super admins read a paginated deployment stream with `GET /api/v1/events`. Each deployment query covers at most 30 UTC days.
 
-**Planned, not yet emitted:** session lifecycle (`session.create` · `session.terminate` · `session.expired`), `notebook.run`, `notebook.snapshot` (snapshot capture on teardown, §8), and `migration.run`.
+**Planned, not yet emitted:** session lifecycle (`session.create` · `session.terminate` · `session.expired`), `notebook.run`, `notebook.snapshot` (snapshot capture on teardown, §8).
 
 ### 4.10 `_system/identities/{user-id}.json`
 
@@ -1446,48 +1437,26 @@ Schema migrations are a first-class concern because there is no database to run 
 
 ### Migration types
 
-| Target                                       | Strategy                                                                                                                                                                                                                                                                          |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Snapshot structure                           | Lazy — the service upgrades the current snapshot in memory before it writes the next snapshot. Old snapshots remain as-is.                                                                                                                                                        |
-| `meta.json` / `project.json` / `source.json` | Fan-out migration job — reads all affected objects, rewrites with the new schema, emits `migration.run`. Iterate with pagination and process in chunks so the job stays within the runtime's per-invocation request/time limits (resume via list cursor; idempotent — see below). |
-| `_system/events/**`                          | Never migrated — event records are immutable history. New event shapes get a bumped `schema_version` field. Consumers must handle multiple versions.                                                                                                                              |
-| `catalog.json`                               | Migrated in place during the first write after a deployment that changes the catalog version. Its strict `version` value is not forward-tolerant.                                                                                                                                 |
+| Target                                       | Strategy                                                                                                                                             |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Snapshot structure                           | Lazy — the service upgrades the current snapshot in memory before it writes the next snapshot. Old snapshots remain as-is.                           |
+| `meta.json` / `project.json` / `source.json` | Background migration — processes bounded batches through the owning service, with CAS checkpoints and permanent completion receipts.                 |
+| `_system/events/**`                          | Never migrated — event records are immutable history. New event shapes get a bumped `schema_version` field. Consumers must handle multiple versions. |
+| `catalog.json`                               | Migrated in place during the first write after a deployment that changes the catalog version. Its strict `version` value is not forward-tolerant.    |
 
 > **No `schema_version` by design:** Operational records have no `schema_version`. This group includes sessions (`_system/sessions/**`), identities (`_system/identities/**`), tokens (`_system/tokens/**`), CLI and OAuth authorizations (`_system/cli-authorizations/**`, `_system/oauth-authorizations/**`), and `fs_snapshot.json`. Writers replace mutable records. Cleanup removes short-lived records. Readers accept compatible changes through optional fields and defaults.
 >
 > OAuth clients (`_system/oauth-clients/**`) also omit `schema_version`, but they are immutable and retained for 90 days. Readers must remain backward-compatible with records written during that window. API response objects are also unversioned. The route path (`/api/v1`) versions the API contract.
 
-### Migration job pseudocode
+### Background migration runner
 
-```javascript
-async function runMigration(s3, fromVersion, toVersion, migrateFn) {
-	// s3.list is paginated; iterate the cursor and process in chunks so the job
-	// stays within the runtime's per-invocation request/time limits.
-	const keys = await s3.list({ prefix: 'projects/' });
+The background runner uses permanent migration IDs, CAS leases, resumable cursors,
+and completion receipts at `_system/migrations/{id}.json`. Entry points schedule
+bounded batches outside request handling. Domain services own migrated writes.
+See [automatic background migrations](./migrations.md#automatic-background-migrations).
 
-	for (const key of keys.filter((k) => k.endsWith('meta.json'))) {
-		const obj = await s3.get(key);
-		const data = JSON.parse(obj.body);
-
-		if (data.schema_version === fromVersion) {
-			const migrated = migrateFn(data);
-			migrated.schema_version = toVersion;
-			await s3.put(key, JSON.stringify(migrated));
-		}
-	}
-
-	await appendEvent(s3, {
-		event: 'migration.run',
-		from_version: fromVersion,
-		to_version: toVersion,
-		actor: 'system',
-	});
-}
-```
-
-> **Fan-out safety:** Each migration checks `schema_version` before it writes.
-> You can safely run an interrupted migration again. Run migrations during a
-> low-traffic period and verify completion in the event log.
+Each batch must tolerate replay after interruption. Completion receipts and
+migration logs report progress; domain CAS protocols protect concurrent writes.
 
 ---
 

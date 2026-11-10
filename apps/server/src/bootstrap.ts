@@ -10,6 +10,7 @@ import { disposeNotifier } from '@marimo-hub/core';
 import { configureLogLevel } from '@marimo-hub/core/logs';
 import { DeferredWorkQueue } from './backgroundWork';
 import {
+	startMigrations,
 	startPreviewPreparation,
 	startJobScheduler,
 	startMaintenance,
@@ -172,7 +173,7 @@ export async function bootstrap(
 	const flushMetrics = () => logEvent({ level: 'info', event: 'metrics', ...wideEvents.collect() });
 	const metricsTimer = setInterval(flushMetrics, 60_000);
 	metricsTimer.unref();
-	const stops: (() => void)[] = [() => clearInterval(metricsTimer)];
+	const stops: (() => void)[] = [() => clearInterval(metricsTimer), startMigrations(deps, loops)];
 	const runtimeDrains: (() => Promise<void>)[] = [];
 	// Maintenance loops run on one replica. Metrics flush on every replica.
 	if (validatedEnv.MARIMOHUB_RUN_MAINTENANCE === 'true') {

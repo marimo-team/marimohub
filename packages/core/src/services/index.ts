@@ -1,3 +1,11 @@
+import { MigrationService } from './catalog/MigrationService';
+import { backgroundMigrations } from './catalog/migrations';
+export { MigrationService } from './catalog/MigrationService';
+export type {
+	BackgroundMigration,
+	MigrationContext,
+	MigrationBatch,
+} from './catalog/MigrationService';
 import type { BackgroundWork } from '../ports/backgroundWork';
 import { NotebookMoveService } from './content/NotebookMoveService';
 export { NotebookMoveService } from './content/NotebookMoveService';
@@ -518,8 +526,6 @@ export interface CreateServicesOptions {
 	backgroundWork?: BackgroundWork;
 	workspaceLimits?: WorkspaceLimits;
 	repositoryHosts?: GitProviderHosts;
-	/** Select a fresh generation only after all legacy project-access writers stop. */
-	projectAccessGeneration?: string;
 	sourceControl?: SourceControlRegistry;
 	/**
 	 * Wrap the bucket and every service in OTEL spans (one per method call).
@@ -578,7 +584,6 @@ export function createServices(
 			metrics,
 			(emails) => identities.getUniqueByEmails(emails),
 			deepLinks,
-			options?.projectAccessGeneration,
 		),
 		{
 			getProject: project,
@@ -758,6 +763,10 @@ export function createServices(
 		oauthAuthorizations,
 		oauthRateLimits,
 		hostRetries: wrap('HostRetryStore', new HostRetryStore(bucket)),
+		migrations: wrap(
+			'MigrationService',
+			new MigrationService(bucket, backgroundMigrations(projects)),
+		),
 		maintenance,
 		idempotency,
 	};

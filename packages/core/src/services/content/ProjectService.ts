@@ -1,4 +1,6 @@
 import { WorkingBranchStore } from './workingBranchRecords';
+import { PROJECT_ACCESS_VERSION } from './projectAccess';
+import type { MigrationBatch, MigrationContext } from '../catalog/MigrationService';
 import { ResumableUploads } from './ResumableUploads';
 import { cachedRead } from '../../async';
 import { MetadataCache } from './metadataCache';
@@ -241,7 +243,6 @@ export class ProjectService {
 		private metrics: Metrics = noopMetrics,
 		private resolveIdentitiesByEmail: InviteIdentityResolver = async () => new Map(),
 		private deepLinks = new DeepLinkService(bucket, metrics),
-		private accessGeneration?: string,
 	) {
 		this.projectCache = new MetadataCache(bucket, METADATA_CACHE_MAX_ENTRIES, undefined, metrics);
 	}
@@ -272,7 +273,6 @@ export class ProjectService {
 				? snapshotEntry.accessCandidatesFor(
 						filter.subject,
 						subjectDefaultRole(filter.subject, filter.policy) !== null,
-						this.accessGeneration,
 					)
 				: undefined;
 		const matching = snapshot.projects
@@ -333,7 +333,7 @@ export class ProjectService {
 		},
 	): Promise<Role | null> {
 		if (isSuperAdmin(subject, policy?.superAdmins) || entry.owner === subject.id) return 'admin';
-		const role = projectedRole(entry, subject, policy, this.accessGeneration);
+		const role = projectedRole(entry, subject, policy);
 		if (role !== undefined) return role;
 		try {
 			return effectiveRole(await loadProject(entry.id), subject, policy);
@@ -350,11 +350,7 @@ export class ProjectService {
 		const snapshotEntry = await this.catalog.getCurrentSnapshotEntry();
 		const active = snapshotEntry.snapshot.projects.filter((entry) => entry.status !== 'deleted');
 		if (active.some((entry) => entry.owner === subject.id)) return false;
-		const candidates = snapshotEntry.accessCandidatesFor(
-			subject,
-			fallback !== null,
-			this.accessGeneration,
-		);
+		const candidates = snapshotEntry.accessCandidatesFor(subject, fallback !== null);
 		const relevant = active.filter((entry) => candidates.has(entry.id));
 		let foundAppRole = fallback === 'app-user';
 		for (let offset = 0; offset < relevant.length; offset += BUCKET_SCAN_CONCURRENCY) {
@@ -426,9 +422,7 @@ export class ProjectService {
 						projects: [
 							...snap.projects,
 							{
-								...projectCatalogPatch(project, project, {
-									accessGeneration: this.accessGeneration,
-								}),
+								...projectCatalogPatch(project, project),
 								id,
 								owner: actor,
 								created_at: now,
@@ -586,7 +580,6 @@ export class ProjectService {
 			(entry) =>
 				loadProjectCatalogPatch(this.bucket, id, entry, {
 					finalizeSecurityLabels: true,
-					accessGeneration: this.accessGeneration,
 				}),
 			{
 				project_id: id,
@@ -616,7 +609,6 @@ export class ProjectService {
 				(entry) =>
 					loadProjectCatalogPatch(this.bucket, id, entry, {
 						finalizeSecurityLabels: true,
-						accessGeneration: this.accessGeneration,
 					}),
 				{ project_id: id },
 			);
@@ -782,7 +774,6 @@ export class ProjectService {
 			await this.catalog.updateProjectEntry('project.access.rollback', actor, id, async (entry) => {
 				const patch = await loadProjectCatalogPatch(this.bucket, id, entry, {
 					finalizeAccess: mutation,
-					accessGeneration: this.accessGeneration,
 				});
 				if (patch) return patch;
 				const pending = entry.access_pending?.filter((id) => id !== mutation);
@@ -797,26 +788,46 @@ export class ProjectService {
 		}
 	}
 
-	/** Run after all legacy writers have stopped, using the deployment's access generation. */
+	async migrateAccessSummaries({
+		cursor,
+		signal,
+		force = false,
+	}: MigrationContext & { force?: boolean } = {}): Promise<MigrationBatch> {
+		let result: MigrationBatch = { done: false, cursor };
+		await this.catalog.mutateSnapshot('project.access.rebuild', SYSTEM_ACTOR, async (snapshot) => {
+			signal?.throwIfAborted();
+			const remaining = snapshot.projects
+				.filter((entry) => cursor === undefined || entry.id > cursor)
+				.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+			const batch = remaining.slice(0, 25);
+			await mapWithConcurrency(batch, BUCKET_SCAN_CONCURRENCY, async (entry) => {
+				signal?.throwIfAborted();
+				if (entry.access_pending?.length) {
+					entry.access = undefined;
+					return;
+				}
+				if (!force && (entry.access?.version ?? 0) >= PROJECT_ACCESS_VERSION) return;
+				const patch = await loadProjectCatalogPatch(this.bucket, entry.id, entry);
+				if (!patch) {
+					if (entry.status === 'deleted') return;
+					throw new NotFoundError(`Project ${entry.id} metadata not found`);
+				}
+				Object.assign(entry, patch);
+			});
+			signal?.throwIfAborted();
+			result =
+				remaining.length > batch.length
+					? { done: false, cursor: batch[batch.length - 1].id }
+					: { done: true };
+			return snapshot;
+		});
+		return result;
+	}
+
 	async rebuildAccessSummaries(): Promise<void> {
-		if (!this.accessGeneration?.trim()) {
-			throw new ValidationError('Project access generation is required to rebuild summaries');
-		}
-		const snapshot = await this.catalog.getCurrentSnapshot();
-		for (const project of snapshot.projects) {
-			await this.catalog.updateProjectEntry(
-				'project.access.rebuild',
-				SYSTEM_ACTOR,
-				project.id,
-				async (entry) => {
-					const patch = await loadProjectCatalogPatch(this.bucket, project.id, entry, {
-						accessGeneration: this.accessGeneration,
-					});
-					if (!patch) throw new NotFoundError(`Project ${project.id} metadata not found`);
-					return patch;
-				},
-			);
-		}
+		let result: MigrationBatch = { done: false };
+		while (!result.done)
+			result = await this.migrateAccessSummaries({ cursor: result.cursor, force: true });
 	}
 
 	private syncProjectEntry(
@@ -828,7 +839,6 @@ export class ProjectService {
 		return this.catalog.updateProjectEntry(operation, actor, id, (entry) =>
 			loadProjectCatalogPatch(this.bucket, id, entry, {
 				finalizeAccess: accessMutation,
-				accessGeneration: this.accessGeneration,
 			}),
 		);
 	}
@@ -994,9 +1004,8 @@ export class ProjectService {
 					actor,
 					id,
 					async (entry) =>
-						(await loadProjectCatalogPatch(this.bucket, id, entry, {
-							accessGeneration: this.accessGeneration,
-						})) ?? projectCatalogPatch(updated, entry, { accessGeneration: this.accessGeneration }),
+						(await loadProjectCatalogPatch(this.bucket, id, entry)) ??
+						projectCatalogPatch(updated, entry),
 				)
 			: null;
 

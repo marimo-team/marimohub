@@ -2563,6 +2563,43 @@ paths:
       responses:
         '204':
           description: Stored.
+  /_system/migrations/{id}.json:
+    summary: Background migration lease, resumable cursor, or permanent completion
+      receipt.
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: MigrationService
+    get:
+      operationId: read_system_migrations_json
+      summary: Read MigrationState
+      tags:
+        - ops
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationState'
+    put:
+      operationId: write_system_migrations_json
+      summary: Write MigrationState
+      tags:
+        - ops
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MigrationState'
+      responses:
+        '204':
+          description: Stored.
   /_system/host-retry-cleanup.json:
     summary: Shared progress for bounded host receipt compaction.
     parameters: []
@@ -4950,6 +4987,10 @@ components:
                       - app-user
                   generation:
                     type: string
+                  version:
+                    type: integer
+                    exclusiveMinimum: 0
+                    maximum: 9007199254740991
                 required:
                   - members
                   - default_role
@@ -8050,6 +8091,59 @@ components:
         - event
         - actor
       additionalProperties: {}
+    MigrationState:
+      oneOf:
+        - type: object
+          properties:
+            version:
+              type: number
+              const: 1
+            status:
+              type: string
+              const: complete
+            completed_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+          required:
+            - version
+            - status
+            - completed_at
+        - type: object
+          properties:
+            version:
+              type: number
+              const: 1
+            status:
+              type: string
+              const: pending
+            cursor:
+              type: string
+          required:
+            - version
+            - status
+        - type: object
+          properties:
+            version:
+              type: number
+              const: 1
+            status:
+              type: string
+              const: running
+            cursor:
+              type: string
+            lease:
+              type: string
+              minLength: 1
+            expires_at:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+          required:
+            - version
+            - status
+            - lease
+            - expires_at
     HostRetryCleanup:
       type: object
       properties:

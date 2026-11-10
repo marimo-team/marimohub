@@ -142,6 +142,8 @@ stopped, replaces it with one ETag CAS.
 
 These CAS-managed records also have one writer each:
 
+- `MigrationService` owns `_system/migrations/{id}.json`: batch leases, cursors, and permanent completion receipts. Domain writes remain with their existing owners.
+
 - `NotebookMoveService` owns the leased move record at `_system/notebook-moves/{nid}.json`
   and, during a move, the `move_id` fence in `meta.json` and hidden runtimes' `preview-runtime.json`,
   plus the `moving` stamp on the source catalog entry (written through `mutateSnapshot`).

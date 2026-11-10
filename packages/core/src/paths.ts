@@ -297,6 +297,7 @@ function projectPaths(pid: ProjectId): ProjectPaths {
 }
 
 export const paths = {
+	migration: (id: string): string => `_system/migrations/${id}.json`,
 	notebookMoves: '_system/notebook-moves/',
 	notebookMove: (nid: NotebookId) => `_system/notebook-moves/${nid}.json`,
 	deepLink: (slug: string) => `_system/deep-links/${slug}.json`,

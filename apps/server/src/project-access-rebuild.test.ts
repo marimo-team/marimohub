@@ -8,14 +8,13 @@ vi.mock('@marimo-hub/config', () => ({ loadAdapterLibraries: vi.fn(), makeStorag
 beforeEach(() => {
 	vi.resetModules();
 	vi.clearAllMocks();
-	vi.stubEnv('MARIMOHUB_PROJECT_ACCESS_GENERATION', ' deployment-v2 ');
 });
 afterEach(() => {
 	vi.restoreAllMocks();
 	vi.unstubAllEnvs();
 });
 
-it('refreshes the configured storage using the trimmed generation', async () => {
+it('repairs the configured storage without a generation setting', async () => {
 	const bucket = new MemoryBucket();
 	const catalog = new CatalogService(bucket);
 	await catalog.initialize(SYSTEM_ACTOR);
@@ -27,19 +26,10 @@ it('refreshes the configured storage using the trimmed generation', async () => 
 	const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 	await import('./project-access-rebuild');
 	expect(loadAdapterLibraries).toHaveBeenCalledWith(process.env);
-	expect((await catalog.getCurrentSnapshot()).projects[0].access?.generation).toBe('deployment-v2');
+	expect((await catalog.getCurrentSnapshot()).projects[0].access?.version).toBe(1);
 	expect(log).toHaveBeenCalledWith(
 		'Project access summaries rebuilt; pending mutations remain untrusted.',
 	);
-});
-
-it.each([undefined, '   '])('rejects generation %s before loading storage', async (generation) => {
-	vi.stubEnv('MARIMOHUB_PROJECT_ACCESS_GENERATION', generation);
-	await expect(import('./project-access-rebuild')).rejects.toThrow(
-		'MARIMOHUB_PROJECT_ACCESS_GENERATION is required',
-	);
-	expect(loadAdapterLibraries).not.toHaveBeenCalled();
-	expect(makeStorage).not.toHaveBeenCalled();
 });
 
 it('propagates storage failures without reporting success', async () => {

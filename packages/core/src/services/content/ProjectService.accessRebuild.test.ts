@@ -8,14 +8,7 @@ import { ProjectService } from './ProjectService';
 async function setup() {
 	const env = await setupTestEnv();
 	const project = await env.projects.createProject({ name: 'Shared', description: '' }, ACTOR);
-	const reader = new ProjectService(
-		env.bucket,
-		env.catalog,
-		undefined,
-		undefined,
-		undefined,
-		'deployment-v2',
-	);
+	const reader = new ProjectService(env.bucket, env.catalog);
 	return { ...env, project, reader };
 }
 
@@ -36,7 +29,7 @@ describe('project access summary rebuild', () => {
 		expect(snapshot.projects[0].access).toEqual({
 			members: [{ user_id: subject.id, role: 'viewer' }],
 			default_role: 'inherit',
-			generation: 'deployment-v2',
+			version: 1,
 		});
 		const get = vi.spyOn(bucket, 'get');
 		expect((await reader.listProjects({ subject })).map((p) => p.id)).toEqual([project.id]);
@@ -66,14 +59,7 @@ describe('project access summary rebuild', () => {
 			paths.project(project.id).meta,
 			JSON.stringify({ ...project, members: [{ user_id: subject.id, role: 'viewer' }] }),
 		);
-		const other = new ProjectService(
-			bucket,
-			new CatalogService(bucket),
-			undefined,
-			undefined,
-			undefined,
-			'deployment-v2',
-		);
+		const other = new ProjectService(bucket, new CatalogService(bucket));
 		const put = bucket.put.bind(bucket);
 		let raced = false;
 		vi.spyOn(bucket, 'put').mockImplementation(async (key, ...args) => {
@@ -94,6 +80,7 @@ describe('project access summary rebuild', () => {
 		async (failure) => {
 			const { bucket, catalog, project, reader } = await setup();
 			const key = paths.project(project.id).meta;
+			const before = (await catalog.getCurrentSnapshot()).projects[0].access;
 			if (failure === 'missing') await bucket.delete(key);
 			if (failure === 'invalid') await bucket.put(key, '{');
 			if (failure === 'unavailable') {
@@ -104,14 +91,7 @@ describe('project access summary rebuild', () => {
 				});
 			}
 			await expect(reader.rebuildAccessSummaries()).rejects.toThrow();
-			expect((await catalog.getCurrentSnapshot()).projects[0].access?.generation).toBeUndefined();
+			expect((await catalog.getCurrentSnapshot()).projects[0].access).toEqual(before);
 		},
 	);
-
-	it('requires an explicit deployment generation before writing', async () => {
-		const { bucket, projects } = await setup();
-		const put = vi.spyOn(bucket, 'put');
-		await expect(projects.rebuildAccessSummaries()).rejects.toThrow('generation is required');
-		expect(put).not.toHaveBeenCalled();
-	});
 });

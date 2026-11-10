@@ -722,7 +722,6 @@ export function createFromEnv(
 			'shadow',
 		),
 		workspaceLimits,
-		projectAccessGeneration: env.MARIMOHUB_PROJECT_ACCESS_GENERATION?.trim() || undefined,
 		backgroundWork: options?.backgroundWork,
 		tracing: options?.tracing,
 		repositoryHosts: sourceControlConfig.sourceControl?.repositoryHosts,

@@ -34,6 +34,20 @@ const APP_ALERT_CONTEXT_CONCURRENCY = 8;
 // provider it resolves, which would outlive a re-registered provider.
 const tracedMaintenanceSteps = () => traced('Maintenance', { sweepAppPools });
 
+export function startMigrations(deps: ApiDeps, loops = new BackgroundLoops()): () => void {
+	const loop = loops.start({
+		name: 'migrations',
+		intervalMs: 5_000,
+		deadlineMs: 55_000,
+		abortOnStop: true,
+		run: ({ signal }) => deps.services.migrations.tick(signal),
+		onSuccess: (complete) => {
+			if (complete) loop.stop();
+		},
+	});
+	return loop.stop;
+}
+
 function maintenanceLock(deps: ApiDeps, key: string = paths.maintenanceLock): MaintenanceLock {
 	const attributes = () => ({ 'bucket.key': key });
 	return traced('MaintenanceLock', new MaintenanceLock(deps.bucket, key), {

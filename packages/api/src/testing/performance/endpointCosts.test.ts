@@ -16,7 +16,7 @@ import type { Seeded } from './seed';
 
 type Api = ReturnType<typeof makeApi>;
 
-const READY_OPTIONS = { sessionIndex: 'on', projectAccessGeneration: 'benchmark-v1' } as const;
+const READY_OPTIONS = { sessionIndex: 'on' } as const;
 
 function makeApi(s: Seeded, userId: UserId, index: MemorySearchIndex, ready = false) {
 	const background = queuedBackgroundWork();
@@ -242,7 +242,10 @@ test.each([
 		if (scale.ready) {
 			const services = createServices(seeded.bucket, undefined, READY_OPTIONS);
 			await services.sessions.rebuildSessionIndex();
-			await services.projects.rebuildAccessSummaries();
+			let batches = 0;
+			while (!(await services.migrations.tick())) {
+				expect(++batches).toBeLessThanOrEqual(scale.projects);
+			}
 		}
 		const index = new MemorySearchIndex();
 		for (const user of [OWNER, ...Object.values(USERS)]) {

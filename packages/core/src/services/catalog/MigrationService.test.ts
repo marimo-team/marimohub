@@ -1,201 +1,403 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { createNotebookId, createProjectId } from '../../ids';
-import { MemoryBucket, makeNotebookMeta } from '../../testing';
-import type { BucketListOptions } from '../../ports/bucket';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MemoryBucket } from '../../testing/MemoryBucket';
 import { paths } from '../../paths';
-import { EventService } from './EventService';
-import { MigrationService, exampleMigrateV1toV2 } from './MigrationService';
-import type { MigrateFn } from './MigrationService';
+import { MigrationService } from './MigrationService';
+import type { BackgroundMigration, MigrationBatch } from './MigrationService';
 
-/** Forces a tiny list page so the cursor loop is exercised without 1000+ objects. */
-class SmallPageBucket extends MemoryBucket {
-	constructor(private readonly pageSize: number) {
-		super();
-	}
-	override list(options?: BucketListOptions) {
-		return super.list({ ...options, limit: options?.limit ?? this.pageSize });
-	}
-}
+const id = 'test-v1';
+const key = paths.migration(id);
+const complete = async (): Promise<MigrationBatch> => ({ done: true });
+const definition = (runBatch: BackgroundMigration['runBatch'] = complete) => ({ id, runBatch });
+afterEach(() => vi.restoreAllMocks());
 
-describe('MigrationService (prototype, unwired)', () => {
-	let bucket: MemoryBucket;
-	let migrations: MigrationService;
-
-	// Seed three meta.json objects under distinct notebook keys.
-	async function seedMeta(count: number): Promise<string[]> {
-		const keys: string[] = [];
-		const projectId = createProjectId();
-		for (let i = 0; i < count; i++) {
-			const notebookId = createNotebookId();
-			const key = paths.project(projectId).notebook(notebookId).meta;
-			const meta = makeNotebookMeta({ id: notebookId, project_id: projectId });
-			await bucket.put(key, JSON.stringify(meta));
-			keys.push(key);
-		}
-		return keys;
-	}
-
-	beforeEach(() => {
-		bucket = new MemoryBucket();
-		migrations = new MigrationService(bucket);
+describe('background migrations', () => {
+	it('persists completion across restarts and performs no I/O on later ticks', async () => {
+		const bucket = new MemoryBucket();
+		const runBatch = vi.fn(complete);
+		const first = new MigrationService(bucket, [definition(runBatch)]);
+		expect(await first.tick()).toBe(true);
+		expect(await (await bucket.get(key))!.json()).toMatchObject({ status: 'complete' });
+		const second = new MigrationService(bucket, [definition(runBatch)]);
+		const get = vi.spyOn(bucket, 'get');
+		const put = vi.spyOn(bucket, 'put');
+		expect(await second.tick()).toBe(true);
+		expect(get).toHaveBeenCalledExactlyOnceWith(key);
+		get.mockClear();
+		for (const service of [first, second]) expect(await service.tick()).toBe(true);
+		expect(runBatch).toHaveBeenCalledTimes(1);
+		expect(get).not.toHaveBeenCalled();
+		expect(put).not.toHaveBeenCalled();
 	});
 
-	it('migrates every v1 object exactly once', async () => {
-		const keys = await seedMeta(3);
-
-		const result = await migrations.runMigration(1, 2, 'meta', exampleMigrateV1toV2);
-
-		expect(result.scanned).toBe(3);
-		expect(result.migrated).toBe(3);
-		expect(result.skipped).toBe(0);
-
-		for (const key of keys) {
-			const obj = await bucket.get(key);
-			const data = await obj!.json<any>();
-			expect(data.schema_version).toBe(2);
-			expect(data.migrated_marker).toBe(true);
-		}
+	it('runs one bounded batch per tick and resumes its cursor after a restart', async () => {
+		const bucket = new MemoryBucket();
+		const runBatch = vi
+			.fn<BackgroundMigration['runBatch']>()
+			.mockResolvedValueOnce({ done: false, cursor: 'page-2' })
+			.mockResolvedValueOnce({ done: true });
+		expect(await new MigrationService(bucket, [definition(runBatch)]).tick()).toBe(false);
+		expect(runBatch).toHaveBeenCalledTimes(1);
+		expect(await new MigrationService(bucket, [definition(runBatch)]).tick()).toBe(true);
+		expect(runBatch.mock.calls.map(([context]) => context.cursor)).toEqual([undefined, 'page-2']);
 	});
 
-	it('is idempotent — a second run migrates nothing', async () => {
-		await seedMeta(3);
-
-		const first = await migrations.runMigration(1, 2, 'meta', exampleMigrateV1toV2);
-		expect(first.migrated).toBe(3);
-
-		// Second run: every object is now at v2, so the schema_version guard skips
-		// all of them — each object is migrated at most once across both runs.
-		const second = await migrations.runMigration(1, 2, 'meta', exampleMigrateV1toV2);
-		expect(second.scanned).toBe(3);
-		expect(second.migrated).toBe(0);
-		expect(second.skipped).toBe(3);
+	it('orders migrations, keeps receipts for removed definitions, and runs a new version', async () => {
+		const bucket = new MemoryBucket();
+		const first = vi.fn(complete);
+		const next = vi.fn(complete);
+		const service = new MigrationService(bucket, [
+			definition(first),
+			{ id: 'test-v2', runBatch: next },
+		]);
+		expect(await service.tick()).toBe(false);
+		expect(next).not.toHaveBeenCalled();
+		expect(await service.tick()).toBe(true);
+		const restarted = new MigrationService(bucket, [{ id: 'test-v2', runBatch: next }]);
+		expect(await restarted.tick()).toBe(true);
+		expect(first).toHaveBeenCalledTimes(1);
+		expect(next).toHaveBeenCalledTimes(1);
+		expect(await bucket.get(key)).not.toBeNull();
 	});
 
-	it('only migrates objects still at fromVersion (mixed-version corpus)', async () => {
-		// Two v1 objects plus one already-migrated v2 object.
-		const keys = await seedMeta(2);
-		const projectId = createProjectId();
-		const notebookId = createNotebookId();
-		const v2Key = paths.project(projectId).notebook(notebookId).meta;
-		await bucket.put(
-			v2Key,
-			JSON.stringify({
-				...makeNotebookMeta({ id: notebookId, project_id: projectId }),
-				schema_version: 2,
-				migrated_marker: true,
+	it('coalesces concurrent ticks in one process', async () => {
+		const batch = Promise.withResolvers<MigrationBatch>();
+		const runBatch = vi.fn(() => batch.promise);
+		const service = new MigrationService(new MemoryBucket(), [definition(runBatch)]);
+		const first = service.tick();
+		expect(service.tick()).toBe(first);
+		batch.resolve({ done: true });
+		expect(await first).toBe(true);
+		expect(runBatch).toHaveBeenCalledTimes(1);
+	});
+
+	it('allows only one replica to acquire a batch', async () => {
+		const bucket = new MemoryBucket();
+		const batch = Promise.withResolvers<MigrationBatch>();
+		const entered = Promise.withResolvers<void>();
+		const runBatch = vi.fn(() => {
+			entered.resolve();
+			return batch.promise;
+		});
+		const first = new MigrationService(bucket, [definition(runBatch)]).tick();
+		await entered.promise;
+		expect(await new MigrationService(bucket, [definition(runBatch)]).tick()).toBe(false);
+		batch.resolve({ done: true });
+		expect(await first).toBe(true);
+		expect(runBatch).toHaveBeenCalledTimes(1);
+	});
+
+	it('handles a create-if-absent race without treating contention as failure', async () => {
+		const bucket = new MemoryBucket();
+		const runBatch = vi.fn(complete);
+		const results = await Promise.all([
+			new MigrationService(bucket, [definition(runBatch)]).tick(),
+			new MigrationService(bucket, [definition(runBatch)]).tick(),
+		]);
+		expect(results.sort((a, b) => Number(a) - Number(b))).toEqual([false, true]);
+		expect(runBatch).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([false, true])(
+		'fences a late worker after lease takeover (successor complete: %s)',
+		async (done) => {
+			let now = Date.now();
+			vi.spyOn(Date, 'now').mockImplementation(() => now);
+			const bucket = new MemoryBucket();
+			const late = Promise.withResolvers<MigrationBatch>();
+			const entered = Promise.withResolvers<void>();
+			const first = new MigrationService(bucket, [
+				definition(() => {
+					entered.resolve();
+					return late.promise;
+				}),
+			]).tick();
+			await entered.promise;
+			now += 60_001;
+			expect(
+				await new MigrationService(bucket, [
+					definition(async () => (done ? { done: true } : { done: false, cursor: 'successor' })),
+				]).tick(),
+			).toBe(done);
+			const successor = await (await bucket.get(key))!.text();
+			late.resolve({ done: false, cursor: 'stale' });
+			expect(await first).toBe(false);
+			expect(await (await bucket.get(key))!.text()).toBe(successor);
+		},
+	);
+
+	it('does not publish completion after its lease expires even without a successor', async () => {
+		let now = Date.now();
+		vi.spyOn(Date, 'now').mockImplementation(() => now);
+		const bucket = new MemoryBucket();
+		const service = new MigrationService(bucket, [
+			definition(async () => {
+				now += 60_001;
+				return { done: true };
 			}),
+		]);
+		expect(await service.tick()).toBe(false);
+		expect(await (await bucket.get(key))!.json()).toMatchObject({ status: 'pending' });
+	});
+
+	it('retries a failed batch from the last successful cursor', async () => {
+		const bucket = new MemoryBucket();
+		const runBatch = vi
+			.fn<BackgroundMigration['runBatch']>()
+			.mockResolvedValueOnce({ done: false, cursor: 'saved' })
+			.mockRejectedValueOnce(new Error('storage unavailable'))
+			.mockResolvedValueOnce({ done: true });
+		const service = new MigrationService(bucket, [definition(runBatch)]);
+		expect(await service.tick()).toBe(false);
+		await expect(service.tick()).rejects.toThrow('storage unavailable');
+		expect(await service.tick()).toBe(true);
+		expect(runBatch.mock.calls.map(([context]) => context.cursor)).toEqual([
+			undefined,
+			'saved',
+			'saved',
+		]);
+	});
+
+	it.each([false, true])(
+		'recovers from an uncertain checkpoint write (committed: %s)',
+		async (committed) => {
+			const bucket = new MemoryBucket();
+			const put = bucket.put.bind(bucket);
+			const spy = vi.spyOn(bucket, 'put').mockImplementation(async (path, value, options) => {
+				if ((JSON.parse(value as string) as { status: string }).status === 'complete') {
+					if (committed) await put(path, value, options);
+					throw new Error('response lost');
+				}
+				return put(path, value, options);
+			});
+			const runBatch = vi.fn(complete);
+			const service = new MigrationService(bucket, [definition(runBatch)]);
+			await expect(service.tick()).rejects.toThrow('response lost');
+			spy.mockRestore();
+			expect(await service.tick()).toBe(true);
+			expect(runBatch).toHaveBeenCalledTimes(committed ? 1 : 2);
+		},
+	);
+
+	it.each(['{', '{"version":2,"status":"complete"}', '{"version":1,"status":"running"}'])(
+		'does not overwrite invalid state: %s',
+		async (body) => {
+			const bucket = new MemoryBucket();
+			await bucket.put(key, body);
+			const runBatch = vi.fn(complete);
+			const put = vi.spyOn(bucket, 'put');
+			await expect(new MigrationService(bucket, [definition(runBatch)]).tick()).rejects.toThrow();
+			expect(runBatch).not.toHaveBeenCalled();
+			expect(put).not.toHaveBeenCalled();
+		},
+	);
+
+	it('does not run work when reading or acquiring its checkpoint fails', async () => {
+		const bucket = new MemoryBucket();
+		const runBatch = vi.fn(complete);
+		const service = new MigrationService(bucket, [definition(runBatch)]);
+		const get = vi.spyOn(bucket, 'get').mockRejectedValueOnce(new Error('read failed'));
+		await expect(service.tick()).rejects.toThrow('read failed');
+		get.mockRestore();
+		const put = vi.spyOn(bucket, 'put').mockRejectedValueOnce(new Error('write failed'));
+		await expect(service.tick()).rejects.toThrow('write failed');
+		put.mockRestore();
+		expect(runBatch).not.toHaveBeenCalled();
+		expect(await service.tick()).toBe(true);
+	});
+
+	it('waits for an uncertain lease acquisition to expire before retrying', async () => {
+		let now = Date.now();
+		vi.spyOn(Date, 'now').mockImplementation(() => now);
+		const bucket = new MemoryBucket();
+		const put = bucket.put.bind(bucket);
+		vi.spyOn(bucket, 'put').mockImplementationOnce(async (...args) => {
+			await put(...args);
+			throw new Error('response lost');
+		});
+		const runBatch = vi.fn(complete);
+		const service = new MigrationService(bucket, [definition(runBatch)]);
+		await expect(service.tick()).rejects.toThrow('response lost');
+		expect(await service.tick()).toBe(false);
+		expect(runBatch).not.toHaveBeenCalled();
+		now += 60_001;
+		expect(await service.tick()).toBe(true);
+	});
+
+	it('does not checkpoint work cancelled during a batch', async () => {
+		const bucket = new MemoryBucket();
+		const controller = new AbortController();
+		const service = new MigrationService(bucket, [
+			definition(async ({ signal }) => {
+				expect(signal).toBe(controller.signal);
+				controller.abort(new Error('shutdown'));
+				return { done: true };
+			}),
+		]);
+		await expect(service.tick(controller.signal)).rejects.toThrow('shutdown');
+		expect(await (await bucket.get(key))!.json()).toMatchObject({ status: 'pending' });
+		const get = vi.spyOn(bucket, 'get');
+		await expect(service.tick(controller.signal)).rejects.toThrow('shutdown');
+		expect(get).not.toHaveBeenCalled();
+	});
+
+	it('returns complete without storage access for an empty registry', async () => {
+		const bucket = new MemoryBucket();
+		const get = vi.spyOn(bucket, 'get');
+		expect(await new MigrationService(bucket, []).tick()).toBe(true);
+		expect(get).not.toHaveBeenCalled();
+	});
+
+	it.each(['../escape', '', 'UPPER', 'a/b'])('rejects invalid IDs: %s', (badId) => {
+		expect(
+			() => new MigrationService(new MemoryBucket(), [{ id: badId, runBatch: complete }]),
+		).toThrow('Invalid');
+	});
+	it('rejects duplicate IDs', () => {
+		expect(() => new MigrationService(new MemoryBucket(), [definition(), definition()])).toThrow(
+			'duplicate',
 		);
+	});
+});
 
-		const result = await migrations.runMigration(1, 2, 'meta', exampleMigrateV1toV2);
+it('preserves the batch error when releasing a failed lease also fails', async () => {
+	let now = Date.now();
+	vi.spyOn(Date, 'now').mockImplementation(() => now);
+	const bucket = new MemoryBucket();
+	const put = bucket.put.bind(bucket);
+	const spy = vi.spyOn(bucket, 'put').mockImplementation((path, value, options) => {
+		if ((JSON.parse(value as string) as { status: string }).status === 'pending')
+			throw new Error('release failed');
+		return put(path, value, options);
+	});
+	const batch = vi
+		.fn<BackgroundMigration['runBatch']>()
+		.mockRejectedValueOnce(new Error('batch failed'))
+		.mockResolvedValueOnce({ done: true });
+	const service = new MigrationService(bucket, [definition(batch)]);
+	await expect(service.tick()).rejects.toThrow('batch failed');
+	spy.mockRestore();
+	expect(await service.tick()).toBe(false);
+	now += 60_001;
+	expect(await service.tick()).toBe(true);
+});
 
-		expect(result.scanned).toBe(3);
-		expect(result.migrated).toBe(2); // only the two v1 objects
-		expect(result.skipped).toBe(1); // the pre-existing v2 object
-
-		for (const key of [...keys, v2Key]) {
-			const data = await (await bucket.get(key))!.json<any>();
-			expect(data.schema_version).toBe(2);
+it('does not checkpoint over a successor that takes over during the completion write', async () => {
+	let now = Date.now();
+	vi.spyOn(Date, 'now').mockImplementation(() => now);
+	const bucket = new MemoryBucket();
+	const successor = new MigrationService(bucket, [
+		definition(async () => ({ done: false, cursor: 'successor' })),
+	]);
+	const put = bucket.put.bind(bucket);
+	let raced = false;
+	vi.spyOn(bucket, 'put').mockImplementation(async (path, value, options) => {
+		if (!raced && (JSON.parse(value as string) as { status: string }).status === 'complete') {
+			raced = true;
+			now += 60_001;
+			expect(await successor.tick()).toBe(false);
 		}
+		return put(path, value, options);
 	});
-
-	it('emits a migration.run event on completion', async () => {
-		await seedMeta(2);
-		await migrations.runMigration(1, 2, 'meta', exampleMigrateV1toV2);
-
-		const date = new Date().toISOString().slice(0, 10);
-		const events = await new EventService(bucket).getEvents(date);
-		const run = events.find((e) => e.event === 'migration.run');
-		expect(run).toBeDefined();
-		expect((run as any).from_version).toBe(1);
-		expect((run as any).to_version).toBe(2);
-		expect((run as any).migrated).toBe(2);
+	expect(await new MigrationService(bucket, [definition()]).tick()).toBe(false);
+	expect(raced).toBe(true);
+	expect(await (await bucket.get(key))!.json()).toEqual({
+		version: 1,
+		status: 'pending',
+		cursor: 'successor',
 	});
+});
 
-	it('leaves already-migrated objects intact when migrateFn throws mid-run', async () => {
-		await seedMeta(3);
-		let n = 0;
-		const migrateThrows: MigrateFn = (data) => {
-			if (n++ === 1) throw new Error('mid-run boom');
-			return { ...data, migrated_marker: true };
-		};
-
-		await expect(migrations.runMigration(1, 2, 'meta', migrateThrows)).rejects.toThrow(
-			'mid-run boom',
-		);
-
-		// The object migrated before the throw stays at v2 (not rolled back).
-		const metas = await Promise.all(
-			(await bucket.list({ prefix: 'projects/' })).objects.map(async (o) =>
-				(await bucket.get(o.key))!.json<any>(),
-			),
-		);
-		expect(metas.filter((m) => m.schema_version === 2)).toHaveLength(1);
+it('releases an acquired lease without running work when shutdown arrives during acquisition', async () => {
+	const bucket = new MemoryBucket();
+	await bucket.put(key, JSON.stringify({ version: 1, status: 'pending', cursor: 'saved' }));
+	const controller = new AbortController();
+	const put = bucket.put.bind(bucket);
+	vi.spyOn(bucket, 'put').mockImplementationOnce(async (...args) => {
+		const result = await put(...args);
+		controller.abort(new Error('shutdown'));
+		return result;
 	});
-
-	it('does not abort the whole run on one malformed object', async () => {
-		const validKeys = await seedMeta(2);
-		// A corrupt meta.json (invalid JSON) under the scanned prefix/suffix.
-		const projectId = createProjectId();
-		const notebookId = createNotebookId();
-		const badKey = paths.project(projectId).notebook(notebookId).meta;
-		await bucket.put(badKey, 'not-json{');
-
-		const result = await migrations.runMigration(1, 2, 'meta', exampleMigrateV1toV2);
-
-		// The two valid objects should migrate despite the corrupt sibling.
-		expect(result.migrated).toBe(2);
-		for (const key of validKeys) {
-			expect((await (await bucket.get(key))!.json<any>()).schema_version).toBe(2);
-		}
+	const runBatch = vi.fn(complete);
+	const service = new MigrationService(bucket, [definition(runBatch)]);
+	await expect(service.tick(controller.signal)).rejects.toThrow('shutdown');
+	expect(runBatch).not.toHaveBeenCalled();
+	expect(await (await bucket.get(key))!.json()).toEqual({
+		version: 1,
+		status: 'pending',
+		cursor: 'saved',
 	});
+	expect(await service.tick()).toBe(true);
+	expect(runBatch).toHaveBeenCalledExactlyOnceWith({ cursor: 'saved', signal: undefined });
+});
 
-	it('skips a JSON-valid but non-object record (e.g. null) without aborting', async () => {
-		const validKeys = await seedMeta(2);
-		// Valid JSON, but `null` — reading `.schema_version` off it would throw.
-		const badKey = paths.project(createProjectId()).notebook(createNotebookId()).meta;
-		await bucket.put(badKey, 'null');
+it.each([false, true])(
+	'resumes the durable cursor after an uncertain intermediate checkpoint (committed: %s)',
+	async (committed) => {
+		const bucket = new MemoryBucket();
+		await bucket.put(key, JSON.stringify({ version: 1, status: 'pending', cursor: 'previous' }));
+		const put = bucket.put.bind(bucket);
+		const spy = vi.spyOn(bucket, 'put').mockImplementation(async (path, value, options) => {
+			const state = JSON.parse(value as string) as { status: string; cursor?: string };
+			if (state.status === 'pending' && state.cursor === 'next') {
+				if (committed) await put(path, value, options);
+				throw new Error('checkpoint response lost');
+			}
+			return put(path, value, options);
+		});
+		await expect(
+			new MigrationService(bucket, [
+				definition(async () => ({ done: false, cursor: 'next' })),
+			]).tick(),
+		).rejects.toThrow('checkpoint response lost');
+		spy.mockRestore();
+		const resume = vi.fn(complete);
+		expect(await new MigrationService(bucket, [definition(resume)]).tick()).toBe(true);
+		expect(resume).toHaveBeenCalledExactlyOnceWith({
+			cursor: committed ? 'next' : 'previous',
+			signal: undefined,
+		});
+	},
+);
 
-		const result = await migrations.runMigration(1, 2, 'meta', exampleMigrateV1toV2);
+it('blocks later migrations until a failed predecessor completes, including across restarts', async () => {
+	const bucket = new MemoryBucket();
+	const first = vi
+		.fn<BackgroundMigration['runBatch']>()
+		.mockRejectedValueOnce(new Error('predecessor failed'))
+		.mockResolvedValueOnce({ done: true });
+	const second = vi.fn(complete);
+	const registry = [definition(first), { id: 'test-v2', runBatch: second }];
+	await expect(new MigrationService(bucket, registry).tick()).rejects.toThrow('predecessor failed');
+	expect(second).not.toHaveBeenCalled();
+	expect(await bucket.get(paths.migration('test-v2'))).toBeNull();
+	const restarted = new MigrationService(bucket, registry);
+	expect(await restarted.tick()).toBe(false);
+	expect(second).not.toHaveBeenCalled();
+	expect(await restarted.tick()).toBe(true);
+	expect(first).toHaveBeenCalledTimes(2);
+	expect(second).toHaveBeenCalledTimes(1);
+});
 
-		expect(result.migrated).toBe(2);
-		expect(result.skipped).toBe(1);
-		for (const key of validKeys) {
-			expect((await (await bucket.get(key))!.json<any>()).schema_version).toBe(2);
-		}
-	});
-
-	it('resumes across multiple cursor pages', async () => {
-		const small = new SmallPageBucket(2);
-		const svc = new MigrationService(small);
-		const projectId = createProjectId();
-		const keys: string[] = [];
-		for (let i = 0; i < 5; i++) {
-			const notebookId = createNotebookId();
-			const key = paths.project(projectId).notebook(notebookId).meta;
-			await small.put(
-				key,
-				JSON.stringify(makeNotebookMeta({ id: notebookId, project_id: projectId })),
-			);
-			keys.push(key);
-		}
-
-		const result = await svc.runMigration(1, 2, 'meta', exampleMigrateV1toV2);
-
-		expect(result.scanned).toBe(5);
-		expect(result.migrated).toBe(5);
-		for (const key of keys) {
-			expect((await (await small.get(key))!.json<any>()).schema_version).toBe(2);
-		}
-	});
-
-	it('exampleMigrateV1toV2 is pure and leaves schema_version to the runner', () => {
-		const input = { schema_version: 1, foo: 'bar' };
-		const output = exampleMigrateV1toV2(input);
-		expect(output.migrated_marker).toBe(true);
-		expect(output.foo).toBe('bar');
-		// The migrate fn must not stamp schema_version itself — the runner does.
-		expect(output.schema_version).toBe(1);
-		// Input is not mutated.
-		expect(input).not.toHaveProperty('migrated_marker');
-	});
+it('preserves successor completion when an expired worker fails late', async () => {
+	let now = Date.now();
+	vi.spyOn(Date, 'now').mockImplementation(() => now);
+	const bucket = new MemoryBucket();
+	const entered = Promise.withResolvers<void>();
+	const late = Promise.withResolvers<MigrationBatch>();
+	const first = new MigrationService(bucket, [
+		definition(() => {
+			entered.resolve();
+			return late.promise;
+		}),
+	]);
+	const attempt = first.tick();
+	const rejected = expect(attempt).rejects.toThrow('late failure');
+	await entered.promise;
+	now += 60_001;
+	expect(await new MigrationService(bucket, [definition()]).tick()).toBe(true);
+	const receipt = await (await bucket.get(key))!.text();
+	late.reject(new Error('late failure'));
+	await rejected;
+	expect(await (await bucket.get(key))!.text()).toBe(receipt);
+	expect(await first.tick()).toBe(true);
 });

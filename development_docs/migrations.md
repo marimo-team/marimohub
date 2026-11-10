@@ -1,183 +1,144 @@
-# Schema migrations
+# Migrations
 
-> **Status:** design + unwired prototype. There is no live `v2` of any schema
-> yet, so no migration runs in production. This document captures the strategy so
-> the runner can be built deliberately when the first real `v2` lands. It is
-> grounded in [`bucket_spec.md` §9](./bucket_spec.md#9-migrations).
+Project access summaries migrate automatically in the background. Normal upgrades
+require neither shell access nor a rebuild command.
 
-The backend has no database, so there is no `ALTER TABLE` to run. Every
-independently-migrated object instead carries a `schema_version` field, and the
-Worker decides how to roll a schema forward per object type. Three strategies
-cover all object types.
+`MARIMOHUB_SESSION_INDEX` still controls session indexing. Its automatic migration
+is proposed, not implemented. See [session index rollout](./bucket_spec.md#per-user-session-index).
 
-## Strategies
+## Automatic background migrations
 
-| Object type                                                   | `schema_version` field | Strategy                                                                                                                                                                |
-| ------------------------------------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Snapshot (`_system/snapshots/{id}.json`)                      | `schema_version`       | **Lazy upgrade.** Read schema tolerates any version; the read path normalizes to the current shape before writing the next snapshot. Old snapshots are never rewritten. |
-| `meta.json` / `project.json` / `source.json` / `version.json` | `schema_version`       | **Fan-out migration job.** List all affected objects, rewrite each with the new schema, emit `migration.run`. Idempotent + resumable.                                   |
-| `catalog.json`                                                | `version`              | **In-place on first write** after a deploy that bumps the catalog schema version. (Single object; no fan-out needed.)                                                   |
-| Events (`_system/events/**`)                                  | `schema_version`       | **Never migrated.** Event records are immutable history. New event shapes bump `schema_version`; consumers must handle multiple versions.                               |
+`MigrationService` runs the registry in
+`packages/core/src/services/catalog/migrations.ts`. Each migration has a permanent
+ID and performs one bounded batch per tick, in registry order:
 
-### 1. Lazy snapshot upgrade
+```ts
+{
+  id: 'project-access-v1',
+  runBatch: (context) => projects.migrateAccessSummaries(context),
+}
+```
 
-Snapshots are an append-only chain: each mutation writes a brand-new snapshot
-object and swaps the catalog pointer. We never need to rewrite the whole history
-to roll the schema forward — we only need the **next** write to be in the new
-shape. So the upgrade happens lazily, on read:
+`runBatch({ cursor, signal })` returns `{ done: false, cursor }` or `{ done: true }`.
+The owning domain service performs all data writes through its existing CAS protocol.
 
-1. The read schema (`SnapshotSchema` in `packages/core/src/schema.ts`) accepts
-   **any** positive-integer `schema_version`, so a snapshot written by a newer
-   replica during a rolling deploy parses without throwing.
-2. `CatalogService.upgradeSnapshot(raw)` normalizes a parsed snapshot to the
-   current in-memory shape. Today it is the identity function (only v1 exists);
-   a future v1→v2 upgrade slots in here as a branch keyed on
-   `raw.schema_version`.
-3. Every read path (`getCurrentSnapshot`, `mutateSnapshot`) runs the snapshot
-   through `upgradeSnapshot` before mutating, and writes always stamp
-   `CURRENT_SNAPSHOT_VERSION`. So the next written snapshot is automatically in
-   the current shape.
+### Scheduling and completion
 
-This means a snapshot schema bump is **not a flag day**: forward-tolerant reads
-plus a lazy upgrade seam let old and new replicas coexist during a rolling
-deploy.
+| Entrypoint        | Schedule                                                                                 | After completion           |
+| ----------------- | ---------------------------------------------------------------------------------------- | -------------------------- |
+| Node server       | Starts immediately; retries every five seconds, independently of the maintenance setting | Stops its migration loop   |
+| Cloudflare Worker | One batch per scheduled event; the example cron runs every five minutes                  | Skips completed migrations |
 
-### 2. Fan-out migration for per-object types
+HTTP startup does not wait for migration. Requests never run batches or read
+migration checkpoints. Fresh deployments wait for catalog initialization;
+new projects already contain current summaries.
 
-`meta.json`, `project.json`, `source.json`, and `version.json` are not part of
-the snapshot chain — they are addressed directly by key and are not rewritten on
-every mutation. A schema change to one of them therefore needs an explicit
-batch job that walks every affected key and rewrites it. This is the
-`runMigration` contract below.
+The runner owns `_system/migrations/{id}.json`. Each record holds a cursor and
+lease until completion, then becomes a permanent receipt. Each process reads
+completed receipts once and caches them. Restart processes after replacing or
+restoring a bucket.
 
-### 3. Immutable events
+### Failures and concurrency
 
-`_system/events/**` records are never migrated. They are a faithful audit log of
-what happened. A new event shape simply carries a higher `schema_version`;
-readers fan out over versions rather than rewriting old records.
+- A 60-second lease coordinates replicas. Node cancels a batch after 55 seconds.
+  Lease expiry permits takeover but cannot stop storage work already in flight.
+- Checkpoint and release writes use the acquisition ETag. A late worker cannot
+  overwrite a successor's progress.
+- Batches must tolerate replay and overlap. Data can commit before its checkpoint
+  response arrives; execution is at least once.
+- Failed batches retain the last saved cursor. The runner releases its lease when
+  possible; otherwise, another attempt waits for expiry. Later migrations wait
+  for their predecessors to complete.
+- Invalid or unknown checkpoint formats fail without overwriting stored state.
+  They require repair.
+
+Progress and completion emit `migration_progress` and `migration_completed` logs.
+Node reports failures through its background-loop logs and, on maintenance
+replicas, the loop health endpoint. Worker failures reject the scheduled handler
+after the other scheduled work finishes.
+
+### Project access v1
+
+`ProjectService.migrateAccessSummaries` processes up to 25 projects in stable ID
+order. Each changed batch publishes one catalog snapshot. It rereads authoritative
+metadata on every catalog CAS attempt and leaves project metadata unchanged.
+
+Current summaries carry `access.version: 1`. Old deployment generations do not
+establish trust. Readers fall back to metadata for missing or unknown versions,
+and for pending permission mutations. Automatic migration preserves newer versions.
+
+Pending permission and security markers remain intact. Migration can complete
+while these projects still use metadata reads. The owning mutation finalizes its
+marker; [offline recovery](./operations.md#inspect-and-recover-the-catalog) can resolve
+abandoned markers with writers stopped. Recovery rebuilds current summaries and
+does not need to erase migration receipts.
+
+Missing metadata for a deleted project is skipped. Missing active-project metadata,
+invalid metadata, or storage errors leave the batch incomplete. After repair,
+background execution resumes from the saved cursor.
+
+The optional repair command bypasses completion receipts and rereads project
+metadata. It preserves pending markers and requires no generation setting:
+
+```sh
+# Source checkout:
+pnpm --filter @marimo-hub/server project-access:rebuild
+# Packaged installation:
+node dist/project-access-rebuild.mjs
+```
+
+### Upgrade compatibility
+
+Every concurrent writer must support `access_pending`: invalidate summaries before
+permission writes and preserve other writers' markers. Before upgrading from
+releases without this protocol, stop all old writers, including maintenance and
+command-line processes. Do not roll back to those binaries against migrated storage.
+Migration completion cannot prove that incompatible writers have stopped.
+
+An older compatible writer can replace a versioned summary with an unversioned
+summary during rollout. Readers then use metadata until a current writer refreshes
+it. The repair command can refresh these entries after rollout.
+
+### Adding and retiring migrations
+
+1. Add a permanent ID, such as `project-access-v2`. Never reuse an ID or change
+   its cursor semantics.
+2. Implement bounded, idempotent batches in the owning service. Check cancellation
+   before storage work and publication; preserve its concurrency safeguards.
+3. Keep readers compatible with unmigrated data. Do not add request-time checkpoint reads.
+4. Test interruption, competing replicas, lost responses, corrupt records,
+   concurrent mutations, and completed migrations without repeated I/O.
+5. Retain definitions required by supported upgrades. A replacement must handle
+   all earlier supported data shapes, or retain its prerequisites in registry order.
+6. Remove obsolete definitions when supported upgrades no longer need them.
+   Retain their receipts; the runner ignores removed IDs without listing storage.
+
+This runner is unsuitable for non-idempotent external effects or destructive work
+that requires exclusive writers.
+
+## Stored schema strategies
+
+| Object                                          | Strategy                                                                                |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Snapshots                                       | Normalize on read; publish a new immutable snapshot on mutation. Never rewrite history. |
+| Project, notebook, source, and version metadata | Use background batches when existing objects need conversion.                           |
+| Catalog pointer                                 | Change through `CatalogService`; incompatible formats require a staged rollout.         |
+| Audit events                                    | Never migrate history. Readers must accept retained event versions.                     |
+
+`upgradeSnapshot` currently returns v1 snapshots unchanged. Future conversions
+belong there. `CatalogService` writes the greater of the supported and stored
+snapshot versions, so older replicas cannot lower that version.
 
 ## Rolling-deploy compatibility
 
-Session records may now include an optional `surfaces` map. `SessionSchema`
-remains a `z.looseObject`, so an old replica preserves this field during a CAS
-read-modify-write. New replicas treat an absent map as a session with no started
-secondary surfaces. No stored-data migration is required.
+Within a schema version, changes must be additive. Preserve unknown fields when
+reading and writing shared records; `SnapshotSchema` uses `z.looseObject` for this.
+For breaking changes, deploy readers that accept both shapes before enabling new writers.
 
-Project and notebook snapshot entries may carry a `security_labels` projection —
-labels, `null` for known unlabeled, or absent for indeterminate — plus a
-transient `security_labels_pending` marker while a label mutation is in flight.
-Both ride through an old replica's read-modify-write unchanged (`looseObject`).
-A new replica treats an absent projection as indeterminate and resolves it from
-the authoritative `project.json` / `meta.json` (failing closed if that read
-fails). The next routine projection write repairs the state. No stored-data
-migration is required.
+Field preservation does not provide policy enforcement. Before enabling resource
+constraints or labels, upgrade every API, proxy, and maintenance replica. All
+replicas must use the same resource-security configuration.
 
-Field preservation does not provide policy enforcement on older replicas.
-Before enabling resource constraints or applying labels, upgrade every replica,
-including API servers, kernel proxies, and maintenance workers.
-Replicas from releases before resource security still authorize by project role
-and do not enforce labels. All replicas must use the same resource-security configuration.
-
-Lazy/fan-out migration handles the **old data → new code** direction. The
-dangerous direction during a rolling deploy is the opposite one: a **new-version
-replica writes an object an old-version replica then reads, mutates, and
-re-commits.** Both versions run simultaneously for the duration of the rollout,
-so the policy must make that safe — otherwise the old replica corrupts the new
-replica's data.
-
-Two complementary rules, in code:
-
-1. **New code reads old** — forward-compatible readers. `SchemaVersionSchema`
-   accepts any positive integer, and `upgradeSnapshot` normalizes an
-   older-shaped snapshot to the current in-memory shape before use. (This is the
-   lazy-upgrade strategy above.)
-2. **Old code tolerates new** — forward-compatible writers:
-   - `SnapshotSchema` is a `z.looseObject` (not a strict `object`). A strict
-     object would **silently strip** fields a newer replica added when an older
-     replica round-trips the snapshot, destroying the new data. `looseObject`
-     preserves unknown keys through the read→mutate→write cycle.
-   - `CatalogService.mutateSnapshot` stamps
-     `schema_version = max(CURRENT_SNAPSHOT_VERSION, currentSnapshot.schema_version)`
-     — a **downgrade-guard**, so an old replica can never roll a `v2` snapshot
-     back to `v1`.
-
-   Together these let an old replica safely re-commit a snapshot a newer replica
-   wrote, without losing fields or downgrading the version. There is a test for
-   both halves in `CatalogService.test.ts` ("rolling-deploy write compatibility").
-
-The standing **policy** that keeps this working:
-
-- **Additive-only changes within a schema version.** Add fields; never remove,
-  rename, or repurpose a field that a deployed reader depends on. Old code must
-  keep working when it encounters the new shape.
-- **A genuinely breaking change is a two-phase deploy.** Ship the readers first
-  (a release that understands both the old and the new shape), let it roll out
-  fully, then ship the writers that emit the new shape. Never do both in one
-  release — that is the flag-day the lazy/loose design exists to avoid.
-- The same reasoning applies to the fan-out objects (`meta.json`,
-  `project.json`, `source.json`, `version.json`): bump `schema_version`, keep
-  readers tolerant, and run the fan-out job to roll the rest forward
-  out-of-band. (These are not round-tripped by _other_ writers the way snapshots
-  are, so stripping is not a concern for them — but the additive-only rule still
-  protects mixed-version reads.)
-
-## The `runMigration` contract
-
-```ts
-runMigration(
-  fromVersion: number,
-  toVersion: number,
-  targetType: MigrationTargetType,   // 'meta' | 'project' | 'source' | 'version'
-  migrateFn: (data: Record<string, unknown>) => Record<string, unknown>,
-): Promise<MigrationResult>
-```
-
-Semantics (matching `bucket_spec.md` §9 pseudocode):
-
-1. **List affected keys, paginated.** Use the bucket `cursor` to iterate the
-   target prefix in chunks so the job stays within the runtime's per-invocation
-   request/time limits. Filter to the file suffix for `targetType` (e.g.
-   `meta.json`).
-2. **Per object: check `schema_version`.** Skip anything whose version is not
-   `fromVersion` (already migrated, or a different version). This is the
-   idempotency guard.
-3. **Apply `migrateFn`,** stamp `schema_version = toVersion`, and write the
-   object back.
-4. **Emit `migration.run`** to the event log on completion (`from_version`,
-   `to_version`, counts), so progress and completion are verifiable from the
-   immutable event log.
-
-Properties:
-
-- **Idempotent.** Re-running skips objects already at `toVersion` (the
-  `schema_version === fromVersion` check), so an interrupted job can be re-run
-  safely and migrates each object at most once.
-- **Resumable.** Driven by the bucket list `cursor`, so a job that hits a
-  runtime time limit can resume from where it stopped.
-
-A thin, fully-typed prototype of this contract — **not wired into any
-entrypoint, route, or cron** — lives in
-`packages/core/src/services/catalog/MigrationService.ts`, with an idempotency test
-against `MemoryBucket`.
-
-## Open questions (resolve before building the real runner)
-
-These need a deliberate decision (some need product/ops input) and are
-intentionally **not** guessed at in the prototype:
-
-1. **Where does the runner run?** A one-off job triggered on deploy, a Cloudflare
-   cron, or a manual ops invocation? `bucket_spec.md` §9 suggests running during
-   a low-traffic window. The prototype is deliberately unwired so this choice
-   stays open.
-2. **How is completion verified?** Via the `migration.run` event log only, or
-   also a re-scan that asserts zero remaining `fromVersion` objects? The
-   resumable/idempotent design supports either; we should pick one.
-3. **Rollback story.** Fan-out migrations rewrite objects in place (the old shape
-   is gone once overwritten). Do we need a reverse `migrateFn`, a pre-migration
-   backup/snapshot of affected keys, or is "roll forward only" acceptable for
-   these object types? Events and snapshots are immutable, so this question is
-   specific to the fan-out targets.
-4. **Concurrency with live traffic.** A fan-out migration runs while the app may
-   be reading/writing the same objects. Do we require a maintenance window, or a
-   CAS-on-write (`onlyIfEtagMatches`) so a concurrent app write is not clobbered
-   by the migration's rewrite?
+Optional session `surfaces` need no backfill: absence means no secondary surfaces.
+Missing security-label projections require authoritative metadata reads; routine
+projection writes repair them. See [projection contracts](./bucket_spec.md#4-file-schemas).

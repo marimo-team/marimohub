@@ -280,14 +280,7 @@ describe('group principals', () => {
 	});
 	it('fails closed on unprojected group grants for directory access and trusted-summary lists', async () => {
 		const { catalog, bucket } = await setupTestEnv();
-		const projects = new ProjectService(
-			bucket,
-			catalog,
-			undefined,
-			undefined,
-			undefined,
-			'test-deployment',
-		);
+		const projects = new ProjectService(bucket, catalog, undefined, undefined, undefined);
 		const project = await projects.createProject({ name: 'Groups', description: '' }, ACTOR);
 		await bucket.put(
 			paths.project(project.id).meta,

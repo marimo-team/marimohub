@@ -10,6 +10,7 @@ import { NotebookMetaSchema, ProjectSchema, readStored } from '../../schema';
 import type { Project, SnapshotNotebookEntry, SnapshotProjectEntry } from '../../schema';
 import type { ResourceSecurityLabels } from '../../securityLabels';
 import { notebookCatalogPatch } from './notebookMeta';
+import { PROJECT_ACCESS_VERSION } from './projectAccess';
 
 export interface SecurityLabelProjectionOptions {
 	/**
@@ -21,7 +22,6 @@ export interface SecurityLabelProjectionOptions {
 }
 
 interface ProjectProjectionOptions extends SecurityLabelProjectionOptions {
-	accessGeneration?: string;
 	/** Clear only this mutation's marker. Other writers can still be active. */
 	finalizeAccess?: SnapshotId;
 }
@@ -83,7 +83,7 @@ export function projectCatalogPatch(
 			: {
 					members: project.members,
 					default_role: defaultRole,
-					generation: options?.accessGeneration,
+					version: PROJECT_ACCESS_VERSION,
 				},
 		name: project.name,
 		description: project.description,

@@ -29,6 +29,7 @@ vi.mock('@marimo-hub/storage-r2', () => ({
 import {
 	createServices,
 	MaintenanceLock,
+	MigrationService,
 	SessionService,
 	SessionRetirer,
 	paths,
@@ -770,4 +771,54 @@ describe('Cloudflare Worker sandbox-host isolation guard', () => {
 			} as unknown as Env),
 		).toThrow(/shares an origin/);
 	});
+});
+
+describe('scheduled migrations', () => {
+	it('runs migration batches on scheduled events and never from requests', async () => {
+		const bucket = new MemoryBucket();
+		const services = createServices(bucket);
+		await services.catalog.initialize(ACTOR);
+		const project = await services.projects.createProject(
+			{ name: 'Existing', description: '' },
+			ACTOR,
+		);
+		await services.catalog.updateProjectEntry('test.legacy', ACTOR, project.id, () => ({
+			access: undefined,
+		}));
+		const env = makeEnv(bucket);
+		const get = vi.spyOn(bucket, 'get');
+		await fetchApi(env);
+		expect(get.mock.calls.some(([key]) => key.startsWith('_system/migrations/'))).toBe(false);
+		await worker.scheduled({} as ScheduledController, env, makeContext());
+		expect((await services.catalog.getCurrentSnapshot()).projects[0].access?.version).toBe(1);
+		get.mockClear();
+		await worker.scheduled({} as ScheduledController, env, makeContext());
+		expect(get.mock.calls.some(([key]) => key.startsWith('_system/migrations/'))).toBe(false);
+	});
+
+	it('still runs maintenance if a migration fails', async () => {
+		const bucket = new MemoryBucket();
+		await createServices(bucket).catalog.initialize(ACTOR);
+		vi.spyOn(MigrationService.prototype, 'tick').mockRejectedValueOnce(
+			new Error('migration unavailable'),
+		);
+		const expire = vi.spyOn(SessionService.prototype, 'expireStale');
+		await expect(
+			worker.scheduled({} as ScheduledController, makeEnv(bucket), makeContext()),
+		).rejects.toThrow('migration unavailable');
+		expect(expire).toHaveBeenCalled();
+	});
+});
+
+it('does not start scheduled work if shared resource construction fails', async () => {
+	vi.mocked(R2BucketAdapter).mockImplementationOnce(() => {
+		throw new Error('binding unavailable');
+	});
+	const migrations = vi.spyOn(MigrationService.prototype, 'tick');
+	const expire = vi.spyOn(SessionService.prototype, 'expireStale');
+	await expect(
+		worker.scheduled({} as ScheduledController, makeEnv(), makeContext()),
+	).rejects.toThrow('binding unavailable');
+	expect(migrations).not.toHaveBeenCalled();
+	expect(expire).not.toHaveBeenCalled();
 });
