@@ -29,6 +29,10 @@ import { EventService } from './EventService';
 // Exhaustion tests should not spend 750 ms in production backoff timers.
 const ZERO_BACKOFF = { backoffMs: () => 0 };
 
+function casCalls(increment: ReturnType<typeof vi.fn>) {
+	return increment.mock.calls.filter(([name]) => name.startsWith('catalog.cas.'));
+}
+
 describe('CatalogService', () => {
 	let bucket: MemoryBucket;
 	let catalog: CatalogService;
@@ -36,6 +40,25 @@ describe('CatalogService', () => {
 	beforeEach(async () => {
 		bucket = new MemoryBucket();
 		catalog = new CatalogService(bucket, noopMetrics, undefined, ZERO_BACKOFF);
+	});
+
+	it('shares cached records without sharing the metrics sink between service instances', async () => {
+		await catalog.initialize(ACTOR);
+		const firstMetrics = { increment: vi.fn(), gauge: vi.fn() };
+		const secondMetrics = { increment: vi.fn(), gauge: vi.fn() };
+		const first = new CatalogService(bucket, firstMetrics);
+		const second = new CatalogService(bucket, secondMetrics);
+		await first.getCurrentSnapshot();
+		await second.getCurrentSnapshot();
+		expect(firstMetrics.increment.mock.calls).toEqual([
+			['cache.metadata.reads', 1, { result: 'miss', consistency: 'validated' }],
+			['cache.snapshot.reads', 1, { result: 'miss' }],
+		]);
+		expect(secondMetrics.increment.mock.calls).toEqual([
+			['cache.conditional.reads', 1, { result: 'not_modified' }],
+			['cache.metadata.reads', 1, { result: 'hit', consistency: 'validated' }],
+			['cache.snapshot.reads', 1, { result: 'hit' }],
+		]);
 	});
 
 	it('keeps committed catalog changes when a deferred audit fails and drains subsequent audits', async () => {
@@ -883,7 +906,7 @@ describe('CatalogService', () => {
 				'snapshot put boom',
 			);
 
-			expect(increment).not.toHaveBeenCalled();
+			expect(casCalls(increment)).toEqual([]);
 			// Nothing was written (the failed put left no orphan).
 			expect((await bucket.list({ prefix: paths.snapshotsPrefix })).objects.length).toBe(before);
 		});
@@ -900,7 +923,7 @@ describe('CatalogService', () => {
 				}),
 			).rejects.toBe(boom);
 
-			expect(increment).not.toHaveBeenCalled();
+			expect(casCalls(increment)).toEqual([]);
 			expect((await bucket.list({ prefix: paths.snapshotsPrefix })).objects.length).toBe(before);
 		});
 
@@ -913,7 +936,7 @@ describe('CatalogService', () => {
 			await expect(svc.mutateSnapshot('test', ACTOR, (s) => ({ ...s }))).rejects.toBeInstanceOf(
 				NotInitializedError,
 			);
-			expect(increment).not.toHaveBeenCalled();
+			expect(casCalls(increment)).toEqual([]);
 		});
 
 		it('throws a corrupted-object error on malformed catalog JSON', async () => {
@@ -1002,7 +1025,7 @@ describe('CatalogService', () => {
 			await instrumented.mutateSnapshot('noop', ACTOR, (snapshot) => snapshot);
 
 			expect(put).not.toHaveBeenCalled();
-			expect(increment).not.toHaveBeenCalled();
+			expect(casCalls(increment)).toEqual([]);
 		});
 
 		it('counts each conditional write and only the rejected write as a conflict', async () => {
@@ -1026,7 +1049,7 @@ describe('CatalogService', () => {
 			await instrumented.mutateSnapshot('test', ACTOR, (snapshot) => ({ ...snapshot }));
 
 			expect(writes).toBe(2);
-			expect(increment.mock.calls).toEqual([
+			expect(casCalls(increment)).toEqual([
 				['catalog.cas.attempt'],
 				['catalog.cas.conflict'],
 				['catalog.cas.attempt'],
@@ -1055,7 +1078,7 @@ describe('CatalogService', () => {
 			await expect(instrumented.mutateSnapshot('t', ACTOR, (s) => ({ ...s }))).rejects.toThrow(
 				ConflictError,
 			);
-			expect(increment.mock.calls).toEqual([
+			expect(casCalls(increment)).toEqual([
 				...Array.from({ length: 5 }, () => [
 					['catalog.cas.attempt'],
 					['catalog.cas.conflict'],

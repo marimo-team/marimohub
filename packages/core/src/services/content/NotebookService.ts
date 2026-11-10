@@ -248,7 +248,7 @@ export class NotebookService {
 		workspaceLimits?: WorkspaceLimits,
 		private backgroundWork?: BackgroundWork,
 	) {
-		this.metaCache = new MetadataCache(bucket, NOTEBOOK_META_CACHE_MAX_ENTRIES);
+		this.metaCache = new MetadataCache(bucket, NOTEBOOK_META_CACHE_MAX_ENTRIES, undefined, metrics);
 		this.thumbnails = new ThumbnailService(bucket, this);
 		this.imports = new NotebookImportService(bucket, this);
 		this.synced = new SyncedNotebookService(bucket, catalog, metrics, {

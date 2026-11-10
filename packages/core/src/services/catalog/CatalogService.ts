@@ -77,7 +77,7 @@ export class CatalogService {
 		private backgroundWork?: BackgroundWork,
 	) {
 		this.cache = snapshotCache(cacheBucket);
-		this.pointer = new MetadataCache(bucket, 1, this.cache.pointer);
+		this.pointer = new MetadataCache(bucket, 1, this.cache.pointer, metrics);
 	}
 
 	async initialize(actor: UserId): Promise<Snapshot> {
@@ -232,16 +232,20 @@ export class CatalogService {
 	}
 
 	private readSnapshotEntry(catalog: Catalog) {
-		return this.cache.read(catalog.current_snapshot_key, async () => {
-			const object = await this.bucket.get(catalog.current_snapshot_key);
-			if (!object)
-				throw new NotInitializedError(
-					`Catalog recovery required: snapshot ${catalog.current_snapshot_id} not found`,
+		return this.cache.read(
+			catalog.current_snapshot_key,
+			async () => {
+				const object = await this.bucket.get(catalog.current_snapshot_key);
+				if (!object)
+					throw new NotInitializedError(
+						`Catalog recovery required: snapshot ${catalog.current_snapshot_id} not found`,
+					);
+				return upgradeSnapshot(
+					await readStored(SnapshotSchema, object, catalog.current_snapshot_key),
 				);
-			return upgradeSnapshot(
-				await readStored(SnapshotSchema, object, catalog.current_snapshot_key),
-			);
-		});
+			},
+			this.metrics,
+		);
 	}
 
 	planRecovery(source: CatalogRecoverySource) {

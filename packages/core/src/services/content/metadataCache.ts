@@ -1,4 +1,5 @@
-import { metrics } from '@opentelemetry/api';
+import { noopMetrics } from '../../ports/metrics';
+import type { Metrics } from '../../ports/metrics';
 import { METADATA_CACHE_MAX_ENTRIES } from '../../constants';
 import { EtagRecordCache } from '../../etagRecordCache';
 import { isNotModified } from '../../ports/bucket';
@@ -12,17 +13,12 @@ export type ReadConsistency = 'fresh' | 'validated';
  */
 export class MetadataCache<T> {
 	private readonly entries: EtagRecordCache<T>;
-	private readonly reads = metrics
-		.getMeter('@marimo-hub/core')
-		.createCounter('cache.metadata.reads');
-	private readonly conditional = metrics
-		.getMeter('@marimo-hub/core')
-		.createCounter('cache.conditional.reads');
 
 	constructor(
 		private readonly bucket: Bucket,
 		maxSize = METADATA_CACHE_MAX_ENTRIES,
 		entries?: EtagRecordCache<T>,
+		private readonly metrics: Metrics = noopMetrics,
 	) {
 		this.entries = entries ?? new EtagRecordCache(maxSize);
 	}
@@ -38,23 +34,23 @@ export class MetadataCache<T> {
 				? await this.bucket.get(key, { ifNoneMatch: cached.etag })
 				: await this.bucket.get(key);
 			if (!object) {
-				if (cached) this.conditional.add(1, { result: 'missing' });
-				this.reads.add(1, { result: 'miss', consistency });
+				if (cached) this.metrics.increment('cache.conditional.reads', 1, { result: 'missing' });
+				this.metrics.increment('cache.metadata.reads', 1, { result: 'miss', consistency });
 				this.entries.delete(key);
 				continue;
 			}
 			if (isNotModified(object)) {
 				if (!cached || cached.etag !== object.etag) {
-					if (cached) this.conditional.add(1, { result: 'invalid' });
+					if (cached) this.metrics.increment('cache.conditional.reads', 1, { result: 'invalid' });
 					throw new Error('Invalid conditional read response');
 				}
-				this.conditional.add(1, { result: 'not_modified' });
-				this.reads.add(1, { result: 'hit', consistency });
+				this.metrics.increment('cache.conditional.reads', 1, { result: 'not_modified' });
+				this.metrics.increment('cache.metadata.reads', 1, { result: 'hit', consistency });
 				this.entries.get(key, cached.etag);
 				return structuredClone(cached.value);
 			}
-			if (cached) this.conditional.add(1, { result: 'modified' });
-			this.reads.add(1, { result: 'miss', consistency });
+			if (cached) this.metrics.increment('cache.conditional.reads', 1, { result: 'modified' });
+			this.metrics.increment('cache.metadata.reads', 1, { result: 'miss', consistency });
 			const value = await parse(object);
 			if (consistency !== 'validated') return value;
 			this.entries.set(key, object.etag, value);

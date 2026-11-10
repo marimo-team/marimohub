@@ -1,4 +1,3 @@
-import { metrics } from '@opentelemetry/api';
 import { afterEach, expect, it, vi } from 'vitest';
 import { makeSnapshot, MemoryBucket } from '../../testing';
 import { snapshotCache } from './snapshotCache';
@@ -6,27 +5,28 @@ import { snapshotCache } from './snapshotCache';
 afterEach(() => vi.restoreAllMocks());
 
 it('counts cold, concurrent, warm, failed, and evicted snapshot loads', async () => {
-	const meter = metrics.getMeter('test');
-	const add = vi.fn();
-	vi.spyOn(meter, 'createCounter').mockReturnValue({ add });
-	vi.spyOn(metrics, 'getMeter').mockReturnValue(meter);
+	const metrics = { increment: vi.fn(), gauge: vi.fn() };
 	const cache = snapshotCache(new MemoryBucket());
 	const load = vi.fn(async () => makeSnapshot());
-	const first = cache.read('a', load);
-	const concurrent = cache.read('a', load);
+	const first = cache.read('a', load, metrics);
+	const concurrent = cache.read('a', load, metrics);
 	await Promise.all([first, concurrent]);
-	await cache.read('a', load);
+	await cache.read('a', load, metrics);
 	expect(load).toHaveBeenCalledOnce();
-	await cache.read('b', load);
-	await cache.read('c', load);
-	await cache.read('a', load);
+	await cache.read('b', load, metrics);
+	await cache.read('c', load, metrics);
+	await cache.read('a', load, metrics);
 	await expect(
-		cache.read('failed', async () => {
-			throw new Error('unavailable');
-		}),
+		cache.read(
+			'failed',
+			async () => {
+				throw new Error('unavailable');
+			},
+			metrics,
+		),
 	).rejects.toThrow('unavailable');
-	await cache.read('failed', load);
-	expect(add.mock.calls.map(([, tags]) => tags.result)).toEqual([
+	await cache.read('failed', load, metrics);
+	expect(metrics.increment.mock.calls.map(([, , tags]) => tags.result)).toEqual([
 		'miss',
 		'hit',
 		'hit',

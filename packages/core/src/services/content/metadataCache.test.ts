@@ -1,4 +1,7 @@
-import { metrics } from '@opentelemetry/api';
+import type { Metrics } from '../../ports/metrics';
+import { createServices } from '../index';
+import { makeProject, makeNotebookMeta } from '../../testing/fixtures';
+import { paths } from '../../paths';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { MetadataCache } from './metadataCache';
@@ -6,14 +9,17 @@ import { MetadataCache } from './metadataCache';
 afterEach(() => vi.restoreAllMocks());
 
 function recordCacheMetrics() {
-	const meter = metrics.getMeter('test');
 	const reads = vi.fn();
 	const conditional = vi.fn();
-	vi.spyOn(meter, 'createCounter').mockImplementation((name) => ({
-		add: name === 'cache.metadata.reads' ? reads : conditional,
-	}));
-	vi.spyOn(metrics, 'getMeter').mockReturnValue(meter);
-	return { reads, conditional };
+	const metrics: Metrics = {
+		increment(name, value, tags) {
+			if (name === 'cache.metadata.reads') reads(value, tags);
+			else if (name === 'cache.conditional.reads') conditional(value, tags);
+			else throw new Error(`Unexpected metric: ${name}`);
+		},
+		gauge() {},
+	};
+	return { metrics, reads, conditional };
 }
 
 describe('MetadataCache fallback keys', () => {
@@ -169,9 +175,9 @@ describe('MetadataCache failure and race handling', () => {
 });
 
 it('counts validated hits, misses, and conditional outcomes without object-key labels', async () => {
-	const { reads, conditional } = recordCacheMetrics();
+	const { metrics, reads, conditional } = recordCacheMetrics();
 	const bucket = new MemoryBucket();
-	const cache = new MetadataCache<string>(bucket);
+	const cache = new MetadataCache<string>(bucket, undefined, undefined, metrics);
 	const read = () => cache.read(['private-key'], (object) => object.text(), 'validated');
 	await bucket.put('private-key', 'first');
 	await read();
@@ -193,10 +199,10 @@ it('counts validated hits, misses, and conditional outcomes without object-key l
 });
 
 it('does not count a rejected conditional response as a cache hit or valid not-modified response', async () => {
-	const { reads, conditional } = recordCacheMetrics();
+	const { metrics, reads, conditional } = recordCacheMetrics();
 	const bucket = new MemoryBucket();
 	await bucket.put('meta', 'stored');
-	const cache = new MetadataCache<string>(bucket);
+	const cache = new MetadataCache<string>(bucket, undefined, undefined, metrics);
 	const read = () => cache.read(['meta'], (object) => object.text(), 'validated');
 	await read();
 	reads.mockClear();
@@ -212,3 +218,33 @@ it('does not count a rejected conditional response as a cache hit or valid not-m
 	expect(reads).toHaveBeenCalledExactlyOnceWith(1, { result: 'hit', consistency: 'validated' });
 	expect(conditional).toHaveBeenLastCalledWith(1, { result: 'not_modified' });
 });
+
+it.each(['project', 'notebook'])(
+	'forwards %s cache outcomes to the injected service metrics',
+	async (kind) => {
+		const bucket = new MemoryBucket();
+		const project = makeProject();
+		const notebook = makeNotebookMeta({ project_id: project.id });
+		await bucket.put(paths.project(project.id).meta, JSON.stringify(project));
+		await bucket.put(
+			paths.project(project.id).notebook(notebook.id).meta,
+			JSON.stringify(notebook),
+		);
+		const { metrics, reads, conditional } = recordCacheMetrics();
+		const services = createServices(bucket, metrics);
+		const read =
+			kind === 'project'
+				? () => services.projects.getProject(project.id, { consistency: 'validated' })
+				: () =>
+						services.notebooks.getNotebookMeta(project.id, notebook.id, {
+							consistency: 'validated',
+						});
+		await read();
+		await read();
+		expect(reads.mock.calls).toEqual([
+			[1, { result: 'miss', consistency: 'validated' }],
+			[1, { result: 'hit', consistency: 'validated' }],
+		]);
+		expect(conditional).toHaveBeenCalledExactlyOnceWith(1, { result: 'not_modified' });
+	},
+);
