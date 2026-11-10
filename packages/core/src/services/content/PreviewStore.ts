@@ -620,23 +620,28 @@ export class PreviewStore {
 		if (workId) await this.removeInactiveWork(record.project_id, workId);
 	}
 
-	async projectPage(startAfter?: string, limit: number = PREVIEW_LIMITS.projectsPerTick) {
+	async projectPage(
+		startAfter?: string,
+		limit: number = PREVIEW_LIMITS.projectsPerTick,
+		excluded: readonly ProjectId[] = [],
+	) {
 		let cursor = startAfter;
 		const projects: ProjectId[] = [];
 		for (let scanned = 0; scanned < PREVIEW_LIMITS.workPagesPerTick; scanned++) {
 			const page = await this.bucket.list({
 				prefix: previewActiveProjectPrefix,
 				startAfter: cursor,
-				limit: limit - projects.length,
+				limit: Math.min(PREVIEW_LIMITS.projectsPerTick, limit - projects.length + excluded.length),
 			});
-			for (const object of page.objects) {
+			for (const [index, object] of page.objects.entries()) {
 				try {
 					const [pid, filename] = object.key.slice(previewActiveProjectPrefix.length).split('/');
 					const projectId = ProjectIdSchema.parse(pid);
 					const workId = filename.slice(0, -5);
 					const project = await this.project(projectId);
-					if (hasWork(project) && project.work_id === workId) projects.push(projectId);
-					else await this.removeInactiveWork(projectId, workId);
+					if (hasWork(project) && project.work_id === workId) {
+						if (!excluded.includes(projectId)) projects.push(projectId);
+					} else await this.removeInactiveWork(projectId, workId);
 				} catch (error) {
 					logOperationalError(
 						'preview_work_scan_failed',
@@ -644,9 +649,15 @@ export class PreviewStore {
 						error,
 					);
 				}
+				if (projects.length === limit) {
+					return {
+						projects,
+						cursor: index + 1 < page.objects.length || page.truncated ? object.key : undefined,
+					};
+				}
 			}
 			cursor = page.truncated ? page.objects.at(-1)?.key : undefined;
-			if (!cursor || projects.length === limit) break;
+			if (!cursor) break;
 		}
 		return { projects, cursor };
 	}
@@ -672,6 +683,7 @@ export class PreviewStore {
 					const page = await this.projectPage(
 						record.cursor,
 						PREVIEW_LIMITS.projectsPerTick - pending.length,
+						pending,
 					);
 					record.cursor = page.cursor;
 					return [...new Set([...pending, ...page.projects])];

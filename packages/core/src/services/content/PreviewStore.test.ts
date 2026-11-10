@@ -749,6 +749,25 @@ describe('PreviewStore scheduling', () => {
 		expect(await restarted.nextProjects('cleanup')).toEqual(projects.slice(0, 4));
 	});
 
+	it.each([
+		{ position: 'first', indexes: [0, 1, 2] },
+		{ position: 'interleaved', indexes: [1, 3, 5] },
+		{ position: 'last', indexes: [5, 6, 7] },
+	])(
+		'preserves a distinct rotating slot with pending projects $position in the scan',
+		async ({ indexes }) => {
+			const { store, intent } = fixture();
+			const projects = Array.from({ length: 8 }, () => createProjectId()).sort();
+			for (const project_id of projects) await store.reserve({ ...intent(), project_id });
+			const pending = indexes.map((index) => projects[index]);
+			const rotating = projects.filter((pid) => !pending.includes(pid));
+			for (const expected of rotating) {
+				for (const pid of pending) await store.prioritize(pid);
+				expect(await store.nextProjects('prepare')).toEqual([...pending, expected]);
+			}
+		},
+	);
+
 	it('does not lose a priority request racing with the preparation cursor CAS', async () => {
 		const { bucket, store, pid } = fixture();
 		const next = createProjectId();

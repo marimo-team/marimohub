@@ -1951,6 +1951,28 @@ describe('asynchronous preview preparation', () => {
 		},
 	);
 
+	it.each(['scan failure', 'shutdown before prepare'] as const)(
+		'retains a dequeued project after %s throws from scheduled work',
+		async (reason) => {
+			const service = api.deps.services.previews;
+			const record = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+			vi.spyOn(service.store, 'projectPage').mockResolvedValue({ projects: [], cursor: undefined });
+			const controller = new AbortController();
+			const read = service.projectRecords.bind(service);
+			vi.spyOn(service, 'projectRecords').mockImplementationOnce(async (...args) => {
+				if (reason === 'scan failure') throw new Error('storage temporarily unavailable');
+				const records = await read(...args);
+				controller.abort();
+				return records;
+			});
+			await service.preparePending(api.deps.sourceControl!, controller.signal);
+			expect(reader.getBranchHead).not.toHaveBeenCalled();
+			expect((await service.get(pid, nid, record.id)).preparation).toBe('pending');
+			await service.preparePending(api.deps.sourceControl!);
+			expect((await service.get(pid, nid, record.id)).preparation).toBe('ready');
+		},
+	);
+
 	it('retains priority when shutdown happens immediately after dequeue', async () => {
 		const service = api.deps.services.previews;
 		const record = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);

@@ -5,11 +5,18 @@ import {
 	createSessionId,
 	Millis,
 	paths,
+	PreconditionFailedError,
 	StoredObjectError,
 	WarmPoolService,
 	WarmPoolStore,
 } from '@marimo-hub/core';
-import type { NotebookId, NotebookPreview, ProjectId, SourceControlReader } from '@marimo-hub/core';
+import type {
+	NotebookId,
+	NotebookPreview,
+	PreviewId,
+	ProjectId,
+	SourceControlReader,
+} from '@marimo-hub/core';
 import { ACTOR, fakeComputeFrom, makeFakeSandbox } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectOk, stubSourceControl } from './testing';
 import { cleanupPreview, sweepPreviews } from './previews';
@@ -84,6 +91,80 @@ async function runningSession(notebookId = preview.current!.notebook_id) {
 	});
 	return sessions.setRunning(pid, session.session_id, 'https://sandbox.example');
 }
+
+describe('preview priority hints', () => {
+	it.each(['create', 'prepare', 'reconcile'] as const)(
+		'keeps a committed %s request successful when priority CAS retries exhaust',
+		async (action) => {
+			const service = api.deps.services.previews;
+			const base = `/projects/${pid}/notebooks/${nid}/previews`;
+			const deferred =
+				action === 'prepare'
+					? await service.create(
+							pid,
+							nid,
+							{
+								name: 'Deferred',
+								source: { type: 'branch', branch: 'priority' },
+								eager: false,
+							},
+							ACTOR,
+							api.deps.sourceControl,
+						)
+					: undefined;
+			reader.getPullRequest = vi.fn(async () => ({
+				number: 1,
+				state: 'open' as const,
+				branch: 'priority',
+				commit: 'a'.repeat(40),
+				sameRepository: true,
+			}));
+			await service.store.nextProjects('prepare');
+			const originalPut = api.bucket.put.bind(api.bucket);
+			const put = vi.spyOn(api.bucket, 'put').mockImplementation(async (key, ...args) => {
+				if (key === paths.previewWork) throw new PreconditionFailedError('Priority contention');
+				return originalPut(key, ...args);
+			});
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+			const response =
+				action === 'prepare'
+					? await api.request('POST', `${base}/${deferred!.id}/prepare`)
+					: action === 'create'
+						? await api.request('POST', base, {
+								name: 'Queued',
+								source: { type: 'branch', branch: 'priority' },
+							})
+						: await api.request('POST', `${base}/reconcile`, {
+								repository: 'owner/repo',
+								pull_request: 1,
+								event: 'opened',
+								commit: 'a'.repeat(40),
+								workflow_id: '10',
+								run_id: '1',
+								run_number: 1,
+								event_at: new Date().toISOString(),
+								policy: { mode: 'sticky', keep: 5, eager: true },
+							});
+			const result = await expectOk<{ id: PreviewId; items: { id: PreviewId }[] }>(response, 202);
+			const id = action === 'reconcile' ? result.items[0].id : result.id;
+			expect(await service.get(pid, nid, id)).toMatchObject({
+				state: 'active',
+				preparation: 'pending',
+			});
+			expect(put.mock.calls.filter(([key]) => key === paths.previewWork).length).toBeGreaterThan(1);
+			expect(log).toHaveBeenCalledTimes(1);
+			expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
+				event: 'preview_prioritize_failed',
+				project_id: pid,
+			});
+
+			put.mockRestore();
+			await service.preparePending(api.deps.sourceControl!);
+			expect((await service.get(pid, nid, id)).preparation).toBe('ready');
+		},
+	);
+});
 
 describe('preview maintenance', () => {
 	it('cleans preview execution namespaces without touching the parent app', async () => {

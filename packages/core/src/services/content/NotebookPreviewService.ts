@@ -405,7 +405,7 @@ export class NotebookPreviewService {
 		// Re-check membership: cleanup may have forgotten the preview after reservation.
 		const saved = await this.get(pid, nid, intent.id);
 		if (saved.state !== 'active') throw new ConflictError('This preview has been deleted');
-		await this.store.prioritize(pid);
+		await this.prioritize(pid);
 		return saved;
 	}
 
@@ -454,7 +454,7 @@ export class NotebookPreviewService {
 			automation: { key, revision: 0, commit: input.commit },
 		});
 		await this.store.reconcileAutomation(template, input, pr.branch, await sha256Hex(pr.branch));
-		await this.store.prioritize(pid);
+		await this.prioritize(pid);
 		const records = await this.projectRecords(pid, nid);
 		const group = (await this.store.getAutomation(pid, key))!;
 		return {
@@ -467,6 +467,14 @@ export class NotebookPreviewService {
 					previewAvailable(record),
 			),
 		};
+	}
+
+	private async prioritize(pid: ProjectId): Promise<void> {
+		try {
+			await this.store.prioritize(pid);
+		} catch (error) {
+			logOperationalError('preview_prioritize_failed', { project_id: pid }, error);
+		}
 	}
 
 	async requestPreparation(record: NotebookPreview): Promise<NotebookPreview> {
@@ -525,7 +533,7 @@ export class NotebookPreviewService {
 				preparation: current.preparation === 'deferred' ? 'pending' : current.preparation,
 			};
 		});
-		if (preparationDue(requested)) await this.store.prioritize(record.project_id);
+		if (preparationDue(requested)) await this.prioritize(record.project_id);
 		return requested;
 	}
 
@@ -1126,7 +1134,7 @@ export class NotebookPreviewService {
 		// One candidate per project prevents a busy repository from monopolizing workers.
 		for (let offset = 0; offset < projects.length; offset += PREVIEW_LIMITS.concurrency) {
 			if (signal?.aborted) {
-				for (const pid of projects.slice(offset)) await this.store.prioritize(pid);
+				for (const pid of projects.slice(offset)) await this.prioritize(pid);
 				return;
 			}
 			await Promise.allSettled(
@@ -1150,9 +1158,10 @@ export class NotebookPreviewService {
 						if (
 							records.some((record) => record.preparation === 'pending' && preparationDue(record))
 						)
-							await this.store.prioritize(pid);
+							await this.prioritize(pid);
 					} catch (error) {
 						logOperationalError('preview_preparation_failed', { project_id: pid }, error);
+						await this.prioritize(pid);
 					}
 				}),
 			);
