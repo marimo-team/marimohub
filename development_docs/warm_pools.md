@@ -14,7 +14,7 @@ Notebook files, credentials, and kernels load after assignment.
    A failed pre-install keeps the member, and the kernel launcher retries installation.
    See [Installation and sandbox images](../packages/notebook-bridge/README.md#installation-and-sandbox-images).
 3. Reservation records the destination and changes the operation token. Reconnect and a bounded probe overlap session publication and admission.
-4. Handoff validates the just-published session without reading it again. Its CAS checks the claim token and deadline while URL preparation runs. Workspace writes and credential injection wait for handoff.
+4. Handoff rereads the session to reject a concurrent stop, failure, or sandbox replacement. Its CAS checks the claim token and deadline while URL preparation runs. Workspace writes and credential injection wait for handoff.
 5. Session teardown owns assigned sandboxes. Claims never return to the pool. Failed cleanup retains ownership for retry.
 
 If the probe fails or the claim expires, the route replaces the starting session's sandbox ID and repeats URL preparation.

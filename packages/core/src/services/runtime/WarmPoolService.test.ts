@@ -1547,39 +1547,35 @@ describe('warm pool failure boundaries', () => {
 		expect((await w.members())[0]).toMatchObject({ state: 'claimed', assigned: false });
 	});
 
-	it.each(
-		['wrong sandbox', 'failed session', 'stale token', 'expired claim', 'expired lifetime'].flatMap(
-			(reason) => ['read', 'provided'].map((source) => ({ reason, source })),
-		),
-	)('fences handoff with $reason and a $source session', async ({ reason, source }) => {
-		const w = setup({ providerLifetimeMs: reason === 'expired lifetime' ? 90_000 : undefined });
-		await w.service.sweep();
-		const request = w.request();
-		const claim = (await claimWarm(w.service, request))!;
-		await w.sessions.createSession({
-			...request.destination,
-			user_id: ACTOR,
-			sandbox_id: reason === 'wrong sandbox' ? createSandboxId() : claim.member.sandbox_id,
-		});
-		if (reason === 'failed session') {
-			await w.sessions.markFailed(request.destination.project_id, request.destination.session_id, {
-				code: 'STARTUP_FAILED',
-				message: 'failed',
+	it.each(['wrong sandbox', 'failed session', 'stale token', 'expired claim', 'expired lifetime'])(
+		'fences handoff with %s',
+		async (reason) => {
+			const w = setup({ providerLifetimeMs: reason === 'expired lifetime' ? 90_000 : undefined });
+			await w.service.sweep();
+			const request = w.request();
+			const claim = (await claimWarm(w.service, request))!;
+			await w.sessions.createSession({
+				...request.destination,
+				user_id: ACTOR,
+				sandbox_id: reason === 'wrong sandbox' ? createSandboxId() : claim.member.sandbox_id,
 			});
-		}
-		if (reason === 'stale token') claim.member.token = 'stale';
-		if (reason === 'expired claim') w.advance(60_000);
-		if (reason === 'expired lifetime') w.advance(30_000);
-		const session =
-			source === 'provided'
-				? await w.sessions.getSession(
-						request.destination.project_id,
-						request.destination.session_id,
-					)
-				: undefined;
-		await expect(w.service.handoff(claim, session)).rejects.toThrow();
-		expect((await w.members())[0].assigned).toBe(false);
-	});
+			if (reason === 'failed session') {
+				await w.sessions.markFailed(
+					request.destination.project_id,
+					request.destination.session_id,
+					{
+						code: 'STARTUP_FAILED',
+						message: 'failed',
+					},
+				);
+			}
+			if (reason === 'stale token') claim.member.token = 'stale';
+			if (reason === 'expired claim') w.advance(60_000);
+			if (reason === 'expired lifetime') w.advance(30_000);
+			await expect(w.service.handoff(claim)).rejects.toThrow();
+			expect((await w.members())[0].assigned).toBe(false);
+		},
+	);
 
 	it('does not destroy the current claim when an old token tries to abandon it', async () => {
 		const w = setup();

@@ -4019,6 +4019,7 @@ describe('Session routes', () => {
 		async (wait) => {
 			const background = queuedBackgroundWork();
 			const compute = makeFakeSnapshotCompute();
+			compute.captureSnapshot.mockResolvedValue({ snapshotId: 'interactive-stop-snapshot' });
 			const api = createTestApi({ bucket, compute, deps: { backgroundWork: background.work } });
 			const started = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
 			await background.runAll();
@@ -4035,6 +4036,9 @@ describe('Session routes', () => {
 				expect(capture).toHaveBeenCalledOnce();
 				expect(thumbnail).not.toHaveBeenCalled();
 				expect(compute.captureSnapshot).toHaveBeenCalledOnce();
+				expect(await api.deps.services.notebooks.getFsSnapshot(pid, nid)).toMatchObject({
+					snapshot_id: 'interactive-stop-snapshot',
+				});
 			} finally {
 				capture.mockRestore();
 				thumbnail.mockRestore();

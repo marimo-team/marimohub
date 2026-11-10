@@ -2329,7 +2329,7 @@ async function startNotebookSessionOnce(
 								provision: () => Promise<ProvisionResult>;
 							}>({
 								handoff: async () => {
-									if (warmClaim) await deps.warmPool!.handoff(warmClaim, session);
+									if (warmClaim) await deps.warmPool!.handoff(warmClaim);
 								},
 								async provision(): Promise<ProvisionResult> {
 									const { baseUrl, publicUrl, cookiePartitioned } =

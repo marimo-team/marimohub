@@ -1,4 +1,3 @@
-import type { Session } from '../../schema';
 import type { NotebookBridgeRuntime } from '../../ports/notebookBridge';
 import { notebookBridgePaths } from './notebookBridgePaths';
 import { shellQuote } from './shell';
@@ -160,12 +159,10 @@ export class WarmPoolService {
 		}
 	}
 
-	/** Pass createdSession only for a record this request just published. */
-	async handoff(claim: WarmPoolClaim, createdSession?: Session): Promise<void> {
+	async handoff(claim: WarmPoolClaim): Promise<void> {
 		const destination = claim.member.destination!;
-		const session =
-			createdSession ??
-			(await this.sessions.getSession(destination.project_id, destination.session_id));
+		// The probe can outlive a stop or sandbox replacement after session publication.
+		const session = await this.sessions.getSession(destination.project_id, destination.session_id);
 		if (
 			session.session_id !== destination.session_id ||
 			session.project_id !== destination.project_id ||

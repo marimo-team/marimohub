@@ -544,7 +544,51 @@ describe('session warm sandbox assignment', () => {
 		},
 	);
 
-	it('hands off the published session without rereading it and records warm probe time', async () => {
+	it.each(['stopping', 'failed', 'replaced'] as const)(
+		'rejects warm handoff when the published session is %s during the probe',
+		async (change) => {
+			const w = await setup();
+			await w.warmPool.sweep();
+			const probeGate = Promise.withResolvers<void>();
+			const probe = w.warmPool.probe.bind(w.warmPool);
+			vi.spyOn(w.warmPool, 'probe').mockImplementationOnce(async (claim) => {
+				await probe(claim);
+				await probeGate.promise;
+			});
+			const published = vi.spyOn(w.api.deps.services.sessions, 'createSessionWithEtag');
+			const pending = w.api.request('POST', w.path);
+			try {
+				await vi.waitFor(() => expect(published).toHaveBeenCalledOnce());
+				const { value: session } = await published.mock.results[0].value;
+				switch (change) {
+					case 'stopping':
+						await w.services.sessions.beginTerminating(w.project.id, session.session_id);
+						break;
+					case 'failed':
+						await w.services.sessions.markFailed(w.project.id, session.session_id);
+						break;
+					case 'replaced':
+						await w.services.sessions.replaceStartingSandbox(
+							w.project.id,
+							session.session_id,
+							session.sandbox_id,
+							createSandboxId(),
+						);
+						break;
+				}
+			} finally {
+				probeGate.resolve();
+			}
+			await expectError(await pending, 409, 'CONFLICT');
+			expect(w.fake.calls.writeFiles).toEqual([]);
+			expect(w.fake.calls.setEnvVars).toEqual([]);
+			expect(w.fake.calls.startProcess).toEqual([]);
+			expect(w.fake.calls.destroy).toBe(1);
+			expect((await w.warmPool.store.read()).pools[0].members).toEqual([]);
+		},
+	);
+
+	it('rereads the published session before handoff and records warm probe time', async () => {
 		const w = await setup();
 		await w.warmPool.sweep();
 		const get = vi.spyOn(w.services.sessions, 'getSession');
@@ -565,11 +609,8 @@ describe('session warm sandbox assignment', () => {
 			now += 75;
 		});
 		const response = await expectOk<Session>(await w.api.request('POST', w.path));
-		expect(handoff).toHaveBeenCalledWith(
-			expect.anything(),
-			expect.objectContaining({ session_id: response.session_id, status: 'starting' }),
-		);
-		expect(get).not.toHaveBeenCalled();
+		expect(handoff).toHaveBeenCalledExactlyOnceWith(expect.anything());
+		expect(get).toHaveBeenCalledExactlyOnceWith(w.project.id, response.session_id);
 		const events = log.events();
 		expect(events).toHaveLength(1);
 		expect(events[0]).toMatchObject({

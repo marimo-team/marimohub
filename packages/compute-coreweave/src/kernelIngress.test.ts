@@ -43,8 +43,7 @@ describe('createKernelIngressPublisher', () => {
 			api,
 		});
 		await expect(publisher.publish(target)).rejects.toThrow('after 100 retries');
-		expect(sleep).toHaveBeenCalledTimes(100);
-		expect(sleep).toHaveBeenCalledWith(100);
+		expect(vi.mocked(sleep).mock.calls).toEqual(Array.from({ length: 100 }, () => [100]));
 		expect(calls).toHaveLength(101);
 	});
 

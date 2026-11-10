@@ -3113,7 +3113,35 @@ it('reserves the URL during ingress publication and waits only at exposePort', a
 	expect(world.registry.get('cw-1')!.fake.startCalls).toEqual([]);
 });
 
-it('retries failed ingress publication while retaining successful publications', async () => {
+it('retries failed background ingress preparation while sharing the next attempt', async () => {
+	const world = makeWorld();
+	const pending = Promise.withResolvers<void>();
+	const retry = Promise.withResolvers<void>();
+	const publish = vi.fn().mockReturnValueOnce(pending.promise).mockReturnValue(retry.promise);
+	const instance = makeCompute(world, {
+		...baseConfig,
+		kernelIngress: { publish, remove: async () => {} },
+	}).create(SANDBOX_ID, { reuse: false });
+	await instance.ready!();
+	const options = { hostname: 'example.test' };
+	const expected = { url: 'https://cw-1-2718.example.test' };
+	await instance.prepareExposure!(2718, options);
+	pending.reject(new Error('ingress unavailable'));
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	await expect(
+		Promise.all([
+			instance.prepareExposure!(2718, options),
+			instance.prepareExposure!(2718, options),
+		]),
+	).resolves.toEqual([expected, expected]);
+	expect(publish).toHaveBeenCalledTimes(2);
+	retry.resolve();
+	await expect(instance.exposePort(2718, options)).resolves.toEqual(expected);
+	await instance.prepareExposure!(2718, options);
+	expect(publish).toHaveBeenCalledTimes(2);
+});
+
+it('shares ingress failure between concurrent callers and retries the next exposure', async () => {
 	const world = makeWorld();
 	const failure = new Error('ingress unavailable');
 	const pending = Promise.withResolvers<void>();
@@ -3124,10 +3152,14 @@ it('retries failed ingress publication while retaining successful publications',
 	}).create(SANDBOX_ID, { reuse: false });
 	await instance.ready!();
 	const options = { hostname: 'example.test' };
+	const failures = [
+		expect(instance.exposePort(2718, options)).rejects.toBe(failure),
+		expect(instance.exposePort(2718, options)).rejects.toBe(failure),
+	];
 	await instance.prepareExposure!(2718, options);
+	expect(publish).toHaveBeenCalledOnce();
 	pending.reject(failure);
-	await new Promise((resolve) => setTimeout(resolve, 0));
-	await expect(instance.exposePort(2718, options)).rejects.toBe(failure);
+	await Promise.all(failures);
 	await expect(instance.exposePort(2718, options)).resolves.toEqual({
 		url: 'https://cw-1-2718.example.test',
 	});

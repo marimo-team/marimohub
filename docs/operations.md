@@ -396,17 +396,17 @@ into the sandbox, bounded workspace reads start while the sandbox boots, so
 workspaces, and reads over the prefetch budget, wait for readiness first. Do not
 sum phase timings; use `total_ms` for the full start request.
 
-| Field                | Measures                                                             |
-| -------------------- | -------------------------------------------------------------------- |
-| `total_ms`           | Full session start, including a stop wait and retry.                 |
-| `auth_reuse_ms`      | Authorization and reuse checks before the saga, across all attempts. |
-| `stop_wait_ms`       | Wait for the same user’s retiring editor; zero when no wait occurs.  |
-| `warm_probe_ms`      | Warm sandbox probe, when attempted.                                  |
-| `ingress_publish_ms` | CoreWeave ingress publication, which overlaps sandbox setup.         |
-| `provision_total_ms` | Sandbox provisioning only.                                           |
+| Field                | Measures                                                               |
+| -------------------- | ---------------------------------------------------------------------- |
+| `total_ms`           | Full session start, including a stop wait and retry.                   |
+| `auth_reuse_ms`      | Pre-saga admission, authorization, and reuse work across all attempts. |
+| `stop_wait_ms`       | Wait for the same user’s retiring editor; zero when no wait occurs.    |
+| `warm_probe_ms`      | Warm sandbox probe, when attempted.                                    |
+| `ingress_publish_ms` | CoreWeave ingress publication, which overlaps sandbox setup.           |
+| `provision_total_ms` | Sandbox provisioning only.                                             |
 
-CoreWeave starts ingress publication during URL preparation and waits for it before returning the live URL.
-Service discovery allows 100 retries, with a 100 ms delay between attempts.
+When CoreWeave uses `kernelIngress` without `resolveExposedUrl`, it starts ingress publication during URL preparation and waits for it before returning the live URL.
+That publisher allows 100 service-discovery retries, with a 100 ms delay between attempts.
 
 On every compute backend, these fields split the file and injection phases:
 

@@ -1630,17 +1630,12 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 						this.dataplaneTimings.ingress_publish = Date.now() - started;
 					});
 				// Setup can fail before exposePort consumes the background publication.
-				publishing.catch(() => {});
+				publishing.catch(() => {
+					if (this.exposures.get(key) === publishing) this.exposures.delete(key);
+				});
 				this.exposures.set(key, publishing);
 			}
-			if (wait) {
-				try {
-					await publishing;
-				} catch (error) {
-					if (this.exposures.get(key) === publishing) this.exposures.delete(key);
-					throw error;
-				}
-			}
+			if (wait) await publishing;
 		}
 		return { url };
 	}
