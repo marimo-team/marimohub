@@ -59,7 +59,7 @@ Ordinary workspaces use bounded file batches. Existing synced archives, snapshot
 | Counter                  | Meaning                                                                         |
 | ------------------------ | ------------------------------------------------------------------------------- |
 | `reconnect_by_reference` | Resolution attempts with a saved reference                                      |
-| `reconnect_by_lookup`    | Resolution attempts without a reference, including process-cache lookups        |
+| `reconnect_by_lookup`    | Lookup-based reconnect attempts, including process-cache lookups                |
 | `execs`                  | Blocking `exec` and `execInput` calls                                           |
 | `file_writes`            | SDK file writes, including retries                                              |
 | `file_write_waves`       | Unary waves or packed batches, including packed retries                         |
