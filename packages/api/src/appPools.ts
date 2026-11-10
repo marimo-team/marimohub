@@ -1,5 +1,8 @@
 import {
 	AppPoolService,
+	AppPoolStore,
+	mapWithConcurrency,
+	routeAppRetirement,
 	logOperationalError,
 	kernelActiveConnections,
 	localKernelBasePath,
@@ -13,7 +16,9 @@ import {
 	ProjectId,
 	SessionRetirer,
 	sessionOwner,
+	sessionMode,
 } from '@marimo-hub/core';
+import type { Metrics } from '@marimo-hub/core';
 import type { ApiDeps } from './context';
 import { previewAppPoolPolicy } from './previewPolicy';
 
@@ -26,6 +31,28 @@ export async function sweepAppPools(
 	},
 ): Promise<void> {
 	const { sessions } = deps.services;
+	const projectSessions = new Map<ProjectId, ReturnType<typeof sessions.listActiveByProject>>();
+	const readSessions = (pid: ProjectId) => {
+		let pending = projectSessions.get(pid);
+		if (!pending) {
+			pending = sessions
+				.listActiveByProject(pid)
+				.then((rows) => rows.filter((session) => sessionMode(session) === 'app'));
+			projectSessions.set(pid, pending);
+		}
+		return pending;
+	};
+	const sweepSessions = new Proxy(sessions, {
+		get(target, property) {
+			if (property === 'listActiveByProject') return readSessions;
+			const value = Reflect.get(target, property);
+			return typeof value === 'function' ? value.bind(target) : value;
+		},
+	});
+	const store = new AppPoolStore(deps.bucket);
+	const previewPolicy = previewAppPoolPolicy(deps.policy.appPool);
+	let visits = 0;
+	let complete = true;
 
 	const retirer = new SessionRetirer({
 		...deps,
@@ -36,12 +63,65 @@ export async function sweepAppPools(
 	let cursor: string | undefined;
 	do {
 		const page = await deps.bucket.list({ prefix: '_system/app-pools/', cursor });
-		for (const object of page.objects) {
+		await mapWithConcurrency(page.objects, 8, async (object) => {
 			const match = /^_system\/app-pools\/([^/]+)\/([^/]+)\.json$/.exec(object.key);
-			if (!match || !ProjectId.is(match[1]) || !NotebookId.is(match[2])) continue;
+			if (!match || !ProjectId.is(match[1]) || !NotebookId.is(match[2])) return;
 			const pid = match[1];
 			const nid = match[2];
 			try {
+				const snapshot = await store.read(pid, nid);
+				if (!snapshot) return;
+				let poolVisits = snapshot.assignments.length;
+				visits += poolVisits;
+				if (snapshot.deleted_at !== undefined && snapshot.members.length === 0) return;
+				if (
+					snapshot.members.length === 0 &&
+					snapshot.assignments.length === 0 &&
+					!(await readSessions(pid)).some((session) => session.notebook_id === nid)
+				)
+					return;
+				const now = Date.now();
+				const needsSync =
+					snapshot.deleted_at !== undefined ||
+					snapshot.members.length === 0 ||
+					snapshot.members.some((member) => {
+						return (
+							(member.idle_since === undefined &&
+								!snapshot.assignments.some(
+									(assignment) => assignment.session_id === member.session_id,
+								)) ||
+							routeAppRetirement(snapshot, member, previewPolicy, now) !== 'retain'
+						);
+					}) ||
+					snapshot.assignments.some(
+						(assignment) =>
+							assignment.visit_id === undefined ||
+							assignment.visits.some((visit) => visit.expires_at <= now) ||
+							(assignment.visits.length === 0 && (assignment.grace_until ?? 0) <= now),
+					);
+				if (!needsSync) {
+					const active = await readSessions(pid);
+					const changed = snapshot.members.some((member) => {
+						const session = active.find((session) => session.session_id === member.session_id);
+						return (
+							!session ||
+							session.status === 'terminating' ||
+							(session.authorization_expires_at &&
+								Date.parse(session.authorization_expires_at) <= now)
+						);
+					});
+					if (!changed) return;
+				}
+				const metrics: Metrics = {
+					increment: (name, value, tags) => deps.metrics?.increment(name, value, tags),
+					histogram: (name, value, tags) => deps.metrics?.histogram?.(name, value, tags),
+					gauge: (name, value, tags) => {
+						if (name === 'app_pool.visits') {
+							visits += value - poolVisits;
+							poolVisits = value;
+						} else deps.metrics?.gauge(name, value, tags);
+					},
+				};
 				const notebook = paths.project(pid).notebook(nid);
 				let metaKey = notebook.meta;
 				let metaObject = await deps.bucket.get(metaKey);
@@ -67,8 +147,8 @@ export async function sweepAppPools(
 					: null;
 				// A corrupt runtime must retain preview bounds and startup protection.
 				const isPreview = isRuntime || !!meta?.preview;
-				const policy = isPreview ? previewAppPoolPolicy(deps.policy.appPool) : deps.policy.appPool;
-				const pool = new AppPoolService(deps.bucket, sessions, policy, deps.metrics);
+				const policy = isPreview ? previewPolicy : deps.policy.appPool;
+				const pool = new AppPoolService(deps.bucket, sweepSessions, policy, metrics);
 				await pool.reconcile(pid, nid, {
 					probe: async (member) => {
 						const session = await sessions.getSession(pid, member.session_id).catch((error) => {
@@ -116,13 +196,15 @@ export async function sweepAppPools(
 					},
 				});
 			} catch (error) {
+				complete = false;
 				logOperationalError(
 					'app_pool_sweep_failed',
 					{ operation: 'app_pool.sweep', project_id: pid, notebook_id: nid },
 					error,
 				);
 			}
-		}
+		});
 		cursor = page.truncated ? page.cursor : undefined;
 	} while (cursor);
+	if (complete) deps.metrics?.gauge('app_pool.visits', visits);
 }

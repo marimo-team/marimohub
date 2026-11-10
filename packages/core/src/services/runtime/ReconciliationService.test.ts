@@ -402,6 +402,33 @@ describe('ReconciliationService', () => {
 		expect(destroy).toHaveBeenCalledTimes(2);
 	});
 
+	it('does not re-process 2k reclaimed records or re-read their unchanged released claims', async () => {
+		for (let i = 0; i < 2000; i++) {
+			const session = await putSession({
+				notebook_id: createNotebookId(),
+				status: 'terminated',
+				sandbox_id: terminalId,
+				sandbox_reclaimed_at: iso(0),
+			});
+			await bucket.put(
+				paths.editorClaim(projectId, session.notebook_id),
+				JSON.stringify({ session_id: null, sharing: 'shared', claimed_at: iso(0) }),
+			);
+		}
+		const get = vi.spyOn(bucket, 'get');
+		const reclaim = vi.spyOn(SessionRetirer.prototype, 'reclaim');
+		expect(await reconciler.reclaimTerminalSessions()).toEqual({
+			reclaimed: 0,
+			unreclaimedTerminal: 0,
+			oldestUnreclaimedAgeMs: null,
+		});
+		expect(get).toHaveBeenCalledTimes(4000);
+		get.mockClear();
+		await reconciler.reclaimTerminalSessions();
+		expect(reclaim).not.toHaveBeenCalled();
+		expect(get).not.toHaveBeenCalled();
+	});
+
 	it('retries a failed claim release after the sandbox is marked reclaimed', async () => {
 		const session = await putSession({ status: 'terminated', sandbox_id: terminalId });
 		await sessions.claimEditor(projectId, notebookId, session.session_id, 'shared');
@@ -422,7 +449,8 @@ describe('ReconciliationService', () => {
 		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
 			session.session_id,
 		);
-		expect(await reconciler.reclaimTerminalSessions()).toEqual({
+		const restarted = new ReconciliationService(sessions, notebooks, compute, bucket, 'source');
+		expect(await restarted.reclaimTerminalSessions()).toEqual({
 			reclaimed: 0,
 			unreclaimedTerminal: 0,
 			oldestUnreclaimedAgeMs: null,
@@ -431,6 +459,46 @@ describe('ReconciliationService', () => {
 		expect(compute.destroyed).toEqual([terminalId]);
 	});
 
+	it.each(['list', 'read', 'corrupt'] as const)(
+		'keeps reclaiming sessions when claim cleanup has a %s failure and retries cleanup',
+		async (failure) => {
+			vi.spyOn(console, 'error').mockImplementation(() => {});
+			const reclaimed = await putSession({
+				status: 'terminated',
+				sandbox_id: terminalId,
+				sandbox_reclaimed_at: iso(0),
+			});
+			await sessions.claimEditor(projectId, notebookId, reclaimed.session_id, 'shared');
+			const claimKey = paths.editorClaim(projectId, notebookId);
+			const claim = await (await bucket.get(claimKey))!.text();
+			const pendingId = createSandboxId();
+			await putSession({
+				notebook_id: createNotebookId(),
+				status: 'terminated',
+				sandbox_id: pendingId,
+			});
+			const list = bucket.list.bind(bucket);
+			const get = bucket.get.bind(bucket);
+			const listSpy = vi.spyOn(bucket, 'list').mockImplementation((options) => {
+				if (failure === 'list' && options?.prefix === '_system/editors/')
+					throw new Error('listing unavailable');
+				return list(options);
+			});
+			const getSpy = vi.spyOn(bucket, 'get').mockImplementation((key) => {
+				if (failure === 'read' && key === claimKey) throw new Error('read unavailable');
+				return get(key);
+			});
+			if (failure === 'corrupt') await bucket.put(claimKey, 'invalid');
+			expect((await reconciler.reclaimTerminalSessions()).reclaimed).toBe(1);
+			expect(compute.destroyed).toEqual([pendingId]);
+			listSpy.mockRestore();
+			getSpy.mockRestore();
+			if (failure === 'corrupt') await bucket.put(claimKey, claim);
+			expect((await reconciler.reclaimTerminalSessions()).reclaimed).toBe(0);
+			expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBeNull();
+			expect(compute.destroyed).toEqual([pendingId]);
+		},
+	);
 	it.each(['2', '', '0'])(
 		'maintenance requires a confirmed idle expired kernel: %j',
 		async (output) => {

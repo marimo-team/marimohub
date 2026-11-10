@@ -55,7 +55,7 @@ describe('MaintenanceLock', () => {
 		expect(await lock.acquire('B', 10_000)).toBe(true);
 	});
 
-	it('treats a lease released between the failed create and the read as free', async () => {
+	it('treats a lease released while acquisition reads the lease as free', async () => {
 		expect(await lock.acquire('A', 10_000)).toBe(true);
 		const originalGet = bucket.get.bind(bucket);
 		let released = false;
@@ -71,51 +71,40 @@ describe('MaintenanceLock', () => {
 		expect(await lock.acquire('B', 10_000)).toBe(true);
 	});
 
-	it('release does not clobber a lease stolen between its read and write', async () => {
-		expect(await lock.acquire('A', 1000)).toBe(true);
-		const stale = (await bucket.get(paths.maintenanceLock))!;
-		vi.spyOn(bucket, 'get').mockImplementationOnce(async () => {
-			clock.set(2000);
-			expect(await lock.acquire('B', 10_000)).toBe(true);
-			return stale;
-		});
-		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-		await lock.release('A');
-
-		expect(await (await bucket.get(paths.maintenanceLock))!.json()).toMatchObject({ holder: 'B' });
-		expect(error).not.toHaveBeenCalled();
+	it('uses three operations per tick without a failed create', async () => {
+		await lock.acquire('initial');
+		await lock.release('initial');
+		const get = vi.spyOn(bucket, 'get');
+		const put = vi.spyOn(bucket, 'put');
+		expect(await lock.acquire('next')).toBe(true);
+		await lock.release('next');
+		expect(get).toHaveBeenCalledOnce();
+		expect(put).toHaveBeenCalledTimes(2);
+		expect(put.mock.calls.every(([, , opts]) => opts?.onlyIfEtagMatches)).toBe(true);
 	});
 
-	it.each(['get', 'body'] as const)(
-		'does not release a successor after an aborted %s resumes',
-		async (phase) => {
-			await lock.acquire('A', 1000);
-			const oldRecord = (await bucket.get(paths.maintenanceLock))!;
-			const read = Promise.withResolvers<void>();
-			vi.spyOn(bucket, 'get').mockImplementationOnce(async () => {
-				if (phase === 'get') await read.promise;
-				return {
-					...oldRecord,
-					text: async () => {
-						await read.promise;
-						return oldRecord.text();
-					},
-				};
-			});
-			const controller = new AbortController();
-			const releasing = lock.release('A', controller.signal);
-			await Promise.resolve();
-			controller.abort();
-			clock.set(2000);
-			expect(await lock.acquire('B', 1000)).toBe(true);
-			read.resolve();
-			await releasing;
-			expect(await (await bucket.get(paths.maintenanceLock))!.json()).toMatchObject({
-				holder: 'B',
-			});
-		},
-	);
+	it('a delayed release cannot overwrite another replica after expiry', async () => {
+		await lock.acquire('A', 1000);
+		const originalPut = bucket.put.bind(bucket);
+		const pending = Promise.withResolvers<void>();
+		vi.spyOn(bucket, 'put').mockImplementationOnce(async (...args) => {
+			await pending.promise;
+			return originalPut(...args);
+		});
+		const releasing = lock.release('A');
+		clock.set(2000);
+		expect(await new MaintenanceLock(bucket).acquire('B', 10_000)).toBe(true);
+		pending.resolve();
+		await releasing;
+		expect(await (await bucket.get(paths.maintenanceLock))!.json()).toMatchObject({ holder: 'B' });
+	});
+
+	it('does not write a release when already aborted', async () => {
+		await lock.acquire('A', 1000);
+		const put = vi.spyOn(bucket, 'put');
+		await lock.release('A', AbortSignal.abort());
+		expect(put).not.toHaveBeenCalled();
+	});
 
 	it('release by a non-holder is a no-op', async () => {
 		expect(await lock.acquire('A', 10_000)).toBe(true);
@@ -150,6 +139,46 @@ describe('MaintenanceLock', () => {
 		expect(await lock.acquire('B', 1000)).toBe(false);
 	});
 
+	it('allows exactly one concurrent creator and ignores the losing holder release', async () => {
+		const other = new MaintenanceLock(bucket);
+		const results = await Promise.all([lock.acquire('A', 1000), other.acquire('B', 1000)]);
+		expect(results.filter(Boolean)).toHaveLength(1);
+		const winner = results[0] ? 'A' : 'B';
+		await (results[0] ? other : lock).release(results[0] ? 'B' : 'A');
+		expect(await (await bucket.get(paths.maintenanceLock))!.json()).toMatchObject({
+			holder: winner,
+			expires_at: new Date(1000).toISOString(),
+		});
+	});
+
+	it('does not turn a failed lease read into permission to run', async () => {
+		vi.spyOn(bucket, 'get').mockRejectedValueOnce(new Error('bucket unavailable'));
+		const put = vi.spyOn(bucket, 'put');
+		await expect(lock.acquire('A')).rejects.toThrow('bucket unavailable');
+		await lock.release('A');
+		expect(put).not.toHaveBeenCalled();
+		expect(await lock.acquire('A')).toBe(true);
+	});
+
+	it('retains the lease after a release write fails and permits takeover exactly at expiry', async () => {
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		await lock.acquire('A', 1000);
+		vi.spyOn(bucket, 'put').mockRejectedValueOnce(new Error('write unavailable'));
+		await expect(lock.release('A')).resolves.toBeUndefined();
+		const other = new MaintenanceLock(bucket);
+		clock.set(999);
+		expect(await other.acquire('B', 1000)).toBe(false);
+		clock.set(1000);
+		expect(await other.acquire('B', 1000)).toBe(true);
+	});
+
+	it('releases using the renewed ETag', async () => {
+		await lock.acquire('A', 1000);
+		clock.set(500);
+		await lock.acquire('A', 2000);
+		await lock.release('A');
+		expect(await new MaintenanceLock(bucket).acquire('B')).toBe(true);
+	});
 	it('release does not delete a lease another holder stole after a TTL overrun', async () => {
 		expect(await lock.acquire('A', 1000)).toBe(true);
 		clock.set(2000); // A overran its TTL

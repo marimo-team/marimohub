@@ -18,7 +18,7 @@ import { RECLAIM_PROVISION_GRACE_MS, SessionRetirer } from './SessionRetirer';
 import { AppPoolStore } from './AppPoolStore';
 import { SandboxDiagnosticLease } from './SandboxDiagnosticLease';
 import { isTerminal } from './sessionState';
-import { listAllKeys } from '../catalog/storage';
+import { listAllKeys, listAllObjects } from '../catalog/storage';
 import type { SessionService } from './SessionService';
 
 /**
@@ -39,6 +39,7 @@ class ReclaimTimeoutError extends Error {
 }
 
 const OrphanMarkerSchema = z.object({ first_seen: z.number() });
+const ClaimReferenceSchema = z.object({ session_id: z.string().nullable() });
 
 /** A second accounting source: sandboxes held by active job runs (see JobRunService). */
 export interface ActiveSandboxSource {
@@ -68,6 +69,7 @@ export interface ReconcileResult {
 
 /** Reclaims terminal sessions even without provider enumeration, then reconciles live sandboxes. */
 export class ReconciliationService {
+	private claimIndex = new Map<string, { etag: string; sessionId: string | null }>();
 	private readonly retirer: SessionRetirer;
 	private readonly diagnosticLeases: SandboxDiagnosticLease;
 	/**
@@ -119,9 +121,15 @@ export class ReconciliationService {
 		let reclaimed = 0;
 		let unreclaimedTerminal = 0;
 		let oldestUnreclaimedAgeMs: number | null = null;
-		const candidates = (await this.sessions.listSessions()).filter(
+		const sessions = await this.sessions.listSessions();
+		await this.releaseReclaimedClaims(sessions).catch((error) => {
+			logOperationalError('reclaimed_claim_scan_failed', {}, error);
+		});
+		const candidates = sessions.filter(
 			(session) =>
-				session.sandbox_id && (isTerminal(session.status) || session.status === 'terminating'),
+				session.sandbox_id &&
+				!session.sandbox_reclaimed_at &&
+				(isTerminal(session.status) || session.status === 'terminating'),
 		);
 		await mapWithConcurrency(candidates, 8, async (session) => {
 			try {
@@ -165,6 +173,48 @@ export class ReconciliationService {
 			);
 		});
 		return { reclaimed, unreclaimedTerminal, oldestUnreclaimedAgeMs };
+	}
+
+	private async releaseReclaimedClaims(sessions: Session[]): Promise<void> {
+		const reclaimed = new Map(
+			sessions
+				.filter((session) => session.sandbox_reclaimed_at)
+				.map((session) => [
+					`${session.project_id}/${session.notebook_id}/${session.session_id}`,
+					session,
+				]),
+		);
+		if (reclaimed.size === 0) return;
+		const objects = (
+			await Promise.all([
+				listAllObjects(this.bucket, '_system/editors/'),
+				listAllObjects(this.bucket, '_system/apps/'),
+			])
+		).flat();
+		const next = new Map<string, { etag: string; sessionId: string | null }>();
+		await mapWithConcurrency(objects, 8, async (listed) => {
+			try {
+				let claim = this.claimIndex.get(listed.key);
+				if (!listed.etag || claim?.etag !== listed.etag) {
+					const object = await this.bucket.get(listed.key);
+					if (!object) return;
+					const record = await readStored(ClaimReferenceSchema, object, listed.key);
+					claim = { etag: object.etag, sessionId: record.session_id };
+				}
+				next.set(listed.key, claim);
+				if (!claim.sessionId) return;
+				const match = /^_system\/(?:editors|apps)\/([^/]+)\/([^/]+)\.json$/.exec(listed.key);
+				const session = match && reclaimed.get(`${match[1]}/${match[2]}/${claim.sessionId}`);
+				if (!session) return;
+				// Claim release can fail after the reclaimed stamp. Retry only outstanding claims.
+				if (listed.key.startsWith('_system/editors/'))
+					await this.sessions.releaseEditorFor(session);
+				else await this.sessions.releaseAppFor(session);
+			} catch (error) {
+				logOperationalError('reclaimed_claim_release_failed', { object: listed.key }, error);
+			}
+		});
+		this.claimIndex = next;
 	}
 
 	async reconcile(opts?: { orphanGraceMs?: number }): Promise<ReconcileResult> {
