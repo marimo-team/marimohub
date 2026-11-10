@@ -41,6 +41,8 @@ const LEASE_MS = 60_000;
 export class MigrationService {
 	private readonly completed = new Set<string>();
 	private inFlight?: Promise<boolean>;
+	private refreshInFlight?: Promise<void>;
+	private nextRefreshAt = 0;
 	private readonly migrations: readonly BackgroundMigration[];
 
 	constructor(
@@ -55,6 +57,34 @@ export class MigrationService {
 			ids.add(migration.id);
 		}
 		this.migrations = [...migrations];
+	}
+
+	/** Readiness checks never perform storage I/O. */
+	isComplete(id: string): boolean {
+		return this.completed.has(id);
+	}
+
+	/** Read-only startup refresh for runtimes whose request isolates do not run ticks. */
+	refreshCompleted(): Promise<void> | undefined {
+		if (this.refreshInFlight) return this.refreshInFlight;
+		if (this.completed.size === this.migrations.length || Date.now() < this.nextRefreshAt)
+			return undefined;
+		this.nextRefreshAt = Date.now() + 5_000;
+		this.refreshInFlight = this.readCompleted().finally(() => {
+			this.refreshInFlight = undefined;
+		});
+		return this.refreshInFlight;
+	}
+
+	private async readCompleted(): Promise<void> {
+		for (const migration of this.migrations) {
+			if (this.completed.has(migration.id)) continue;
+			const key = paths.migration(migration.id);
+			const object = await this.bucket.get(key);
+			const state = object ? await readStored(MigrationStateSchema, object, key) : undefined;
+			if (state?.status !== 'complete') return;
+			this.completed.add(migration.id);
+		}
 	}
 
 	/** Run at most one batch; true means every registered migration is complete. */

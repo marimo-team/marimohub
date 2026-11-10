@@ -1,10 +1,7 @@
 # Migrations
 
-Project access summaries migrate automatically in the background. Normal upgrades
-require neither shell access nor a rebuild command.
-
-`MARIMOHUB_SESSION_INDEX` still controls session indexing. Its automatic migration
-is proposed, not implemented. See [session index rollout](./bucket_spec.md#per-user-session-index).
+Project access summaries and session indexes migrate automatically in the background.
+Normal upgrades require neither shell access nor a rebuild command.
 
 ## Automatic background migrations
 
@@ -12,12 +9,8 @@ is proposed, not implemented. See [session index rollout](./bucket_spec.md#per-u
 `packages/core/src/services/catalog/migrations.ts`. Each migration has a permanent
 ID and performs one bounded batch per tick, in registry order:
 
-```ts
-{
-  id: 'project-access-v1',
-  runBatch: (context) => projects.migrateAccessSummaries(context),
-}
-```
+1. `project-access-v1` updates catalog summaries.
+2. `session-index-v1` builds per-user session indexes.
 
 `runBatch({ cursor, signal })` returns `{ done: false, cursor }` or `{ done: true }`.
 The owning domain service performs all data writes through its existing CAS protocol.
@@ -29,8 +22,8 @@ The owning domain service performs all data writes through its existing CAS prot
 | Node server       | Starts immediately; retries every five seconds, independently of the maintenance setting | Stops its migration loop   |
 | Cloudflare Worker | One batch per scheduled event; the example cron runs every five minutes                  | Skips completed migrations |
 
-HTTP startup does not wait for migration. Requests never run batches or read
-migration checkpoints. Fresh deployments wait for catalog initialization;
+HTTP startup does not wait for migration. Requests never run migration batches.
+Node requests use cached readiness without reading checkpoints. Fresh deployments wait for catalog initialization;
 new projects already contain current summaries.
 
 The runner owns `_system/migrations/{id}.json`. Each record holds a cursor and
@@ -87,6 +80,50 @@ pnpm --filter @marimo-hub/server project-access:rebuild
 node dist/project-access-rebuild.mjs
 ```
 
+### Session index v1
+
+The second migration uses `bucketMigration`:
+
+```ts
+bucketMigration({
+	id: 'session-index-v1',
+	bucket,
+	prefix: paths.sessionsPrefix,
+	migrate: (key, signal) => sessions.migrateSessionIndexEntry(key, signal),
+});
+```
+
+The helper visits at most 100 objects per tick, with at most 16 concurrent visitors.
+It handles pagination, cancellation, and draining active visitors after errors.
+The runner handles leases, retries, checkpoints, ordering, and permanent completion receipts.
+A failed page replays from its preceding checkpoint. Visitors must tolerate partial writes and replay.
+New writers must maintain the migrated format, including objects inserted behind the cursor.
+
+`SessionService` merges each live reference through the user index CAS.
+Each CAS attempt rereads the session. Missing records are skipped, terminal editors
+are excluded, and unreclaimed app sandboxes retain their references.
+Corrupt sessions, mismatched IDs, and storage failures prevent completion.
+
+Every session creation requires successful index registration, including before migration completes.
+Admission uses session scans until the background runner observes the completion receipt.
+`isComplete(id)` reads only process memory.
+Each replica activates indexed reads independently, including after restart.
+Worker HTTP isolates use `refreshCompleted()` through deferred background work because cron can run in another isolate.
+The framework coalesces these read-only checks and limits retries to once per five seconds.
+After completion, it stops storage reads. A refresh failure leaves scans active and logs the error.
+
+Missing indexes still trigger strict recovery scans. Missing never means an empty
+queue, including for a new user. Normal reads validate the indexed sessions;
+lifecycle maintenance repairs membership. See [session index invariants](./bucket_spec.md#per-user-session-index).
+
+The optional repair command remains available after migration:
+
+```sh
+pnpm --filter @marimo-hub/server session-index:rebuild
+# Packaged installation:
+node dist/session-index-rebuild.mjs
+```
+
 ### Upgrade compatibility
 
 Every concurrent writer must support `access_pending`: invalidate summaries before
@@ -94,6 +131,8 @@ permission writes and preserve other writers' markers. Before upgrading from
 releases without this protocol, stop all old writers, including maintenance and
 command-line processes. Do not roll back to those binaries against migrated storage.
 Migration completion cannot prove that incompatible writers have stopped.
+Session-index writers must require registration before admitting new sessions.
+Stop older writers that omit registration or ignore its failures before upgrading.
 
 An older compatible writer can replace a versioned summary with an unversioned
 summary during rollout. Readers then use metadata until a current writer refreshes
@@ -103,15 +142,17 @@ it. The repair command can refresh these entries after rollout.
 
 1. Add a permanent ID, such as `project-access-v2`. Never reuse an ID or change
    its cursor semantics.
-2. Implement bounded, idempotent batches in the owning service. Check cancellation
-   before storage work and publication; preserve its concurrency safeguards.
-3. Keep readers compatible with unmigrated data. Do not add request-time checkpoint reads.
-4. Test interruption, competing replicas, lost responses, corrupt records,
+2. Use `bucketMigration` for object traversal. Supply a prefix and an idempotent visitor
+   that delegates writes to the owning service. Use `runBatch` for other batch shapes.
+3. Check cancellation before storage work and publication. Preserve domain concurrency safeguards.
+4. Keep readers compatible with unmigrated data. Keep checkpoint reads out of domain request methods.
+5. Test interruption, competing replicas, lost responses, corrupt records,
    concurrent mutations, and completed migrations without repeated I/O.
-5. Retain definitions required by supported upgrades. A replacement must handle
+6. Retain definitions required by supported upgrades. A replacement must handle
    all earlier supported data shapes, or retain its prerequisites in registry order.
-6. Remove obsolete definitions when supported upgrades no longer need them.
+7. Remove obsolete definitions when supported upgrades no longer need them.
    Retain their receipts; the runner ignores removed IDs without listing storage.
+   Update readiness consumers to use the replacement migration or the current format.
 
 This runner is unsuitable for non-idempotent external effects or destructive work
 that requires exclusive writers.

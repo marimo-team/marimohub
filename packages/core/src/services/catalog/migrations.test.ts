@@ -73,7 +73,7 @@ describe('project access background migration', () => {
 		expect(metadataCalls(get.mock.calls)).toHaveLength(25);
 		expect(put.mock.calls.filter(([key]) => key === paths.catalog)).toHaveLength(1);
 		get.mockClear();
-		expect(await createServices(bucket).migrations.tick()).toBe(true);
+		await finish(createServices(bucket));
 		expect(metadataCalls(get.mock.calls)).toHaveLength(5);
 		expect(put.mock.calls.filter(([key]) => key === paths.catalog)).toHaveLength(2);
 		expect((await services.projects.listProjects({ subject })).length).toBe(30);
@@ -114,14 +114,14 @@ describe('project access background migration', () => {
 		}));
 		const key = paths.project(id).meta;
 		await bucket.put(key, JSON.stringify({ ...projects[0], members: [] }));
-		expect(await services.migrations.tick()).toBe(true);
+		await finish(services);
 		const entry = (await services.catalog.getCurrentSnapshot()).projects[0];
 		expect(entry.access_pending).toEqual([marker]);
 		expect(entry.security_labels_pending).toBe(true);
 		expect(entry.access).toBeUndefined();
 		expect(await services.projects.listProjects({ subject })).toEqual([]);
 		const get = vi.spyOn(bucket, 'get');
-		expect(await services.migrations.tick()).toBe(true);
+		await finish(services);
 		expect(get).not.toHaveBeenCalled();
 	});
 
@@ -131,14 +131,14 @@ describe('project access background migration', () => {
 		expect(await services.migrations.tick()).toBe(false);
 		expect(await bucket.get(paths.catalog)).toBeNull();
 		await services.catalog.initialize(ACTOR);
-		expect(await services.migrations.tick()).toBe(true);
+		await finish(services);
 	});
 
 	it('skips current summaries and leaves new projects ready after migration completes', async () => {
 		const { bucket, services } = await seed(0);
 		await services.projects.createProject({ name: 'Current', description: '' }, ACTOR);
 		const get = vi.spyOn(bucket, 'get');
-		expect(await services.migrations.tick()).toBe(true);
+		await finish(services);
 		expect(metadataCalls(get.mock.calls)).toHaveLength(0);
 		const project = await services.projects.createProject(
 			{ name: 'Later', description: '' },
@@ -215,7 +215,7 @@ describe('project access background migration', () => {
 		await expect(services.migrations.tick()).rejects.toThrow('catalog response lost');
 		spy.mockRestore();
 		const get = vi.spyOn(bucket, 'get');
-		expect(await createServices(bucket).migrations.tick()).toBe(true);
+		await finish(createServices(bucket));
 		expect(metadataCalls(get.mock.calls)).toHaveLength(0);
 	});
 
@@ -235,7 +235,7 @@ it('does not downgrade a summary from a newer writer during automatic migration'
 		access: { ...entry.access!, version: 2 },
 	}));
 	const get = vi.spyOn(bucket, 'get');
-	expect(await services.migrations.tick()).toBe(true);
+	await finish(services);
 	expect(metadataCalls(get.mock.calls)).toHaveLength(0);
 	expect((await services.catalog.getCurrentSnapshot()).projects[0].access?.version).toBe(2);
 	expect((await services.projects.listProjects({ subject })).map((p) => p.id)).toEqual([
@@ -263,7 +263,7 @@ it('keeps earlier batches committed but publishes none of a batch with corrupt m
 	});
 	await bucket.put(broken, original);
 	const get = vi.spyOn(bucket, 'get');
-	expect(await createServices(bucket).migrations.tick()).toBe(true);
+	await finish(createServices(bucket));
 	expect(
 		metadataCalls(get.mock.calls)
 			.map(([key]) => key)
@@ -287,7 +287,7 @@ it('resumes after the project used as its saved cursor has been deleted', async 
 	});
 	await bucket.delete(paths.project(boundary.id).meta);
 	const get = vi.spyOn(bucket, 'get');
-	expect(await createServices(bucket).migrations.tick()).toBe(true);
+	await finish(createServices(bucket));
 	expect(metadataCalls(get.mock.calls)).toHaveLength(2);
 	expect(await services.projects.listProjects({ subject })).toHaveLength(26);
 });
@@ -306,7 +306,7 @@ it('publishes neither summaries nor progress when cancelled during metadata read
 	expect((await services.catalog.getCurrentSnapshot()).snapshot_id).toBe(before.snapshot_id);
 	expect(await (await bucket.get(receipt))!.json()).toEqual({ version: 1, status: 'pending' });
 	spy.mockRestore();
-	expect(await createServices(bucket).migrations.tick()).toBe(true);
+	await finish(createServices(bucket));
 	expect(await services.projects.listProjects({ subject })).toHaveLength(3);
 });
 
@@ -324,7 +324,7 @@ it('preserves a concurrent new permission grant when retrying catalog publicatio
 		}
 		return put(key, ...args);
 	});
-	expect(await services.migrations.tick()).toBe(true);
+	await finish(services);
 	expect(raced).toBe(true);
 	const get = vi.spyOn(bucket, 'get');
 	expect(

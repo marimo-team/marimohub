@@ -14,18 +14,17 @@ import type { StorageCost } from './roundTripBucket';
 import { ALICE, OWNER, USERS, seed } from './seed';
 import type { Seeded } from './seed';
 
-type Api = ReturnType<typeof makeApi>;
+type Api = Awaited<ReturnType<typeof makeApi>>;
 
-const READY_OPTIONS = { sessionIndex: 'on' } as const;
-
-function makeApi(s: Seeded, userId: UserId, index: MemorySearchIndex, ready = false) {
+async function makeApi(s: Seeded, userId: UserId, index: MemorySearchIndex, ready = false) {
 	const background = queuedBackgroundWork();
 	const bucket = new RoundTripBucket(s.bucket);
 	const services = createServices(
 		bucket,
 		undefined,
-		ready ? { ...READY_OPTIONS, backgroundWork: background.work } : undefined,
+		ready ? { backgroundWork: background.work } : undefined,
 	);
+	if (ready) expect(await services.migrations.tick()).toBe(true);
 	const policy: PolicyConfig = { maxConcurrentSessionsPerUser: 20 };
 	const authz = new AuthorizationService(policy);
 	const source = new NotebookSource(bucket, services.catalog, services.notebooks, authz);
@@ -240,16 +239,15 @@ test.each([
 		});
 		const seeded = await seed(scale.projects, scale.notebooks, { terminalSessions: 2000 });
 		if (scale.ready) {
-			const services = createServices(seeded.bucket, undefined, READY_OPTIONS);
-			await services.sessions.rebuildSessionIndex();
+			const services = createServices(seeded.bucket);
 			let batches = 0;
 			while (!(await services.migrations.tick())) {
-				expect(++batches).toBeLessThanOrEqual(scale.projects);
+				expect(++batches).toBeLessThanOrEqual(1000);
 			}
 		}
 		const index = new MemorySearchIndex();
 		for (const user of [OWNER, ...Object.values(USERS)]) {
-			const api = makeApi(seeded, user, index, scale.ready);
+			const api = await makeApi(seeded, user, index, scale.ready);
 			await expectOk(await api.request('GET', '/me'));
 			await api.background.runAll();
 		}
@@ -325,9 +323,9 @@ test.each([
 			const isSearch = endpoint.name.startsWith('GET /search');
 			// Search fingerprints include ETags, which change when the fixture is copied.
 			const scenarioIndex = isSearch ? await buildSearch(s) : index;
-			const setupApi = makeApi(s, endpoint.user ?? ALICE, scenarioIndex, scale.ready);
+			const setupApi = await makeApi(s, endpoint.user ?? ALICE, scenarioIndex, scale.ready);
 			await endpoint.setup?.(setupApi, s);
-			const api = makeApi(s, endpoint.user ?? ALICE, scenarioIndex, scale.ready);
+			const api = await makeApi(s, endpoint.user ?? ALICE, scenarioIndex, scale.ready);
 			api.editSession = setupApi.editSession;
 			for (const [i, state] of ['cold', 'warm'].entries()) {
 				const costs = await measure(

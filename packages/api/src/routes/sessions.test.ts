@@ -4071,9 +4071,13 @@ describe('Session routes', () => {
 		},
 	);
 
-	it.each(['off', 'shadow', 'on'] as const)(
-		'POST /sessions enforces the per-user cap in %s mode (429)',
-		async (sessionIndex) => {
+	it.each([false, true])(
+		'POST /sessions enforces the per-user cap with migration complete: %s (429)',
+		async (migrated) => {
+			const services = createServices(bucket);
+			if (migrated) {
+				while (!(await services.migrations.tick())) {}
+			}
 			// Cap the owner at 1 concurrent session.
 			const compute = makeFakeCompute();
 			const create = vi.spyOn(compute, 'create');
@@ -4082,7 +4086,7 @@ describe('Session routes', () => {
 				userId: ACTOR,
 				compute,
 				maxConcurrentSessionsPerUser: 1,
-				deps: { services: createServices(bucket, undefined, { sessionIndex }) },
+				deps: { services },
 			}).request;
 
 			// First session succeeds (running, counts toward the cap).
@@ -4117,7 +4121,8 @@ describe('Session routes', () => {
 	] as const)(
 		'handles an active $mode start missing its $missing before cap ranking',
 		async ({ missing, mode }) => {
-			const services = createServices(bucket, undefined, { sessionIndex: 'on' });
+			const services = createServices(bucket);
+			while (!(await services.migrations.tick())) {}
 			const api = createTestApi({
 				bucket,
 				compute: makeFakeCompute(),
@@ -4147,7 +4152,8 @@ describe('Session routes', () => {
 	);
 
 	it('rejects an unregistered start and reclaims its speculative sandbox', async () => {
-		const services = createServices(bucket, undefined, { sessionIndex: 'on' });
+		const services = createServices(bucket);
+		while (!(await services.migrations.tick())) {}
 		const api = createTestApi({ bucket, compute: makeFakeCompute(), deps: { services } });
 		const put = bucket.put.bind(bucket);
 		const failure = vi.spyOn(bucket, 'put').mockImplementation((key, value, options) => {
@@ -4284,7 +4290,8 @@ describe('Session routes', () => {
 	] as const)(
 		'scans deployment-wide sessions $scans time(s) for an indexed user on a $start start',
 		async ({ start, scans }) => {
-			const services = createServices(bucket, undefined, { sessionIndex: 'on' });
+			const services = createServices(bucket);
+			while (!(await services.migrations.tick())) {}
 			const unrelatedProject = createProjectId();
 			const unrelated = await services.sessions.createSession({
 				project_id: unrelatedProject,

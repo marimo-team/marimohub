@@ -9,16 +9,15 @@ session records and five live sessions. Memberships vary between editor, viewer,
 app-user, and no access. Each scenario starts from its own copy of the data.
 
 The steady-state reports are [small](./endpoint-costs.steady.small.md) and
-[large](./endpoint-costs.steady.large.md). They enable the session index after
-backfill, run the registered background migrations to completion, and provide
+[large](./endpoint-costs.steady.large.md). They run the registered background migrations to completion and provide
 core services with a background-work queue. Setup runs outside measurement.
 Run only these profiles with `pnpm test:perf -t steady`.
 These profiles also cover reopening a claimed editor on a fresh replica and
 unchanged periodic saves. Use them to judge routine user-facing costs.
 
-The default profile retains shadow session-index mode, missing persistent indexes,
+The default profile retains scan-based admission, missing persistent indexes,
 and legacy project summaries before background migration.
-Its first session admission includes migration work. Keep this profile for comparison;
+Its first session admission includes missing-index recovery. Keep this profile for comparison;
 do not replace it with the steady-state profile to hide migration costs.
 Service options are explicit: environment variables do not configure these tests.
 Project-list assertions check exact visible IDs, and `/me` checks app-only status,

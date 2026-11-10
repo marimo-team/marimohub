@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 describe('startup migrations', () => {
-	it('runs immediately and stops polling after completion', async () => {
+	it('runs the next migration on a later tick and stops after both complete', async () => {
 		const bucket = await createInitializedBucket();
 		const deps = makeTestDeps(bucket);
 		const project = await deps.services.projects.createProject(
@@ -33,9 +33,13 @@ describe('startup migrations', () => {
 			expect((await deps.services.catalog.getCurrentSnapshot()).projects[0].access?.version).toBe(
 				1,
 			);
+			expect(deps.services.migrations.isComplete('session-index-v1')).toBe(false);
+			await vi.advanceTimersByTimeAsync(5_000);
+			await loops.drain();
+			expect(deps.services.migrations.isComplete('session-index-v1')).toBe(true);
 			const get = vi.spyOn(bucket, 'get');
 			await vi.advanceTimersByTimeAsync(60_000);
-			expect(tick).toHaveBeenCalledTimes(1);
+			expect(tick).toHaveBeenCalledTimes(2);
 			expect(get).not.toHaveBeenCalled();
 		} finally {
 			stop();
@@ -57,8 +61,12 @@ describe('startup migrations', () => {
 			await loops.drain();
 			expect(tick).toHaveBeenCalledTimes(2);
 			expect(await deps.bucket.get(paths.migration('project-access-v1'))).not.toBeNull();
+			expect(deps.services.migrations.isComplete('session-index-v1')).toBe(false);
+			await vi.advanceTimersByTimeAsync(5_000);
+			await loops.drain();
+			expect(deps.services.migrations.isComplete('session-index-v1')).toBe(true);
 			await vi.advanceTimersByTimeAsync(60_000);
-			expect(tick).toHaveBeenCalledTimes(2);
+			expect(tick).toHaveBeenCalledTimes(3);
 		} finally {
 			stop();
 			await loops.drain();
@@ -106,8 +114,11 @@ it('does not overlap a timed-out attempt and retries after the stalled work sett
 		await loops.drain();
 		expect(tick).toHaveBeenCalledTimes(2);
 		expect(await deps.bucket.get(paths.migration('project-access-v1'))).not.toBeNull();
+		await vi.advanceTimersByTimeAsync(5_000);
+		await loops.drain();
+		expect(deps.services.migrations.isComplete('session-index-v1')).toBe(true);
 		await vi.advanceTimersByTimeAsync(60_000);
-		expect(tick).toHaveBeenCalledTimes(2);
+		expect(tick).toHaveBeenCalledTimes(3);
 	} finally {
 		pending.resolve(false);
 		stop();

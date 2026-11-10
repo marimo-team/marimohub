@@ -5,14 +5,15 @@ import { createNotebookId, createProjectId, createSessionId } from '../../ids';
 import { paths } from '../../paths';
 import { SessionService } from './SessionService';
 import { SessionIndex } from './SessionIndex';
+import { legacySessions } from '../../testing/legacy-sessions';
 
 afterEach(() => vi.restoreAllMocks());
 
 function fixture() {
 	const bucket = new MemoryBucket();
 	const input = { project_id: createProjectId(), notebook_id: createNotebookId(), user_id: ACTOR };
-	const sessions = new SessionService(bucket, undefined, undefined, 'on');
-	const legacy = new SessionService(bucket, undefined, undefined, 'off');
+	const sessions = new SessionService(bucket, undefined, undefined, () => true);
+	const legacy = legacySessions(bucket);
 	return { bucket, input, sessions, legacy, index: new SessionIndex(bucket) };
 }
 
@@ -50,7 +51,7 @@ describe('session index recovery', () => {
 			}
 			return put(key, value, options);
 		});
-		const replica = new SessionService(bucket, undefined, undefined, 'on');
+		const replica = new SessionService(bucket, undefined, undefined, () => true);
 		const created = await Promise.all([
 			sessions.createSession(input),
 			replica.createSession(input),
@@ -69,7 +70,7 @@ describe('session index recovery', () => {
 		const { bucket, sessions, input } = fixture();
 		const existing = await sessions.createSession(input);
 		await bucket.delete(paths.sessionIndexForUser(ACTOR));
-		const cold = new SessionService(bucket, undefined, undefined, 'on');
+		const cold = new SessionService(bucket, undefined, undefined, () => true);
 		expect((await cold.listActiveForUser(ACTOR)).map((session) => session.session_id)).toEqual([
 			existing.session_id,
 		]);
@@ -81,7 +82,7 @@ describe('session index recovery', () => {
 		await legacy.createSession({ ...input, user_id: uid('unrelated') });
 		const get = vi.spyOn(bucket, 'get');
 		const list = vi.spyOn(bucket, 'list');
-		const cold = new SessionService(bucket, undefined, undefined, 'on');
+		const cold = new SessionService(bucket, undefined, undefined, () => true);
 		expect(await cold.countActiveForUser(ACTOR)).toBe(1);
 		expect(list).not.toHaveBeenCalled();
 		expect(get.mock.calls.map(([key]) => key)).toEqual([
@@ -171,7 +172,7 @@ describe('session index recovery', () => {
 		const cleanup = sessions.markFailed(input.project_id, original.session_id);
 		await entered.promise;
 		try {
-			const replica = new SessionService(bucket, undefined, undefined, 'on');
+			const replica = new SessionService(bucket, undefined, undefined, () => true);
 			await replica.createSession({ ...input, session_id: original.session_id });
 		} finally {
 			release.resolve();
@@ -188,11 +189,11 @@ describe('session index recovery', () => {
 });
 
 describe('bounded session index reconciliation', () => {
-	it.each(['shadow', 'on'] as const)(
+	it.each([false, true])(
 		'does not revalidate sessions or rewrite an unchanged %s index',
 		async (mode) => {
 			const { bucket, input } = fixture();
-			const sessions = new SessionService(bucket, undefined, undefined, mode);
+			const sessions = new SessionService(bucket, undefined, undefined, () => mode);
 			const session = await sessions.createSession(input);
 			const get = vi.spyOn(bucket, 'get');
 			const put = vi.spyOn(bucket, 'put');

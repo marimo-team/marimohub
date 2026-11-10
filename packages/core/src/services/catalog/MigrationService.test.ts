@@ -401,3 +401,64 @@ it('preserves successor completion when an expired worker fails late', async () 
 	expect(await (await bucket.get(key))!.text()).toBe(receipt);
 	expect(await first.tick()).toBe(true);
 });
+
+it('coalesces read-only readiness refreshes, throttles pending checks, and stops after completion', async () => {
+	const bucket = new MemoryBucket();
+	const runBatch = vi.fn(complete);
+	const service = new MigrationService(bucket, [definition(runBatch)]);
+	let now = 1_000;
+	vi.spyOn(Date, 'now').mockImplementation(() => now);
+	const get = vi.spyOn(bucket, 'get');
+	const first = service.refreshCompleted();
+	expect(service.refreshCompleted()).toBe(first);
+	await first;
+	expect(service.isComplete(id)).toBe(false);
+	expect(service.refreshCompleted()).toBeUndefined();
+	expect(get).toHaveBeenCalledTimes(1);
+	await new MigrationService(bucket, [definition()]).tick();
+	now += 5_000;
+	await service.refreshCompleted();
+	expect(service.isComplete(id)).toBe(true);
+	get.mockClear();
+	now += 60_000;
+	expect(service.refreshCompleted()).toBeUndefined();
+	expect(get).not.toHaveBeenCalled();
+	expect(runBatch).not.toHaveBeenCalled();
+});
+
+it.each(['read-failure', 'corrupt'])(
+	'keeps readiness false after %s and recovers without running batches',
+	async (failure) => {
+		const bucket = new MemoryBucket();
+		const runBatch = vi.fn(complete);
+		const service = new MigrationService(bucket, [definition(runBatch)]);
+		let now = 1_000;
+		vi.spyOn(Date, 'now').mockImplementation(() => now);
+		if (failure === 'corrupt') await bucket.put(key, '{}');
+		else vi.spyOn(bucket, 'get').mockRejectedValueOnce(new Error('read failed'));
+		await expect(service.refreshCompleted()).rejects.toThrow();
+		expect(service.isComplete(id)).toBe(false);
+		expect(service.refreshCompleted()).toBeUndefined();
+		await bucket.put(
+			key,
+			JSON.stringify({ version: 1, status: 'complete', completed_at: new Date().toISOString() }),
+		);
+		now += 5_000;
+		await service.refreshCompleted();
+		expect(service.isComplete(id)).toBe(true);
+		expect(runBatch).not.toHaveBeenCalled();
+	},
+);
+
+it('does not activate a later receipt before its predecessor completes', async () => {
+	const bucket = new MemoryBucket();
+	const runBatch = vi.fn(complete);
+	const service = new MigrationService(bucket, [definition(runBatch), { id: 'next-v1', runBatch }]);
+	await bucket.put(
+		paths.migration('next-v1'),
+		JSON.stringify({ version: 1, status: 'complete', completed_at: new Date().toISOString() }),
+	);
+	await service.refreshCompleted();
+	expect(service.isComplete('next-v1')).toBe(false);
+	expect(runBatch).not.toHaveBeenCalled();
+});

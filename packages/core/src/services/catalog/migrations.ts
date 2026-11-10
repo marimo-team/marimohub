@@ -1,8 +1,18 @@
+import type { Bucket } from '../../ports/bucket';
+import { paths } from '../../paths';
+import type { SessionService } from '../runtime/SessionService';
+import { bucketMigration } from './bucketMigration';
 import { NotInitializedError } from '../../errors';
 import type { ProjectService } from '../content/ProjectService';
 import type { BackgroundMigration } from './MigrationService';
 
-export function backgroundMigrations(projects: ProjectService): readonly BackgroundMigration[] {
+export const SESSION_INDEX_MIGRATION = 'session-index-v1';
+
+export function backgroundMigrations(
+	bucket: Bucket,
+	projects: ProjectService,
+	sessions: SessionService,
+): readonly BackgroundMigration[] {
 	return [
 		{
 			id: 'project-access-v1',
@@ -16,5 +26,11 @@ export function backgroundMigrations(projects: ProjectService): readonly Backgro
 				}
 			},
 		},
+		bucketMigration({
+			id: SESSION_INDEX_MIGRATION,
+			bucket,
+			prefix: paths.sessionsPrefix,
+			migrate: (key, signal) => sessions.migrateSessionIndexEntry(key, signal),
+		}),
 	];
 }

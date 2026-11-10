@@ -1,5 +1,5 @@
 import { MigrationService } from './catalog/MigrationService';
-import { backgroundMigrations } from './catalog/migrations';
+import { backgroundMigrations, SESSION_INDEX_MIGRATION } from './catalog/migrations';
 export { MigrationService } from './catalog/MigrationService';
 export type {
 	BackgroundMigration,
@@ -522,7 +522,6 @@ const bucketAttrs: AttrExtractors<Bucket> = {
 };
 
 export interface CreateServicesOptions {
-	sessionIndex?: 'off' | 'shadow' | 'on';
 	backgroundWork?: BackgroundWork;
 	workspaceLimits?: WorkspaceLimits;
 	repositoryHosts?: GitProviderHosts;
@@ -599,7 +598,9 @@ export function createServices(
 	);
 	const sessions = wrap(
 		'SessionService',
-		new SessionService(bucket, metrics, undefined, options?.sessionIndex),
+		new SessionService(bucket, metrics, undefined, (): boolean =>
+			migrations.isComplete(SESSION_INDEX_MIGRATION),
+		),
 		{
 			createSession: (input) => ({
 				...notebook(input.project_id, input.notebook_id),
@@ -716,6 +717,11 @@ export function createServices(
 		prune: previewRecord,
 	});
 
+	const migrations = wrap(
+		'MigrationService',
+		new MigrationService(bucket, backgroundMigrations(bucket, projects, sessions)),
+	);
+
 	return {
 		catalog,
 		events,
@@ -763,10 +769,7 @@ export function createServices(
 		oauthAuthorizations,
 		oauthRateLimits,
 		hostRetries: wrap('HostRetryStore', new HostRetryStore(bucket)),
-		migrations: wrap(
-			'MigrationService',
-			new MigrationService(bucket, backgroundMigrations(projects)),
-		),
+		migrations,
 		maintenance,
 		idempotency,
 	};

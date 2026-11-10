@@ -49,10 +49,10 @@ describe('SessionService (app mode)', () => {
 				project_id: projectId,
 				user_id: USER_A,
 				mode: 'app',
-				source_version_id: 'ver-0000000000000001' as VersionId,
+				source_version_id: 'ver_00000000000000000000000001' as VersionId,
 			});
 			expect(s.mode).toBe('app');
-			expect(s.source_version_id).toBe('ver-0000000000000001');
+			expect(s.source_version_id).toBe('ver_00000000000000000000000001');
 		});
 	});
 
