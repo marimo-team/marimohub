@@ -1188,6 +1188,74 @@ describe('optional compute configuration', () => {
 			).toThrow(/requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE/);
 		});
 
+		it.each([
+			[undefined, 'sandboxes-compress@kubernetescrd'],
+			[
+				'sandboxes-auth@kubernetescrd',
+				'sandboxes-auth@kubernetescrd,sandboxes-compress@kubernetescrd',
+			],
+			[
+				' sandboxes-auth@kubernetescrd, sandboxes-compress@kubernetescrd ',
+				'sandboxes-auth@kubernetescrd,sandboxes-compress@kubernetescrd',
+			],
+		])('merges middleware references with existing annotations: %s', (existing, expected) => {
+			const createPublisher = vi.spyOn(coreweave, 'createKernelIngressPublisher');
+			const annotation = 'traefik.ingress.kubernetes.io/router.middlewares';
+			try {
+				makeCompute({
+					...env,
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: 'sandboxes',
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: JSON.stringify({
+						'example.com/annotation': 'preserved',
+						[annotation]: existing,
+					}),
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES:
+						' sandboxes-compress@kubernetescrd, sandboxes-compress@kubernetescrd ',
+				});
+				expect(createPublisher).toHaveBeenCalledExactlyOnceWith({
+					namespace: 'sandboxes',
+					ingressClassName: 'traefik',
+					ingressAnnotations: {
+						'example.com/annotation': 'preserved',
+						[annotation]: expected,
+					},
+				});
+			} finally {
+				createPublisher.mockRestore();
+			}
+		});
+
+		it.each([
+			'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES',
+			'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE',
+		])('rejects %s without an ingress namespace', (variable) => {
+			expect(() =>
+				makeCompute({
+					...env,
+					[variable]: 'sandboxes-compress@kubernetescrd',
+				}),
+			).toThrow(`${variable} requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE`);
+		});
+
+		it.each([
+			'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES',
+			'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE',
+		])('checks the combined annotation size after appending %s', (variable) => {
+			const error = getConfigError(() =>
+				makeCompute({
+					...env,
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: 'sandboxes',
+					MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: JSON.stringify({
+						a: 'x'.repeat(256 * 1024 - 1),
+					}),
+					[variable]: 'sandboxes-compress@kubernetescrd',
+				}),
+			);
+			expect(error.message).toMatch(/Invalid combined CoreWeave ingress annotations.*256 KiB/);
+			expect(error.opts.remediation).toContain('MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS');
+			expect(error.opts.remediation).toContain('MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES');
+		});
+
 		it('treats an empty MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION as unset', () => {
 			expect(() =>
 				makeCompute({

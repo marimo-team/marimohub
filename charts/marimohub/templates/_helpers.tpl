@@ -80,6 +80,24 @@ Call with: (dict "root" $ "maintenance" true|false)
 {{- define "marimohub.podTemplate" -}}
 {{- $root := .root -}}
 {{- $v := $root.Values -}}
+{{- if $v.sandboxIngress.compression.enabled -}}
+{{- $namespace := required "sandboxIngress.namespace is required for kernel compression" $v.sandboxIngress.namespace -}}
+{{- $namespaceKey := "MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE" -}}
+{{- $compressionKey := "MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE" -}}
+{{- range $source, $values := dict "config" $v.config "secrets.data" $v.secrets.data -}}
+{{- if and (hasKey ($values | default dict) $namespaceKey) (ne (get $values $namespaceKey) $namespace) -}}
+{{- fail (printf "%s.%s must match sandboxIngress.namespace when compression is enabled" $source $namespaceKey) -}}
+{{- end -}}
+{{- if hasKey ($values | default dict) $compressionKey -}}
+{{- fail (printf "%s.%s is managed by sandboxIngress.compression; put other middleware references in MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS" $source $compressionKey) -}}
+{{- end -}}
+{{- end -}}
+{{- range $v.extraEnv -}}
+{{- if or (eq .name $namespaceKey) (eq .name $compressionKey) -}}
+{{- fail (printf "extraEnv.%s is managed by sandboxIngress.compression" .name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- range $v.extraEnv -}}
 {{- if eq .name "MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS" -}}
 {{- fail "Use maintenance.shutdownTimeoutSeconds instead of extraEnv for the shutdown timeout" -}}
@@ -200,6 +218,12 @@ spec:
         # explicit env overrides any value coming from the ConfigMap/Secret.
         - name: MARIMOHUB_RUN_MAINTENANCE
           value: {{ if .maintenance }}"true"{{ else }}"false"{{ end }}
+        {{- if $v.sandboxIngress.compression.enabled }}
+        - name: MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE
+          value: {{ $v.sandboxIngress.namespace | quote }}
+        - name: MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE
+          value: {{ printf "%s-%s-kernel-compress@kubernetescrd" $v.sandboxIngress.namespace (include "marimohub.fullname" $root) | quote }}
+        {{- end }}
         {{- if .maintenance }}
         - name: MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS
           value: {{ $v.maintenance.shutdownTimeoutSeconds | quote }}

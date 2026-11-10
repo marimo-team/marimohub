@@ -6,12 +6,14 @@ on:
     branches: [main]
     paths:
       - 'charts/**'
+      - 'packages/config/**'
       - '.github/workflows/chart.yml'
       - 'apps/server/k8s/deployment.yaml'
       - 'examples/kubernetes/deployment.yaml'
   pull_request:
     paths:
       - 'charts/**'
+      - 'packages/config/**'
       - '.github/workflows/chart.yml'
       - 'apps/server/k8s/deployment.yaml'
       - 'examples/kubernetes/deployment.yaml'
@@ -30,6 +32,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          version: 1.3.0
+          node-version-file: '.node-version'
+          sfw: true
+          cache: true
+          run-install: |
+            - args: ['--frozen-lockfile']
 
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
         # `latest` resolves over the network and silently falls back to Helm v3 on
@@ -51,6 +62,11 @@ jobs:
 
       - name: Verify kernel compression
         run: bash charts/marimohub/ci/check-kernel-compression.sh
+
+      - name: Verify compression with external Secrets
+        env:
+          MARIMOHUB_HELM_TEST: 'true'
+        run: vp test packages/config/src/kernelCompression.helm.test.ts --configLoader=runner --pool=threads
 
       - name: Verify sandbox pre-puller configuration
         run: |
@@ -141,15 +157,14 @@ jobs:
           curl -sSfL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
             | tar -xz -C /usr/local/bin kubeconform
 
-      # Render with the defaults and with the example values, then validate the
-      # manifests against the upstream Kubernetes JSON schemas. Treats a missing
-      # schema (none of our kinds are CRDs) as an error.
+      # The compression script checks Traefik's Middleware CRD; kubeconform
+      # validates the remaining resources against Kubernetes schemas.
       - name: Render & validate manifests
         run: |
-          for values in "" "-f charts/marimohub/ci/example-values.yaml" "-f charts/marimohub/ci/kubernetes-secrets-values.yaml" "-f charts/marimohub/ci/sandbox-prepuller-values.yaml"; do
+          for values in "" "-f charts/marimohub/ci/example-values.yaml" "-f charts/marimohub/ci/kubernetes-secrets-values.yaml" "-f charts/marimohub/ci/sandbox-prepuller-values.yaml" "-f charts/marimohub/ci/kernel-compression-values.yaml"; do
             echo "::group::helm template ${values:-(defaults)}"
             helm template test charts/marimohub $values \
-              | kubeconform -strict -summary -verbose \
+              | kubeconform -strict -summary -verbose -skip Middleware \
                   -kubernetes-version 1.29.0 \
                   -schema-location default
             echo "::endgroup::"

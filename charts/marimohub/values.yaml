@@ -30,6 +30,7 @@ serviceAccount:
 # and Services in. When set, the hub gets a Role there to publish each kernel's
 # Ingress (pair with MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE).
 sandboxIngress:
+  # Requires Traefik's Middleware CRD.
   compression:
     enabled: false
   namespace: ''
@@ -95,8 +96,8 @@ maintenance:
   # The pod grace period adds 20 seconds for final cleanup and process exit.
   shutdownTimeoutSeconds: 120
   resources:
-    requests: { cpu: 50m, memory: 128Mi }
-    limits: { cpu: 250m, memory: 256Mi }
+    requests: { cpu: 50m, memory: 256Mi }
+    limits: { cpu: 250m, memory: 768Mi }
 
 # Non-secret MARIMOHUB_* config → ConfigMap, consumed via envFrom. Every key
 # becomes an env var. Empty by default (no ConfigMap is created — e.g. when all

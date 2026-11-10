@@ -13,6 +13,7 @@ import {
 	KubernetesCompute,
 	loadPodTemplateFile,
 	parseIngressAnnotations,
+	validateIngressAnnotations,
 	portRoutingCollision,
 	resolveIngressTlsMode,
 	validateIngressHostnameTemplate,
@@ -444,10 +445,43 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 					},
 				);
 			}
-			const ingressAnnotations = kubernetesIngressAnnotations(
+			let ingressAnnotations = kubernetesIngressAnnotations(
 				env,
 				'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS',
 			);
+			const compressionMiddleware =
+				env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE?.trim();
+			const middlewares = [
+				...(parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES) ?? []),
+				...(compressionMiddleware ? [compressionMiddleware] : []),
+			];
+			if (middlewares.length > 0) {
+				if (!env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE?.trim()) {
+					const variable = compressionMiddleware
+						? 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE'
+						: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES';
+					throw new ConfigError(
+						`${variable} requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE`,
+						{ variable },
+					);
+				}
+				const annotation = 'traefik.ingress.kubernetes.io/router.middlewares';
+				const merged = {
+					...ingressAnnotations,
+					[annotation]: [
+						...new Set([...(parseList(ingressAnnotations?.[annotation]) ?? []), ...middlewares]),
+					].join(','),
+				};
+				try {
+					ingressAnnotations = validateIngressAnnotations(merged);
+				} catch (cause) {
+					const detail = cause instanceof Error ? cause.message : 'invalid annotations';
+					throw new ConfigError(`Invalid combined CoreWeave ingress annotations (${detail})`, {
+						remediation:
+							'Reduce MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS, MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES, or MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE to fit the combined annotation size limit.',
+					});
+				}
+			}
 			if (ingressAnnotations && !env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE?.trim()) {
 				throw new ConfigError(
 					'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE',

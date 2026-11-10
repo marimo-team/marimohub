@@ -861,6 +861,9 @@ More in [Troubleshooting](../troubleshooting.md).
 
 ## Kernel response compression
 
+This option applies to hub-published CoreWeave kernel Ingresses: `kernelIngress` configured without `resolveExposedUrl`.
+A `resolveExposedUrl` callback bypasses Ingress publication, so its routes need separate compression configuration.
+
 If Traefik's `Middleware` CRD is installed, enable kernel compression in the
 namespace where the runner creates sandbox Services:
 
@@ -869,17 +872,33 @@ sandboxIngress:
   namespace: sandboxes
   compression:
     enabled: true
+```
+
+Replace `sandboxes` with the namespace where the runner creates sandbox Services.
+The chart creates the middleware and sets the ingress namespace and middleware reference on the API and optional maintenance Deployments.
+The app combines this reference with existing annotations and `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES`, including values from an external Secret.
+It applies the combined middleware references to new hub-published kernel Ingresses.
+Duplicate middleware references are removed. No Doppler annotation change is required.
+The chart namespace takes precedence over the namespace in an external Secret.
+Keep these namespaces equal when you change the runner or its API principal.
+
+Use matching chart and application versions. Older images, including `0.6.4`,
+do not read `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE`.
+For those images, add these values to your Helm configuration:
+
+```yaml
 config:
   MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: sandboxes
-  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: '{"traefik.ingress.kubernetes.io/router.middlewares":"sandboxes-marimohub-kernel-compress@kubernetescrd"}'
+  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: >-
+    {"traefik.ingress.kubernetes.io/router.middlewares":"sandboxes-marimohub-kernel-compress@kubernetescrd"}
 ```
 
 Replace `sandboxes` and `marimohub` with your namespace and chart fullname.
-The annotation format is
-`<namespace>-<chart-fullname>-kernel-compress@kubernetescrd`.
+If `secrets.existingSecret` supplies these variables, update that Secret instead.
+Set its `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS` key to the JSON string shown above, through `stringData` or the external secret provider.
+The Secret value takes precedence over the chart ConfigMap.
+If the JSON already contains annotations or middleware references, preserve them and append the compression reference.
 
-The chart creates the middleware. The annotation attaches it to new kernel
-Ingresses.
 Compression uses zstd, Brotli, or gzip and skips bodies smaller than 1 KiB and
 `text/event-stream` responses.
 
@@ -888,6 +907,9 @@ For existing Ingresses, append the middleware reference to their comma-separated
 This applies compression without terminating active sessions.
 If you recreate sandboxes instead, save active work first. Recreation terminates
 their kernel sessions.
+
+Before disabling compression, remove its reference from existing kernel Ingresses and any manually configured annotations.
+Otherwise, deleting the middleware leaves those routes pointing to a missing resource.
 
 Before rollout, check compressed HTML and JSON responses through Traefik.
 Check that kernel events arrive without compression or buffering.
