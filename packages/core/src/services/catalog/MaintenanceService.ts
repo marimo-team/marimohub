@@ -18,12 +18,13 @@ const DEFAULT_EVENT_RETENTION_MS = Millis.days(90);
 const DEFAULT_KEEP_LAST = 20;
 
 const SNAPSHOT_CURSOR_KEY = '_system/snapshot-expiry-cursor.json';
+const SnapshotKeySchema = z.string().startsWith(paths.snapshotsPrefix);
 const SnapshotExpiryCursorSchema = z.object({
-	after: z.string().optional(),
+	after: SnapshotKeySchema.optional(),
 	cutoff: z.number(),
 	retentionMs: z.number().nonnegative(),
 	keepLast: z.number().int().nonnegative(),
-	recent: z.array(z.object({ key: z.string(), uploaded: z.number(), size: z.number() })),
+	recent: z.array(z.object({ key: SnapshotKeySchema, uploaded: z.number(), size: z.number() })),
 	count: z.number().int().nonnegative(),
 	bytes: z.number().nonnegative(),
 });
@@ -72,9 +73,17 @@ export class MaintenanceService {
 
 		const cursorObject = await this.bucket.get(SNAPSHOT_CURSOR_KEY);
 		let cursorEtag = cursorObject?.etag;
-		let cursor: z.infer<typeof SnapshotExpiryCursorSchema> | undefined = cursorObject
-			? await readStored(SnapshotExpiryCursorSchema, cursorObject, SNAPSHOT_CURSOR_KEY)
-			: undefined;
+		let cursor: z.infer<typeof SnapshotExpiryCursorSchema> | undefined;
+		if (cursorObject) {
+			const text = await cursorObject.text();
+			// The cursor is disposable scan state; reset corruption but retain its CAS fence.
+			try {
+				const result = SnapshotExpiryCursorSchema.safeParse(JSON.parse(text));
+				if (result.success) cursor = result.data;
+			} catch (error) {
+				if (!(error instanceof SyntaxError)) throw error;
+			}
+		}
 		if (!cursor?.after || cursor.retentionMs !== retentionMs || cursor.keepLast !== keepLast) {
 			cursor = {
 				cutoff: Date.now() - retentionMs,

@@ -3,6 +3,7 @@ import { MemoryBucket, makeSnapshot, makeCatalog, useFakeClock } from '../../tes
 import { createSnapshotId } from '../../ids';
 import type { SnapshotId } from '../../ids';
 import { paths } from '../../paths';
+import type { BucketObjectBody } from '../../ports/bucket';
 import { MaintenanceService } from './MaintenanceService';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -29,15 +30,15 @@ describe('MaintenanceService', () => {
 
 	describe('expireSnapshots', () => {
 		it.each([
-			{ retentionMs: -1 },
-			{ retentionMs: Number.NaN },
-			{ retentionMs: Infinity },
-			{ keepLast: -1 },
-			{ keepLast: 1.5 },
-			{ pageSize: 0 },
-			{ pageSize: 1.5 },
-			{ maxPages: 0 },
-		])('rejects invalid limits before accessing storage: %j', async (options) => {
+			{ name: 'negative retention', options: { retentionMs: -1 } },
+			{ name: 'NaN retention', options: { retentionMs: Number.NaN } },
+			{ name: 'infinite retention', options: { retentionMs: Infinity } },
+			{ name: 'negative floor', options: { keepLast: -1 } },
+			{ name: 'fractional floor', options: { keepLast: 1.5 } },
+			{ name: 'zero page size', options: { pageSize: 0 } },
+			{ name: 'fractional page size', options: { pageSize: 1.5 } },
+			{ name: 'zero page count', options: { maxPages: 0 } },
+		])('rejects $name before accessing storage', async ({ options }) => {
 			const get = vi.spyOn(bucket, 'get');
 			const list = vi.spyOn(bucket, 'list');
 			await expect(maintenance.expireSnapshots(options)).rejects.toThrow(RangeError);
@@ -156,14 +157,90 @@ describe('MaintenanceService', () => {
 			).toEqual(ids.slice(2).map(paths.snapshot));
 		});
 
-		it('fails closed on a corrupt cursor', async () => {
-			await bucket.put('_system/snapshot-expiry-cursor.json', '{invalid');
-			const list = vi.spyOn(bucket, 'list');
-			const del = vi.spyOn(bucket, 'delete');
-			await expect(maintenance.expireSnapshots()).rejects.toThrow();
-			expect(list).not.toHaveBeenCalled();
-			expect(del).not.toHaveBeenCalled();
-		});
+		it.each(['invalid JSON', 'schema mismatch', 'foreign recent key', 'foreign after key'])(
+			'restarts a cursor with %s and preserves unrelated objects',
+			async (failure) => {
+				const ids = Array.from({ length: 3 }, () => createSnapshotId()).sort();
+				for (const id of ids) await putSnapshotAt(id, 0);
+				await bucket.put(
+					paths.catalog,
+					JSON.stringify({
+						...makeCatalog(ids[2]),
+						previous_snapshot_id: ids[1],
+					}),
+				);
+				const unrelated = '_system/identities/user.json';
+				await bucket.put(unrelated, 'identity');
+				clock.set(200 * DAY_MS);
+				const cursorKey = '_system/snapshot-expiry-cursor.json';
+				const cursor = {
+					after: failure === 'foreign after key' ? 'zzz/outside' : paths.snapshot(ids[2]),
+					cutoff: 110 * DAY_MS,
+					retentionMs: 90 * DAY_MS,
+					keepLast: 0,
+					recent: [
+						{
+							key: failure === 'foreign recent key' ? unrelated : paths.snapshot(ids[0]),
+							uploaded: 0,
+							size: 8,
+						},
+					],
+					count: 1,
+					bytes: 8,
+				};
+				const invalid =
+					failure === 'invalid JSON'
+						? '{invalid'
+						: failure === 'schema mismatch'
+							? '{}'
+							: JSON.stringify(cursor);
+				const { etag } = await bucket.put(cursorKey, invalid);
+				const list = vi.spyOn(bucket, 'list');
+				const del = vi.spyOn(bucket, 'delete');
+				const put = vi.spyOn(bucket, 'put');
+
+				expect(await maintenance.expireSnapshots({ keepLast: 0 })).toBe(1);
+				expect(list.mock.calls[0][0]?.startAfter).toBeUndefined();
+				expect(del).toHaveBeenCalledExactlyOnceWith([paths.snapshot(ids[0])]);
+				expect(put).toHaveBeenCalledExactlyOnceWith(cursorKey, expect.any(String), {
+					onlyIfEtagMatches: etag,
+				});
+				expect(await (await bucket.get(unrelated))!.text()).toBe('identity');
+				for (const id of ids.slice(1)) expect(await bucket.head(paths.snapshot(id))).not.toBeNull();
+				await expect(new MaintenanceService(bucket).expireSnapshots({ keepLast: 0 })).resolves.toBe(
+					0,
+				);
+			},
+		);
+
+		it.each(['get', 'body'])(
+			'propagates cursor %s failures without restarting cleanup',
+			async (failure) => {
+				const cursorKey = '_system/snapshot-expiry-cursor.json';
+				await bucket.put(cursorKey, '{}');
+				const cursor = (await bucket.get(cursorKey))!;
+				const error = new Error('storage unavailable');
+				const get = vi.spyOn(bucket, 'get');
+				if (failure === 'get') get.mockRejectedValueOnce(error);
+				else
+					get.mockResolvedValueOnce({
+						...cursor,
+						text: async () => {
+							throw error;
+						},
+						json: async () => {
+							throw error;
+						},
+					} satisfies BucketObjectBody);
+				const list = vi.spyOn(bucket, 'list');
+				const del = vi.spyOn(bucket, 'delete');
+				const put = vi.spyOn(bucket, 'put');
+				await expect(maintenance.expireSnapshots()).rejects.toThrow('storage unavailable');
+				expect(list).not.toHaveBeenCalled();
+				expect(del).not.toHaveBeenCalled();
+				expect(put).not.toHaveBeenCalled();
+			},
+		);
 
 		it('resumes bounded pages after restart, preserves the newest floor and reports complete gauges', async () => {
 			const ids = Array.from({ length: 17 }, () => createSnapshotId()).sort();
