@@ -137,40 +137,6 @@ describe('createFromEnv auth backend selection', () => {
 		},
 	);
 
-	it.each([
-		[undefined, 'hub'],
-		['hub', 'hub'],
-		[' hub ', 'hub'],
-		['', undefined],
-		[' \t ', undefined],
-		['false', undefined],
-		['FaLsE', undefined],
-		[' FALSE ', undefined],
-		['\r\n\t', undefined],
-		['https://cdn.example.com/Assets/{version}', 'https://cdn.example.com/Assets/{version}'],
-		[
-			' \thttps://CDN.example.com/Assets/{version}?fallback=false&Key=AbC\r\n',
-			'https://CDN.example.com/Assets/{version}?fallback=false&Key=AbC',
-		],
-	])('resolves compute asset URL %j to %j', (value, expected) => {
-		const deps = createFromEnv({
-			...baseEnv,
-			MARIMOHUB_AUTH_BACKEND: 'dev',
-			MARIMOHUB_COMPUTE_ASSET_URL: value,
-		});
-		expect(deps.sandbox.assetUrl).toBe(expected);
-	});
-
-	it('does not retain an asset override between configurations or mutate the input', () => {
-		const env = Object.freeze({ ...baseEnv, MARIMOHUB_AUTH_BACKEND: 'dev' });
-		expect(createFromEnv(env).sandbox.assetUrl).toBe('hub');
-		expect(
-			createFromEnv({ ...env, MARIMOHUB_COMPUTE_ASSET_URL: 'false' }).sandbox.assetUrl,
-		).toBeUndefined();
-		expect(createFromEnv(env).sandbox.assetUrl).toBe('hub');
-		expect(env).not.toHaveProperty('MARIMOHUB_COMPUTE_ASSET_URL');
-	});
-
 	it('wires the first compute profile into sandbox configuration', () => {
 		const deps = createFromEnv({
 			...baseEnv,

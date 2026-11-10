@@ -106,7 +106,6 @@ import { parseWarmPoolConfig } from './warmPool';
 
 import type { Env } from './env';
 import { parseSandboxAuth } from './sandboxAuth';
-import { parseSandboxAssetUrl } from './sandboxAssets';
 import { ConfigError } from './errors';
 import {
 	checkSandboxHostIsolation,
@@ -817,7 +816,7 @@ export function createFromEnv(
 			bucket: makeSandboxBucketConfig(env),
 			hostname: env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME ?? '',
 			workdir: env.MARIMOHUB_COMPUTE_WORKDIR ?? '/workspace',
-			assetUrl: parseSandboxAssetUrl(env.MARIMOHUB_COMPUTE_ASSET_URL),
+			assetUrl: env.MARIMOHUB_COMPUTE_ASSET_URL,
 			notebookBridge: notebookBridgeRuntime(),
 			// Unset defers to the core default (2 min); served on /api/v1/capabilities.
 			startupTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS'),

@@ -35,8 +35,8 @@ Selector: `MARIMOHUB_COMPUTE_BACKEND`. Full variables:
 
 ## Shared settings
 
-Marimo frontend assets are cached across sessions by default.
-See [asset caching](./deploying/asset-caching.md) to configure or disable shared assets.
+Set `MARIMOHUB_COMPUTE_ASSET_URL` to reuse frontend assets across sessions.
+See [asset caching](./deploying/asset-caching.md) for the versioned URL and staging checks.
 
 Most production backends need a sandbox image and a public hostname for kernel
 traffic:

@@ -563,8 +563,8 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_ASSET_URL',
 						name: 'Frontend asset URL',
 						description:
-							'Use `hub` for cached marimo assets, or a custom URL with {version}. Empty or `false` uses bundled sandbox assets.',
-						default: 'hub',
+							'Versioned base URL for shared marimo frontend assets. Use {version} to match the installed marimo version. Recommended for connected deployments after worker, WASM, and CSP staging checks. Omit to use bundled sandbox assets.',
+						example: 'https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist',
 					},
 					{
 						id: 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS',

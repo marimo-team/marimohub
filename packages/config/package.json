@@ -11,7 +11,6 @@
 		".": "./src/index.ts",
 		"./app-pool": "./src/appPool.ts",
 		"./compute-profiles": "./src/computeProfiles.ts",
-		"./sandbox-assets": "./src/sandboxAssets.ts",
 		"./sandbox-auth": "./src/sandboxAuth.ts",
 		"./spec": "./src/spec.ts",
 		"./package.json": "./package.json",

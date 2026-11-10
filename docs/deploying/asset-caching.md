@@ -9,30 +9,30 @@ browsers reuse marimo's frontend across sessions and projects.
 
 ## Shared marimo assets
 
-`MARIMOHUB_COMPUTE_ASSET_URL` defaults to `hub`, marimo's special key for cached
-hub assets. It applies to editor and app sessions with proxy or subdomain exposure.
-Set it to `false` or an empty value to use bundled sandbox assets, including for disconnected deployments.
-Leaving it unset keeps the `hub` default.
-
-For internet-connected deployments, use jsDelivr to reduce asset traffic and load
-on the hub server:
+For internet-connected deployments, set:
 
 ```bash
 MARIMOHUB_COMPUTE_ASSET_URL='https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist'
 ```
 
-Marimo replaces `{version}` with its installed version. The asset origin must
-serve each deployed version and receives browser requests directly.
+Keep `{version}`: marimo substitutes its installed version, which can differ
+between notebook environments. The CDN must contain each deployed version.
+This setting supports both proxy and subdomain exposure.
+
+The CDN receives browser requests and the marimo version. For disconnected
+deployments, leave the setting unset to use each sandbox's bundled assets.
 
 Before production rollout, run these checks in staging:
 
-1. Open an editor and an app. Check workers, WASM, and fonts for CORS or CSP errors.
-2. Open a second session. Check cache hits and transferred bytes in DevTools.
+1. Open an editor and an app with the setting enabled.
+2. Load workers, WASM, and fonts without CORS or CSP errors.
+3. Open a second session and check for disk or memory cache hits in DevTools.
+4. Compare transferred bytes between the two sessions.
 
 The sandbox's CSP must allow the asset origin for scripts, styles, fonts, and
 fetches. Cross-origin module workers also need `worker-src blob:`.
 The hub SPA's CSP does not control sandbox documents.
-If any check fails, set `MARIMOHUB_COMPUTE_ASSET_URL=false`.
+If any check fails, leave the setting unset.
 
 ## Hub responses
 
