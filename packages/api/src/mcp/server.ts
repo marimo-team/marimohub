@@ -21,7 +21,7 @@ import {
 	TAG_NAMESPACE_DESCRIPTION,
 	TagsBodySchema,
 } from '../tagNamespace';
-import type { ApiDeps } from '../context';
+import type { ResolvedApiDeps } from '../context';
 import { withMcpSessionActivity } from './sessionActivity';
 import { startMcpSession } from './sessionStartup';
 import { executeMcpCode } from './kernelExecution';
@@ -76,7 +76,7 @@ const EXPECTED_UPDATED_AT_DESCRIPTION =
 	'updated_at returned by get_notebook. Rejects the change if notebook metadata changed since that read.';
 
 export function createMcpServer(
-	deps: ApiDeps,
+	deps: ResolvedApiDeps,
 	principal: AuthenticatedPrincipal,
 	request: StartRequestContext,
 ): McpServer {

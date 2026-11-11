@@ -1,11 +1,11 @@
 import { withAbortSignal } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, Project, ProjectId } from '@marimo-hub/core';
 import { ForbiddenError, NotFoundError } from '@marimo-hub/core/errors';
-import type { ApiDeps } from '../context';
+import type { ApiDeps, ResolvedApiDeps } from '../context';
 import { loadVisibleProject } from '../shared';
 
 export interface ConversationOperationContext {
-	deps: ApiDeps;
+	deps: ResolvedApiDeps;
 	principal: AuthenticatedPrincipal;
 	pid: ProjectId;
 	signal?: AbortSignal;

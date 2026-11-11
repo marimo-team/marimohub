@@ -8,7 +8,7 @@ import type { ConversationPermission, TurnContext } from '@marimo-hub/core/chat'
 import { NotebookId } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, Project } from '@marimo-hub/core';
 import { ForbiddenError } from '@marimo-hub/core/errors';
-import type { ApiDeps } from '../context';
+import type { ResolvedApiDeps } from '../context';
 import { DEFAULT_CHAT_CONFIG } from '../context';
 import { createMcpServer } from '../mcp/server';
 import type { StartRequestContext } from '../mcp/server';
@@ -115,13 +115,13 @@ function toolFailure(data: Record<string, unknown>): Error {
  * consent cards added in front of every mutating call.
  */
 export async function openToolSession(
-	deps: ApiDeps,
+	deps: ResolvedApiDeps,
 	principal: AuthenticatedPrincipal,
 	project: Project,
 	request: StartRequestContext,
 ): Promise<ToolSession> {
 	const open = new Set<() => Promise<void>>();
-	const connect = async (scope: ApiDeps) => {
+	const connect = async (scope: ResolvedApiDeps) => {
 		const server = createMcpServer(scope, principal, request);
 		const client = new Client({ name: 'marimohub-chat', version: '1' });
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

@@ -157,7 +157,7 @@ describe('external access tokens on API and MCP', () => {
 	});
 
 	it('denies token management and session-only administration even for a super admin', async () => {
-		deps.policy = { superAdmins: [user.id] };
+		deps.policy = { ...deps.policy, superAdmins: [user.id] };
 		app = createApi(deps);
 		for (const path of ['/me/tokens', '/admin/users']) {
 			const response = await api(path);

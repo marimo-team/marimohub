@@ -14,16 +14,19 @@ import type {
 } from '@marimo-hub/core';
 import { ACTOR, MemoryBucket, noopCompute } from '@marimo-hub/core/testing';
 import { DEFAULT_JOBS_CONFIG } from '../context';
-import type { ApiDeps, WifConfig } from '../context';
-import { createApi } from '../createApi';
+import type { ApiDeps, ResolvedApiDeps, WifConfig } from '../context';
+import { createApi, resolveApiDeps } from '../createApi';
 
 /**
  * Build the `ApiDeps` bundle every API test needs. Defaults to a no-op compute
  * and a deny-all authenticator; `overrides` swaps in a `compute`/`authenticator`
  * (or anything else) per test.
  */
-export function makeTestDeps(bucket: MemoryBucket, overrides: Partial<ApiDeps> = {}): ApiDeps {
-	return {
+export function makeTestDeps(
+	bucket: MemoryBucket,
+	overrides: Partial<ApiDeps> = {},
+): ResolvedApiDeps {
+	return resolveApiDeps({
 		services: createServices(bucket, undefined, { sourceControl: overrides.sourceControl }),
 		bucket,
 		compute: noopCompute,
@@ -40,7 +43,7 @@ export function makeTestDeps(bucket: MemoryBucket, overrides: Partial<ApiDeps> =
 		// On in tests; pass `jobs: undefined` for the off-deployment paths.
 		jobs: { ...DEFAULT_JOBS_CONFIG },
 		...overrides,
-	};
+	});
 }
 
 export interface TestWifOptions {

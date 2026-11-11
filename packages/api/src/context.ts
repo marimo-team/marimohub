@@ -601,9 +601,20 @@ export interface ApiDeps {
 	};
 }
 
+/**
+ * `ApiDeps` with the defaults `createApi` fills in (`resolveApiDeps`). Routes read
+ * this from `c.get('deps')`; a helper that uses one of the defaulted fields takes
+ * it instead of `ApiDeps` so it needs no fallback of its own.
+ */
+export type ResolvedApiDeps = Omit<ApiDeps, 'sandbox' | 'policy'> &
+	Required<Pick<ApiDeps, 'workspaceLimits' | 'notifier' | 'sleep' | 'kernelProbe'>> & {
+		sandbox: SandboxConfig & Required<Pick<SandboxConfig, 'exposure'>>;
+		policy: PolicyConfig & Required<Pick<PolicyConfig, 'viewerMode' | 'editorSandboxSharing'>>;
+	};
+
 export type HonoEnv = {
 	Variables: {
-		deps: ApiDeps;
+		deps: ResolvedApiDeps;
 		user: AuthenticatedPrincipal;
 		/**
 		 * How the request authenticated, decided once in the authN middleware:

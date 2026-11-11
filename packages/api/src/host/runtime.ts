@@ -8,7 +8,6 @@ import {
 	sessionSandbox,
 	sessionPersistsEdits,
 	sessionWorkspaceDir,
-	sleep,
 	UnavailableError,
 	workspaceSourcePolicy,
 } from '@marimo-hub/core';
@@ -17,7 +16,7 @@ import { requestRuntimeHost } from '@marimo-hub/core/host-bridge';
 import type { HostRequest } from '@marimo-hub/core/host-bridge';
 import { sha256Hex } from '@marimo-hub/core/sha256';
 import { HostProblemError } from '@marimo-hub/host-protocol';
-import type { ApiDeps } from '../context';
+import type { ApiDeps, ResolvedApiDeps } from '../context';
 import { notebookBridgeFor } from '../mcp/bridge';
 import {
 	authorizeMcpSession,
@@ -70,7 +69,7 @@ async function editorProblem(
 }
 
 export async function ensureHostSession(
-	deps: ApiDeps,
+	deps: ResolvedApiDeps,
 	user: AuthenticatedPrincipal,
 	request: HostSessionRequest,
 	project: Project,
@@ -162,7 +161,7 @@ export async function ensureHostSession(
 	}
 	const deadline = Date.now() + 60_000;
 	while (session.status === 'starting' && Date.now() < deadline) {
-		await (deps.sleep ?? sleep)(500, request.signal);
+		await deps.sleep(500, request.signal);
 		session = await deps.services.sessions.getSession(project.id, session.session_id);
 	}
 	if (session.status !== 'running' || !session.sandbox_id)

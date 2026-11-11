@@ -2,11 +2,11 @@ import { deferTeardown, cancelJobRuns, retireLiveApps } from '../shared';
 import { retireNotebookPreviews } from '../previews';
 import { notificationRouter } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, NotebookId, Project } from '@marimo-hub/core';
-import type { ApiDeps } from '../context';
+import type { ResolvedApiDeps } from '../context';
 import { assertNotificationMutationAllowed, scheduleProjectAlert } from '../notifications';
 
 export async function deleteNotebookAndRetire(
-	deps: ApiDeps,
+	deps: ResolvedApiDeps,
 	project: Project,
 	notebookId: NotebookId,
 	user: AuthenticatedPrincipal,

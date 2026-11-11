@@ -53,7 +53,7 @@ import {
 	SnapshotProjectEntrySchema,
 	SuccessResponseSchema,
 } from '../shared';
-import type { ApiDeps } from '../context';
+import type { ApiDeps, ResolvedApiDeps } from '../context';
 import { idempotentCreate } from '../idempotency';
 import { effectiveFederation } from '../federation';
 import { pageSchema, paginate, ProjectListQuery } from '../pagination';
@@ -618,7 +618,7 @@ type MemberAddedAlert =
 	| { kind: 'member.group_added'; member: { group: string; role: AssignableRole } };
 
 async function addProjectMember(
-	deps: ApiDeps,
+	deps: ResolvedApiDeps,
 	user: AuthSubject,
 	pid: ProjectId,
 	member: NewMember,
@@ -701,7 +701,7 @@ app.openapi(addGroupMember, async (c) => {
 });
 
 async function changeMemberRole(
-	deps: ApiDeps,
+	deps: ResolvedApiDeps,
 	user: AuthSubject,
 	pid: ProjectId,
 	selector: MemberSelector,
@@ -729,7 +729,7 @@ async function changeMemberRole(
 }
 
 async function deleteMember(
-	deps: ApiDeps,
+	deps: ResolvedApiDeps,
 	user: AuthSubject,
 	pid: ProjectId,
 	selector: MemberSelector,

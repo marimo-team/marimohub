@@ -6,7 +6,7 @@ import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import { CHAT_LIMITS, ChatPermissionStore } from '@marimo-hub/core/chat';
 import type { TurnCheckpoint, TurnContext } from '@marimo-hub/core/chat';
 import type { SearchIndexer, SearchService } from '@marimo-hub/core/search';
-import type { ApiDeps } from '../context';
+import type { ApiDeps, ResolvedApiDeps } from '../context';
 import { withRequestMemo } from '../requestMemo';
 import { createInitializedBucket, createTestApi, expectOk } from '../testing';
 import { openToolSession } from './tools';
@@ -18,7 +18,10 @@ const principal: AuthenticatedPrincipal = {
 	credential: { kind: 'development' },
 };
 
-async function session(overrides: Partial<ApiDeps> = {}, scope = (deps: ApiDeps) => deps) {
+async function session(
+	overrides: Partial<ApiDeps> = {},
+	scope = (deps: ResolvedApiDeps): ResolvedApiDeps => deps,
+) {
 	const bucket = await createInitializedBucket();
 	const api = createTestApi({ bucket, deps: overrides });
 	const created = await expectOk<{ id: string }>(

@@ -24,7 +24,7 @@ import {
 	SubdomainExposure,
 	UnavailableError,
 } from '@marimo-hub/core';
-import type { ApiDeps, HonoEnv } from './context';
+import type { ApiDeps, HonoEnv, ResolvedApiDeps } from './context';
 import { describeError, errorMetadata, logEvent } from './log';
 import adminApp from './routes/admin';
 import policyAnalyzerApp from './routes/policyAnalyzer';
@@ -150,6 +150,40 @@ function requestResourceContext(path: string) {
 }
 
 /**
+ * Fill in the defaults library callers need not wire: pacing, the no-op notifier,
+ * the kernel probe, subdomain exposure, and the policy modes. `createApi` does this
+ * for the app; tests that call a route helper directly use it to build its input.
+ */
+export function resolveApiDeps(rawDeps: ApiDeps): ResolvedApiDeps {
+	const serviceLimits = rawDeps.services?.notebooks.workspace.limits;
+	if (
+		rawDeps.workspaceLimits &&
+		serviceLimits &&
+		Object.entries(serviceLimits).some(
+			([key, value]) => rawDeps.workspaceLimits![key as keyof typeof serviceLimits] !== value,
+		)
+	) {
+		throw new Error('API workspace limits must match the notebook service limits');
+	}
+	return {
+		...rawDeps,
+		workspaceLimits: rawDeps.workspaceLimits ?? serviceLimits ?? WORKSPACE_LIMITS,
+		notifier: rawDeps.notifier ?? noopNotifier,
+		sleep: rawDeps.sleep ?? sleep,
+		kernelProbe: rawDeps.kernelProbe ?? ((url) => probeKernelLiveness(url, { timeoutMs: 2000 })),
+		sandbox: {
+			...rawDeps.sandbox,
+			exposure: rawDeps.sandbox.exposure ?? new SubdomainExposure(),
+		},
+		policy: {
+			...rawDeps.policy,
+			viewerMode: rawDeps.policy.viewerMode ?? 'static',
+			editorSandboxSharing: rawDeps.policy.editorSandboxSharing ?? 'shared',
+		},
+	};
+}
+
+/**
  * Build the provider-agnostic marimohub API. All external dependencies arrive
  * through `deps` (no `c.env`, no vendor SDK): the same app runs on Cloudflare
  * Workers (`app.fetch`) or under @hono/node-server in `apps/server`.
@@ -168,35 +202,7 @@ export function createApi(rawDeps: ApiDeps) {
 		);
 	});
 
-	const serviceLimits = rawDeps.services?.notebooks.workspace.limits;
-	if (
-		rawDeps.workspaceLimits &&
-		serviceLimits &&
-		Object.entries(serviceLimits).some(
-			([key, value]) => rawDeps.workspaceLimits![key as keyof typeof serviceLimits] !== value,
-		)
-	) {
-		throw new Error('API workspace limits must match the notebook service limits');
-	}
-
-	// Default the exposure mode and kernel probe so library callers need not wire them.
-	const deps: ApiDeps = {
-		...rawDeps,
-		workspaceLimits:
-			rawDeps.workspaceLimits ?? rawDeps.services?.notebooks.workspace.limits ?? WORKSPACE_LIMITS,
-		notifier: rawDeps.notifier ?? noopNotifier,
-		sleep: rawDeps.sleep ?? sleep,
-		kernelProbe: rawDeps.kernelProbe ?? ((url) => probeKernelLiveness(url, { timeoutMs: 2000 })),
-		sandbox: {
-			...rawDeps.sandbox,
-			exposure: rawDeps.sandbox.exposure ?? new SubdomainExposure(),
-		},
-		policy: {
-			...rawDeps.policy,
-			viewerMode: rawDeps.policy.viewerMode ?? 'static',
-			editorSandboxSharing: rawDeps.policy.editorSandboxSharing ?? 'shared',
-		},
-	};
+	const deps = resolveApiDeps(rawDeps);
 
 	app.use('*', requestMemoMiddleware(deps));
 

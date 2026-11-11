@@ -1,7 +1,7 @@
 import { PromiseMemo, weakMemo } from '@marimo-hub/core/cache';
 import type { WeakMemo } from '@marimo-hub/core/cache';
 import type { MiddlewareHandler } from 'hono';
-import type { ApiDeps, HonoEnv } from './context';
+import type { ApiDeps, HonoEnv, ResolvedApiDeps } from './context';
 
 const owners = new WeakMap<ApiDeps, ApiDeps>();
 
@@ -22,13 +22,13 @@ export function deploymentState<T>(create: () => T): WeakMemo<ApiDeps, T> {
 	return scoped;
 }
 
-export function withRequestMemo(deps: ApiDeps): ApiDeps & { readMemo: PromiseMemo } {
+export function withRequestMemo<D extends ApiDeps>(deps: D): D & { readMemo: PromiseMemo } {
 	const scoped = { ...deps, readMemo: new PromiseMemo() };
 	owners.set(scoped, unscopedDeps(deps));
 	return scoped;
 }
 
-export function requestMemoMiddleware(deps: ApiDeps): MiddlewareHandler<HonoEnv> {
+export function requestMemoMiddleware(deps: ResolvedApiDeps): MiddlewareHandler<HonoEnv> {
 	return async (c, next) => {
 		c.set('deps', withRequestMemo(deps));
 		await next();

@@ -1,8 +1,9 @@
-export { createApi, generateOpenApiDocument } from './createApi';
+export { createApi, generateOpenApiDocument, resolveApiDeps } from './createApi';
 export { generateCliManifest } from './cliManifest';
 export type { CliManifest, CliOperation } from './cliManifest';
 export type {
 	ApiDeps,
+	ResolvedApiDeps,
 	ChatConfig,
 	ConfigSummary,
 	HonoEnv,

@@ -16,7 +16,7 @@ import type {
 	HostRuntimeDiscovery,
 	HostRuntimeHandle,
 } from '@marimo-hub/host-protocol';
-import type { ApiDeps } from '../context';
+import type { ResolvedApiDeps } from '../context';
 import { withRequestMemo } from '../requestMemo';
 import { refreshIdentityFor } from '../identity';
 import { authorizeMcpSession, sessionAuthorizationDeadline } from '../mcp/sessionActivity';
@@ -79,7 +79,7 @@ function runtimeHandle(
 	};
 }
 
-function sessionRequest(deps: ApiDeps, context: HostRequestContext): HostSessionRequest {
+function sessionRequest(deps: ResolvedApiDeps, context: HostRequestContext): HostSessionRequest {
 	const url = new URL(context.request.url);
 	return {
 		requestId: context.requestId,
@@ -91,7 +91,7 @@ function sessionRequest(deps: ApiDeps, context: HostRequestContext): HostSession
 	};
 }
 
-export function createHubHostPlatform(deps: ApiDeps): HubHostPlatform {
+export function createHubHostPlatform(deps: ResolvedApiDeps): HubHostPlatform {
 	async function resolveNotebook(
 		principal: AuthenticatedPrincipal,
 		id: string,
