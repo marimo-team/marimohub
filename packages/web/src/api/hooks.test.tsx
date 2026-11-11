@@ -1003,27 +1003,31 @@ describe('browse request cancellation', () => {
 
 	it('does not toast when an abort cancels an in-flight preview', async () => {
 		const errorToast = vi.spyOn(toast, 'error');
+		const started = deferred<void>();
 		let requestSignal: AbortSignal | undefined;
-		const fetchMock = stubFetch(async (_url, init) => {
+		stubFetch(async (_url, init) => {
 			requestSignal = (init instanceof Request ? init.signal : init?.signal) ?? undefined;
 			return new Promise<Response>((_resolve, reject) => {
 				requestSignal?.addEventListener('abort', () =>
 					reject(new DOMException('The user aborted a request.', 'AbortError')),
 				);
+				started.resolve();
 			});
 		});
-		const { result, client, unmount } = renderHookWithClient(
-			() => useBrowseTablePreview(PID, 'int-1'),
-			{ toaster: false },
-		);
-		act(() => result.current.mutate({ namespace: ['sales'], table: 'orders' }));
-		await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+		const { result, unmount } = renderHookWithClient(() => useBrowseTablePreview(PID, 'int-1'), {
+			toaster: false,
+		});
+		let mutation!: ReturnType<typeof result.current.mutateAsync>;
+		act(() => {
+			mutation = result.current.mutateAsync({ namespace: ['sales'], table: 'orders' });
+		});
+		const rejected = expect(mutation).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+		await started.promise;
 
 		unmount();
 
-		await waitFor(() =>
-			expect(client.getMutationCache().getAll().at(-1)?.state.status).toBe('error'),
-		);
+		await rejected;
+		expect(requestSignal?.aborted).toBe(true);
 		expect(errorToast).not.toHaveBeenCalled();
 	});
 });

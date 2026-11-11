@@ -218,7 +218,9 @@ export function makeFetch(opts: FetchOptions) {
 			return ok({ proposal_id: proposalId, change_request: changeRequest });
 		}
 		if (
-			url.endsWith(`/sessions/${(opts.session ?? runningSession()).session_id}`) ||
+			new URL(url, 'http://localhost').pathname.endsWith(
+				`/sessions/${(opts.session ?? runningSession()).session_id}`,
+			) ||
 			(method === 'POST' && url.endsWith('/heartbeat'))
 		) {
 			return ok(opts.session ?? runningSession());

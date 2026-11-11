@@ -18,17 +18,21 @@ const DEFAULT_LIMITS: Limits = {
 
 type Task = { label: string; run: () => Promise<unknown> };
 
-/** Bounds deferred work. Overflow runs on the caller's promise and still participates in drain. */
+const LONG_LIVED = new Set(['conversation.turn', 'surface.start']);
+
+/** Isolates teardown capacity and tracks long-lived work without occupying worker slots. */
 export class DeferredWorkQueue implements BackgroundWork {
 	private readonly tasks: Task[] = [];
 	private readonly active = new Map<string, number>();
-	private readonly pending = new InFlightWork();
 	private running = 0;
 	private readonly limits: Limits;
+	private readonly cleanup?: DeferredWorkQueue;
 
 	constructor(
 		private readonly metrics: Metrics,
 		limits: Partial<Limits> = {},
+		private readonly cleanupLane = false,
+		private readonly pending = new InFlightWork(),
 	) {
 		this.limits = { ...DEFAULT_LIMITS, ...limits };
 		for (const value of Object.values(this.limits)) {
@@ -36,10 +40,31 @@ export class DeferredWorkQueue implements BackgroundWork {
 				throw new RangeError('Queue limits must be positive integers');
 		}
 		this.record();
+		if (!cleanupLane)
+			this.cleanup = new DeferredWorkQueue(
+				metrics,
+				{
+					concurrency: 16,
+					perLabelConcurrency: 16,
+					queueSize: 256,
+					perLabelQueueSize: 256,
+				},
+				true,
+				this.pending,
+			);
 	}
 
 	defer(label: string, run: () => Promise<unknown>): void | Promise<void> {
 		const task = { label, run: context.bind(context.active(), run) };
+		if (LONG_LIVED.has(label)) {
+			void this.execute(task).catch(() => {});
+			return;
+		}
+		if (label === 'session.stop' && this.cleanup) {
+			const overflow = this.cleanup.defer(label, run);
+			if (overflow) void overflow.catch(() => {});
+			return;
+		}
 		if (this.canStart(label)) {
 			this.start(task);
 			return;
@@ -57,8 +82,8 @@ export class DeferredWorkQueue implements BackgroundWork {
 		this.record(label);
 	}
 
-	drain(): Promise<void> {
-		return this.pending.drain();
+	async drain(): Promise<void> {
+		await this.pending.drain();
 	}
 
 	private canStart(label: string): boolean {
@@ -105,8 +130,9 @@ export class DeferredWorkQueue implements BackgroundWork {
 	private record(label?: string): void {
 		// Telemetry failures must not strand queued work or leak an active slot.
 		try {
-			this.metrics.gauge('background.queue_depth', this.tasks.length);
-			this.metrics.gauge('background.running', this.running);
+			const lane = this.cleanupLane ? { lane: 'teardown' } : undefined;
+			this.metrics.gauge('background.queue_depth', this.tasks.length, lane);
+			this.metrics.gauge('background.running', this.running, lane);
 			if (label !== undefined) {
 				this.metrics.gauge('background.queue_depth', this.queuedCount(label), { label });
 				this.metrics.gauge('background.running', this.active.get(label) ?? 0, { label });

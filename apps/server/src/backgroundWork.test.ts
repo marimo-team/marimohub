@@ -6,6 +6,51 @@ import { DeferredWorkQueue } from './backgroundWork';
 import { WideEventMetrics } from './metrics';
 
 describe('DeferredWorkQueue', () => {
+	it('starts teardown independently of long-lived turns and saturated ordinary work', async () => {
+		const queue = new DeferredWorkQueue(new WideEventMetrics(), { concurrency: 1 });
+		const gate = Promise.withResolvers<void>();
+		const stopped = vi.fn(async () => {});
+		for (let i = 0; i < 100; i++) {
+			expect(queue.defer('conversation.turn', () => gate.promise)).toBeUndefined();
+		}
+		void queue.defer('audit', () => gate.promise);
+		for (let i = 0; i < 100; i++) expect(queue.defer('session.stop', stopped)).toBeUndefined();
+		await vi.waitFor(() => expect(stopped).toHaveBeenCalledTimes(100));
+		gate.resolve();
+		await queue.drain();
+	});
+
+	it('drains teardown scheduled by a settling long-lived task, including failure', async () => {
+		const queue = new DeferredWorkQueue(new WideEventMetrics());
+		const stopped = vi.fn(async () => {
+			throw new Error('provider unavailable');
+		});
+		void queue.defer('surface.start', async () => {
+			void queue.defer('session.stop', stopped);
+		});
+		await queue.drain();
+		expect(stopped).toHaveBeenCalledOnce();
+	});
+	it('tracks teardown overflow and waits for its failure during shutdown', async () => {
+		const metrics = new WideEventMetrics();
+		const queue = new DeferredWorkQueue(metrics);
+		const capacity = Promise.withResolvers<void>();
+		const overflow = Promise.withResolvers<void>();
+		const queued = vi.fn(() => capacity.promise);
+		for (let index = 0; index < 16 + 256; index++)
+			expect(queue.defer('session.stop', queued)).toBeUndefined();
+		expect(queue.defer('session.stop', () => overflow.promise)).toBeUndefined();
+		let drained = false;
+		const draining = queue.drain().then(() => {
+			drained = true;
+		});
+		capacity.resolve();
+		await vi.waitFor(() => expect(queued).toHaveBeenCalledTimes(272));
+		expect(drained).toBe(false);
+		overflow.reject(new Error('teardown failed'));
+		await draining;
+		expect(metrics.collect()['counter.background.inline_fallback{"label":"session.stop"}']).toBe(1);
+	});
 	it('bounds a burst globally and per label, drains queued tasks, and skips blocked labels', async () => {
 		const metrics = new WideEventMetrics();
 		const queue = new DeferredWorkQueue(metrics, {

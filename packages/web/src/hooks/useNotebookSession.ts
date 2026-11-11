@@ -1,9 +1,12 @@
+import { prefetchMarimoAssets } from '@/lib/marimoAssets';
 import { useSandboxPreconnect } from './useSandboxPreconnect';
 import { leaveAppVisit } from '@/api/sessionVisits';
 import { MAX_TIMER_DELAY_MS } from '@marimo-hub/core/async';
 import { APP_HEARTBEAT_INTERVAL_MS } from '@marimo-hub/core/constants';
-import { sleep } from '@marimo-hub/core/duration';
-import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
+import { heartbeatRetryDelay } from '@/api/sessionRetryPolicy';
+import { useAsyncLoop } from './useAsyncLoop';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { RetainedEditorContext } from '@/context/RetainedEditorContext';
 import { apiClient, apiData, ApiRequestError } from '@/api/client';
 import {
 	useRestartApp,
@@ -13,11 +16,9 @@ import {
 } from '@/api/hooks';
 import { isNotFoundError } from '@/api/request';
 import { useGeneration } from '@/hooks/useGeneration';
-import { useInterval } from '@/hooks/useInterval';
 import type { Session } from '@/types';
 import {
 	EDITOR_HEARTBEAT_INTERVAL_MS,
-	SESSION_STATUS_INTERVAL_MS,
 	sessionStartPollDelayMs,
 	sessionStartupDeadlineMs,
 } from '@/lib/sessions';
@@ -86,6 +87,7 @@ export function useNotebookSession(
 		mode = 'edit',
 		editIntent,
 		startupTimeoutSeconds,
+		marimoAssetUrl,
 		appHeartbeatIntervalSeconds = DEFAULT_APP_HEARTBEAT_INTERVAL_SECONDS,
 	}: {
 		enabled?: boolean;
@@ -93,6 +95,7 @@ export function useNotebookSession(
 		editIntent?: 'temporary';
 		/** Fail startup after this deployment timeout plus the grace in `sessionStartupDeadlineMs`. */
 		startupTimeoutSeconds?: number;
+		marimoAssetUrl?: string;
 		appHeartbeatIntervalSeconds?: number;
 	} = {},
 ): NotebookSession {
@@ -181,6 +184,7 @@ export function useNotebookSession(
 			setEnded(null);
 			setEndedByUserId(null);
 			setStarting(true);
+			void prefetchMarimoAssets(marimoAssetUrl);
 			// Separate attempts need separate visits so late cleanup cannot release the winner.
 			void mutation.mutateAsync(mode === 'app' ? crypto.randomUUID() : undefined).then(
 				(data) => {
@@ -202,7 +206,7 @@ export function useNotebookSession(
 				},
 			);
 		},
-		[concludeAccessLost, commitSession, generation, projectId, notebookId, mode],
+		[concludeAccessLost, commitSession, generation, projectId, notebookId, mode, marimoAssetUrl],
 	);
 	const start = useCallback(() => {
 		startWithMutation(startSession);
@@ -308,13 +312,17 @@ export function useNotebookSession(
 			onNext: (next: Session) => void,
 			onGone: () => void,
 			isLive: () => boolean = () => true,
+			signal?: AbortSignal,
 		): Promise<void> => {
 			const gen = generation.current();
 			const current = () => generation.isCurrent(gen) && isLive();
 			return apiData(
 				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}', {
+					signal,
+					timeout: 25_000,
 					params: {
 						path: { pid: projectId, nid: notebookId, sid: sessionId },
+						query: { wait: 20 },
 					},
 				}),
 			)
@@ -330,7 +338,7 @@ export function useNotebookSession(
 
 	// A lost provisioning request can leave the record starting indefinitely. Returns the
 	// ms left before the deadline, or null once startup is over or has been failed.
-	const enforceStartupDeadline = useEffectEvent((): number | null => {
+	const enforceStartupDeadline = (): number | null => {
 		// These timers can fire after a commit but before its re-render, so read the ref.
 		const session = sessionRef.current;
 		if (session?.status !== 'starting' || startingSinceRef.current === null) return null;
@@ -348,68 +356,60 @@ export function useNotebookSession(
 			session,
 		);
 		return null;
-	});
+	};
 
 	// Reused sessions can return before provisioning finishes, so watch them until ready.
-	const pollStartingSession = useEffectEvent(
-		(sessionId: string, isLive: () => boolean): Promise<void> => {
-			const current = sessionRef.current;
-			if (current?.session_id !== sessionId || current.status !== 'starting')
-				return Promise.resolve();
-			return pollSession(
-				sessionId,
-				(next) => {
-					if (next.status === 'running' && !next.sandbox_url) {
-						concludeAccessLost(next.can?.attach ?? false);
-					} else if (next.status === 'running' || next.status === 'starting') {
-						commitSession(next);
-					} else if (next.status !== 'terminating') {
-						failStart(next.error, undefined, next.status === 'failed' ? next : undefined);
-					}
-				},
-				// The record vanished mid-start (reaped, or the notebook deleted).
-				() => failStart(undefined, 'NOT_FOUND'),
-				isLive,
-			);
-		},
-	);
+	const pollStartingSession = (
+		sessionId: string,
+		isLive: () => boolean,
+		signal: AbortSignal,
+	): Promise<void> => {
+		const current = sessionRef.current;
+		if (current?.session_id !== sessionId || current.status !== 'starting')
+			return Promise.resolve();
+		return pollSession(
+			sessionId,
+			(next) => {
+				if (next.status === 'running' && !next.sandbox_url) {
+					concludeAccessLost(next.can?.attach ?? false);
+				} else if (next.status === 'running' || next.status === 'starting') {
+					commitSession(next);
+				} else if (next.status !== 'terminating') {
+					failStart(next.error, undefined, next.status === 'failed' ? next : undefined);
+				}
+			},
+			// The record vanished mid-start (reaped, or the notebook deleted).
+			() => failStart(undefined, 'NOT_FOUND'),
+			isLive,
+			signal,
+		);
+	};
 	const startingSessionId = session?.status === 'starting' ? session.session_id : null;
-	useEffect(() => {
-		if (startingSessionId === null) return;
-		const controller = new AbortController();
-		const { signal } = controller;
-		// Drops responses after cleanup too, e.g. once an app heartbeat reports `running`.
-		const isLive = () => !signal.aborted;
-		const pause = (ms: number) =>
-			sleep(ms, signal).catch((error: unknown) => {
-				if (isLive()) throw error;
-			});
-		// Each delay starts when the previous response is handled: overlapping polls can
-		// answer out of order, and a late `starting` would undo a newer `running`.
-		const pollWhileStarting = async () => {
-			for (let attempt = 0; ; attempt += 1) {
-				const since = startingSinceRef.current;
-				await pause(sessionStartPollDelayMs(attempt, since === null ? 0 : Date.now() - since));
-				if (!isLive()) return;
-				await pollStartingSession(startingSessionId, isLive);
-			}
-		};
-		// Timed separately from polling so a hung poll cannot postpone the deadline.
-		// Re-armed rather than set once because the timeout can change while starting.
-		const watchDeadline = async () => {
-			for (let wait = 0; ; ) {
-				await pause(wait);
-				if (!isLive()) return;
-				const remaining = enforceStartupDeadline();
-				if (remaining === null) return;
-				// sleep() rejects fractional or over-long delays, which a capability timeout can produce.
-				wait = Math.min(Math.ceil(remaining) + 1, MAX_TIMER_DELAY_MS);
-			}
-		};
-		void pollWhileStarting();
-		void watchDeadline();
-		return () => controller.abort();
-	}, [startingSessionId]);
+	const onLoopError = (error: Error) => setError(toSessionError(error));
+	useAsyncLoop({
+		key: startingSessionId,
+		initial: 0,
+		delay: (attempt) => {
+			const since = startingSinceRef.current;
+			return sessionStartPollDelayMs(attempt, since === null ? 0 : Date.now() - since);
+		},
+		step: async (attempt, signal) => {
+			await pollStartingSession(startingSessionId!, () => !signal.aborted, signal);
+			return attempt + 1;
+		},
+		onError: onLoopError,
+	});
+	// A hung request must not postpone the deadline; read current capabilities each time it fires.
+	useAsyncLoop({
+		key: startingSessionId,
+		initial: 0,
+		delay: (remaining) => remaining,
+		step: async () => {
+			const remaining = enforceStartupDeadline();
+			return remaining === null ? null : Math.min(Math.ceil(remaining) + 1, MAX_TIMER_DELAY_MS);
+		},
+		onError: onLoopError,
+	});
 
 	const concludeSession = useCallback(
 		(status: SessionEnded, endedBy: string | null = null) => {
@@ -437,22 +437,12 @@ export function useNotebookSession(
 		[commitSession, concludeAccessLost, concludeSession],
 	);
 
-	useInterval(
-		() => {
-			const sid = session?.session_id;
-			if (!sid) return;
-			void pollSession(sid, updateRunningSession, () => concludeSession('gone'));
-		},
-		mode !== 'app' && session?.status === 'running' ? SESSION_STATUS_INTERVAL_MS : null,
-	);
-
 	const heartbeatActive =
 		session?.status === 'running' || (mode === 'app' && session?.status === 'starting');
 
-	// App heartbeats also return status, avoiding a separate running-session poll.
-	const sendHeartbeat = useEffectEvent(async (signal: AbortSignal): Promise<boolean> => {
+	const sendHeartbeat = async (signal: AbortSignal): Promise<number | null> => {
 		const current = sessionRef.current;
-		if (!current || !heartbeatActive) return false;
+		if (!current || !heartbeatActive) return null;
 		const gen = generation.current();
 		try {
 			const next = await apiData(
@@ -463,49 +453,38 @@ export function useNotebookSession(
 					params: { path: { pid: projectId, nid: notebookId, sid: current.session_id } },
 				}),
 			);
-			if (!signal.aborted && mode === 'app' && generation.isCurrent(gen))
-				updateRunningSession(next);
+			if (!signal.aborted && generation.isCurrent(gen)) updateRunningSession(next);
 		} catch (error) {
-			if (signal.aborted || mode !== 'app' || !generation.isCurrent(gen)) return false;
+			if (signal.aborted || !generation.isCurrent(gen)) return null;
 			if (isNotFoundError(error)) concludeSession('gone');
 			else if (error instanceof ApiRequestError && error.status === 403) concludeAccessLost();
-			else if (
-				error instanceof ApiRequestError &&
-				error.code === 'CONFLICT' &&
-				error.message === 'The app assignment expired. Open the app again.'
-			)
+			else if (error instanceof ApiRequestError && error.code === 'APP_ASSIGNMENT_EXPIRED')
 				concludeSession('expired');
-			else return true;
+			else return error instanceof ApiRequestError ? (error.retryAfterMs ?? 0) : 0;
 		}
-		return false;
-	});
+		return null;
+	};
 	const heartbeatSessionId = heartbeatActive ? session?.session_id : undefined;
-	useEffect(() => {
-		if (!heartbeatSessionId) return;
-		const controller = new AbortController();
-		const { signal } = controller;
-		const run = async () => {
-			let failures = 0;
-			while (!signal.aborted) {
-				const interval =
-					mode === 'app'
-						? appHeartbeatIntervalSeconds * 1000 * (0.8 + Math.random() * 0.2)
-						: EDITOR_HEARTBEAT_INTERVAL_MS;
-				const delay = failures
-					? Math.min(5000, 500 * 2 ** Math.min(failures, 4)) * (0.5 + Math.random() * 0.5)
-					: interval;
-				try {
-					await sleep(Math.floor(delay), signal);
-				} catch {
-					return;
-				}
-				if (signal.aborted) return;
-				failures = (await sendHeartbeat(signal)) ? failures + 1 : 0;
-			}
-		};
-		void run();
-		return () => controller.abort();
-	}, [heartbeatSessionId, mode, appHeartbeatIntervalSeconds]);
+	const heartbeatKey = useMemo(
+		() => (heartbeatSessionId ? { heartbeatSessionId, mode, appHeartbeatIntervalSeconds } : null),
+		[heartbeatSessionId, mode, appHeartbeatIntervalSeconds],
+	);
+	useAsyncLoop({
+		key: heartbeatKey,
+		initial: { failures: 0, retryAfter: 0 },
+		delay: ({ failures, retryAfter }) => {
+			const interval =
+				mode === 'app'
+					? appHeartbeatIntervalSeconds * 1000 * (0.8 + Math.random() * 0.2)
+					: EDITOR_HEARTBEAT_INTERVAL_MS;
+			return heartbeatRetryDelay(failures, interval, retryAfter, Math.random());
+		},
+		step: async ({ failures }, signal) => {
+			const failureDelay = await sendHeartbeat(signal);
+			return { failures: failureDelay === null ? 0 : failures + 1, retryAfter: failureDelay ?? 0 };
+		},
+		onError: onLoopError,
+	});
 
 	useEffect(() => {
 		mountedRef.current = true;
@@ -536,7 +515,12 @@ export function useNotebookSession(
 	);
 
 	const isProvisioning = restarting || starting || session?.status === 'starting';
+	useEffect(() => {
+		if (isProvisioning) void prefetchMarimoAssets(marimoAssetUrl);
+	}, [isProvisioning, marimoAssetUrl]);
 	const isRunning = session?.status === 'running' && !!session.sandbox_url;
+	const reportRetentionReady = useContext(RetainedEditorContext);
+	useEffect(() => reportRetentionReady?.(isRunning), [isRunning, reportRetentionReady]);
 
 	return {
 		acknowledgeWorkingBranchSave,

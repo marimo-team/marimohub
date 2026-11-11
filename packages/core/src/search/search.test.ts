@@ -24,6 +24,27 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 describe('authorized search', () => {
+	it('excludes inaccessible access candidates before loading metadata, with a conservative legacy fallback', async () => {
+		const f = await setup('search-test');
+		const hidden = await f.services.projects.createProject(
+			{ name: 'Private', description: '' },
+			outsider.id,
+		);
+		const reads = vi.spyOn(f.services.projects, 'getProject');
+		expect(
+			(await f.search.search(owner, { ...f.query, project_id: undefined })).items,
+		).toHaveLength(1);
+		expect(reads.mock.calls.some(([id]) => id === hidden.id)).toBe(false);
+		await f.services.catalog.mutateSnapshot('test.legacy', owner.id, (snapshot) => {
+			delete snapshot.projects.find((entry) => entry.id === hidden.id)!.access;
+			return snapshot;
+		});
+		reads.mockClear();
+		expect(
+			(await f.search.search(owner, { ...f.query, project_id: undefined })).items,
+		).toHaveLength(1);
+		expect(reads.mock.calls.some(([id]) => id === hidden.id)).toBe(true);
+	});
 	it('does not restart a crawl when a refresh revision is replayed', async () => {
 		const f = await setup();
 		const indexer = new SearchIndexer(

@@ -104,10 +104,11 @@ export default defineConfig({
 			{
 				text: 'Configure',
 				activeMatch:
-					'^/(auth|service-accounts|storage|compute|editor-sessions|surfaces|theming|sandbox-image|apps|thumbnails|jobs|ai|environment-and-access|integration-secrets|integrations|data-browser|support|notifications|project-alerts|organizing-projects|importing-notebooks|syncing|notebook-previews|workload-identity-federation)',
+					'^/(auth|service-accounts|storage|compute|marimo-assets|editor-sessions|surfaces|theming|sandbox-image|apps|thumbnails|jobs|ai|environment-and-access|integration-secrets|integrations|data-browser|support|notifications|project-alerts|organizing-projects|importing-notebooks|syncing|notebook-previews|workload-identity-federation)',
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },
+					{ text: 'Shared marimo assets', link: '/marimo-assets' },
 					{ text: 'Editor sessions', link: '/editor-sessions' },
 					{ text: 'Session surfaces', link: '/surfaces' },
 					{ text: 'Theming', link: '/theming' },
@@ -179,6 +180,7 @@ export default defineConfig({
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },
+					{ text: 'Shared marimo assets', link: '/marimo-assets' },
 					{ text: 'Editor sessions', link: '/editor-sessions' },
 					{ text: 'Session surfaces', link: '/surfaces' },
 					{ text: 'Theming', link: '/theming' },

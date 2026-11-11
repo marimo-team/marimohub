@@ -40,6 +40,7 @@ function context(overrides: { project?: Project; run?: Partial<JobRun> } = {}): 
 		project_id: project.id,
 		notebook_id: job.notebook_id,
 		status: 'provisioning',
+		timeout_seconds: 3600,
 		trigger: 'schedule',
 		...overrides.run,
 	} as unknown as JobRun;
@@ -305,6 +306,30 @@ describe('resolveIntegrationRender', () => {
 });
 
 describe('resolveJobSandboxEnv', () => {
+	it('refreshes cached credentials when a later job needs more remaining lifetime', async () => {
+		vi.useFakeTimers();
+		try {
+			let issued = 0;
+			const exchange = vi.fn(async () => ({
+				accessKeyId: `AK${++issued}`,
+				secretAccessKey: 'SK',
+				expiration: new Date(Date.now() + 3600_000).toISOString(),
+			}));
+			const config = makeTestWif({ exchange });
+			const first = context({ run: { timeout_seconds: 1800 } });
+			expect(
+				(await resolveJobSandboxEnv({ ...deps, wif: config }, first))?.vars?.AWS_ACCESS_KEY_ID,
+			).toBe('AK1');
+			vi.setSystemTime(Date.now() + 20 * 60_000);
+			const later = context({ project: first.project, run: { timeout_seconds: 3000 } });
+			expect(
+				(await resolveJobSandboxEnv({ ...deps, wif: config }, later))?.vars?.AWS_ACCESS_KEY_ID,
+			).toBe('AK2');
+			expect(exchange).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 	let bucket: MemoryBucket;
 	let deps: ApiDeps;
 

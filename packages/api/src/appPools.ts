@@ -1,3 +1,4 @@
+import { BoundedLruMap } from '@marimo-hub/core/cache';
 import {
 	AppPoolService,
 	AppPoolStore,
@@ -16,12 +17,14 @@ import {
 	NotFoundError,
 	ProjectId,
 	SessionRetirer,
-	sessionOwner,
+	sessionSandbox,
 	sessionMode,
 } from '@marimo-hub/core';
-import type { Metrics } from '@marimo-hub/core';
+import type { Bucket, Metrics } from '@marimo-hub/core';
 import type { ApiDeps } from './context';
 import { previewAppPoolPolicy } from './previewPolicy';
+
+const inertPools = new WeakMap<Bucket, BoundedLruMap<string, string>>();
 
 export async function sweepAppPools(
 	deps: Pick<
@@ -32,6 +35,9 @@ export async function sweepAppPools(
 	},
 ): Promise<void> {
 	const { sessions } = deps.services;
+	const cached = inertPools.get(deps.bucket) ?? new BoundedLruMap<string, string>(10_000);
+	const next = new BoundedLruMap<string, string>(10_000);
+	inertPools.set(deps.bucket, cached);
 	const projectSessions = new Map<ProjectId, ReturnType<typeof sessions.listActiveByProject>>();
 	const readSessions = (pid: ProjectId) => {
 		let pending = projectSessions.get(pid);
@@ -70,7 +76,12 @@ export async function sweepAppPools(
 			const pid = match[1];
 			const nid = match[2];
 			try {
-				const snapshot = await store.read(pid, nid);
+				if (object.etag && cached.get(object.key) === object.etag) {
+					next.set(object.key, object.etag);
+					return;
+				}
+				const known = await store.readWithEtag(pid, nid);
+				const snapshot = known?.value;
 				if (!snapshot) return;
 				let poolVisits = snapshot.assignments.length;
 				visits += poolVisits;
@@ -78,8 +89,10 @@ export async function sweepAppPools(
 					snapshot.deleted_at !== undefined &&
 					snapshot.members.length === 0 &&
 					snapshot.assignments.length === 0
-				)
+				) {
+					next.set(object.key, known.etag);
 					return;
+				}
 				if (
 					snapshot.members.length === 0 &&
 					snapshot.assignments.length === 0 &&
@@ -168,7 +181,7 @@ export async function sweepAppPools(
 						)
 							return 0;
 						const connections = await kernelActiveConnections(
-							deps.compute.create(member.sandbox_id, { owner: sessionOwner(session) }),
+							sessionSandbox(deps.compute, session, deps.metrics, 'app_pool'),
 							localKernelBasePath(session),
 						).catch((error: unknown) => {
 							if (error instanceof NotFoundError) return null;
@@ -188,9 +201,11 @@ export async function sweepAppPools(
 						)
 							return false;
 						if (!session) {
-							await deps.compute
-								.create(member.sandbox_id, { owner: { projectId: pid, userId: member.user_id } })
-								.destroy();
+							const existing = deps.compute.connectExisting?.(member.sandbox_id, {
+								owner: { projectId: pid, userId: member.user_id },
+							});
+							if (!existing) return false;
+							await existing.destroy();
 							return true;
 						}
 						if (session.sandbox_reclaimed_at) return true;
@@ -212,5 +227,6 @@ export async function sweepAppPools(
 		});
 		cursor = page.truncated ? page.cursor : undefined;
 	} while (cursor);
+	if (complete) inertPools.set(deps.bucket, next);
 	if (complete) deps.metrics?.gauge('app_pool.visits', visits);
 }

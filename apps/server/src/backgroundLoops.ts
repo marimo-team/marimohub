@@ -53,6 +53,7 @@ interface LoopOptions<T> {
 	abortOnStop?: boolean;
 	overlapEvent?: string;
 	lock?: MaintenanceLock;
+	retainLease?: boolean;
 	notLeaderEvent?: string;
 	shouldRun?: () => Promise<boolean>;
 	run(context: LoopContext): Promise<T>;
@@ -148,6 +149,7 @@ export class BackgroundLoops {
 		};
 		this.states.set(name, state);
 		const stopping = new AbortController();
+		const retainedHolder = `${os.hostname()}:${process.pid}:${randomUUID()}`;
 
 		const work = async (
 			signal: AbortSignal,
@@ -169,7 +171,9 @@ export class BackgroundLoops {
 			if (
 				lease &&
 				!(await context.step(() =>
-					lease.lock.acquire(lease.holder, Math.max(1, deadlineMs - (Date.now() - started))),
+					options.retainLease
+						? lease.lock.hold(lease.holder, deadlineMs + options.intervalMs * 2, deadlineMs)
+						: lease.lock.acquire(lease.holder, Math.max(1, deadlineMs - (Date.now() - started))),
 				))
 			) {
 				if (options.notLeaderEvent)
@@ -182,7 +186,7 @@ export class BackgroundLoops {
 				return { value: await options.run(context) };
 			} finally {
 				// After a deadline, leave the lease to expire instead of releasing it late.
-				if (lease && !signal.aborted)
+				if (lease && !signal.aborted && (!options.retainLease || state.stopped))
 					await withAbortSignal(lease.lock.release(lease.holder, signal), signal).catch(
 						(error: unknown) => {
 							if (!signal.aborted)
@@ -198,7 +202,12 @@ export class BackgroundLoops {
 				state.running = true;
 				state.last_started_at = started;
 				const lease = options.lock
-					? { lock: options.lock, holder: `${os.hostname()}:${process.pid}:${randomUUID()}` }
+					? {
+							lock: options.lock,
+							holder: options.retainLease
+								? retainedHolder
+								: `${os.hostname()}:${process.pid}:${randomUUID()}`,
+						}
 					: undefined;
 				let pending: Promise<unknown> | undefined;
 				let outcome: Outcome;
@@ -273,9 +282,20 @@ export class BackgroundLoops {
 		tick();
 		const interval = setInterval(tick, options.intervalMs);
 		const stop = () => {
+			if (state.stopped) return;
 			state.stopped = true;
 			clearInterval(interval);
 			if (options.abortOnStop) stopping.abort(new Error(`${name} stopped`));
+			if (options.retainLease && options.lock) {
+				const lock = options.lock;
+				void this.inFlight.track(
+					current
+						.then(() => (state.running ? undefined : lock.release(retainedHolder)))
+						.catch((error: unknown) => {
+							logFailure(`${name}_release_failed`, error, { holder: retainedHolder });
+						}),
+				);
+			}
 		};
 		const drain = () => current;
 		return {

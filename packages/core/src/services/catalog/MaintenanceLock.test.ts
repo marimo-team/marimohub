@@ -20,6 +20,37 @@ describe('MaintenanceLock', () => {
 		vi.restoreAllMocks();
 	});
 
+	it('retains a lease without bucket I/O and renews with its owned ETag', async () => {
+		expect(await lock.hold('A', 3000, 1000)).toBe(true);
+		const get = vi.spyOn(bucket, 'get');
+		const put = vi.spyOn(bucket, 'put');
+		clock.set(1000);
+		expect(await lock.hold('A', 3000, 1000)).toBe(true);
+		expect(get).not.toHaveBeenCalled();
+		expect(put).not.toHaveBeenCalled();
+		clock.set(2001);
+		expect(await lock.hold('A', 3000, 1000)).toBe(true);
+		expect(get).not.toHaveBeenCalled();
+		expect(put).toHaveBeenCalledOnce();
+		await lock.release('A');
+		expect(await new MaintenanceLock(bucket).acquire('B')).toBe(true);
+	});
+
+	it('does not reuse an expired lease or recover ownership after losing renewal CAS', async () => {
+		await lock.hold('A', 1000, 500);
+		clock.set(1000);
+		await new MaintenanceLock(bucket).acquire('B', 2000);
+		expect(await lock.hold('A', 1000, 500)).toBe(false);
+		clock.set(3000);
+		expect(await lock.hold('A', 1000, 500)).toBe(true);
+		clock.set(3600);
+		vi.spyOn(bucket, 'put').mockRejectedValueOnce(new PreconditionFailedError('lost'));
+		expect(await lock.hold('A', 1000, 500)).toBe(false);
+		const get = vi.spyOn(bucket, 'get');
+		await lock.hold('A', 1000, 500);
+		expect(get).toHaveBeenCalledOnce();
+	});
+
 	it('acquires a free lease', async () => {
 		expect(await lock.acquire('A', 1000)).toBe(true);
 		expect(await bucket.get(paths.maintenanceLock)).not.toBeNull();

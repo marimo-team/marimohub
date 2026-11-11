@@ -6,7 +6,7 @@ import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
 import {
 	SESSION_START_POLL_INTERVAL_MS,
 	SESSION_START_SLOW_POLL_AFTER_MS,
-	SESSION_STATUS_INTERVAL_MS,
+	EDITOR_HEARTBEAT_INTERVAL_MS,
 	sessionStartPollDelayMs,
 } from '@/lib/sessions';
 import { useNotebookSession } from './useNotebookSession';
@@ -101,13 +101,15 @@ describe('useNotebookSession', () => {
 	it('preserves the saved baseline when an older session poll completes', async () => {
 		vi.useFakeTimers();
 		const pending = deferred<Response>();
-		const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
-			init?.method === 'POST' ? jsonOk(makeSession({ source_version_id: 'a' })) : pending.promise,
+		const fetchMock = vi.fn(async (url: RequestInfo | URL) =>
+			String(url).endsWith('/sessions')
+				? jsonOk(makeSession({ source_version_id: 'a' }))
+				: pending.promise,
 		);
 		vi.stubGlobal('fetch', fetchMock);
 		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
 		await settleHook();
-		await act(() => vi.advanceTimersByTimeAsync(SESSION_STATUS_INTERVAL_MS));
+		await act(() => vi.advanceTimersByTimeAsync(EDITOR_HEARTBEAT_INTERVAL_MS));
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		await act(async () => result.current.acknowledgeWorkingBranchSave('sess-1', 'b'));
 		await act(async () => {
@@ -340,7 +342,7 @@ describe('useNotebookSession', () => {
 			const polls = () =>
 				fetchMock.mock.calls
 					.map(([url]) => String(url))
-					.filter((url) => url.endsWith('/sessions/sess-2'));
+					.filter((url) => new URL(url, 'http://localhost').pathname.endsWith('/sessions/sess-2'));
 			await act(() => vi.advanceTimersByTimeAsync(0));
 			expect(polls()).toHaveLength(1);
 			await act(() => vi.advanceTimersByTimeAsync(249));
@@ -356,7 +358,8 @@ describe('useNotebookSession', () => {
 			vi.useFakeTimers();
 			const pollTimes: number[] = [];
 			const fetchMock = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => {
-				if (String(url).endsWith('/sessions/sess-1')) pollTimes.push(Date.now());
+				if (new URL(String(url), 'http://localhost').pathname.endsWith('/sessions/sess-1'))
+					pollTimes.push(Date.now());
 				return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
 			});
 			vi.stubGlobal('fetch', fetchMock);
@@ -390,7 +393,7 @@ describe('useNotebookSession', () => {
 			if (init?.method === 'POST') {
 				return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
 			}
-			if (String(url).endsWith('/sessions/sess-1')) {
+			if (new URL(String(url), 'http://localhost').pathname.endsWith('/sessions/sess-1')) {
 				polls += 1;
 				return polls === 1 ? slowStarting.promise : jsonOk(makeSession());
 			}
@@ -621,7 +624,7 @@ describe('useNotebookSession', () => {
 			if (init?.method === 'POST') {
 				return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
 			}
-			if (String(url).endsWith(`/sessions/sess-1`)) {
+			if (new URL(String(url), 'http://localhost').pathname.endsWith('/sessions/sess-1')) {
 				return jsonOk(makeSession({ status: 'running' }));
 			}
 			throw new Error(`unexpected fetch: ${String(url)}`);
@@ -637,9 +640,11 @@ describe('useNotebookSession', () => {
 		});
 
 		expect(result.current.isRunning).toBe(true);
-		expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith(`/sessions/sess-1`))).toBe(
-			true,
-		);
+		expect(
+			fetchMock.mock.calls.some(([url]) =>
+				new URL(String(url), 'http://localhost').pathname.endsWith('/sessions/sess-1'),
+			),
+		).toBe(true);
 	});
 
 	it('surfaces a terminal startup state while polling', async () => {
@@ -650,7 +655,7 @@ describe('useNotebookSession', () => {
 				if (init?.method === 'POST') {
 					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
 				}
-				if (String(url).endsWith(`/sessions/sess-1`)) {
+				if (new URL(String(url), 'http://localhost').pathname.endsWith('/sessions/sess-1')) {
 					return jsonOk(makeSession({ status: 'failed', sandbox_url: undefined }));
 				}
 				throw new Error(`unexpected fetch: ${String(url)}`);
@@ -678,7 +683,7 @@ describe('useNotebookSession', () => {
 				if (init?.method === 'POST') {
 					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
 				}
-				if (String(url).endsWith('/sessions/sess-1')) {
+				if (new URL(String(url), 'http://localhost').pathname.endsWith('/sessions/sess-1')) {
 					return jsonOk(
 						makeSession({
 							status: 'failed',
@@ -715,7 +720,10 @@ describe('useNotebookSession', () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-				if (init?.method === 'POST' || String(url).endsWith('/sessions/sess-1')) {
+				if (
+					init?.method === 'POST' ||
+					new URL(String(url), 'http://localhost').pathname.endsWith('/sessions/sess-1')
+				) {
 					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
 				}
 				throw new Error(`unexpected fetch: ${String(url)}`);
@@ -752,7 +760,10 @@ describe('useNotebookSession', () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-				if (init?.method === 'POST' || String(url).endsWith('/sessions/sess-1')) {
+				if (
+					init?.method === 'POST' ||
+					new URL(String(url), 'http://localhost').pathname.endsWith('/sessions/sess-1')
+				) {
 					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
 				}
 				throw new Error(`unexpected fetch: ${String(url)}`);
@@ -792,7 +803,10 @@ describe('useNotebookSession', () => {
 						? jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }))
 						: jsonOk(makeSession());
 				}
-				if (String(url).endsWith('/sessions/sess-1') || String(url).endsWith('/heartbeat')) {
+				if (
+					new URL(String(url), 'http://localhost').pathname.endsWith('/sessions/sess-1') ||
+					String(url).endsWith('/heartbeat')
+				) {
 					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
 				}
 				throw new Error(`unexpected fetch: ${String(url)}`);
@@ -818,6 +832,42 @@ describe('useNotebookSession', () => {
 		await settleHook();
 		expect(result.current.error).toBeNull();
 		expect(result.current.isRunning).toBe(true);
+	});
+
+	it('uses the editor heartbeat for status without a separate status poll', async () => {
+		vi.useFakeTimers();
+		const fetchMock = vi.fn(async (..._args: Parameters<typeof fetch>) => jsonOk(makeSession()));
+		vi.stubGlobal('fetch', fetchMock);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		await settleHook();
+		fetchMock.mockClear();
+		await act(() => vi.advanceTimersByTimeAsync(EDITOR_HEARTBEAT_INTERVAL_MS - 1));
+		expect(fetchMock).not.toHaveBeenCalled();
+		fetchMock.mockResolvedValue(jsonOk(makeSession({ status: 'terminated' })));
+		await act(() => vi.advanceTimersByTimeAsync(1));
+		expect(fetchMock).toHaveBeenCalledOnce();
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/heartbeat');
+		expect(result.current.ended).toBe('terminated');
+	});
+
+	it('honors Retry-After before retrying an unavailable heartbeat', async () => {
+		vi.spyOn(Math, 'random').mockReturnValue(0.5);
+		const sentAt: number[] = [];
+		await setupAppHeartbeat(
+			() => {
+				sentAt.push(Date.now());
+				const response = jsonError('SERVICE_UNAVAILABLE', 'Try later', 503);
+				response.headers.set('Retry-After', '12');
+				return response;
+			},
+			makeSession({ mode: 'app' }),
+		);
+		await act(() => vi.advanceTimersByTimeAsync(900));
+		expect(sentAt).toHaveLength(1);
+		await act(() => vi.advanceTimersByTimeAsync(11_999));
+		expect(sentAt).toHaveLength(1);
+		await act(() => vi.advanceTimersByTimeAsync(1));
+		expect(sentAt[1] - sentAt[0]).toBe(12_000);
 	});
 
 	it('uses one heartbeat/status request per interval for running apps', async () => {
@@ -848,7 +898,7 @@ describe('useNotebookSession', () => {
 			[
 				{ status: 403, code: 'FORBIDDEN', ended: 'access_lost' },
 				{ status: 404, code: 'NOT_FOUND', ended: 'gone' },
-				{ status: 409, code: 'CONFLICT', ended: 'expired' },
+				{ status: 409, code: 'APP_ASSIGNMENT_EXPIRED', ended: 'expired' },
 			].map((failure) => ({ sessionStatus, ...failure })),
 		),
 	)(
@@ -858,9 +908,7 @@ describe('useNotebookSession', () => {
 				() =>
 					jsonError(
 						code,
-						status === 409
-							? 'The app assignment expired. Open the app again.'
-							: 'assignment unavailable',
+						status === 409 ? 'This wording may change.' : 'assignment unavailable',
 						status,
 					),
 				makeSession({ mode: 'app', status: sessionStatus }),
@@ -938,17 +986,50 @@ describe('useNotebookSession', () => {
 			makeSession({ mode: 'app', app_assignment: assignment }),
 		);
 		const startedAt = Date.now();
-		await act(() => vi.advanceTimersByTimeAsync(17_400));
+		await act(() => vi.advanceTimersByTimeAsync(96_150));
 		expect(sentAt.map((at) => at - startedAt)).toEqual([
-			900, 1650, 3150, 6150, 9900, 13_650, 17_400,
+			900, 1650, 3150, 6150, 36_150, 66_150, 96_150,
 		]);
 		expect(result.current.ended).toBeNull();
 		expect(result.current.isRunning).toBe(true);
 		await act(() => vi.advanceTimersByTimeAsync(899));
 		expect(sentAt).toHaveLength(7);
 		await act(() => vi.advanceTimersByTimeAsync(1));
-		expect(sentAt[7] - startedAt).toBe(18_300);
+		expect(sentAt[7] - startedAt).toBe(97_050);
 		expect(heartbeatBodies()).toEqual(Array(sentAt.length).fill(assignment));
+	});
+
+	it('restarts the heartbeat cadence and ignores a cancelled request after configuration changes', async () => {
+		vi.useFakeTimers();
+		vi.spyOn(Math, 'random').mockReturnValue(0.5);
+		const held = deferred<Response>();
+		const signals: AbortSignal[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (String(url).endsWith('/heartbeat')) {
+					signals.push(init!.signal!);
+					if (signals.length === 1) return held.promise;
+				}
+				return jsonOk(makeSession({ mode: 'app' }));
+			}),
+		);
+		const { result, rerender } = renderHookWithClient(
+			({ interval }) =>
+				useNotebookSession(PID, NID, { mode: 'app', appHeartbeatIntervalSeconds: interval }),
+			{ toaster: false, initialProps: { interval: 10 } },
+		);
+		await settleHook();
+		await act(() => vi.advanceTimersByTimeAsync(9000));
+		expect(signals).toHaveLength(1);
+		rerender({ interval: 1 });
+		expect(signals[0].aborted).toBe(true);
+		await act(() => vi.advanceTimersByTimeAsync(900));
+		expect(signals).toHaveLength(2);
+		await act(async () => held.resolve(jsonError('FORBIDDEN', 'Old access result', 403)));
+		expect(result.current.isRunning).toBe(true);
+		expect(result.current.ended).toBeNull();
+		expect(result.current.error).toBeNull();
 	});
 
 	it.each(['timeout', 'unmount'] as const)(
@@ -1098,7 +1179,7 @@ describe('useNotebookSession', () => {
 				if (init?.method === 'POST') {
 					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
 				}
-				if (String(url).endsWith('/sessions/sess-1')) {
+				if (new URL(String(url), 'http://localhost').pathname.endsWith('/sessions/sess-1')) {
 					polls += 1;
 					// The first poll hangs until after the timeout has concluded.
 					return polls === 1
@@ -1160,7 +1241,7 @@ describe('useNotebookSession', () => {
 			if (init?.method === 'POST') {
 				return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
 			}
-			if (String(url).endsWith(`/sessions/sess-1`)) {
+			if (new URL(String(url), 'http://localhost').pathname.endsWith('/sessions/sess-1')) {
 				polls += 1;
 				if (polls === 1) throw new Error('temporary');
 				return jsonOk(makeSession({ status: 'running' }));
@@ -1354,7 +1435,7 @@ describe('useNotebookSession (app mode)', () => {
 				if (init?.method === 'POST') {
 					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
 				}
-				if (String(url).endsWith('/sessions/sess-1')) {
+				if (new URL(String(url), 'http://localhost').pathname.endsWith('/sessions/sess-1')) {
 					return jsonOk(makeSession(revoked ? { sandbox_url: undefined } : { status: 'starting' }));
 				}
 				throw new Error(`unexpected fetch: ${String(url)}`);
@@ -1427,7 +1508,7 @@ describe('useNotebookSession (app mode)', () => {
 				if (init?.method === 'POST') {
 					return jsonOk(makeSession({ mode: 'app', status: 'starting', sandbox_url: undefined }));
 				}
-				if (String(url).endsWith('/sessions/sess-1')) {
+				if (new URL(String(url), 'http://localhost').pathname.endsWith('/sessions/sess-1')) {
 					return jsonError('NOT_FOUND', 'gone', 404);
 				}
 				throw new Error(`unexpected fetch: ${String(url)}`);
@@ -1632,12 +1713,16 @@ describe('useNotebookSession (app mode)', () => {
 				toaster: false,
 			});
 			await settleHook();
-			await act(async () => vi.advanceTimersByTimeAsync(60_000));
+			await act(async () =>
+				vi.advanceTimersByTimeAsync(mode === 'app' ? 60_000 : EDITOR_HEARTBEAT_INTERVAL_MS),
+			);
 			await settleHook();
-			if (mode === 'app') {
+			{
 				expect(watches).toBe(1);
 				await act(async () => pending.resolve(jsonOk(makeSession({ mode }))));
-				await act(async () => vi.advanceTimersByTimeAsync(30_000));
+				await act(async () =>
+					vi.advanceTimersByTimeAsync(mode === 'app' ? 30_000 : EDITOR_HEARTBEAT_INTERVAL_MS),
+				);
 			}
 			expect(watches).toBe(2);
 			expect(result.current.ended).toBe(mode === 'edit' ? 'takeover' : 'terminated');
@@ -1736,7 +1821,7 @@ describe('useNotebookSession (app mode)', () => {
 						: jsonOk(makeSession({ session_id: 'sess-2', mode: 'app' }));
 				}
 				if (method === 'DELETE') return jsonOk(undefined);
-				if (String(url).endsWith('/sessions/sess-1')) {
+				if (new URL(String(url), 'http://localhost').pathname.endsWith('/sessions/sess-1')) {
 					await pollGate.promise;
 					return jsonOk(makeSession({ mode: 'app', status: 'failed', sandbox_url: undefined }));
 				}
@@ -1822,9 +1907,9 @@ describe('session diagnostic links', () => {
 			});
 			vi.stubGlobal(
 				'fetch',
-				vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
+				vi.fn(async (url: RequestInfo | URL) =>
 					jsonOk(
-						init?.method === 'POST'
+						String(url).endsWith('/sessions')
 							? makeSession({
 									mode: 'edit',
 									status,
@@ -1838,7 +1923,7 @@ describe('session diagnostic links', () => {
 				toaster: false,
 			});
 			await settleHook();
-			await act(() => vi.advanceTimersByTimeAsync(30_000));
+			await act(() => vi.advanceTimersByTimeAsync(EDITOR_HEARTBEAT_INTERVAL_MS));
 			expect(result.current.session).toBeNull();
 			expect(result.current.isRunning).toBe(false);
 			expect(result.current.diagnosticSession).toEqual(failed);
@@ -1967,6 +2052,7 @@ describe('session diagnostic links', () => {
 		expect(result.current.diagnosticSession?.links).toEqual(starting.links);
 		act(() => result.current.start());
 		await settleHook();
+		await act(() => vi.advanceTimersByTimeAsync(1_500));
 		expect(result.current.error?.message).toBe('Compute unavailable');
 		expect(result.current.session).toBeNull();
 		expect(result.current.diagnosticSession).toBeNull();

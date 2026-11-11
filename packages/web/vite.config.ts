@@ -81,6 +81,11 @@ export default defineConfig({
 				codeSplitting: {
 					groups: [
 						{
+							name: 'workspace',
+							test: /\/src\/(?:components\/(?:Workspace\/WorkspaceLayout|Workspace\/WorkspaceHome|Project\/Project|ProjectList\/ProjectList|ui\/(?:FormDialog|Page|UserAvatar)|Notebook\/baseImage)|hooks\/useListFilters|api\/thumbnails)\.tsx?$/,
+							includeDependenciesRecursively: false,
+						},
+						{
 							name: 'icons',
 							test: /node_modules\/lucide-react\//,
 							includeDependenciesRecursively: false,

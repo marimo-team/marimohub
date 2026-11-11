@@ -229,7 +229,7 @@ with the
 
 ## Shutdown
 
-API pods use a 30-second drain budget and a 50-second termination grace period.
+API pods use a 180-second drain budget and a 200-second termination grace period.
 This lets background teardown finish before compute clients close.
 See [shutdown budgets](../operations.md#shutdown-budgets) and [session stop and recovery](../operations.md#session-stop-and-recovery).
 

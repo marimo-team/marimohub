@@ -26,6 +26,7 @@ import { listAllObjects } from '../catalog/storage';
 export class IdentityService {
 	// Avoid repeated profile writes within this process. Restarts force one refresh per user.
 	private readonly written = new Map<string, string>();
+	private readonly writes = new Map<UserId, Promise<void>>();
 	private inviteDirectory = new Map<string, { etag: string; identity: Identity | null }>();
 
 	static readonly ACTIVE_SUSPENSION_FRESH_MS = 10_000;
@@ -86,29 +87,45 @@ export class IdentityService {
 		const email = EmailAddressSchema.parse(user.email);
 		const name = IdentityService.displayName(user);
 		const sig = IdentityService.signature(email, name, user.pictureUrl);
-		if (this.written.get(user.id) === sig) return;
+		if (!this.writes.has(user.id) && this.written.get(user.id) === sig) return;
 
-		const key = paths.identity(user.id);
-		const record = await withCasRetry(this.bucket, async (cas) => {
-			const obj = await this.bucket.get(key);
-			const existing = obj ? await readStored(IdentitySchema, obj, key) : null;
-			const next = IdentitySchema.parse({
-				id: user.id,
-				email,
-				name,
-				...(user.pictureUrl ? { picture_url: user.pictureUrl } : {}),
-				...(existing?.suspended_at ? { suspended_at: existing.suspended_at } : {}),
-				updated_at: new Date().toISOString(),
+		const previous = this.writes.get(user.id);
+		const pending = (async () => {
+			await previous?.catch(() => {});
+			if (this.written.get(user.id) === sig) return;
+			const key = paths.identity(user.id);
+			const record = await withCasRetry(this.bucket, async (cas) => {
+				const obj = await this.bucket.get(key);
+				const existing = obj ? await readStored(IdentitySchema, obj, key) : null;
+				if (
+					existing &&
+					IdentityService.signature(existing.email, existing.name, existing.picture_url) === sig
+				)
+					return existing;
+				const next = IdentitySchema.parse({
+					id: user.id,
+					email,
+					name,
+					...(user.pictureUrl ? { picture_url: user.pictureUrl } : {}),
+					...(existing?.suspended_at ? { suspended_at: existing.suspended_at } : {}),
+					updated_at: new Date().toISOString(),
+				});
+				await cas.put(
+					key,
+					JSON.stringify(next),
+					obj ? { onlyIfEtagMatches: obj.etag } : { onlyIfNotExists: true },
+				);
+				return next;
 			});
-			await cas.put(
-				key,
-				JSON.stringify(next),
-				obj ? { onlyIfEtagMatches: obj.etag } : { onlyIfNotExists: true },
-			);
-			return next;
-		});
-		this.written.set(user.id, sig);
-		this.updateCachedRecord(record);
+			this.written.set(user.id, sig);
+			this.updateCachedRecord(record);
+		})();
+		this.writes.set(user.id, pending);
+		try {
+			await pending;
+		} finally {
+			if (this.writes.get(user.id) === pending) this.writes.delete(user.id);
+		}
 	}
 
 	async isSuspended(id: UserId): Promise<boolean> {

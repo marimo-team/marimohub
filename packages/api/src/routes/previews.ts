@@ -437,7 +437,7 @@ app.openapi(launch, async (c) => {
 		user,
 		pid,
 		nid: record.current.notebook_id,
-		preview: { id: prid, notebook_id: nid },
+		preview: { id: prid, notebook_id: nid, record },
 		body: c.req.valid('json'),
 		request: {
 			method: c.req.method,

@@ -203,6 +203,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		mode: isApp ? 'app' : 'edit',
 		editIntent,
 		startupTimeoutSeconds: capabilities?.sandbox_startup_timeout_seconds,
+		marimoAssetUrl: capabilities?.marimo_asset_url,
 		appHeartbeatIntervalSeconds: capabilities?.app_pool?.heartbeat_interval_seconds,
 	});
 

@@ -2,9 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { preloadInitialRoute } from './initialRoute';
 import { createTestQueryClient, jsonError, jsonOk } from '@/test/render';
 import { appKeys, notebookKeys, projectKeys, sessionKeys } from '@/api/queryKeys';
+import { rememberProject, lastProjectKey } from '@/components/Workspace/lastProject';
+import { deferred } from '@/test/deferred';
 
 vi.mock('@/components/Workspace/WorkspaceLayout', () => ({ WorkspaceLayout: () => null }));
 vi.mock('@/components/Project/Project', () => ({ Project: () => null }));
+vi.mock('@/components/Workspace/WorkspaceHome', () => ({ WorkspaceHome: () => null }));
+vi.mock('@/components/ProjectList/ProjectList', () => ({ ProjectList: () => null }));
 
 afterEach(() => {
 	vi.unstubAllGlobals();
@@ -13,6 +17,70 @@ afterEach(() => {
 });
 
 describe('initial route prefetch', () => {
+	it.each(['app-only', 'remembered'] as const)(
+		'does not block a %s home route on the speculative first-project lookup',
+		async (route) => {
+			const lookup = deferred<Response>();
+			const userId = `prefetch-${route}`;
+			if (route === 'remembered') rememberProject(userId, 'remembered');
+			const fetch = vi.fn(async (input: RequestInfo | URL) => {
+				const url = new URL(String(input), window.location.href);
+				if (url.pathname === '/api/v1/projects') return lookup.promise;
+				if (url.pathname.endsWith('/me'))
+					return jsonOk({ id: userId, app_only: route === 'app-only' });
+				return jsonOk(
+					url.pathname.endsWith('/projects/remembered')
+						? { id: 'remembered' }
+						: { items: [], next_cursor: null },
+				);
+			});
+			vi.stubGlobal('fetch', fetch);
+			try {
+				const routes = await preloadInitialRoute(createTestQueryClient());
+				expect(routes.Home).toBeTypeOf('function');
+				const rememberedRequested = fetch.mock.calls.some(([url]) =>
+					String(url).endsWith('/projects/remembered'),
+				);
+				expect(rememberedRequested).toBe(route === 'remembered');
+			} finally {
+				lookup.resolve(jsonOk({ items: [], next_cursor: null }));
+				localStorage.removeItem(lastProjectKey(userId));
+			}
+		},
+	);
+
+	it('starts the first-project lookup alongside the account request without fetching a roster', async () => {
+		const requested: URL[] = [];
+		let resolveUser!: (response: Response) => void;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn((input: RequestInfo | URL) => {
+				const url = new URL(String(input), window.location.href);
+				requested.push(url);
+				if (url.pathname.endsWith('/me'))
+					return new Promise<Response>((resolve) => {
+						resolveUser = resolve;
+					});
+				if (url.pathname === '/api/v1/projects')
+					return Promise.resolve(jsonOk({ items: [{ id: 'p' }], next_cursor: 'more' }));
+				return Promise.resolve(
+					jsonOk(
+						url.pathname.endsWith('/projects/p') ? { id: 'p' } : { items: [], next_cursor: null },
+					),
+				);
+			}),
+		);
+		const pending = preloadInitialRoute(createTestQueryClient());
+		await vi.waitFor(() => expect(requested).toHaveLength(2));
+		expect(
+			requested.find((url) => url.pathname === '/api/v1/projects')?.searchParams.get('limit'),
+		).toBe('1');
+		resolveUser(jsonOk({ id: 'u', app_only: false }));
+		await pending;
+		expect(requested.some((url) => url.pathname === '/api/v1/projects/p/notebooks')).toBe(true);
+		expect(requested.filter((url) => url.pathname === '/api/v1/projects')).toHaveLength(1);
+	});
+
 	it('does not hold the project page behind a stalled sessions request', async () => {
 		window.history.replaceState({}, '', '/projects/p');
 		const client = createTestQueryClient();

@@ -51,58 +51,73 @@ describe('maintenance tracing', () => {
 		['sessionLifecycle', 'session_lifecycle'],
 		['jobScheduler', 'job_scheduler'],
 		['warmPool', 'warm_pool'],
-	] as const)(
-		'traces %s lock acquisition and release under the loop span',
-		async (loop, loopName) => {
-			const metrics = new WideEventMetrics();
-			const loops = new BackgroundLoops();
-			const run = vi.fn(async () => {});
-			const start = loops.start.bind(loops);
-			vi.spyOn(loops, 'start').mockImplementation((options) =>
-				start({ ...options, run, onSuccess: undefined }),
-			);
-			switch (loop) {
-				case 'maintenance':
-					h.track(startMaintenance(deps, metrics, loops));
-					break;
-				case 'sessionLifecycle':
-					deps.sandbox.sessionLifetime = makeSessionLifetime();
-					h.track(startSessionLifecycle(deps, loops));
-					break;
-				case 'jobScheduler':
-					h.track(startJobScheduler(deps, metrics, loops));
-					break;
-				case 'warmPool':
-					deps.warmPool = new WarmPoolService(
-						new WarmPoolStore(deps.bucket, 'kubernetes'),
-						deps.compute,
-						deps.services.sessions,
-						{
-							enabled: true,
-							size: 1,
-							profiles: [],
-							creationTimeoutMs: 300_000,
-							minimumRemainingMs: 60_000,
-						},
-					);
-					h.track(startWarmPools(deps, loops));
-			}
-			await flushRun();
-			const spans = exporter.getFinishedSpans();
-			expect(run).toHaveBeenCalledTimes(loop === 'maintenance' ? 5 : 1);
-			const parent = span(spans, `loop.${loopName}`);
-			const children = spans.filter(
-				(child) => child.spanContext().traceId === parent.spanContext().traceId,
-			);
-			const acquire = span(children, 'MaintenanceLock.acquire');
+	] as const)('traces %s lease ownership through its lifecycle', async (loop, loopName) => {
+		const metrics = new WideEventMetrics();
+		const loops = new BackgroundLoops();
+		const run = vi.fn(async () => {});
+		let stop: () => void;
+		const start = loops.start.bind(loops);
+		vi.spyOn(loops, 'start').mockImplementation((options) =>
+			start({ ...options, run, onSuccess: undefined }),
+		);
+		switch (loop) {
+			case 'maintenance':
+				stop = h.track(startMaintenance(deps, metrics, loops));
+				break;
+			case 'sessionLifecycle':
+				deps.sandbox.sessionLifetime = makeSessionLifetime();
+				stop = h.track(startSessionLifecycle(deps, loops))!;
+				break;
+			case 'jobScheduler':
+				stop = h.track(startJobScheduler(deps, metrics, loops)).stop;
+				break;
+			case 'warmPool':
+				deps.warmPool = new WarmPoolService(
+					new WarmPoolStore(deps.bucket, 'kubernetes'),
+					deps.compute,
+					deps.services.sessions,
+					{
+						enabled: true,
+						size: 1,
+						profiles: [],
+						creationTimeoutMs: 300_000,
+						minimumRemainingMs: 60_000,
+					},
+				);
+				stop = h.track(startWarmPools(deps, loops))!.stop;
+		}
+		await flushRun();
+		const spans = exporter.getFinishedSpans();
+		expect(run).toHaveBeenCalledTimes(loop === 'maintenance' ? 5 : 1);
+		const parent = span(spans, `loop.${loopName}`);
+		const children = spans.filter(
+			(child) => child.spanContext().traceId === parent.spanContext().traceId,
+		);
+		const retained = loop === 'jobScheduler' || loop === 'warmPool';
+		const acquire = span(children, retained ? 'MaintenanceLock.hold' : 'MaintenanceLock.acquire');
+		expectChildOf(acquire, parent);
+		const key = paths[`${loop}Lock`];
+		expect(acquire.attributes).toEqual({ 'bucket.key': key, 'marimohub.lock.acquired': true });
+		if (retained) {
+			expect(children.some((child) => child.name === 'MaintenanceLock.release')).toBe(false);
+			expect(await storedLease(deps, key)).toBeGreaterThan(Date.now());
+		} else {
 			const release = span(children, 'MaintenanceLock.release');
-			expectChildOf(acquire, parent);
 			expectChildOf(release, parent);
-			const key = paths[`${loop}Lock`];
-			expect(acquire.attributes).toEqual({ 'bucket.key': key, 'marimohub.lock.acquired': true });
 			expect(release.attributes).toEqual({ 'bucket.key': key });
-		},
-	);
+		}
+		stop();
+		await loops.drain();
+		if (retained) {
+			const release = span(
+				exporter.getFinishedSpans().filter((child) => child.attributes['bucket.key'] === key),
+				'MaintenanceLock.release',
+			);
+			expect(release.status.code).toBe(SpanStatusCode.UNSET);
+			expect(release.parentSpanContext).toBeUndefined();
+		}
+		expect(await storedLease(deps, key)).toBeLessThanOrEqual(Date.now());
+	});
 
 	it('does not report lock contention as an error or sweep without the lease', async () => {
 		await deps.bucket.put(
@@ -177,8 +192,9 @@ describe('maintenance tracing', () => {
 		expectChildOf(failed, parent);
 		expect(parent.status.code).toBe(SpanStatusCode.ERROR);
 		if (step === 'app_pool') {
-			expect(span(spans, 'MaintenanceLock.release').status.code).toBe(SpanStatusCode.UNSET);
-			expect(await storedLease(deps, '_system/app-pool-maintenance-lock.json')).toBeLessThanOrEqual(
+			expect(span(spans, 'MaintenanceLock.hold').status.code).toBe(SpanStatusCode.UNSET);
+			expect(spans.some((child) => child.name === 'MaintenanceLock.release')).toBe(false);
+			expect(await storedLease(deps, '_system/app-pool-maintenance-lock.json')).toBeGreaterThan(
 				Date.now(),
 			);
 		} else {

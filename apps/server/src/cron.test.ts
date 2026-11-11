@@ -312,9 +312,9 @@ describe('startMaintenance', () => {
 				'counter.background.failed{"label":"filesystem_snapshot.delete"}': 1,
 			});
 			if (configured) {
-				expect(increment).toHaveBeenCalledExactlyOnceWith('background.failed', 1, {
-					label: 'filesystem_snapshot.delete',
-				});
+				expect(increment.mock.calls.filter(([name]) => name === 'background.failed')).toEqual([
+					['background.failed', 1, { label: 'filesystem_snapshot.delete' }],
+				]);
 			} else {
 				expect(increment).not.toHaveBeenCalled();
 			}
@@ -573,7 +573,10 @@ describe('startMaintenance', () => {
 		expect(gc).toHaveBeenCalledOnce();
 		expect(jobs).toHaveBeenCalledTimes(2);
 		expect(snapshots).toHaveBeenCalledTimes(2);
-		expect((await api.request('/api/health/maintenance')).status).toBe(503);
+		expect((await api.request('/api/health/maintenance')).status).toBe(200);
+		expect(await (await api.request('/api/health/maintenance')).json()).toMatchObject({
+			status: 'degraded',
+		});
 		const orphaned = [{ snapshot_id: 'late-snapshot', captured_at: new Date().toISOString() }];
 		late.resolve({ purged: 1, orphanedSnapshots: orphaned });
 		await flushRun();

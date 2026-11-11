@@ -10,7 +10,7 @@ describe('GET /api/v1/theme', () => {
 		const authenticate = vi.fn(async () => null);
 		const { request } = createTestApi({ bucket, deps: { authenticator: { authenticate } } });
 		const response = await request('GET', '/theme');
-		expect(response.headers.get('cache-control')).toBe('no-store');
+		expect(response.headers.get('cache-control')).toBe('public, max-age=60, must-revalidate');
 		expect(await expectOk(response)).toEqual(DEFAULT_THEME_CONFIG);
 		expect(authenticate).not.toHaveBeenCalled();
 		expect(get).not.toHaveBeenCalled();

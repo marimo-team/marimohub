@@ -1,3 +1,8 @@
+import {
+	readRetentionCursor,
+	writeRetentionCursor,
+	retentionBatch,
+} from '../catalog/retentionCursor';
 import { WorkingBranchStore } from './workingBranchRecords';
 import { PROJECT_ACCESS_VERSION } from './projectAccess';
 import type { MigrationBatch, MigrationContext } from '../catalog/MigrationService';
@@ -244,7 +249,29 @@ export class ProjectService {
 		private resolveIdentitiesByEmail: InviteIdentityResolver = async () => new Map(),
 		private deepLinks = new DeepLinkService(bucket, metrics),
 	) {
-		this.projectCache = new MetadataCache(bucket, METADATA_CACHE_MAX_ENTRIES, undefined, metrics);
+		this.projectCache = new MetadataCache(bucket, METADATA_CACHE_MAX_ENTRIES, undefined, metrics, {
+			cache: 'project',
+			service: 'ProjectService',
+		});
+	}
+
+	async accessCandidateIds(
+		subject: AuthorizationSubject,
+		authz: AuthorizationService,
+	): Promise<readonly ProjectId[]> {
+		const entry = await this.catalog.getCurrentSnapshotEntry();
+		const candidates = authz.isSuperAdmin(subject)
+			? undefined
+			: entry.accessCandidatesFor(
+					subject,
+					authz.hasDefaultProjectRole(subject),
+					this.accessGeneration,
+				);
+		return entry.snapshot.projects
+			.filter(
+				(project) => project.status === 'active' && (!candidates || candidates.has(project.id)),
+			)
+			.map((project) => project.id);
 	}
 
 	/** Apply role, token, and label restrictions before the caller paginates. */
@@ -254,6 +281,7 @@ export class ProjectService {
 			policy?: AuthorizationPolicy;
 			resourceSecurity?: ResourceSecurityPolicy;
 			action?: 'project.read' | 'app.read' | 'notebook.manage';
+			loadedProjects?: Map<ProjectId, Promise<Project>>;
 		},
 	): Promise<PublicProjectEntry[]> {
 		const authz = filter
@@ -263,7 +291,7 @@ export class ProjectService {
 		if (filter && authz && !authz.credentialAllowsAction(filter.subject, action)) {
 			throw new ForbiddenError('Token grant does not permit project listing');
 		}
-		const loaded = new Map<ProjectId, Promise<Project>>();
+		const loaded = filter?.loadedProjects ?? new Map<ProjectId, Promise<Project>>();
 		const loadProject = (id: ProjectId) =>
 			cachedRead(loaded, id, () => this.getProject(id, { consistency: 'validated' }));
 		const snapshotEntry = await this.catalog.getCurrentSnapshotEntry();
@@ -1044,7 +1072,7 @@ export class ProjectService {
 	 * mistake. Remove the snapshot entry only after cleanup succeeds so failures
 	 * remain discoverable by the GC sweep.
 	 */
-	async hardDeleteProject(id: ProjectId): Promise<void> {
+	async hardDeleteProject(id: ProjectId, maxDeletePages = Infinity): Promise<boolean> {
 		const key = paths.project(id).meta;
 		const obj = await this.bucket.get(key);
 		const project = obj ? await readStored(ProjectSchema, obj, key) : null;
@@ -1070,7 +1098,12 @@ export class ProjectService {
 		);
 		await new ResumableUploads(this.bucket, paths.project(id).objectUploadsPrefix).cancelAll();
 		const prefix = paths.project(id).meta.replace(/project\.json$/, '');
-		await deleteByPrefix(this.bucket, prefix);
+		for (let page = 0; ; page++) {
+			const remaining = await this.bucket.list({ prefix, limit: 200 });
+			if (remaining.objects.length === 0) break;
+			if (page >= maxDeletePages) return false;
+			await this.bucket.delete(remaining.objects.map((object) => object.key));
+		}
 		await this.catalog.mutateSnapshot(
 			'project.gc',
 			SYSTEM_ACTOR,
@@ -1080,6 +1113,7 @@ export class ProjectService {
 			},
 			{ project_ids: [id] },
 		);
+		return true;
 	}
 
 	/**
@@ -1114,10 +1148,29 @@ export class ProjectService {
 		const stale = candidates.filter((entry) => entry !== null);
 		if (stale.length === 0) return 0;
 
-		for (const p of stale) {
-			await this.hardDeleteProject(p.id);
+		let purged = 0;
+		const deadline = Date.now() + Millis.minutes(5);
+		const cursorKey = '_system/project-purge-cursor.json';
+		const cursor = await readRetentionCursor(this.bucket, cursorKey);
+		let after = cursor.after;
+		for (const p of retentionBatch(
+			stale.map((item) => ({ ...item, key: item.id })),
+			cursor.after,
+			25,
+		)) {
+			if (Date.now() >= deadline) break;
+			try {
+				if (await this.hardDeleteProject(p.id, 5)) purged++;
+			} catch (error) {
+				logOperationalError(
+					'projects.cleanup_failed',
+					{ operation: 'purge', project_id: p.id },
+					error,
+				);
+			}
+			after = p.key;
 		}
-
-		return stale.length;
+		await writeRetentionCursor(this.bucket, cursorKey, after, cursor.etag);
+		return purged;
 	}
 }

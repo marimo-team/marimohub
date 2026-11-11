@@ -61,6 +61,36 @@ describe('IdentityService', () => {
 			expect(put).toHaveBeenCalledTimes(1);
 		});
 
+		it('shares concurrent unchanged writes and skips an unchanged stored profile after restart', async () => {
+			const user = { id: uid('burst'), email: 'ada@x.io', name: 'Ada' };
+			const put = vi.spyOn(bucket, 'put');
+			await Promise.all(Array.from({ length: 20 }, () => identities.upsert(user)));
+			expect(put).toHaveBeenCalledTimes(1);
+			await new IdentityService(bucket).upsert(user);
+			expect(put).toHaveBeenCalledTimes(1);
+		});
+
+		it('preserves queued profile changes, including a return to the cached profile', async () => {
+			const user = { id: uid('changes'), email: 'ada@x.io', name: 'Ada' };
+			await identities.upsert(user);
+			await Promise.all([identities.upsert({ ...user, name: 'Grace' }), identities.upsert(user)]);
+			expect((await identities.get(user.id))?.name).toBe('Ada');
+		});
+
+		it('retries after a failed profile write and preserves suspension', async () => {
+			const user = { id: uid('retry'), email: 'ada@x.io', name: 'Ada' };
+			await identities.upsert(user);
+			await identities.setSuspension(user.id, true);
+			const other = new IdentityService(bucket);
+			vi.spyOn(bucket, 'put').mockRejectedValueOnce(new Error('unavailable'));
+			await expect(other.upsert({ ...user, name: 'Updated' })).rejects.toThrow('unavailable');
+			await other.upsert({ ...user, name: 'Updated' });
+			expect(await other.get(user.id)).toMatchObject({
+				name: 'Updated',
+				suspended_at: expect.any(String),
+			});
+		});
+
 		it('re-writes when the email, name, or profile picture changes', async () => {
 			const put = vi.spyOn(bucket, 'put');
 

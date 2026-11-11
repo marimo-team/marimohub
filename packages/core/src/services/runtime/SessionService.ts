@@ -1,3 +1,5 @@
+import { withAbortSignal } from '../../async';
+import { SingleFlight } from '../../cache';
 import { MetadataCache } from '../content/metadataCache';
 import type { ReadConsistency } from '../content/metadataCache';
 import { SessionIndex, sameSessionReferences } from './SessionIndex';
@@ -10,7 +12,7 @@ import type { Metrics } from '../../ports/metrics';
 import { BUCKET_SCAN_CONCURRENCY, MARIMO_PORT } from '../../constants';
 import type { EditorSandboxSharing, SessionMode } from '../../constants';
 import { KeyedSerialQueue, mapWithConcurrency } from '../../concurrency';
-import { Millis } from '../../duration';
+import { Millis, sleep } from '../../duration';
 import { EtagRecordCache } from '../../etagRecordCache';
 import {
 	ConflictError,
@@ -173,6 +175,9 @@ function countsTowardCap(session: Session, scope: CapScope): boolean {
 }
 
 export class SessionService {
+	private readonly heartbeats = new SingleFlight<string, Session>();
+	private readonly startupReads = new SingleFlight<string, Session>();
+	private readonly startupListeners = new Map<string, Set<(session: Session) => void>>();
 	private readonly index: SessionIndex;
 	private readonly indexMigrationQueue = new KeyedSerialQueue<UserId>();
 	private indexRepairCursor: UserId | undefined;
@@ -219,8 +224,14 @@ export class SessionService {
 		private readonly indexReady: () => boolean = () => false,
 	) {
 		this.index = new SessionIndex(bucket);
-		this.validatedRecords = new MetadataCache(bucket, undefined, recordCache);
-		this.editorClaims = new MetadataCache(bucket);
+		this.validatedRecords = new MetadataCache(bucket, undefined, recordCache, metrics, {
+			cache: 'session',
+			service: 'SessionService',
+		});
+		this.editorClaims = new MetadataCache(bucket, undefined, undefined, metrics, {
+			cache: 'editor_claim',
+			service: 'SessionService',
+		});
 	}
 
 	/**
@@ -247,8 +258,18 @@ export class SessionService {
 				onExhausted: () => this.metrics.increment('sessions.cas.exhausted'),
 			},
 		);
-		if (written) await this.removeFinishedIndexEntry(value);
+		if (written) {
+			this.notifyStartup(value);
+			await this.removeFinishedIndexEntry(value);
+		}
 		return value;
+	}
+
+	private notifyStartup(session: Session): void {
+		for (const listener of this.startupListeners.get(
+			paths.session(session.project_id, session.session_id),
+		) ?? [])
+			listener(session);
 	}
 
 	async acknowledgeWorkingBranchSave(
@@ -357,9 +378,11 @@ export class SessionService {
 		error: { code: string; message: string },
 	): Promise<void> {
 		try {
-			await this.bucket.put(key, JSON.stringify({ ...session, status: 'failed', error }), {
+			const failed: Session = { ...session, status: 'failed', error };
+			await this.bucket.put(key, JSON.stringify(failed), {
 				onlyIfEtagMatches: etag,
 			});
+			this.notifyStartup(failed);
 		} catch (cause) {
 			logOperationalError(
 				'session_creation_rejection_failed',
@@ -399,6 +422,50 @@ export class SessionService {
 				onlyIfEtagMatches: existing.etag,
 			});
 		});
+	}
+
+	async waitForStartup(
+		session: Session,
+		timeoutMs: number,
+		signal?: AbortSignal,
+	): Promise<Session> {
+		if (session.status !== 'starting' || timeoutMs <= 0) return session;
+		signal?.throwIfAborted();
+		const key = paths.session(session.project_id, session.session_id);
+		const completed = Promise.withResolvers<Session>();
+		const polling = new AbortController();
+		const budget = setTimeout(() => completed.resolve(session), Math.min(timeoutMs, 20_000));
+		const listener = (value: Session) => {
+			if (value.status !== 'starting') completed.resolve(structuredClone(value));
+		};
+		const listeners = this.startupListeners.get(key) ?? new Set();
+		listeners.add(listener);
+		this.startupListeners.set(key, listeners);
+		const poll = async () => {
+			for (;;) {
+				const current = await withAbortSignal(
+					this.startupReads.run(key, () => this.getSession(session.project_id, session.session_id)),
+					polling.signal,
+				);
+				if (current.status !== 'starting') return current;
+				await sleep(1000, polling.signal);
+			}
+		};
+		const pending = poll();
+		try {
+			return structuredClone(
+				await withAbortSignal(Promise.race([completed.promise, pending]), signal),
+			);
+		} finally {
+			clearTimeout(budget);
+			polling.abort();
+			await pending.catch(() => {});
+			listeners.delete(listener);
+			if (listeners.size === 0) {
+				this.startupListeners.delete(key);
+				this.startupReads.delete(key);
+			}
+		}
 	}
 
 	async getSession(projectId: ProjectId, id: SessionId): Promise<Session> {
@@ -662,6 +729,20 @@ export class SessionService {
 		});
 	}
 
+	async relinquishStartingSandbox(
+		projectId: ProjectId,
+		id: SessionId,
+		sandboxId: SandboxId,
+	): Promise<boolean> {
+		let relinquished = false;
+		await this.mutate(projectId, id, (session) => {
+			relinquished = session.status === 'starting' && session.sandbox_id === sandboxId;
+			if (!relinquished) return null;
+			return { ...session, sandbox_reclaimed_at: new Date().toISOString() };
+		});
+		return relinquished;
+	}
+
 	async replaceStartingSandbox(
 		projectId: ProjectId,
 		id: SessionId,
@@ -692,21 +773,23 @@ export class SessionService {
 		id: SessionId,
 		known?: KnownObject<Session>,
 	): Promise<Session> {
-		return this.mutate(
-			projectId,
-			id,
-			(session) => {
-				const now = Date.now();
-				if (
-					session.status !== 'running' ||
-					isPastAuthorizationDeadline(session, now) ||
-					now - Date.parse(session.last_heartbeat) < HEARTBEAT_PERSIST_INTERVAL_MS
-				) {
-					return null;
-				}
-				return { ...session, last_heartbeat: new Date(now).toISOString() };
-			},
-			known,
+		return this.heartbeats.run(`${projectId}/${id}`, () =>
+			this.mutate(
+				projectId,
+				id,
+				(session) => {
+					const now = Date.now();
+					if (
+						session.status !== 'running' ||
+						isPastAuthorizationDeadline(session, now) ||
+						now - Date.parse(session.last_heartbeat) < HEARTBEAT_PERSIST_INTERVAL_MS
+					) {
+						return null;
+					}
+					return { ...session, last_heartbeat: new Date(now).toISOString() };
+				},
+				known,
+			),
 		);
 	}
 
@@ -818,7 +901,10 @@ export class SessionService {
 				onExhausted: () => this.metrics.increment('sessions.cas.exhausted'),
 			},
 		);
-		if (result.written) await this.removeFinishedIndexEntry(result.value);
+		if (result.written) {
+			this.notifyStartup(result.value);
+			await this.removeFinishedIndexEntry(result.value);
+		}
 		return { session: result.value, transitioned: result.written };
 	}
 
@@ -1130,8 +1216,13 @@ export class SessionService {
 	 * Rank this user's sessions across projects: editor slots for `user`, app
 	 * sandboxes for `project`. Apps occupy capacity until reclamation completes.
 	 */
-	async listActiveForUser(userId: UserId, capScope: CapScope = 'user'): Promise<Session[]> {
-		if (this.indexReady()) return this.listIndexedForUser(userId, capScope);
+	async listActiveForUser(
+		userId: UserId,
+		capScope: CapScope = 'user',
+		onSource?: (source: 'scan' | 'index') => void,
+	): Promise<Session[]> {
+		if (this.indexReady()) return this.listIndexedForUser(userId, capScope, onSource);
+		onSource?.('scan');
 		return (
 			await this.scanPrefix(
 				paths.sessionsPrefix,
@@ -1142,8 +1233,13 @@ export class SessionService {
 		).sort(byCapOrder);
 	}
 
-	private async listIndexedForUser(userId: UserId, scope: CapScope): Promise<Session[]> {
+	private async listIndexedForUser(
+		userId: UserId,
+		scope: CapScope,
+		onSource?: (source: 'scan' | 'index') => void,
+	): Promise<Session[]> {
 		let index = await this.index.read(userId);
+		onSource?.(index ? 'index' : 'scan');
 		if (!index) {
 			await this.initializeUserIndex(userId);
 			index = await this.index.read(userId);

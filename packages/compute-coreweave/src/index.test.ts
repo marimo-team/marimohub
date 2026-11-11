@@ -1797,7 +1797,7 @@ describe('CoreWeaveCompute', () => {
 			}
 		});
 
-		it('switches to two-second polls after five seconds', async () => {
+		it('uses half-second polls for typical cold boots', async () => {
 			vi.useFakeTimers();
 			try {
 				const world = makeWorld({ bootStatus: 'pending' });
@@ -1806,7 +1806,7 @@ describe('CoreWeaveCompute', () => {
 				const fake = world.registry.get('cw-1')!.fake;
 				expect(fake.statusPolls).toBe(21);
 				fake.status = 'running';
-				await vi.advanceTimersByTimeAsync(1_999);
+				await vi.advanceTimersByTimeAsync(499);
 				expect(fake.statusPolls).toBe(21);
 				await vi.advanceTimersByTimeAsync(1);
 				await waiting;
@@ -1831,7 +1831,7 @@ describe('CoreWeaveCompute', () => {
 				await vi.advanceTimersByTimeAsync(1);
 				await waiting;
 				expect(error).toBeInstanceOf(CWSandboxTimeoutError);
-				expect(world.registry.get('cw-1')!.fake.statusPolls).toBe(48);
+				expect(world.registry.get('cw-1')!.fake.statusPolls).toBe(85);
 				expect(vi.getTimerCount()).toBe(0);
 			} finally {
 				vi.useRealTimers();

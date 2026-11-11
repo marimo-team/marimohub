@@ -19,7 +19,7 @@ spec:
     metadata:
       labels: { app: marimohub, component: api }
     spec:
-      terminationGracePeriodSeconds: 50
+      terminationGracePeriodSeconds: 200
       serviceAccountName: marimohub # bound to the kernel-namespace Role (rbac.yaml)
       containers:
         - name: marimohub
@@ -31,7 +31,7 @@ spec:
                 name: marimohub-config
           env:
             - name: MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS
-              value: '30'
+              value: '180'
             - name: PORT
               value: '3000'
           readinessProbe:

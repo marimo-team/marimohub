@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { createAndOpenProject, createNotebook, notebookRow, uniqueName } from './helpers';
 
 interface SessionSummary {
@@ -10,6 +10,14 @@ interface SessionSummary {
 
 function projectIdFromUrl(url: string): string | undefined {
 	return url.match(/\/projects\/([^/]+)/)?.[1];
+}
+
+function trackFrameLoads(iframe: Locator) {
+	return iframe.evaluateHandle((element) => {
+		const activity = { count: 0 };
+		element.addEventListener('load', () => activity.count++);
+		return activity;
+	});
 }
 
 async function listProjectSessions(page: Page, projectId: string): Promise<SessionSummary[]> {
@@ -144,11 +152,7 @@ if __name__ == "__main__":
 			page.on('request', (request) => {
 				if (request.isNavigationRequest() && request.frame() === runtimeFrame) navigationRequests++;
 			});
-			const loads = await iframe.evaluateHandle((element) => {
-				const activity = { count: 0 };
-				element.addEventListener('load', () => activity.count++);
-				return activity;
-			});
+			const loads = await trackFrameLoads(iframe);
 			await button.click();
 			await expect(page).toHaveURL(new RegExp(`${path}\\?id=456#anchor$`));
 			await expect(iframe).toHaveAttribute('src', src!);
@@ -161,7 +165,9 @@ if __name__ == "__main__":
 		});
 	}
 
-	test('starts a session, sends a heartbeat, and stops the kernel', async ({ page }) => {
+	test('retains an editor across navigation, sends a heartbeat, and stops the kernel', async ({
+		page,
+	}) => {
 		await page.clock.install();
 		const project = uniqueName('proj');
 		const notebook = uniqueName('nb');
@@ -176,6 +182,28 @@ if __name__ == "__main__":
 		const iframe = page.locator('iframe');
 		await expect(iframe).toBeVisible({ timeout: 240_000 });
 		await expect(iframe).toHaveAttribute('src', /^http:\/\/localhost:\d+\//);
+		const originalFrame = await iframe.elementHandle();
+		const originalSrc = await iframe.getAttribute('src');
+		await expect(page.frameLocator('iframe').locator('marimo-user-config')).toBeAttached();
+		await (await originalFrame!.contentFrame())!.waitForLoadState('load');
+		const loads = await trackFrameLoads(iframe);
+		const originalSessions = await listProjectSessionsWithRetry(page, projectId);
+		expect(originalSessions).toHaveLength(1);
+
+		await page.getByRole('link', { name: 'Back to project', exact: true }).click();
+		await expect(page.getByRole('heading', { name: project })).toBeVisible();
+		await expect(iframe).toBeHidden();
+		await page.clock.fastForward(30_000);
+		await notebookRow(page, notebook).getByRole('link', { name: notebook, exact: true }).click();
+		await expect(iframe).toBeVisible();
+		expect(await iframe.evaluate((element, original) => element === original, originalFrame)).toBe(
+			true,
+		);
+		await expect(iframe).toHaveAttribute('src', originalSrc!);
+		expect((await listProjectSessionsWithRetry(page, projectId)).map((s) => s.session_id)).toEqual(
+			originalSessions.map((s) => s.session_id),
+		);
+		expect(await loads.evaluate((activity) => activity.count)).toBe(0);
 
 		// Exercise the production heartbeat interval without waiting two wall-clock minutes.
 		const heartbeat = page.waitForResponse(

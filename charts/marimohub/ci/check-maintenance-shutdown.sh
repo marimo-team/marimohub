@@ -15,8 +15,8 @@ for timeout in 1 120 300 86400; do
         abort "insufficient termination grace" unless pod["terminationGracePeriodSeconds"] == ARGV[0].to_i + 20
         abort "incorrect maintenance probe" unless container.dig("livenessProbe", "httpGet", "path") == "/api/health/maintenance"
       else
-        abort "incorrect API drain" unless env["MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS"] == "30"
-        abort "incorrect API grace" unless pod["terminationGracePeriodSeconds"] == 50
+        abort "incorrect API drain" unless env["MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS"] == "180"
+        abort "incorrect API grace" unless pod["terminationGracePeriodSeconds"] == 200
         abort "incorrect API probe" unless container.dig("livenessProbe", "httpGet", "path") == "/api/health"
       end
     end
@@ -64,8 +64,8 @@ ruby -ryaml -e '
     abort "missing API Deployment: #{path}" unless api
     api_pod = api.dig("spec", "template", "spec")
     api_env = api_pod["containers"].first["env"].to_h { |entry| [entry["name"], entry["value"]] }
-    abort "incorrect API drain timeout: #{path}" unless api_env["MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS"] == "30"
-    abort "insufficient API termination grace: #{path}" unless api_pod["terminationGracePeriodSeconds"] == 50
+    abort "incorrect API drain timeout: #{path}" unless api_env["MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS"] == "180"
+    abort "insufficient API termination grace: #{path}" unless api_pod["terminationGracePeriodSeconds"] == 200
   end
 ' apps/server/k8s/deployment.yaml examples/kubernetes/deployment.yaml
 

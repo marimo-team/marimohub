@@ -51,12 +51,20 @@ describe('CatalogService', () => {
 		await first.getCurrentSnapshot();
 		await second.getCurrentSnapshot();
 		expect(firstMetrics.increment.mock.calls).toEqual([
-			['cache.metadata.reads', 1, { result: 'miss', consistency: 'validated' }],
+			[
+				'cache.metadata.reads',
+				1,
+				{ cache: 'catalog', service: 'CatalogService', result: 'miss', consistency: 'validated' },
+			],
 			['cache.snapshot.reads', 1, { result: 'miss' }],
 		]);
 		expect(secondMetrics.increment.mock.calls).toEqual([
 			['cache.conditional.reads', 1, { result: 'not_modified' }],
-			['cache.metadata.reads', 1, { result: 'hit', consistency: 'validated' }],
+			[
+				'cache.metadata.reads',
+				1,
+				{ cache: 'catalog', service: 'CatalogService', result: 'hit', consistency: 'validated' },
+			],
 			['cache.snapshot.reads', 1, { result: 'hit' }],
 		]);
 	});

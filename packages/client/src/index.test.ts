@@ -324,3 +324,33 @@ describe('dispatchRequest binary bodies', () => {
 		expect([...sent]).toEqual([...bytes]);
 	});
 });
+
+describe('Retry-After', () => {
+	it.each([
+		{ header: '15', expected: 15_000 },
+		{ header: '0', expected: 0 },
+		{ header: 'Tue, 10 Nov 2026 20:00:30 GMT', expected: 30_000 },
+		{ header: 'garbage', expected: undefined },
+		{ header: '-1', expected: undefined },
+		{ header: 'Tue, 10 Nov 2026 19:59:00 GMT', expected: undefined },
+	])(
+		'preserves valid retry delays and ignores $header when invalid',
+		async ({ header, expected }) => {
+			vi.useFakeTimers({ toFake: ['Date'] });
+			vi.setSystemTime(new Date('2026-11-10T20:00:00Z'));
+			stubFetch(
+				async () =>
+					new Response(
+						JSON.stringify({
+							success: false,
+							error: { code: 'SERVICE_UNAVAILABLE', message: 'Try later' },
+						}),
+						{ status: 503, headers: { 'Retry-After': header } },
+					),
+			);
+			await expect(apiData(apiClient.GET('/api/v1/me'))).rejects.toMatchObject({
+				retryAfterMs: expected,
+			});
+		},
+	);
+});

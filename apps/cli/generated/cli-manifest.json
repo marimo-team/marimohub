@@ -6384,6 +6384,15 @@
 					"required": true,
 					"value_type": "string",
 					"repeatable": false
+				},
+				{
+					"name": "wait",
+					"cli_name": "wait",
+					"in": "query",
+					"required": false,
+					"description": "Wait up to this many seconds for a starting session to change status.",
+					"value_type": "integer",
+					"repeatable": false
 				}
 			],
 			"destructive": false,

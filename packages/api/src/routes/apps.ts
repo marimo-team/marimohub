@@ -8,6 +8,7 @@ import {
 } from '@marimo-hub/core';
 import {
 	authorizationService,
+	assertProjectActionOn,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -104,6 +105,7 @@ app.openapi(
 		const search = query.q?.toLocaleLowerCase();
 		const after = decodeCursor(query.cursor);
 		const limit = Math.min(query.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
+		const loadedProjects = new Map<ProjectId, Promise<Project>>();
 		const selectedProject = query.project_id
 			? await loadAppProject(deps.services.projects, query.project_id, user, deps)
 			: undefined;
@@ -115,22 +117,28 @@ app.openapi(
 					policy: deps.policy,
 					resourceSecurity: deps.resourceSecurity,
 					action: 'app.read',
+					loadedProjects,
 					status: 'active',
 				});
 		const snapshot = await deps.services.catalog.getCurrentSnapshot();
-		// Both scoped and unscoped lists use the snapshot's active status.
-		const projectIds = selectedProject
-			? snapshot.projects.some((p) => p.id === selectedProject.id && p.status === 'active')
-				? [selectedProject.id]
-				: []
-			: listed.map((entry) => entry.id);
+		const currentProjects = new Map(snapshot.projects.map((entry) => [entry.id, entry]));
+		const projectIds = (
+			selectedProject ? [selectedProject.id] : listed.map((entry) => entry.id)
+		).filter((id) => currentProjects.get(id)?.status === 'active');
+		for (const entry of listed) {
+			if (currentProjects.get(entry.id)?.updated_at !== entry.updated_at)
+				loadedProjects.delete(entry.id);
+		}
 		const projectCandidates = await mapWithConcurrency(
 			projectIds,
 			BUCKET_SCAN_CONCURRENCY,
 			async (id) => {
 				try {
+					const cached = loadedProjects.get(id);
 					const project =
-						selectedProject ?? (await loadAppProject(deps.services.projects, id, user, deps));
+						selectedProject ??
+						(await (cached ?? loadAppProject(deps.services.projects, id, user, deps)));
+					if (cached) await assertProjectActionOn(project, user, 'app.read', deps);
 					// Page reads check labels and deletions because the snapshot can lag metadata.
 					const notebooks = await deps.services.notebooks.listNotebooks(
 						project.id,

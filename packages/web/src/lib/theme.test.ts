@@ -12,6 +12,7 @@ function deferredResponse() {
 }
 
 afterEach(() => {
+	delete window.__MARIMOHUB_PREFETCH__;
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
@@ -23,6 +24,42 @@ afterEach(() => {
 });
 
 describe('theme bootstrap', () => {
+	it.each([true, false])(
+		'consumes valid shell branding and retries failed shell responses (valid=%s)',
+		async (valid) => {
+			document.head.innerHTML = '<base href="/hub/" />';
+			const branding = { ...DEFAULT_THEME_CONFIG, name: 'Prefetched Hub' };
+			window.__MARIMOHUB_PREFETCH__ = {
+				createdAt: Date.now(),
+				responses: {
+					[new URL('/hub/api/v1/theme', window.location.href).href]: Promise.resolve(
+						valid ? jsonOk(branding) : new Response('Unavailable', { status: 503 }),
+					),
+				},
+			};
+			const fetch = vi.fn().mockResolvedValue(jsonOk(branding));
+			vi.stubGlobal('fetch', fetch);
+			expect(await loadThemeConfig()).toEqual(branding);
+			expect(fetch).toHaveBeenCalledTimes(valid ? 0 : 1);
+		},
+	);
+
+	it('bounds waiting for a stalled shell preload with the theme deadline', async () => {
+		vi.useFakeTimers();
+		window.__MARIMOHUB_PREFETCH__ = {
+			createdAt: Date.now(),
+			responses: {
+				[new URL('/api/v1/theme', window.location.href).href]: new Promise(() => {}),
+			},
+		};
+		const fetch = vi.fn();
+		vi.stubGlobal('fetch', fetch);
+		const pending = loadThemeConfig();
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(await pending).toEqual(DEFAULT_THEME_CONFIG);
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
 	it('updates one browser theme color and restores the default when branding is cleared', () => {
 		document.head.innerHTML = '<meta name="theme-color" content="#0d9488" />';
 		applyThemeConfig({ ...DEFAULT_THEME_CONFIG, primary_color: '#123456' });

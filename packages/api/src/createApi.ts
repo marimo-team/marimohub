@@ -459,9 +459,13 @@ export function createApi(rawDeps: ApiDeps) {
 				loop.status === 'ok' &&
 				(loop.last_duration_ms ?? 0) >= loop.deadline_ms * 0.8,
 		);
+		const stalled = Object.entries(report.loops).some(
+			([name, loop]) => !name.startsWith('retention_') && loop.status === 'stalled',
+		);
+		const degraded = slowRetention || report.status !== 'ok';
 		return c.json(
-			{ ...report, status: report.status === 'ok' && slowRetention ? 'degraded' : report.status },
-			report.status === 'stalled' ? 503 : 200,
+			{ ...report, status: stalled ? 'stalled' : degraded ? 'degraded' : 'ok' },
+			stalled ? 503 : 200,
 		);
 	});
 

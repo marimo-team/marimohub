@@ -69,6 +69,13 @@ Ordinary workspaces use bounded file batches. Existing synced archives, snapshot
 
 `drainTimings()` reports the first data-plane call duration once per instance as `first_dataplane`.
 The session event uses `provision_first_dataplane_ms`.
+
+Since packed transfers were added, `file_write_waves` counts transport batches, not serial startup phases.
+Do not compare it directly with measurements from before packed transfers.
+Use startup phase durations and `file_writes` together to assess transfer changes.
+
+Readiness polling uses 250 ms intervals for the first five seconds, then 500 ms until 15 seconds, then one second.
+Transient failures retain their separate exponential backoff and overall timeout.
 Kubernetes reports applicable counters but omits `file_writes` because it uses exec for file transfers.
 
 When files share a transfer, `files`, `inject_files`, and `bridge_prepare` durations overlap.

@@ -45,6 +45,51 @@ describe('BackgroundLoops', () => {
 		return handle;
 	}
 
+	it('retains a lease between ticks and releases ownership during shutdown', async () => {
+		const acquire = vi.spyOn(lock, 'acquire');
+		const release = vi.spyOn(lock, 'release');
+		const run = vi.fn(async () => {});
+		const handle = start(run, { lock, retainLease: true });
+		await vi.advanceTimersByTimeAsync(200);
+		expect(run).toHaveBeenCalledTimes(3);
+		expect(acquire).toHaveBeenCalledOnce();
+		expect(release).not.toHaveBeenCalled();
+		handle.stop();
+		await loops.drain();
+		expect(release).toHaveBeenCalledOnce();
+	});
+
+	it('logs a retained-lease release failure during shutdown without rejecting drain', async () => {
+		const handle = start(async () => {}, { lock, retainLease: true });
+		await handle.drain();
+		const release = vi.spyOn(lock, 'release').mockRejectedValue(new Error('release unavailable'));
+		handle.stop();
+		handle.stop();
+		await expect(loops.drain()).resolves.toBeUndefined();
+		expect(release).toHaveBeenCalledOnce();
+		expect(events()).toContainEqual(
+			expect.objectContaining({ event: 'test_release_failed', error: 'release unavailable' }),
+		);
+	});
+
+	it('does not release a successor lease when retained work settles after its deadline and stop', async () => {
+		const bucket = new MemoryBucket();
+		const retained = new MaintenanceLock(bucket);
+		const pending = Promise.withResolvers<void>();
+		const run = vi.fn(() => pending.promise);
+		const handle = start(run, { lock: retained, retainLease: true });
+		await vi.advanceTimersByTimeAsync(451);
+		expect(run).toHaveBeenCalledOnce();
+		const successor = new MaintenanceLock(bucket);
+		expect(await successor.acquire('successor', 1000)).toBe(true);
+		handle.stop();
+		pending.resolve();
+		await loops.drain();
+		expect(await new MaintenanceLock(bucket).acquire('contender')).toBe(false);
+		await successor.release('successor');
+		expect(await new MaintenanceLock(bucket).acquire('contender')).toBe(true);
+	});
+
 	it('serves the documented health body', async () => {
 		expect(loops.health()).toEqual({ status: 'ok', loops: {} });
 		start(async () => {});

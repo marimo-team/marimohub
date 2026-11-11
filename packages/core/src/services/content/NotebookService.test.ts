@@ -3400,7 +3400,7 @@ describe('NotebookService', () => {
 
 		it('bounds concurrent cleanup when a batch exceeds the worker limit', async () => {
 			const { uploads } = await gcFixture(1);
-			const notebookCount = (BUCKET_SCAN_CONCURRENCY + 1) * 288;
+			const notebookCount = (BUCKET_SCAN_CONCURRENCY + 1) * 24;
 			await catalog.mutateSnapshot('test.seed', ACTOR, (snapshot) => {
 				const project = snapshot.projects[0];
 				project.notebooks = Array.from({ length: notebookCount }, () => ({
@@ -3536,26 +3536,55 @@ describe('NotebookService', () => {
 			try {
 				clock.mockReturnValue(start);
 				await notebooks.sweepDeletedNotebooks();
-				expect(upload).toHaveBeenCalledTimes(4);
+				expect(upload).toHaveBeenCalledTimes(42);
 				expect(peak).toBeGreaterThan(1);
 				await notebooks.sweepDeletedNotebooks();
-				expect(upload).toHaveBeenCalledTimes(4);
+				expect(upload).toHaveBeenCalledTimes(42);
 				const visited = new Set(upload.mock.calls.map(([, id]) => id));
 				const restarted = new NotebookService(bucket, catalog);
 				vi.spyOn(restarted.workspace, 'sweepUploads').mockImplementation(upload);
 				vi.spyOn(restarted.thumbnails, 'prune').mockImplementation(prune);
-				for (let tick = 1; tick < 288; tick++) {
-					clock.mockReturnValue(start + tick * 5 * 60 * 1000);
+				for (let tick = 1; tick < 24; tick++) {
+					clock.mockReturnValue(start + tick * 60 * 60 * 1000);
 					await restarted.sweepDeletedNotebooks();
 				}
 				expect(new Set(upload.mock.calls.map(([, id]) => id)).size).toBe(1000);
 				expect(upload).toHaveBeenCalledTimes(1000);
 				expect(prune).toHaveBeenCalledTimes(1000);
-				expect(visited.size).toBe(4);
+				expect(visited.size).toBe(42);
 				expect(visited.has(created.id)).toBe(false);
 			} finally {
 				clock.mockRestore();
 			}
+		});
+
+		it('rotates past a full batch of failed notebook deletions', async () => {
+			const { ids } = await gcFixture(26);
+			for (const id of ids) await notebooks.deleteNotebook(projectId, id, ACTOR);
+			const remove = vi
+				.spyOn(notebooks, 'hardDeleteNotebook')
+				.mockImplementation(async (_pid, id) => {
+					if (id !== ids[25]) throw new Error('storage unavailable');
+				});
+			expect((await notebooks.sweepDeletedNotebooks(0)).purged).toBe(0);
+			expect(remove).toHaveBeenCalledTimes(25);
+			remove.mockClear();
+			expect((await notebooks.sweepDeletedNotebooks(0)).purged).toBe(1);
+			expect(remove).toHaveBeenCalledExactlyOnceWith(projectId, ids[25]);
+		});
+
+		it('commits completed notebook purges when a later deletion fails', async () => {
+			const { ids } = await gcFixture(2);
+			for (const id of ids) await notebooks.deleteNotebook(projectId, id, ACTOR);
+			const remove = notebooks.hardDeleteNotebook.bind(notebooks);
+			vi.spyOn(notebooks, 'hardDeleteNotebook').mockImplementation(async (pid, nid) => {
+				if (nid === ids[1]) throw new Error('storage unavailable');
+				return remove(pid, nid);
+			});
+			expect((await notebooks.sweepDeletedNotebooks(0)).purged).toBe(1);
+			expect(
+				(await catalog.getCurrentSnapshot()).projects[0].notebooks.map((notebook) => notebook.id),
+			).toEqual([ids[1]]);
 		});
 
 		it('purges only soft-deleted notebooks past the grace period', async () => {
@@ -3657,6 +3686,166 @@ describe('NotebookService', () => {
 				{ snapshot_id: 'orphan_1', captured_at: '2020-01-01T00:00:00.000Z' },
 			]);
 		});
+	});
+
+	it.each(['v1', '', '\ufeffprint("hello")'])(
+		'does not publish unchanged code %j',
+		async (code) => {
+			const meta = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code, deps: 'deps' },
+				ACTOR,
+			);
+			const nb = paths.project(projectId).notebook(meta.id);
+			const put = vi.spyOn(bucket, 'put');
+			const updated = await notebooks.updateNotebook(
+				projectId,
+				meta.id,
+				{ code, deps: 'deps' },
+				ACTOR,
+				meta.updated_at,
+			);
+			expect(updated).toEqual(meta);
+			expect(
+				put.mock.calls.filter(
+					([key]) =>
+						key === paths.catalog ||
+						key === nb.meta ||
+						key === nb.source ||
+						key.includes('/versions/'),
+				),
+			).toEqual([]);
+			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(1);
+			await expect(
+				notebooks.updateNotebook(projectId, meta.id, { code }, ACTOR, 'stale'),
+			).rejects.toBeInstanceOf(PreconditionFailedError);
+		},
+	);
+
+	it.each([
+		{ failure: 'version-code', deps: 'new-deps' },
+		{ failure: 'version-deps', deps: 'new-deps' },
+		{ failure: 'version-deps', deps: '' },
+		{ failure: 'version-meta', deps: 'new-deps' },
+		{ failure: 'source', deps: 'new-deps' },
+	])(
+		'repairs a failed $failure write when the identical PATCH with deps=$deps is retried',
+		async ({ failure, deps }) => {
+			const meta = await notebooks.createNotebook(
+				projectId,
+				{ title: 'Original', description: '', code: 'v1', deps: 'old-deps' },
+				ACTOR,
+			);
+			const nb = paths.project(projectId).notebook(meta.id);
+			const input = { title: 'Updated', code: 'v2', deps };
+			const originalPut = bucket.put.bind(bucket);
+			let rejected = false;
+			const put = vi.spyOn(bucket, 'put').mockImplementation((key, value, options) => {
+				const versionFile =
+					failure === 'version-code'
+						? 'notebook.py'
+						: failure === 'version-deps'
+							? 'pyproject.toml'
+							: 'version.json';
+				const matches =
+					failure === 'source'
+						? key === nb.source
+						: key.startsWith(`${nb.base}/versions/`) && key.endsWith(`/${versionFile}`);
+				if (!rejected && matches) {
+					rejected = true;
+					return Promise.reject(new Error('injected publication failure'));
+				}
+				return originalPut(key, value, options);
+			});
+			await expect(notebooks.updateNotebook(projectId, meta.id, input, ACTOR)).rejects.toThrow(
+				'injected publication failure',
+			);
+			expect(rejected).toBe(true);
+			put.mockRestore();
+			expect(await (await bucket.get(nb.code))!.text()).toBe('v2');
+			const updated = await notebooks.updateNotebook(projectId, meta.id, input, ACTOR);
+			const source = await notebooks.getNotebookSource(projectId, meta.id);
+			const version = nb.version(source.current_version_id!);
+			expect(await (await bucket.get(version.code))?.text()).toBe('v2');
+			expect(await (await bucket.get(version.deps))?.text()).toBe(deps);
+			expect(await (await bucket.get(version.meta))?.json()).toMatchObject({
+				version_id: source.current_version_id,
+			});
+			expect((await catalog.getCurrentSnapshot()).projects[0].notebooks[0]).toMatchObject({
+				title: 'Updated',
+				updated_at: updated.updated_at,
+			});
+		},
+	);
+
+	it('repairs a failed catalog publication on an identical PATCH without creating another version', async () => {
+		const meta = await notebooks.createNotebook(
+			projectId,
+			{ title: 'Original', description: '', code: 'v1', deps: 'deps' },
+			ACTOR,
+		);
+		const input = { title: 'Updated', code: 'v2', deps: 'deps' };
+		vi.spyOn(catalog, 'updateNotebookEntry').mockRejectedValueOnce(
+			new Error('catalog unavailable'),
+		);
+		await expect(notebooks.updateNotebook(projectId, meta.id, input, ACTOR)).rejects.toThrow(
+			'catalog unavailable',
+		);
+		expect((await catalog.getCurrentSnapshot()).projects[0].notebooks[0].title).toBe('Original');
+		const source = await notebooks.getNotebookSource(projectId, meta.id);
+		const storedMeta = await notebooks.getNotebookMeta(projectId, meta.id);
+		const updated = await notebooks.updateNotebook(
+			projectId,
+			meta.id,
+			input,
+			ACTOR,
+			storedMeta.updated_at,
+		);
+		expect(updated.updated_at).toBe(storedMeta.updated_at);
+		expect((await notebooks.getNotebookSource(projectId, meta.id)).current_version_id).toBe(
+			source.current_version_id,
+		);
+		expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(2);
+		expect((await catalog.getCurrentSnapshot()).projects[0].notebooks[0]).toMatchObject({
+			title: 'Updated',
+			updated_at: updated.updated_at,
+		});
+	});
+
+	it('reuses immutable version contents across unchanged autosaves and retries failed reads', async () => {
+		const meta = await notebooks.createNotebook(
+			projectId,
+			{ title: 'NB', description: '', code: 'v1', deps: 'deps' },
+			ACTOR,
+		);
+		const source = await notebooks.getNotebookSource(projectId, meta.id);
+		const key = paths.project(projectId).notebook(meta.id).version(source.current_version_id!).code;
+		const originalGet = bucket.get.bind(bucket);
+		const get = vi.spyOn(bucket, 'get').mockImplementation(async (path, ...args) => {
+			if (path === key) throw new Error('read unavailable');
+			return originalGet(path, ...args);
+		});
+		await expect(
+			notebooks.commitSession(projectId, meta.id, { code: 'v1', deps: 'deps' }, ACTOR),
+		).rejects.toThrow('read unavailable');
+		get.mockRestore();
+		await notebooks.commitSession(projectId, meta.id, { code: 'v1', deps: 'deps' }, ACTOR);
+		const reads = vi.spyOn(bucket, 'get');
+		await notebooks.commitSession(projectId, meta.id, { code: 'v1', deps: 'deps' }, ACTOR);
+		expect(reads.mock.calls.some(([path]) => path === key)).toBe(false);
+	});
+
+	it('still saves dependency changes when the supplied code is unchanged', async () => {
+		const meta = await notebooks.createNotebook(
+			projectId,
+			{ title: 'NB', description: '', code: 'v1', deps: 'old' },
+			ACTOR,
+		);
+		await notebooks.updateNotebook(projectId, meta.id, { code: 'v1', deps: 'new' }, ACTOR);
+		expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(2);
+		expect(await (await bucket.get(paths.project(projectId).notebook(meta.id).deps))!.text()).toBe(
+			'new',
+		);
 	});
 
 	it.each(['old-deps', ''])('preserves the version for unchanged deps %j', async (deps) => {

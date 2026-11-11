@@ -367,6 +367,55 @@ describe('app-user boundaries', () => {
 		},
 	);
 
+	it.each(['deleted', 'revoked'] as const)(
+		'drops same-millisecond %s projects from the newer gallery snapshot',
+		async (change) => {
+			const project = await services.projects.getProject(pid);
+			vi.useFakeTimers({ toFake: ['Date'] });
+			vi.setSystemTime(new Date(project.updated_at));
+			try {
+				const discover = api.deps.services.projects.listProjects.bind(api.deps.services.projects);
+				vi.spyOn(api.deps.services.projects, 'listProjects').mockImplementationOnce(
+					async (filter) => {
+						const listed = await discover(filter);
+						if (change === 'deleted') await services.projects.deleteProject(pid, ACTOR);
+						else await services.projects.removeMember(pid, STAKEHOLDER, ACTOR);
+						const snapshot = await services.catalog.getCurrentSnapshot();
+						const current = snapshot.projects.find((entry) => entry.id === pid)!;
+						if (change === 'deleted')
+							expect(current).toMatchObject({
+								status: 'deleted',
+								updated_at: project.updated_at,
+							});
+						else expect(current.updated_at).not.toBe(project.updated_at);
+						return listed;
+					},
+				);
+				expect(await expectPage(await api.request('GET', '/apps'))).toEqual([]);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it.each(['owner', 'deleted'] as const)(
+		'authorizes reused metadata when stale %s projections load legacy tags',
+		async (change) => {
+			const project = await services.projects.getProject(pid);
+			await services.catalog.updateProjectEntry('test.legacy-tags', ACTOR, pid, () => ({
+				tags: undefined,
+			}));
+			await api.bucket.put(
+				paths.project(pid).meta,
+				JSON.stringify({
+					...project,
+					...(change === 'owner' ? { owner: STAKEHOLDER, members: [] } : { status: 'deleted' }),
+				}),
+			);
+			expect(await expectPage(await owner.request('GET', '/apps'))).toEqual([]);
+		},
+	);
+
 	it('does not suppress unexpected project load errors in the gallery', async () => {
 		vi.spyOn(api.deps.services.notebooks, 'listNotebooks').mockRejectedValueOnce(
 			new Error('Storage unavailable'),

@@ -131,9 +131,9 @@ export const searchOutsider: AuthenticatedPrincipal = {
 };
 
 /** One indexed project with a single notebook containing `net_revenue = 42`. */
-export async function createSearchFixture() {
+export async function createSearchFixture(projectAccessGeneration?: string) {
 	const bucket = new MemoryBucket();
-	const services = createServices(bucket);
+	const services = createServices(bucket, undefined, { projectAccessGeneration });
 	await services.catalog.initialize(searchOwner.id);
 	const project = await services.projects.createProject(
 		{ name: 'Research', description: '' },

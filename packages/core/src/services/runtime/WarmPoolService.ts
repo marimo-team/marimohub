@@ -26,7 +26,7 @@ const LEGACY_WARM_POOL_MAX_IDLE_MS = 30 * 60_000;
 const CLAIM_TIMEOUT_MS = 60_000;
 const RECONNECT_TIMEOUT_MS = 5_000;
 const PROBE_TIMEOUT_MS = 2_000;
-const HEALTH_INTERVAL_MS = 30_000;
+const HEALTH_INTERVAL_MS = 5 * 60_000;
 const MAX_CONCURRENT_CREATIONS = 2;
 
 export interface WarmPoolProfile {
@@ -81,6 +81,7 @@ interface ClaimRequest {
 
 export class WarmPoolService {
 	private lastCapacityLogAt = -Infinity;
+	private readonly healthRetryAt = new Map<string, number>();
 	constructor(
 		readonly store: WarmPoolStore,
 		private readonly compute: SandboxProvider,
@@ -179,6 +180,15 @@ export class WarmPoolService {
 		if (!assigned) throw new WarmPoolClaimExpiredError();
 	}
 
+	async releaseUnused(claim: WarmPoolClaim): Promise<boolean> {
+		return this.store.updateMember(claim.member, 'claimed', (member) => {
+			if (member.assigned || this.isExpired(member)) return false;
+			member.state = 'ready';
+			member.token = crypto.randomUUID();
+			delete member.destination;
+		});
+	}
+
 	async abandon(claim: WarmPoolClaim): Promise<void> {
 		await this.retire(claim.member, true);
 		await this.cleanup(claim.member);
@@ -188,7 +198,7 @@ export class WarmPoolService {
 		const desired = new Set(
 			this.config.enabled ? this.config.profiles.map((profile) => profile.key) : [],
 		);
-		await this.store.mutate((record) => {
+		const snapshot = await this.store.mutate((record) => {
 			for (const pool of record.pools) {
 				const target = desired.has(pool.key) ? this.config.size : 0;
 				let excess =
@@ -207,11 +217,13 @@ export class WarmPoolService {
 					}
 				}
 			}
+			return record;
 		});
-		const snapshot = await this.store.read();
+		let changed = false;
 		for (const pool of snapshot.pools) {
 			for (const member of pool.members) {
 				try {
+					if (member.state !== 'ready') changed = true;
 					if (member.state === 'claimed') {
 						const destination = member.destination!;
 						const session = await this.sessions
@@ -248,10 +260,20 @@ export class WarmPoolService {
 						await this.retire(member);
 					} else if (member.state === 'ready') {
 						if (!desired.has(pool.key) || member.ready_until <= this.now()) {
+							changed = true;
 							await this.retire(member);
-						} else if (this.now() - member.checked_at >= HEALTH_INTERVAL_MS) {
+						} else if (
+							this.now() - member.checked_at >= HEALTH_INTERVAL_MS &&
+							this.now() >= (this.healthRetryAt.get(member.sandbox_id) ?? 0)
+						) {
+							changed = true;
 							try {
-								const sandbox = this.connect(member);
+								let sandbox: SandboxInstance;
+								try {
+									sandbox = this.connect(member);
+								} catch (error) {
+									throw new WarmPoolReadinessError('reconnect_failed', error);
+								}
 								await this.reconnectAndProbe(sandbox);
 								const reference = this.readReference(sandbox);
 								await this.store.updateMember(member, 'ready', (current) => {
@@ -261,6 +283,15 @@ export class WarmPoolService {
 								continue;
 							} catch (error) {
 								this.report('health_failed', error, { sandbox_id: member.sandbox_id });
+								const cause = error instanceof WarmPoolReadinessError ? error.cause : error;
+								if (
+									error instanceof WarmPoolReadinessError &&
+									error.reason !== 'command_failed' &&
+									!(cause instanceof NotFoundError)
+								) {
+									this.healthRetryAt.set(member.sandbox_id, this.now() + HEALTH_INTERVAL_MS);
+									continue;
+								}
 								await this.retire(member);
 							}
 						} else continue;
@@ -271,13 +302,31 @@ export class WarmPoolService {
 				}
 			}
 		}
-		if (this.config.enabled) {
+		const needsFill =
+			this.config.enabled &&
+			(changed ||
+				this.config.profiles.some((profile) => {
+					const pool = snapshot.pools.find((item) => item.key === profile.key);
+					return (
+						(!pool || pool.retry_at <= this.now()) &&
+						(pool?.members.filter(
+							(member) => member.state === 'ready' || member.state === 'creating',
+						).length ?? 0) < this.config.size
+					);
+				}));
+		if (needsFill) {
+			changed = true;
 			const reservations = await this.reserveCreations();
 			await mapWithConcurrency(reservations, MAX_CONCURRENT_CREATIONS, ({ profile, member }) =>
 				this.fill(profile, member),
 			);
 		}
-		const current = await this.store.read();
+		const current = changed ? await this.store.read() : snapshot;
+		const retained = new Set<string>(
+			current.pools.flatMap((pool) => pool.members.map((member) => member.sandbox_id)),
+		);
+		for (const id of this.healthRetryAt.keys())
+			if (!retained.has(id)) this.healthRetryAt.delete(id);
 		if (this.now() - this.lastCapacityLogAt >= 60_000) {
 			this.lastCapacityLogAt = this.now();
 			for (const profile of this.config.profiles) {

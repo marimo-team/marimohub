@@ -411,7 +411,10 @@ describe('app operation budgets', () => {
 			);
 			expect(response.status).toBe(409);
 			expect(await response.json()).toMatchObject({
-				error: { code: 'CONFLICT', message: 'The app assignment expired. Open the app again.' },
+				error: {
+					code: 'APP_ASSIGNMENT_EXPIRED',
+					message: 'The app assignment expired. Open the app again.',
+				},
 			});
 		},
 	);
@@ -573,9 +576,15 @@ describe('app operation budgets', () => {
 		const pool = new AppPoolService(f.bucket, f.services.sessions);
 		const read = pool.store.readWithEtag.bind(pool.store);
 		const queued = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let paused = false;
 		vi.spyOn(pool.store, 'readWithEtag').mockImplementation(async (...args) => {
 			const record = await read(...args);
-			queued.resolve();
+			if (!paused) {
+				paused = true;
+				queued.resolve();
+				await release.promise;
+			}
 			return record;
 		});
 		const heartbeat = f.renew(pool);
@@ -587,6 +596,7 @@ describe('app operation budgets', () => {
 			f.admission.session_id,
 			f.admission.app_assignment,
 		);
+		release.resolve();
 		expect(await heartbeat).toBe(false);
 		expect(await expectOk(await f.admit())).toHaveProperty('app_assignment');
 	});

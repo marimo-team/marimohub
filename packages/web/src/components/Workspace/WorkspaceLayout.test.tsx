@@ -158,7 +158,7 @@ describe('Workspace navigation', () => {
 		async (options) => {
 			const { requests } = setup(options);
 			await waitFor(() => expect(requests).toContain('/api/v1/projects/alpha'));
-			await screen.findByRole('button', { name: /Alpha/ });
+			await screen.findByRole('button', { name: options.role ? /Alpha/ : /Current project/ });
 			expect(screen.queryByRole('link', { name: /Project sharing/ })).not.toBeInTheDocument();
 		},
 	);
@@ -264,7 +264,9 @@ describe('Workspace navigation', () => {
 	});
 
 	it('switches projects from later roster pages and follows browser history', async () => {
-		const { user } = setup({ route: '/projects/alpha/data/warehouse' });
+		const { user, requests } = setup({ route: '/projects/alpha/data/warehouse' });
+		await screen.findByRole('button', { name: /Alpha/ });
+		expect(requests.some((url) => url.startsWith('/api/v1/projects?'))).toBe(false);
 		await user.click(await screen.findByRole('button', { name: /Alpha/ }));
 		await user.click(await screen.findByRole('option', { name: 'Beta' }));
 		expect(screen.getByRole('status', { name: 'Location' })).toHaveTextContent('/projects/beta');
@@ -311,7 +313,7 @@ describe('Workspace navigation', () => {
 	it('does not remember a project when access is denied', async () => {
 		localStorage.setItem(lastProjectKey('u'), 'beta');
 		setup({ projectError: true });
-		await screen.findByRole('button', { name: /Alpha/ });
+		await screen.findByRole('button', { name: /Current project/ });
 		expect(localStorage.getItem(lastProjectKey('u'))).toBe('beta');
 	});
 
@@ -432,8 +434,10 @@ describe('Workspace navigation', () => {
 	});
 
 	it('leaves global links available when project requests fail', async () => {
-		setup({ projectError: true, listError: true });
+		const { user } = setup({ projectError: true, listError: true });
+		await user.click(await screen.findByRole('button', { name: /Current project/ }));
 		await screen.findByText('Project list unavailable.');
+		await user.keyboard('{Escape}');
 		expect(screen.getByRole('link', { name: 'Apps' })).toBeVisible();
 		expect(screen.queryByRole('navigation', { name: 'Project' })).not.toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Retry projects' })).toBeVisible();

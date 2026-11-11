@@ -563,7 +563,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_ASSET_URL',
 						name: 'Frontend asset URL',
 						description:
-							'Versioned base URL for shared marimo frontend assets. Use {version} to match the installed marimo version. Recommended for connected deployments after worker, WASM, and CSP staging checks. Omit to use bundled sandbox assets.',
+							'Versioned base URL for shared marimo frontend assets. Use {version} to match the installed runtime. Set hub to serve pre-staged assets from MARIMOHUB_APP_BASE_URL/_marimo/{version}. Omit to use bundled sandbox assets. See docs/marimo-assets.md for staging and verification.',
 						example: 'https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist',
 					},
 					{
@@ -1691,7 +1691,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS',
 						name: 'Shutdown timeout',
 						description:
-							'Shutdown drain budget (1–86400 seconds): 30 for API replicas, 120 for maintenance. Set the termination grace at least 20 seconds longer.',
+							'Shutdown drain budget (1–86400 seconds): 180 for API replicas, 120 for maintenance. Set the termination grace at least 20 seconds longer.',
 						example: '120',
 						optIn: true,
 					},

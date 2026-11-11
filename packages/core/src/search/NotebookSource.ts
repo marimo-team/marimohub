@@ -22,6 +22,7 @@ export class NotebookSource implements SearchSource {
 	readonly id = 'notebooks';
 	readonly embeddable = true;
 	readonly incremental = true;
+	readonly catalogBacked = true;
 	readonly kinds = ['notebook', 'code', 'output'] as const;
 	constructor(
 		private readonly bucket: Bucket,

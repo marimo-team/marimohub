@@ -22,10 +22,19 @@ export function makeSearch(env: Env, deps: ApiDeps): ApiDeps['search'] {
 	const sources: SearchSource[] = [new NotebookSource(deps.bucket, catalog, notebooks, authz)];
 	if (deps.integrations)
 		sources.push(new IntegrationSource(deps.integrations, authz, Boolean(deps.dataBrowser)));
-	const index = new BucketSearchIndex(deps.bucket);
+	const index = new BucketSearchIndex(deps.bucket, undefined, deps.metrics);
 	return {
 		service: new SearchService(index, sources, catalog, projects, authz, embeddings),
-		indexer: new SearchIndexer(deps.bucket, index, sources, catalog, projects, embeddings),
+		indexer: new SearchIndexer(
+			deps.bucket,
+			index,
+			sources,
+			catalog,
+			projects,
+			embeddings,
+			undefined,
+			deps.metrics,
+		),
 	};
 }
 

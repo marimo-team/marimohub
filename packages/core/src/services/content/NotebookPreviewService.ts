@@ -207,7 +207,9 @@ export class NotebookPreviewService {
 			}
 			return this.readRecord(intent);
 		}
-		return this.mutate(intent, (current) => applyAutomationIntent(current, intent));
+		const current = await readStored(PreviewRecordSchema, object, key);
+		if (!intent.automation || !applyAutomationIntent(current, intent)) return current;
+		return this.mutate(intent, (latest) => applyAutomationIntent(latest, intent));
 	}
 
 	async projectRecords(

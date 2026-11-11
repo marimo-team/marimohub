@@ -650,26 +650,44 @@ export async function captureWorkspace(
 	}
 }
 
+export function sessionArtifactPaths(
+	mountPath: string,
+	entryNotebook = DEFAULT_LOCAL_ENTRY_NOTEBOOK,
+): Record<keyof CommitSessionInput, string> {
+	const separator = entryNotebook.lastIndexOf('/');
+	const directory = entryNotebook.slice(0, separator + 1);
+	const filename = entryNotebook.slice(separator + 1);
+	const artifactRoot = `${mountPath}/${directory}__marimo__`;
+	return {
+		code: `${mountPath}/${entryNotebook}`,
+		deps: `${mountPath}/pyproject.toml`,
+		html: `${artifactRoot}/${filename.replace(/\.[^.]+$/, '')}.html`,
+		session: `${artifactRoot}/session/${filename}.json`,
+	};
+}
+
 export async function readSessionArtifacts(
 	sandbox: SandboxInstance,
 	mountPath: string,
 	listing: WorkspaceListing = sharedWorkspaceListing(sandbox, mountPath),
 	entryNotebook = DEFAULT_LOCAL_ENTRY_NOTEBOOK,
+	hints?: { sizes: ReadonlyMap<string, number>; reusable: CommitSessionInput },
 ): Promise<CommitSessionInput> {
 	if (!supportsBoundedReads(sandbox)) return {};
-	const sizes = await fileSizes(listing);
-	const read = (path: string) => readCappedFile(sandbox, path, sizes);
-	const separator = entryNotebook.lastIndexOf('/');
-	const directory = entryNotebook.slice(0, separator + 1);
-	const filename = entryNotebook.slice(separator + 1);
-	const artifactRoot = `${mountPath}/${directory}__marimo__`;
+	const sizes = hints?.sizes ?? (await fileSizes(listing));
+	const files = sessionArtifactPaths(mountPath, entryNotebook);
+	const read = (field: keyof CommitSessionInput) => {
+		if (hints && Object.hasOwn(hints.reusable, field)) return hints.reusable[field];
+		return field === 'code'
+			? readNotebookCode(sandbox, files[field], sizes, entryNotebook)
+			: readCappedFile(sandbox, files[field], sizes);
+	};
 	const [code, deps, html, session] = await Promise.all([
-		readNotebookCode(sandbox, `${mountPath}/${entryNotebook}`, sizes, entryNotebook),
-		read(`${mountPath}/pyproject.toml`),
-		read(`${artifactRoot}/${filename.replace(/\.[^.]+$/, '')}.html`),
-		read(`${artifactRoot}/session/${filename}.json`),
+		read('code'),
+		read('deps'),
+		read('html'),
+		read('session'),
 	]);
-
 	return { code, deps, html, session };
 }
 

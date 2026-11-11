@@ -272,6 +272,8 @@ describe('startOtel', () => {
 	});
 
 	it('filters routine background spans before export and flushes errors on shutdown', async () => {
+		vi.stubEnv('OTEL_TRACES_LOOP_SAMPLE_RATIO', '1');
+		vi.stubEnv('OTEL_TRACES_SAMPLER', 'always_on');
 		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
 		vi.stubEnv('OTEL_TRACES_EXPORTER', 'otlp');
 		vi.stubEnv('OTEL_LOGS_EXPORTER', 'none');

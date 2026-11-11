@@ -149,7 +149,7 @@ successes.
 when `MARIMOHUB_RUN_MAINTENANCE=true`). A loop is `stalled` while an attempt is
 past its deadline and unsettled, or when nothing has completed within one
 deadline plus one interval of registration or the last completion. Only
-`stalled` returns 503. A `failing` loop reports `degraded` with HTTP 200 because
+`stalled` non-retention loops return 503. Stalled retention reports `degraded` with HTTP 200. A `failing` loop reports `degraded` with HTTP 200 because
 restarts cannot fix a dependency outage. A successful `retention_*` loop also
 makes the response `degraded` when `last_duration_ms >= 0.8 × deadline_ms`.
 This means 12 minutes with the 15-minute retention deadline. Its per-loop status
@@ -200,9 +200,18 @@ while writers remain active. Check these gauges before changing the recovery
 window. Service overrides are `retentionMs`, `keepLast`, `pageSize`, and `maxPages`.
 
 Notebook artifact cleanup uses a separate cursor and bounded concurrency.
-Each five-minute pass visits `ceil(notebook_count / 288)` notebooks, approximately
+Each hourly pass visits `ceil(notebook_count / 24)` notebooks, approximately
 one full rotation per day. A deadline limits repeat visits in small catalogs.
-Expired notebook deletions and project upload cleanup run every cycle.
+Expired notebook deletions and project upload cleanup run every retention cycle.
+Notebook purges commit each successful catalog removal before attempting the next item.
+Each sweep attempts at most 25 notebook or project deletions, with a five-minute budget between items.
+The project subtree phase deletes at most 1,000 objects per project per sweep and resumes from remaining objects.
+Job retention visits at most 128 jobs and inspects at most 100 run entries and 100 occurrence claims per job.
+CAS cursors preserve job and per-job scan positions across restarts. Failed and retained items cannot starve later work.
+These limits do not interrupt an owner operation. Project prepasses still scan all working branches,
+app pools, deep links, claims, and uploads, and repeat before each subtree batch. Notebook purges,
+upload and import cleanup, run-output deletion, and stale job-marker scans also remain unbounded
+within each selected item. Project metadata discovery reads the full catalog each sweep.
 `NotebookService.pruneVersions` keeps the last 50 versions.
 `SessionService.reapTerminated` removes terminal session records after 24 hours.
 

@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/Button';
 import { Toaster } from '@/components/ui/sonner';
 import { ApiRequestError } from '@/api/client';
 import { appBasePath, withBasePath } from '@/lib/basePath';
+import { RetainedEditorRoute } from '@/components/NotebookPage/RetainedEditorRoute';
 
 const WorkspaceLayout = lazyRoute(async () => {
 	const module = await import('@/components/Workspace/WorkspaceLayout');
@@ -254,17 +255,22 @@ function StandardLayout({ initialRoutes }: { initialRoutes: InitialRoutes }) {
 
 function AppContent({ initialRoutes }: { initialRoutes: InitialRoutes }) {
 	const { available } = useSearchAccess();
+	const { user } = useAuth();
 	useWorkspaceSearchShortcut(available);
 	return (
 		<>
 			<AppErrorBoundary>
 				<Suspense fallback={<PageFallback />}>
-					<Routes>
-						{fullScreenRoutes.map(({ path, element }) => (
-							<Route key={path} path={path} element={element} />
-						))}
-						<Route path="*" element={<StandardLayout initialRoutes={initialRoutes} />} />
-					</Routes>
+					<RetainedEditorRoute key={user?.id} editor={<AppEntryPage variant="edit" />}>
+						<Routes>
+							{fullScreenRoutes.map(({ path, element }) =>
+								path === '/projects/:pid/notebooks/:nid' ? null : (
+									<Route key={path} path={path} element={element} />
+								),
+							)}
+							<Route path="*" element={<StandardLayout initialRoutes={initialRoutes} />} />
+						</Routes>
+					</RetainedEditorRoute>
 				</Suspense>
 			</AppErrorBoundary>
 

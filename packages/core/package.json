@@ -12,6 +12,7 @@
 		"./bearer-token": "./src/bearerToken.ts",
 		"./chat": "./src/services/chat/public.ts",
 		"./async": "./src/async.ts",
+		"./response-body": "./src/responseBody.ts",
 		"./cache": "./src/cache.ts",
 		"./batching": "./src/batching.ts",
 		"./text": "./src/text.ts",

@@ -1,3 +1,4 @@
+import { retrySessionAdmission } from './sessionRetry';
 import type { MemberSelector } from '@marimo-hub/core/identity-match';
 import { MAX_RESOLVED_USERS } from '@marimo-hub/core/constants';
 import {
@@ -2300,13 +2301,15 @@ function useStartSessionRequest(
 ) {
 	return useApiMutation(
 		(visitId: string | void) =>
-			startSessionRequest(
-				projectId,
-				notebookId,
-				mode,
-				computeProfile,
-				editIntent,
-				visitId ?? undefined,
+			retrySessionAdmission(() =>
+				startSessionRequest(
+					projectId,
+					notebookId,
+					mode,
+					computeProfile,
+					editIntent,
+					visitId ?? undefined,
+				),
 			),
 		() => (mode === 'app' ? [] : [sessionKeys.listByProject(projectId)]),
 		{ suppressErrorToast: true },

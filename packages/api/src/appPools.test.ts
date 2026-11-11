@@ -47,6 +47,20 @@ describe('sweepAppPools operation budget', () => {
 		expect(gauge).toHaveBeenCalledExactlyOnceWith('app_pool.visits', 0);
 	});
 
+	it('skips inert tombstones only while the listed ETag is unchanged', async () => {
+		const bucket = await createInitializedBucket();
+		const deps = makeTestDeps(bucket);
+		const key = paths.appPool(createProjectId(), createNotebookId());
+		await bucket.put(key, emptyPool(true));
+		await sweepAppPools(deps);
+		const get = vi.spyOn(bucket, 'get');
+		await sweepAppPools(deps);
+		expect(get).not.toHaveBeenCalled();
+		await bucket.put(key, emptyPool(true));
+		await sweepAppPools(deps);
+		expect(get).toHaveBeenCalledExactlyOnceWith(key);
+	});
+
 	it.each([false, true])(
 		'aggregates visits for active pools (presence expired: %s)',
 		async (expired) => {

@@ -2,6 +2,7 @@ import { projectRosterQueryOptions } from '@/api/routePrefetch';
 import { SEARCH_ROUTE, searchPath } from '@/lib/workspaceSearch';
 import { isAppleKeyboard } from '@/lib/keyboard';
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
 	CalendarClock,
@@ -26,7 +27,12 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void }) {
 	const { user, allowed: enabled, available: searchAvailable, capabilities } = useSearchAccess();
 	const location = useLocation();
 	const { pid, section } = workspaceRoute(location.pathname);
-	const projects = useQuery({ ...projectRosterQueryOptions(), enabled, throwOnError: false });
+	const [pickerOpen, setPickerOpen] = useState(false);
+	const projects = useQuery({
+		...projectRosterQueryOptions(),
+		enabled: enabled && pickerOpen,
+		throwOnError: false,
+	});
 	const selectedProject = useQuery({
 		...projectQueryOptions(pid ?? ''),
 		enabled: enabled && Boolean(pid),
@@ -55,7 +61,8 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void }) {
 					projects={projects.data ?? []}
 					selectedId={pid}
 					selectedName={project?.name}
-					isPending={projects.isPending}
+					isPending={projects.isFetching}
+					onOpenChange={setPickerOpen}
 					canCreate={user?.can_create_projects ?? false}
 					onNavigate={onNavigate}
 				/>

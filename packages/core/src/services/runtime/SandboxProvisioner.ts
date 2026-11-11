@@ -1,3 +1,8 @@
+import {
+	SessionArtifactCache,
+	probeSessionArtifacts,
+	reusableSessionArtifacts,
+} from './sessionArtifactCache';
 import { mergeRuntimeContributions } from './runtimeContributions';
 import { AGENT_CONTEXT_DIR_ENV } from './sandboxEnvironment';
 import type { SessionEnv } from './sandboxEnvironment';
@@ -56,6 +61,7 @@ import {
 	captureWorkspace,
 	loadWorkspaceOverlay,
 	readSessionArtifacts,
+	sessionArtifactPaths,
 	restoreWorkspace,
 	sharedWorkspaceListing,
 } from './sandboxFiles';
@@ -751,6 +757,7 @@ const DEFAULT_PREFETCH_BUDGET = new ByteBudget(64 * 1024 * 1024);
 
 export class SandboxProvisioner {
 	private readonly prefetchBudget: ByteBudget;
+	private readonly artifactCache = new SessionArtifactCache();
 
 	constructor(
 		private provider: SandboxProvider,
@@ -1895,27 +1902,61 @@ export class SandboxProvisioner {
 		actor: UserId,
 		persistWorkspace: 'source' | 'workspace',
 		workdir: string = DEFAULT_WORKDIR,
-		opts?: { includeWorkspace?: boolean; persistEdits?: boolean },
+		opts?: { includeWorkspace?: boolean; persistEdits?: boolean; sandboxId?: SandboxId },
 	): Promise<boolean> {
 		if (opts?.persistEdits === false) return false;
-		const { source } = await notebooks.getNotebook(projectId, notebookId);
+		const { meta, source } = await notebooks.getNotebook(projectId, notebookId);
 		const policy = workspaceSourcePolicy(source);
 		const captureMode = effectivePersistenceMode({ persistEdits: true, source, persistWorkspace });
 		if (captureMode === 'none') return false;
 
 		const mountPath = workdir;
 		const listing = sharedWorkspaceListing(sandbox, mountPath);
+		const cacheKey = opts?.sandboxId
+			? JSON.stringify([projectId, notebookId, opts.sandboxId, mountPath, policy.entryNotebook])
+			: undefined;
+		const previous = cacheKey ? this.artifactCache.get(cacheKey) : undefined;
+		const fingerprints = cacheKey
+			? await probeSessionArtifacts(sandbox, mountPath, policy.entryNotebook)
+			: undefined;
+		const reusable = fingerprints ? reusableSessionArtifacts(fingerprints, previous) : undefined;
+		const artifactPaths = sessionArtifactPaths(mountPath, policy.entryNotebook);
+		const hints =
+			fingerprints && reusable
+				? {
+						sizes: new Map(
+							Object.entries(fingerprints).flatMap(([field, value]) =>
+								value
+									? [[artifactPaths[field as keyof typeof artifactPaths], value.size] as const]
+									: [],
+							),
+						),
+						reusable,
+					}
+				: undefined;
+		const unchanged =
+			previous &&
+			fingerprints?.code &&
+			source.current_version_id === previous.versionId &&
+			meta.status !== 'deleted' &&
+			!meta.preview &&
+			Object.keys(reusable ?? {}).length === 4;
+		const cache = this.artifactCache;
 		// The commit chain and the workspace mirror are independent best-effort
 		// steps over disjoint bucket keys, so they run concurrently.
 		const { commit, workspace } = await allSettled({
 			async commit() {
+				if (unchanged) return;
 				const artifacts = await readSessionArtifacts(
 					sandbox,
 					mountPath,
 					listing,
 					policy.entryNotebook,
+					hints,
 				);
-				await notebooks.commitSession(projectId, notebookId, artifacts, actor);
+				const result = await notebooks.commitSession(projectId, notebookId, artifacts, actor);
+				if (result && cacheKey && fingerprints)
+					await cache.remember(cacheKey, { fingerprints, artifacts, versionId: result.versionId });
 			},
 			async workspace() {
 				if (opts?.includeWorkspace === false) return;

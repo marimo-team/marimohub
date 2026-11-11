@@ -5,8 +5,38 @@ import {
 	joinUrlPath,
 	normalizeBasePath,
 	normalizeBaseUrl,
+	parseAssetBaseUrl,
 	parseHttpUrl,
 } from './url';
+
+describe('parseAssetBaseUrl', () => {
+	it.each([
+		undefined,
+		'',
+		'hub',
+		'/assets',
+		'http://cdn.example/dist',
+		'javascript:alert(1)',
+		'https://user:secret@cdn.example/dist',
+		'https://cdn.example/dist?token=secret',
+		'https://cdn.example/dist#secret',
+	])('omits unsafe or unresolved asset bases: %s', (value) => {
+		expect(parseAssetBaseUrl(value)).toBeUndefined();
+	});
+
+	it.each(['0.24.2', '{version}'])('accepts pinned or template version %s', (version) => {
+		const value = `https://cdn.example/frontend@${version}/dist`;
+		const parsed = parseAssetBaseUrl(value);
+		expect(parsed?.origin).toBe('https://cdn.example');
+		expect(decodeURIComponent(parsed!.pathname)).toBe(`/frontend@${version}/dist`);
+	});
+
+	it('returns independent URLs so callers can normalize paths without sharing mutations', () => {
+		const value = 'https://cdn.example/dist';
+		parseAssetBaseUrl(value)!.pathname += '/';
+		expect(parseAssetBaseUrl(value)?.pathname).toBe('/dist');
+	});
+});
 
 describe('normalizeBasePath', () => {
 	it.each([

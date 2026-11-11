@@ -12,7 +12,7 @@ spec:
     metadata:
       labels: { app: marimohub }
     spec:
-      terminationGracePeriodSeconds: 50
+      terminationGracePeriodSeconds: 200
       containers:
         - name: marimohub
           image: ghcr.io/orgname/marimohub:latest
@@ -23,7 +23,7 @@ spec:
             - secretRef: { name: marimohub-secrets }
           env:
             - name: MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS
-              value: '30'
+              value: '180'
             # Run the session-maintenance cron on a single replica only.
             - name: MARIMOHUB_RUN_MAINTENANCE
               value: 'false'

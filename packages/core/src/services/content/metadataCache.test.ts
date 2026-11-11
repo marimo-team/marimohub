@@ -242,8 +242,24 @@ it.each(['project', 'notebook'])(
 		await read();
 		await read();
 		expect(reads.mock.calls).toEqual([
-			[1, { result: 'miss', consistency: 'validated' }],
-			[1, { result: 'hit', consistency: 'validated' }],
+			[
+				1,
+				{
+					cache: kind,
+					service: kind === 'project' ? 'ProjectService' : 'NotebookService',
+					result: 'miss',
+					consistency: 'validated',
+				},
+			],
+			[
+				1,
+				{
+					cache: kind,
+					service: kind === 'project' ? 'ProjectService' : 'NotebookService',
+					result: 'hit',
+					consistency: 'validated',
+				},
+			],
 		]);
 		expect(conditional).toHaveBeenCalledExactlyOnceWith(1, { result: 'not_modified' });
 	},

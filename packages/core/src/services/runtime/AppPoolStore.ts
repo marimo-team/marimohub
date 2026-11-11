@@ -1,3 +1,4 @@
+import { BoundedLruMap, weakMemo } from '../../cache';
 import { cachedRead } from '../../async';
 import { sleep } from '../../duration';
 import { NotebookId, ProjectId } from '../../ids';
@@ -8,7 +9,7 @@ import { listAllObjects } from '../catalog/storage';
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
-import { ConflictError, NotFoundError } from '../../errors';
+import { ConflictError, NotFoundError, UnavailableError } from '../../errors';
 import { paths } from '../../paths';
 import { readStored } from '../../schema';
 import { withCasRetry } from '../catalog/cas';
@@ -46,7 +47,10 @@ type PendingUpdate = {
 };
 
 // Routes construct stores per request; the bucket identifies their shared replica.
-const batches = new WeakMap<Bucket, Map<string, PendingUpdate[]>>();
+const batches = weakMemo<Bucket, Map<string, PendingUpdate[]>>(() => new Map());
+const batchFlushes = weakMemo<Bucket, BoundedLruMap<string, number>>(
+	() => new BoundedLruMap(10_000),
+);
 
 export class AppPoolStore {
 	async freezeForMove(pid: ProjectId, nid: NotebookId): Promise<void> {
@@ -160,12 +164,9 @@ export class AppPoolStore {
 		intervalMs: number,
 		serialize = false,
 	): Promise<T> {
-		let pending = batches.get(this.bucket);
-		if (!pending) {
-			pending = new Map();
-			batches.set(this.bucket, pending);
-		}
+		const pending = batches(this.bucket);
 		const key = `${paths.appPool(projectId, notebookId)}:${intervalMs}`;
+		const flushes = batchFlushes(this.bucket);
 		const result = Promise.withResolvers<T>();
 		const entry: PendingUpdate = {
 			update,
@@ -180,7 +181,13 @@ export class AppPoolStore {
 			void (async () => {
 				let initial = known;
 				while (queue.length > 0) {
-					await (intervalMs === 0 ? Promise.resolve() : sleep(intervalMs));
+					const delay = serialize
+						? Math.min(
+								intervalMs,
+								Math.max(0, (flushes.get(key) ?? -Infinity) + intervalMs - Date.now()),
+							)
+						: intervalMs;
+					await (delay === 0 ? Promise.resolve() : sleep(delay));
 					if (!serialize) pending.delete(key);
 					const batch = queue.splice(0);
 					try {
@@ -203,6 +210,7 @@ export class AppPoolStore {
 								return { pool: current, value: outcomes };
 							},
 							initial,
+							serialize ? { intervalMs, deadline: Date.now() + 5000 } : undefined,
 						);
 						for (const [index, outcome] of outcomes.entries()) {
 							if (outcome.status === 'fulfilled') batch[index].resolve(outcome.value);
@@ -210,6 +218,8 @@ export class AppPoolStore {
 						}
 					} catch (error) {
 						for (const item of batch) item.reject(error);
+					} finally {
+						if (serialize) flushes.set(key, Date.now());
 					}
 					initial = undefined;
 				}
@@ -224,35 +234,52 @@ export class AppPoolStore {
 		notebookId: NotebookId,
 		update: PoolUpdate<T>,
 		known?: KnownObject<AppPool> | null,
+		presence?: { intervalMs: number; deadline: number },
 	): Promise<T> {
 		const key = paths.appPool(projectId, notebookId);
 		let initial = known;
 		return withCasRetry(
 			this.bucket,
 			async (writer) => {
-				const record =
+				let record =
 					initial === undefined ? await this.readWithEtag(projectId, notebookId) : initial;
 				initial = undefined;
-				const pool = record ? structuredClone(record.value) : emptyAppPool();
-				const before = JSON.stringify(pool);
-				const deletedAt = pool.deleted_at;
-				const { pool: next, value } = await update(pool);
-				if (
-					deletedAt !== undefined &&
-					(next.deleted_at !== deletedAt ||
-						next.assignments.length > 0 ||
-						next.members.some((member) => member.state !== 'retiring'))
-				) {
-					throw new NotFoundError('The app notebook was deleted');
+				while (true) {
+					const pool = record ? structuredClone(record.value) : emptyAppPool();
+					const before = JSON.stringify(pool);
+					const deletedAt = pool.deleted_at;
+					const { pool: next, value } = await update(pool);
+					if (
+						deletedAt !== undefined &&
+						(next.deleted_at !== deletedAt ||
+							next.assignments.length > 0 ||
+							next.members.some((member) => member.state !== 'retiring'))
+					)
+						throw new NotFoundError('The app notebook was deleted');
+					if (JSON.stringify(next) === before) return value;
+					if (presence) {
+						const now = Date.now();
+						const delay = Math.max(
+							0,
+							(record?.value.last_presence_write_at ?? -Infinity) + presence.intervalMs - now,
+						);
+						if (now + delay >= presence.deadline)
+							throw new UnavailableError('App presence is busy. Retry shortly.');
+						if (delay > 0) {
+							await sleep(delay);
+							// A lease can expire or be deleted while another replica owns this interval.
+							record = await this.readWithEtag(projectId, notebookId);
+							continue;
+						}
+						next.last_presence_write_at = now;
+					}
+					await writer.put(
+						key,
+						JSON.stringify(next),
+						record ? { onlyIfEtagMatches: record.etag } : { onlyIfNotExists: true },
+					);
+					return value;
 				}
-				const serialized = JSON.stringify(next);
-				if (serialized === before) return value;
-				await writer.put(
-					key,
-					serialized,
-					record ? { onlyIfEtagMatches: record.etag } : { onlyIfNotExists: true },
-				);
-				return value;
 			},
 			{
 				retries: 12,
