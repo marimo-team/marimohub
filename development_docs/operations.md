@@ -164,10 +164,6 @@ Operationally, a standard release needs no special handling. Before you deploy a
 release that increments `schema_version`, make sure that it obeys the two-phase
 rule.
 
-**Exception: upgrades from 0.6.4 or earlier are not rolling.** Those releases are
-[incompatible writers](./migrations.md#upgrade-compatibility). Follow the
-[operator procedure](../docs/operations.md#upgrading-from-older-releases).
-
 ---
 
 ## 5. Snapshot & event growth

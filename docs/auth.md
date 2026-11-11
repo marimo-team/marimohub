@@ -164,18 +164,8 @@ The `/members/{uid}` route addresses users and email invites only.
 `GET /api/v1/projects/{pid}/members` returns one list with user rows, pending email rows, and group rows.
 Existing group rows remain editable and removable if group creation is disabled.
 
-### Rolling out group membership
-
-1. Upgrade all replicas and stop all old replicas before adding group rows.
-2. Before rollback, remove all group rows with a compatible server.
-
-Older versions reject project records with group rows and return `503`.
-The bucket schema version remains 1. Project reads and listing visibility checks use
-the authoritative project record, even if catalog projections are stale. Listing data
-still comes from the catalog snapshot.
-
-Email invites have the same rollout requirement. Before creating invites, upgrade all replicas.
-Before rollback to an unsupported release, remove pending invites.
+Project reads and listing visibility checks use the authoritative project record, even if catalog projections are stale.
+Listing data comes from the catalog snapshot.
 
 ### What viewers see: `MARIMOHUB_VIEWER_MODE`
 
@@ -222,20 +212,6 @@ Omitting the field preserves its current value. Project responses always include
 The value is `inherit` when the project stores no override.
 A change sends the [`project.default_access_changed` alert](./project-alerts.md#alert-catalog).
 
-#### Rolling out default access
-
-1. Upgrade all replicas and stop all old replicas before setting any value other than `inherit`.
-2. Before rollback, reset every override to `inherit`. A project that used `none` then grants
-   nonmembers the inherited default again; explicit memberships do not suppress it. To keep such a
-   project members-only, set `MARIMOHUB_DEFAULT_ROLE=none` and remove the OIDC group and
-   login-policy `default-role:*` grants that would otherwise apply.
-
-Older versions parse `project.json` with a schema that strips unknown fields.
-During a mixed-version rollout, an old replica that handles a member change or rename drops `default_role`.
-After a rollback, old versions ignore the field.
-In both cases the project falls back to the inherited default: the deployment default (`editor` out
-of the box) or a higher OIDC group or login-policy default-role grant.
-
 ### Super admins: `MARIMOHUB_SUPER_ADMINS`
 
 `MARIMOHUB_SUPER_ADMINS` is a comma-separated list of operators who are treated
@@ -255,10 +231,7 @@ per query. The debug page runs the
 Project managers retain access to each project's daily audit log.
 
 Existing non-owner Admin memberships remain valid and can be demoted or removed,
-but the API does not allow new Admin assignments. A deployment introducing
-Manager must stop all old replicas before the first Manager row is stored; older
-versions cannot parse that role. Rolling back requires converting Manager rows
-first.
+but the API does not allow new Admin assignments.
 
 An entry containing `@` matches the caller's login email, case-insensitively;
 any other entry matches the user id (the IdP `sub`) exactly. The two namespaces

@@ -169,7 +169,6 @@ This works in Hub app and editor views with a connected notebook bridge.
 Normal clicks open the target in the same tab. New-tab actions use the Hub URL.
 Downloads and external links retain their normal behavior.
 Standalone sandbox pages, static outputs, nested iframes, forms, and programmatic redirects do not use this feature.
-Existing sandbox sessions need a restart after the upgrade.
 
 ## Notebooks with query parameters
 
@@ -336,17 +335,8 @@ Existing access depends on the [sandbox exposure mode](./security.md):
 
 A role change cannot remove source that a former viewer already downloaded.
 
-### Upgrade and rollback
-
-Upgrade all replicas before assigning `app-user` or enabling its default or OIDC mapping.
-Older replicas cannot parse the new role.
-Existing memberships do not change during the upgrade.
-
 Session responses omit `user_id` for app-only callers, including app-scoped tokens without `project.read`.
 Clients must handle its absence. Authorized project readers still receive it.
-
-Before rollback, remove app-user assignments and configuration, or explicitly choose replacement roles.
-Do not automatically replace app-user with viewer: viewer grants source access.
 
 ### Verification
 
@@ -365,10 +355,9 @@ CI runs this check with the Chromium end-to-end job.
 | `MARIMOHUB_MAX_SESSIONS_PER_USER`        | Also bounds the apps a single user may have _started_, across all projects.                                            |
 | `MARIMOHUB_PROJECT_NOTEBOOK_TARGET`      | `app` opens notebook links in project lists and galleries as apps for users who can use apps. Default `notebook`.      |
 
-> **Legacy upgrade note.** Releases introducing app mode also grant app access to existing `ephemeral-sandbox` viewers.
-> There is no mode that grants ephemeral editors without shared apps.
-> Use `static` if viewers must not reach shared apps, which carry credentials that ephemeral editors never receive.
-> Upgrade the maintenance replica first: builds predating app mode treat apps as edit sessions.
+`ephemeral-sandbox` grants viewers access to both ephemeral editors and shared apps.
+Shared apps carry credentials that ephemeral editors never receive.
+If viewers must not reach shared apps, use `static`.
 
 See [Configuration](./configuration.md) for the full reference and
 [Auth](./auth.md) for roles and viewer modes.

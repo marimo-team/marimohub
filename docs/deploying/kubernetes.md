@@ -109,8 +109,7 @@ If a session survives the change, its Ingress stays public and becomes orphaned.
 
 See [Configuration → Compute → Kubernetes](../configuration.md#compute) for every
 variable. Before you change the sharing mode, follow the drain procedure in
-[Editor sessions](../editor-sessions.md#changing-the-sharing-mode). The same
-procedure applies when you upgrade from a release without editor claims.
+[Editor sessions](../editor-sessions.md#changing-the-sharing-mode).
 
 ### OpenShift ingress
 
@@ -219,8 +218,6 @@ with the
   is treated as terminal.
 - marimo uses an independent token for each interactive session. Keep
   `*.<hostname>` behind TLS and do not publish session URLs.
-- Complete a server rollout promptly. During a mixed-version rollout, an old
-  proxy replica cannot authenticate to a kernel that a new replica started.
 - In subdomain exposure, the Ingress/TLS scheme is cluster-specific. Confirm
   your ingress controller honours per-host rules and the wildcard certificate.
 - A subdomain-mode Ingress route is created but not waited on, so the kernel

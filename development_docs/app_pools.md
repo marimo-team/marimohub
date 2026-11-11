@@ -1,6 +1,6 @@
 # App pool implementation
 
-See [App pools](../docs/app-pools.md) for capacity, presence timers, API usage, and coordinated upgrades.
+See [App pools](../docs/app-pools.md) for capacity, presence timers, API usage, and cleanup.
 A new sandbox can consume a [warm pool](./warm_pools.md) member.
 
 ## Ownership and routing
@@ -62,7 +62,6 @@ The first due presence batch commits without the one-second delay. Later batches
 Every renewal waits for the persisted batch before acknowledgment. Each process batches its local callers.
 The optional pool `last_presence_write_at` timestamp fences due renewal writes across replicas at one-second intervals.
 CAS retries and waits recheck visit expiry and deletion. After five seconds of contention, the batch returns retryable HTTP 503 with `Retry-After: 2`.
-Existing pool records need no migration. Rolling upgrades enforce the shared limit once all writers use this timestamp.
 A coalesced heartbeat rereads the session to detect a concurrent stop or deletion without writing.
 Response grants use the returned session.
 

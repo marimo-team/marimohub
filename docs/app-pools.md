@@ -30,7 +30,6 @@ These limits can block a new version from starting. Full pools return HTTP 429 w
 Each open page sends periodic heartbeats, including while idle, and a departure request on navigation or closure.
 Clients use the advertised `app_pool.heartbeat_interval_seconds`, which defaults to 30 seconds.
 A persisted lease lasts 240 seconds. Heartbeats renew it at most once per minute. After each heartbeat, at least 180 seconds of the lease remain.
-This applies to leases written by this release. A lease written by v0.6.4 keeps its 120-second `expires_at` until the first heartbeat after the upgrade rewrites it, so a client that misses that heartbeat can lose its slot.
 Missed departures and browser crashes release slots through lease expiry.
 
 Departure holds that visit's slot for 15 seconds of reconnect grace. Other tabs keep their own slots.
@@ -74,15 +73,7 @@ The replacement uses the selected sandbox's pool slot during teardown. Both rema
 Repeated restart requests reuse the replacement. Assignments to other sandboxes remain unchanged.
 Affected visits must enter through admission again. The hub does not transfer kernel memory or replay requests.
 
-## Upgrade
-
-Stop old server and maintenance replicas before upgrading. Do not mix singleton, account-based, and visit-based pool writers.
-Existing sandbox processes can remain running.
-
-Existing account assignments split into visit slots without moving live sessions or changing heartbeat tokens.
-Sandboxes above the new limit keep their existing visits but accept no additional visits until space becomes available.
-Old assignments already in reconnect grace retain one slot until expiry because their departed visit IDs were not stored.
-Legacy singleton sessions enter as drain-only members and retain access through legacy heartbeats.
+## Cleanup
 
 Run maintenance to recover interrupted provisioning and retry failed sandbox cleanup.
 Pool records and deletion tombstones remain until reclamation finishes; empty deletion tombstones remain permanently.

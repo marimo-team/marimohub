@@ -348,50 +348,6 @@ The `marimohub-linux-*` binaries do not include the command. From a repository c
 
 ## Upgrades
 
-### Upgrading from older releases
-
-Releases after 0.6.4 migrate project access summaries and session indexes in the background.
-The migration starts when the first new pod boots.
-Writers from 0.6.4 and earlier do not maintain these records, so old and new pods must not run at the same time.
-A normal rolling `helm upgrade` runs both versions at the same time.
-
-1. Scale the API and maintenance Deployments to zero.
-
-   ```bash
-   kubectl scale deployment marimohub marimohub-maintenance --replicas=0
-   ```
-
-2. Stop every other process that uses the old image, such as recovery jobs and command-line tools.
-3. Run `helm upgrade`. It restores the configured replica counts.
-
-Do not roll back to 0.6.4 or earlier after the new version starts. The migrations begin at boot.
-
-Old and new pods can run at the same time after a rolling upgrade, or after `helm rollback` and a new upgrade.
-If this occurs, stop the old pods.
-Then run both repair commands once from the new image, with only the new version running.
-Use the pod overrides from the [catalog recovery](#catalog-recovery) example:
-
-```bash
-node dist/project-access-rebuild.mjs
-node dist/session-index-rebuild.mjs
-```
-
-From a repository checkout, use `pnpm --filter @marimo-hub/server project-access:rebuild`
-and `pnpm --filter @marimo-hub/server session-index:rebuild`.
-
-### All upgrades
-
-Before upgrading from 0.4.8, check `MARIMOHUB_SESSION_CONNECTION_AWARE` and
-`MARIMOHUB_AUTOMATIC_THUMBNAILS`. Both now accept only `true` or `false`, ignoring
-case and surrounding whitespace. Unset or blank values keep the default, `true`.
-Other values, including `1`, `0`, `yes`, and `on`, now stop startup with a
-configuration error. Previously, these values all enabled the feature. Replace
-them with the explicit boolean that matches your intended behavior.
-
-HTTP create retries with older idempotency records now return `422` instead of
-replaying an unverifiable response or creating a duplicate. Check the original
-operation before using a new key.
-
 The image and Helm chart are released together on every `v*` tag (chart version,
 `appVersion`, and image tag all match), so pinning a chart version pins
 everything.
@@ -399,15 +355,12 @@ everything.
 ```bash
 helm upgrade marimohub oci://ghcr.io/marimo-team/charts/marimohub \
   --version <VERSION> -n marimohub -f values.yaml
-helm rollback marimohub -n marimohub     # revert (not to 0.6.4 or earlier)
 helm history marimohub -n marimohub      # what's running
 ```
 
 Replace `<VERSION>` with a tag from
 [GitHub Releases](https://github.com/marimo-team/marimohub/releases), without
-the leading `v`. See [Deploying with Helm](/deploying/helm). The API tier is
-stateless. Changes to the editor-claim protocol require the drain procedure in
-[Editor sessions → Changing the sharing mode](/editor-sessions#changing-the-sharing-mode).
+the leading `v`. See [Deploying with Helm](/deploying/helm).
 
 ## Configuration changes
 

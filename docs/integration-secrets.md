@@ -220,8 +220,3 @@ References must include their complete backend and locator.
 Copies decrypt and encrypt inline values for the destination. They keep
 external references unchanged. Organization integrations use the same secret
 sources as project integrations.
-
-## Upgrade note
-
-The standalone project-secret subsystem was unreleased. This change removes its
-routes, bucket objects, and `MARIMOHUB_SECRETS_BACKEND`. No migration is provided.

@@ -125,9 +125,3 @@ They do not appear in any single project's audit log.
 The `token.create` event includes the immutable grant for a scoped token. For
 a manual MCP token, it also includes `source: "mcp-manual"` and the bound
 `mcp_resource` URL. It never includes the token secret.
-
-## Rolling upgrades
-
-Scoped tokens use version 2 records. Old replicas reject these records instead
-of treating them as unrestricted. A scoped token can fail during a mixed-version
-rollout, so update all replicas before you depend on it.

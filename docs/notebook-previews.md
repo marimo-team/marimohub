@@ -169,8 +169,6 @@ Manual creation and session launch never wait for GitHub. PR reconciliation chec
 Preparation has a two-minute lease and aborts network requests before that deadline.
 Failed attempts retry with backoff. See [Preparation retries](#preparation-retries).
 At most four preparations run per deployment, with one per project.
-During a rolling upgrade, replicas that run v0.6.4 or earlier drop the queue from `_system/preview-work.json` when they write it.
-This affects only priority order. The rotation still reaches every project.
 The reference Cloudflare Worker does not configure a GitHub App registry or run preparation.
 Previews are unavailable in that example. A custom Worker deployment must configure both before enabling previews.
 Automatic updates, expiry, and cleanup require maintenance.

@@ -827,23 +827,7 @@ namespaces equal when you change the runner or its API principal.
 The middleware uses zstd, Brotli, or gzip. It skips bodies smaller than 1 KiB
 and `text/event-stream` responses.
 
-Use matching chart and application versions. Images `0.6.4` and older do not
-read `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE`. For those
-images, add these values to your Helm configuration:
-
-```yaml
-config:
-  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: sandboxes
-  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: >-
-    {"traefik.ingress.kubernetes.io/router.middlewares":"sandboxes-marimohub-kernel-compress@kubernetescrd"}
-```
-
-Replace `sandboxes` and `marimohub` with your namespace and chart fullname.
-If `secrets.existingSecret` supplies these variables, update that Secret instead.
-Its value overrides the chart ConfigMap. Set its
-`MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS` key to the JSON string above.
-Use `stringData` or your external secret provider. Keep the existing annotations
-and middleware references in the JSON, and append the compression reference.
+Use matching chart and application versions.
 
 The hub adds the reference only to new Ingresses. For an existing Ingress, append
 the reference to its comma-separated `traefik.ingress.kubernetes.io/router.middlewares`
