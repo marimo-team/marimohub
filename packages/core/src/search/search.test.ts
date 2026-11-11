@@ -25,7 +25,7 @@ afterEach(() => {
 });
 describe('authorized search', () => {
 	it('excludes inaccessible access candidates before loading metadata, with a conservative legacy fallback', async () => {
-		const f = await setup('search-test');
+		const f = await setup();
 		const hidden = await f.services.projects.createProject(
 			{ name: 'Private', description: '' },
 			outsider.id,
@@ -474,20 +474,31 @@ describe('authorized search', () => {
 		expect(result.partial).toBe(true);
 		expect(result.coverage).toContainEqual({ source: 'projects', status: 'truncated' });
 	});
-	it('caps the cross-project scan and reports truncation', async () => {
-		const f = await setup();
-		for (let i = 1; i < 200; i++)
-			await f.services.projects.createProject({ name: `Hidden ${i}`, description: '' }, owner.id);
-		const getProject = vi.spyOn(f.services.projects, 'getProject');
-		const result = await f.search.search(outsider, { ...f.query, project_id: undefined });
-		const reads = getProject.mock.calls.filter(
-			([, options]) => options?.consistency === 'validated',
-		);
-		expect(reads.length).toBeLessThanOrEqual(MAX_SEARCH_PROJECT_SCAN);
-		expect(result.items).toEqual([]);
-		expect(result.partial).toBe(true);
-		expect(result.coverage).toEqual([{ source: 'projects', status: 'truncated' }]);
-	});
+	it.each([true, false])(
+		'bounds legacy scans and skips inaccessible projected candidates (projected: %s)',
+		async (projected) => {
+			const f = await setup();
+			for (let i = 1; i < 200; i++)
+				await f.services.projects.createProject({ name: `Hidden ${i}`, description: '' }, owner.id);
+			if (!projected) {
+				await f.services.catalog.mutateSnapshot('test.legacy', owner.id, (snapshot) => {
+					for (const project of snapshot.projects) delete project.access;
+					return snapshot;
+				});
+			}
+			const getProject = vi.spyOn(f.services.projects, 'getProject');
+			const result = await f.search.search(outsider, { ...f.query, project_id: undefined });
+			const reads = getProject.mock.calls.filter(
+				([, options]) => options?.consistency === 'validated',
+			);
+			expect(reads).toHaveLength(projected ? 0 : MAX_SEARCH_PROJECT_SCAN);
+			expect(result.items).toEqual([]);
+			expect(result.partial).toBe(!projected);
+			expect(result.coverage).toEqual(
+				projected ? [] : [{ source: 'projects', status: 'truncated' }],
+			);
+		},
+	);
 });
 
 describe('resumable search indexing', () => {

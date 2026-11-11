@@ -201,11 +201,16 @@ export async function sweepAppPools(
 						)
 							return false;
 						if (!session) {
-							const existing = deps.compute.connectExisting?.(member.sandbox_id, {
-								owner: { projectId: pid, userId: member.user_id },
-							});
-							if (!existing) return false;
-							await existing.destroy();
+							const options = { owner: { projectId: pid, userId: member.user_id } };
+							try {
+								if (deps.compute.destroyExisting)
+									await deps.compute.destroyExisting(member.sandbox_id, options);
+								else if (deps.compute.connectExisting)
+									await deps.compute.connectExisting(member.sandbox_id, options).destroy();
+								else return false;
+							} catch (error) {
+								if (!(error instanceof NotFoundError)) throw error;
+							}
 							return true;
 						}
 						if (session.sandbox_reclaimed_at) return true;

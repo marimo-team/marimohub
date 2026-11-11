@@ -41,9 +41,14 @@ export class MaintenanceLock {
 		const held = this.held;
 		const now = Date.now();
 		if (held?.holder === holder && held.expiresAt > now) {
-			if (held.expiresAt - now >= minimumRemainingMs) return true;
+			if (held.expiresAt - now >= minimumRemainingMs) {
+				trace.getActiveSpan()?.setAttribute('marimohub.lock.acquired', true);
+				return true;
+			}
 			const record: LockRecord = { holder, expires_at: new Date(now + ttlMs).toISOString() };
-			return this.writeLease(record, { onlyIfEtagMatches: held.etag });
+			const acquired = await this.writeLease(record, { onlyIfEtagMatches: held.etag });
+			trace.getActiveSpan()?.setAttribute('marimohub.lock.acquired', acquired);
+			return acquired;
 		}
 		return this.acquire(holder, ttlMs);
 	}

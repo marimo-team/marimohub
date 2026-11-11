@@ -262,11 +262,7 @@ export class ProjectService {
 		const entry = await this.catalog.getCurrentSnapshotEntry();
 		const candidates = authz.isSuperAdmin(subject)
 			? undefined
-			: entry.accessCandidatesFor(
-					subject,
-					authz.hasDefaultProjectRole(subject),
-					this.accessGeneration,
-				);
+			: entry.accessCandidatesFor(subject, authz.hasDefaultProjectRole(subject));
 		return entry.snapshot.projects
 			.filter(
 				(project) => project.status === 'active' && (!candidates || candidates.has(project.id)),

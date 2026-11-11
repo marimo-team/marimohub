@@ -137,7 +137,9 @@ describe('app presence across replicas', () => {
 		const pending = Promise.allSettled(Array.from({ length: 7 }, (_, i) => heartbeat(i)));
 		await vi.advanceTimersByTimeAsync(5000);
 		const results = await pending;
-		expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(5);
+		const fulfilled = results.filter((result) => result.status === 'fulfilled');
+		expect(fulfilled).toHaveLength(5);
+		for (const result of fulfilled) expect(result.value).toBe(true);
 		const rejected = results.filter((result) => result.status === 'rejected');
 		expect(rejected).toHaveLength(2);
 		for (const result of rejected) expect(result.reason).toBeInstanceOf(UnavailableError);

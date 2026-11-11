@@ -124,6 +124,12 @@ export function useNotebookSession(
 	// Bumped by every start/stop/restart: a poll issued before one still lands
 	// afterwards, re-arming the dying session or failing the fresh one.
 	const generation = useGeneration();
+	const admissionRef = useRef<AbortController | undefined>(undefined);
+	const invalidateSession = useCallback(() => {
+		admissionRef.current?.abort();
+		admissionRef.current = undefined;
+		return generation.bump();
+	}, [generation]);
 	// When this client began watching a still-`starting` session (client clock, so
 	// server/client skew can't fail a fresh start). Null while nothing is starting.
 	const startingSinceRef = useRef<number | null>(null);
@@ -163,7 +169,7 @@ export function useNotebookSession(
 	// A missing URL can mean revoked access or an expired pool assignment.
 	const concludeAccessLost = useCallback(
 		(admitted = false) => {
-			generation.bump();
+			invalidateSession();
 			commitSession(null);
 			if (mode === 'app') setEnded(admitted ? 'expired' : 'access_lost');
 			else
@@ -173,40 +179,57 @@ export function useNotebookSession(
 					kind: 'access',
 				});
 		},
-		[mode, commitSession, generation],
+		[mode, commitSession, invalidateSession],
 	);
 
 	const startWithMutation = useCallback(
 		(mutation: typeof startSession) => {
 			setDiagnosticSession(null);
-			const gen = generation.bump();
+			const gen = invalidateSession();
+			const controller = new AbortController();
+			admissionRef.current = controller;
 			setError(null);
 			setEnded(null);
 			setEndedByUserId(null);
 			setStarting(true);
 			void prefetchMarimoAssets(marimoAssetUrl);
 			// Separate attempts need separate visits so late cleanup cannot release the winner.
-			void mutation.mutateAsync(mode === 'app' ? crypto.randomUUID() : undefined).then(
-				(data) => {
-					if (!mountedRef.current || !generation.isCurrent(gen)) {
-						leaveAppVisit(projectId, notebookId, data);
-						return;
-					}
-					setStarting(false);
-					if (data.status === 'running' && !data.sandbox_url) {
-						concludeAccessLost(data.can?.attach ?? false);
-						return;
-					}
-					commitSession(data);
-				},
-				(err) => {
-					if (!generation.isCurrent(gen)) return;
-					setStarting(false);
-					setError(toSessionError(err));
-				},
-			);
+			void mutation
+				.mutateAsync({
+					visitId: mode === 'app' ? crypto.randomUUID() : undefined,
+					signal: controller.signal,
+				})
+				.then(
+					(data) => {
+						if (!mountedRef.current || !generation.isCurrent(gen)) {
+							leaveAppVisit(projectId, notebookId, data);
+							return;
+						}
+						setStarting(false);
+						if (data.status === 'running' && !data.sandbox_url) {
+							concludeAccessLost(data.can?.attach ?? false);
+							return;
+						}
+						commitSession(data);
+					},
+					(err) => {
+						if (!mountedRef.current || controller.signal.aborted || !generation.isCurrent(gen))
+							return;
+						setStarting(false);
+						setError(toSessionError(err));
+					},
+				);
 		},
-		[concludeAccessLost, commitSession, generation, projectId, notebookId, mode, marimoAssetUrl],
+		[
+			concludeAccessLost,
+			commitSession,
+			generation,
+			invalidateSession,
+			projectId,
+			notebookId,
+			mode,
+			marimoAssetUrl,
+		],
 	);
 	const start = useCallback(() => {
 		startWithMutation(startSession);
@@ -222,9 +245,10 @@ export function useNotebookSession(
 
 	const stop = useCallback(() => {
 		const s = sessionRef.current;
+		const gen = invalidateSession();
+		setStarting(false);
+		setRestarting(false);
 		if (s) {
-			const gen = generation.bump();
-			setStarting(false);
 			// The global toast is suppressed for this mutation, so a failed stop must
 			// surface inline — otherwise the page shows no session AND no error.
 			stopSession.mutate(s.session_id, {
@@ -237,11 +261,11 @@ export function useNotebookSession(
 			});
 			commitSession(null);
 		}
-	}, [stopSession, commitSession, generation]);
+	}, [stopSession, commitSession, generation, invalidateSession]);
 
 	const restart = useCallback(() => {
 		const s = sessionRef.current;
-		const gen = generation.bump();
+		const gen = invalidateSession();
 		setError(null);
 		setEnded(null);
 		setEndedByUserId(null);
@@ -270,7 +294,7 @@ export function useNotebookSession(
 		} else {
 			start();
 		}
-	}, [stopSession, restartApp, mode, start, commitSession, generation]);
+	}, [stopSession, restartApp, mode, start, commitSession, generation, invalidateSession]);
 
 	// Start once, on the first enabled render (guarded so strict-mode's
 	// double-invoke doesn't provision two sandboxes).
@@ -287,7 +311,7 @@ export function useNotebookSession(
 		(failure?: Session['error'], code?: string, failedSession?: Session) => {
 			// Terminal: invalidate in-flight polls so a late `running` response
 			// cannot resurrect the session after the failure is shown.
-			generation.bump();
+			invalidateSession();
 			setError(
 				failure
 					? { message: failure.message, code: failure.code, kind: 'startup' }
@@ -301,7 +325,7 @@ export function useNotebookSession(
 			commitSession(null);
 			setDiagnosticSession(failedSession ?? null);
 		},
-		[startFailedMessage, commitSession, generation],
+		[startFailedMessage, commitSession, invalidateSession],
 	);
 
 	// Ignore stale responses. Retry request failures except 404 on the next tick.
@@ -413,12 +437,12 @@ export function useNotebookSession(
 
 	const concludeSession = useCallback(
 		(status: SessionEnded, endedBy: string | null = null) => {
-			generation.bump();
+			invalidateSession();
 			commitSession(null);
 			setEnded(status);
 			setEndedByUserId(endedBy);
 		},
-		[commitSession, generation],
+		[commitSession, invalidateSession],
 	);
 
 	const updateRunningSession = useCallback(
@@ -497,6 +521,10 @@ export function useNotebookSession(
 		window.addEventListener('pagehide', onPageHide);
 		return () => {
 			mountedRef.current = false;
+			// StrictMode reconnects effects before this microtask; a real departure cancels admission.
+			queueMicrotask(() => {
+				if (!mountedRef.current) admissionRef.current?.abort();
+			});
 			window.removeEventListener('pagehide', onPageHide);
 			leave();
 		};

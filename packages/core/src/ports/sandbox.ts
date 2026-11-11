@@ -391,6 +391,8 @@ export interface SandboxProvider {
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance;
 	/** Attach without creating; a missing or stopped sandbox must fail on first use. */
 	connectExisting?(id: SandboxId, options?: ConnectSandboxOptions): SandboxInstance;
+	/** Reclaim runtime compute without starting a missing/stopped sandbox; durable metadata may remain. */
+	destroyExisting?(id: SandboxId, options?: ConnectSandboxOptions): Promise<void>;
 	/**
 	 * Proxy an incoming request to a sandbox's exposed port.
 	 * Returns a Response if the request matched a sandbox URL, null otherwise.

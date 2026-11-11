@@ -150,7 +150,7 @@ Each hub replica caches exchanged credentials in process memory to reuse them ac
 The hub does not persist these credentials. Cache cleanup occurs during later credential requests,
 so entries can remain in memory after expiry.
 
-Jobs reuse cached credentials only when their remaining lifetime covers the configured job timeout.
+Jobs reuse cached credentials only when their remaining lifetime covers the configured job timeout plus the provisioning allowance.
 Otherwise, the hub requests fresh credentials. The broker still controls the lifetime of newly issued credentials.
 This reuse check does not extend broker limits or provide SDK refresh for jobs.
 

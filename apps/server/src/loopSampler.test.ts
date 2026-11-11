@@ -85,3 +85,29 @@ describe('LoopSampler', () => {
 		);
 	});
 });
+
+it.each(['', ' ', '\t', 'bad', '-1', '2'])(
+	'uses ratio defaults for invalid configuration %j',
+	(value) => {
+		const sampler = new LoopSampler({
+			OTEL_TRACES_SAMPLER: 'traceidratio',
+			OTEL_TRACES_SAMPLER_ARG: value,
+			OTEL_TRACES_LOOP_SAMPLE_RATIO: value,
+		});
+		expect(sample(sampler, 'request').decision).toBe(SamplingDecision.RECORD_AND_SAMPLED);
+		expect(sampler.toString()).toContain('TraceIdRatioBased{0.01}');
+	},
+);
+it.each(['', 'prefix_always_off', 'parentbased_typo', 'prefix_traceidratio'])(
+	'uses the parent-based default for unknown sampler %j',
+	(name) => {
+		const sampler = new LoopSampler({ OTEL_TRACES_SAMPLER: name, OTEL_TRACES_SAMPLER_ARG: '0' });
+		expect(sample(sampler, 'request').decision).toBe(SamplingDecision.RECORD_AND_SAMPLED);
+		const parent = trace.setSpanContext(ROOT_CONTEXT, {
+			traceId,
+			spanId: '0123456789abcdef',
+			traceFlags: TraceFlags.NONE,
+		});
+		expect(sample(sampler, 'request', parent).decision).toBe(SamplingDecision.NOT_RECORD);
+	},
+);

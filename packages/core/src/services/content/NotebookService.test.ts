@@ -3571,6 +3571,10 @@ describe('NotebookService', () => {
 			remove.mockClear();
 			expect((await notebooks.sweepDeletedNotebooks(0)).purged).toBe(1);
 			expect(remove).toHaveBeenCalledExactlyOnceWith(projectId, ids[25]);
+			remove.mockResolvedValue(undefined);
+			remove.mockClear();
+			expect((await notebooks.sweepDeletedNotebooks(0)).purged).toBe(25);
+			expect(new Set(remove.mock.calls.map(([, id]) => id))).toEqual(new Set(ids.slice(0, 25)));
 		});
 
 		it('commits completed notebook purges when a later deletion fails', async () => {
@@ -3729,7 +3733,7 @@ describe('NotebookService', () => {
 		{ failure: 'version-meta', deps: 'new-deps' },
 		{ failure: 'source', deps: 'new-deps' },
 	])(
-		'repairs a failed $failure write when the identical PATCH with deps=$deps is retried',
+		'publishes a complete version after a failed $failure write with deps=$deps',
 		async ({ failure, deps }) => {
 			const meta = await notebooks.createNotebook(
 				projectId,
@@ -3775,6 +3779,12 @@ describe('NotebookService', () => {
 				title: 'Updated',
 				updated_at: updated.updated_at,
 			});
+			const versions = await notebooks.listVersions(projectId, meta.id);
+			await notebooks.updateNotebook(projectId, meta.id, input, ACTOR);
+			expect((await notebooks.getNotebookSource(projectId, meta.id)).current_version_id).toBe(
+				source.current_version_id,
+			);
+			expect(await notebooks.listVersions(projectId, meta.id)).toEqual(versions);
 		},
 	);
 
@@ -3785,15 +3795,18 @@ describe('NotebookService', () => {
 			ACTOR,
 		);
 		const input = { title: 'Updated', code: 'v2', deps: 'deps' };
-		vi.spyOn(catalog, 'updateNotebookEntry').mockRejectedValueOnce(
-			new Error('catalog unavailable'),
-		);
-		await expect(notebooks.updateNotebook(projectId, meta.id, input, ACTOR)).rejects.toThrow(
-			'catalog unavailable',
+		const publication = vi
+			.spyOn(catalog, 'updateNotebookEntry')
+			.mockRejectedValue(new Error('catalog unavailable'));
+		await expect(notebooks.updateNotebook(projectId, meta.id, input, ACTOR)).resolves.toMatchObject(
+			{
+				title: 'Updated',
+			},
 		);
 		expect((await catalog.getCurrentSnapshot()).projects[0].notebooks[0].title).toBe('Original');
 		const source = await notebooks.getNotebookSource(projectId, meta.id);
 		const storedMeta = await notebooks.getNotebookMeta(projectId, meta.id);
+		publication.mockRestore();
 		const updated = await notebooks.updateNotebook(
 			projectId,
 			meta.id,

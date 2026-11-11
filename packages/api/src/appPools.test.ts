@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	AppPoolService,
+	NotFoundError,
 	AppPoolStore,
 	createPreviewId,
 	createNotebookId,
@@ -10,7 +11,7 @@ import {
 } from '@marimo-hub/core';
 import { createInitializedBucket, makeTestDeps } from './testing';
 import { sweepAppPools } from './appPools';
-import { makeNotebookMeta, makeSession } from '@marimo-hub/core/testing';
+import { makeNotebookMeta, makeSession, makeFakeSandbox } from '@marimo-hub/core/testing';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -45,6 +46,55 @@ describe('sweepAppPools operation budget', () => {
 		expect(put).not.toHaveBeenCalled();
 		expect(remove).not.toHaveBeenCalled();
 		expect(gauge).toHaveBeenCalledExactlyOnceWith('app_pool.visits', 0);
+	});
+
+	it.each(
+		(['existing', 'missing', 'failed', 'unsupported'] as const).flatMap((outcome) =>
+			(['connectExisting', 'destroyExisting'] as const).map((method) => ({ outcome, method })),
+		),
+	)('reclaims an orphan through $method only ($outcome)', async ({ outcome, method }) => {
+		const bucket = await createInitializedBucket();
+		const deps = makeTestDeps(bucket);
+		const session = makeSession({ sandbox_id: createSandboxId() });
+		const key = paths.appPool(session.project_id, session.notebook_id);
+		await bucket.put(
+			key,
+			JSON.stringify({
+				schema_version: 1,
+				deleted_at: 1,
+				assignments: [],
+				members: [
+					{
+						session_id: session.session_id,
+						sandbox_id: session.sandbox_id,
+						user_id: session.user_id,
+						state: 'retiring',
+						created_at: Date.now(),
+						operation_token: 'test',
+						operation_expires_at: 0,
+					},
+				],
+			}),
+		);
+		const destroy = vi.fn(async () => {
+			if (outcome === 'missing') throw new NotFoundError('Sandbox missing');
+			if (outcome === 'failed') throw new Error('temporarily unavailable');
+		});
+		deps.compute = {
+			...deps.compute,
+			connectExisting:
+				method === 'connectExisting' && outcome !== 'unsupported'
+					? () => ({ ...makeFakeSandbox().instance, destroy })
+					: undefined,
+			destroyExisting:
+				method === 'destroyExisting' && outcome !== 'unsupported' ? destroy : undefined,
+		};
+		const create = vi.spyOn(deps.compute, 'create');
+		await sweepAppPools(deps);
+		const pool = await new AppPoolStore(bucket).read(session.project_id, session.notebook_id);
+		expect(pool?.members).toHaveLength(outcome === 'failed' || outcome === 'unsupported' ? 1 : 0);
+		expect(create).not.toHaveBeenCalled();
+		expect(destroy).toHaveBeenCalledTimes(outcome === 'unsupported' ? 0 : 1);
 	});
 
 	it('skips inert tombstones only while the listed ETag is unchanged', async () => {

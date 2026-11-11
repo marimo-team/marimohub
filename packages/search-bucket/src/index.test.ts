@@ -489,3 +489,21 @@ describe('search build fencing', () => {
 		expect(result.partial).toBe(false);
 	});
 });
+
+it.each([0, 10])(
+	'yields postings work only after its time budget (elapsed: %sms)',
+	async (step) => {
+		const bucket = new MemoryBucket();
+		const index = new BucketSearchIndex(bucket);
+		await index.publish(scope, snapshot(512), null, signal());
+		let elapsed = 0;
+		vi.spyOn(performance, 'now').mockImplementation(() => {
+			elapsed += step;
+			return elapsed;
+		});
+		const timers = vi.spyOn(globalThis, 'setTimeout');
+		const result = await index.read(scope, signal());
+		expect(result.snapshot?.documents).toHaveLength(512);
+		expect(timers.mock.calls.filter(([, ms]) => ms === 0)).toHaveLength(step ? 4 : 0);
+	},
+);

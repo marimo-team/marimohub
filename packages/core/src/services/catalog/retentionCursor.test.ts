@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { MemoryBucket } from '../../testing/MemoryBucket';
 import { readRetentionCursor, retentionBatch, writeRetentionCursor } from './retentionCursor';
 
@@ -29,4 +29,14 @@ it('rejects corrupt and oversized cursors without accepting their scan position'
 	await expect(readRetentionCursor(bucket, key)).rejects.toThrow();
 	await bucket.put(key, 'x'.repeat(4097));
 	await expect(readRetentionCursor(bucket, key)).rejects.toThrow('Retention cursor exceeds budget');
+});
+
+it('uses an explicitly present empty ETag as a CAS condition', async () => {
+	const bucket = new MemoryBucket();
+	const written = await bucket.put('existing', '');
+	const put = vi.spyOn(bucket, 'put').mockResolvedValue(written);
+	await writeRetentionCursor(bucket, 'cursor', 'next', '');
+	expect(put).toHaveBeenCalledExactlyOnceWith('cursor', JSON.stringify({ after: 'next' }), {
+		onlyIfEtagMatches: '',
+	});
 });

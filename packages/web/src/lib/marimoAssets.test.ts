@@ -115,6 +115,19 @@ it.each(['', '/'])('prefetches a pinned hub version with suffix %s', async (suff
 	expect(String(fetch.mock.calls[0]?.[0])).toBe(`${origin}/_marimo/0.25.2/index.html`);
 });
 
+it.each(['0.25.2.dev0', '0.25.2rc1', '0.25.2.post1', '0.25.2-beta.1'])(
+	'prefetches staged prerelease version %s',
+	async (version) => {
+		const fetch = vi.fn(async () => new Response(''));
+		vi.stubGlobal('fetch', fetch);
+		await prefetchMarimoAssets(`https://prerelease.example/_marimo/${version}`);
+		expect(fetch).toHaveBeenCalledWith(
+			new URL(`https://prerelease.example/_marimo/${version}/index.html`),
+			expect.objectContaining({ credentials: 'omit' }),
+		);
+	},
+);
+
 it('cancels a stalled asset index at the deadline and allows a retry', async () => {
 	vi.useFakeTimers();
 	const cancel = vi.fn(() => new Promise<void>(() => {}));

@@ -288,7 +288,7 @@ export class BackgroundLoops {
 			if (options.abortOnStop) stopping.abort(new Error(`${name} stopped`));
 			if (options.retainLease && options.lock) {
 				const lock = options.lock;
-				void this.inFlight.track(
+				current = this.inFlight.track(
 					current
 						.then(() => (state.running ? undefined : lock.release(retainedHolder)))
 						.catch((error: unknown) => {

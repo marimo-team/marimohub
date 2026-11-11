@@ -563,7 +563,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_ASSET_URL',
 						name: 'Frontend asset URL',
 						description:
-							'Versioned base URL for shared marimo frontend assets. Use {version} to match the installed runtime. Set hub to serve pre-staged assets from MARIMOHUB_APP_BASE_URL/_marimo/{version}. Omit to use bundled sandbox assets. See docs/marimo-assets.md for staging and verification.',
+							'Versioned base URL for shared marimo frontend assets. Use {version} to match the installed runtime. Set hub to serve pre-staged assets from MARIMOHUB_APP_BASE_URL/_marimo/{version}. Omit or set false to use bundled sandbox assets. Explicit URLs require HTTPS without credentials, query, or fragment. See docs/marimo-assets.md for staging and verification.',
 						example: 'https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist',
 					},
 					{

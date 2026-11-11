@@ -22,6 +22,9 @@ const fakeSandbox = {
 	execStream: vi.fn(),
 	exposePort: vi.fn(),
 	destroy: vi.fn(),
+	stop: vi.fn(),
+	getState: vi.fn(),
+	containerFetch: vi.fn(),
 	readFile: vi.fn(),
 	writeFile: vi.fn(),
 	listFiles: vi.fn(),
@@ -58,6 +61,82 @@ function makeProvider() {
 }
 
 describe('CloudflareSandboxProvider', () => {
+	it.each(['stopped', 'stopped_with_code'] as const)(
+		'reclaims an orphan without a wake-capable SDK call (%s)',
+		async (status) => {
+			vi.clearAllMocks();
+			fakeSandbox.stop.mockResolvedValueOnce(undefined);
+			fakeSandbox.getState.mockResolvedValueOnce({ status });
+			const provider = makeProvider();
+			const create = vi.spyOn(provider, 'create');
+			await provider.destroyExisting(SANDBOX_ID);
+			expect(getSandbox).toHaveBeenCalledExactlyOnceWith(fakeNamespace, SANDBOX_ID);
+			expect(fakeSandbox.stop).toHaveBeenCalledExactlyOnceWith('SIGKILL');
+			expect(fakeSandbox.getState).toHaveBeenCalledOnce();
+			expect(create).not.toHaveBeenCalled();
+			for (const call of [
+				fakeSandbox.destroy,
+				fakeSandbox.exec,
+				fakeSandbox.startProcess,
+				fakeSandbox.containerFetch,
+			])
+				expect(call).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(['running', 'healthy', 'stopping'] as const)(
+		'retains an orphan while shutdown is uncertain (%s)',
+		async (status) => {
+			fakeSandbox.stop.mockResolvedValueOnce(undefined);
+			fakeSandbox.getState.mockResolvedValueOnce({ status });
+			await expect(makeProvider().destroyExisting(SANDBOX_ID)).rejects.toMatchObject({
+				code: 'SERVICE_UNAVAILABLE',
+			});
+		},
+	);
+
+	it.each(['stop', 'getState'] as const)(
+		'propagates %s failures so cleanup can retry',
+		async (operation) => {
+			vi.clearAllMocks();
+			fakeSandbox.stop.mockResolvedValueOnce(undefined);
+			if (operation === 'stop')
+				fakeSandbox.stop.mockReset().mockRejectedValueOnce(new Error('temporarily unavailable'));
+			else fakeSandbox.getState.mockRejectedValueOnce(new Error('temporarily unavailable'));
+			await expect(makeProvider().destroyExisting(SANDBOX_ID)).rejects.toThrow(
+				'temporarily unavailable',
+			);
+			if (operation === 'stop') expect(fakeSandbox.getState).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(['stop', 'getState'] as const)(
+		'bounds a stalled %s without marking cleanup complete',
+		async (operation) => {
+			vi.clearAllMocks();
+			const controller = new AbortController();
+			const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal);
+			try {
+				const pending = Promise.withResolvers<void>();
+				if (operation === 'stop') fakeSandbox.stop.mockReturnValueOnce(pending.promise);
+				else {
+					fakeSandbox.stop.mockResolvedValueOnce(undefined);
+					fakeSandbox.getState.mockReturnValueOnce(pending.promise);
+				}
+				const cleanup = makeProvider().destroyExisting(SANDBOX_ID);
+				const rejected = expect(cleanup).rejects.toMatchObject({ name: 'TimeoutError' });
+				await Promise.resolve();
+				controller.abort(new DOMException('Timed out', 'TimeoutError'));
+				await rejected;
+				expect(timeout).toHaveBeenCalledExactlyOnceWith(10_000);
+				pending.reject(new Error('late provider failure'));
+				await Promise.resolve();
+			} finally {
+				timeout.mockRestore();
+			}
+		},
+	);
+
 	describe('create()', () => {
 		it('calls getSandbox with the namespace, id, and sleepAfter option', () => {
 			getSandbox.mockClear();

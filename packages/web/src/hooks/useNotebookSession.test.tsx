@@ -81,6 +81,126 @@ afterEach(() => {
 });
 
 describe('useNotebookSession', () => {
+	it('cancels a scheduled app admission retry on unmount', async () => {
+		vi.useFakeTimers();
+		const fetch = vi.fn(
+			async () =>
+				new Response(
+					JSON.stringify({
+						success: false,
+						error: { code: 'SERVICE_UNAVAILABLE', message: 'Busy' },
+					}),
+					{ status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '2' } },
+				),
+		);
+		vi.stubGlobal('fetch', fetch);
+		const { unmount } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await settleHook();
+		expect(fetch).toHaveBeenCalledOnce();
+		unmount();
+		await act(() => vi.advanceTimersByTimeAsync(5000));
+		expect(fetch).toHaveBeenCalledOnce();
+	});
+
+	it('receives a late app admission after unmount so its assignment can be released', async () => {
+		const held = deferred<Response>();
+		let visitId = '';
+		let admissionSignal: AbortSignal | undefined;
+		const fetch = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+			if (String(url).endsWith('/sessions')) {
+				visitId = (JSON.parse(init!.body as string) as { app_visit_id: string }).app_visit_id;
+				admissionSignal = init?.signal ?? undefined;
+				return held.promise;
+			}
+			return jsonOk(undefined);
+		});
+		vi.stubGlobal('fetch', fetch);
+		const { unmount } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await settleHook();
+		unmount();
+		await settleHook();
+		expect(admissionSignal?.aborted).toBe(false);
+		await act(async () =>
+			held.resolve(
+				jsonOk(
+					makeSession({
+						mode: 'app',
+						app_assignment: { visit_id: visitId, generation: 'lease-generation' },
+					}),
+				),
+			),
+		);
+		await settleHook();
+		const leave = fetch.mock.calls.find(([url]) => String(url).endsWith('/sess-1/leave'));
+		expect(leave).toBeDefined();
+		expect(JSON.parse(leave![1]!.body as string)).toEqual({
+			visit_id: visitId,
+			generation: 'lease-generation',
+		});
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it.each(['stop', 'unmount', 'restart', 'persistent', 'default'] as const)(
+		'cancels a pending admission retry on %s',
+		async (action) => {
+			vi.useFakeTimers();
+			const fetch = vi.fn(async (..._args: Parameters<typeof globalThis.fetch>) =>
+				jsonOk(makeSession()),
+			);
+			fetch.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						success: false,
+						error: { code: 'SERVICE_UNAVAILABLE', message: 'Busy' },
+					}),
+					{ status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '2' } },
+				),
+			);
+			vi.stubGlobal('fetch', fetch);
+			const { result, unmount } = renderHookWithClient(() => useNotebookSession(PID, NID), {
+				toaster: false,
+			});
+			await settleHook();
+			expect(fetch).toHaveBeenCalledOnce();
+			act(() => {
+				if (action === 'unmount') unmount();
+				else if (action === 'stop') result.current.stop();
+				else if (action === 'restart') result.current.restart();
+				else if (action === 'persistent') result.current.startPersistent();
+				else result.current.startWithDefault();
+			});
+			await settleHook();
+			await act(() => vi.advanceTimersByTimeAsync(5000));
+			const replaced = action !== 'stop' && action !== 'unmount';
+			expect(fetch).toHaveBeenCalledTimes(replaced ? 2 : 1);
+			if (replaced) expect(result.current.isRunning).toBe(true);
+			if (action === 'stop') expect(result.current.isProvisioning).toBe(false);
+		},
+	);
+
+	it('keeps an in-flight admission alive through StrictMode effect reconnection', async () => {
+		const held = deferred<Response>();
+		let signal: AbortSignal | undefined;
+		const fetch = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+			signal = init?.signal ?? undefined;
+			return held.promise;
+		});
+		vi.stubGlobal('fetch', fetch);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), {
+			toaster: false,
+			reactStrictMode: true,
+		});
+		await settleHook();
+		expect(fetch).toHaveBeenCalledOnce();
+		expect(signal?.aborted).toBe(false);
+		await act(async () => held.resolve(jsonOk(makeSession())));
+		await waitFor(() => expect(result.current.isRunning).toBe(true));
+	});
+
 	it('acknowledges a save only for the current running session', async () => {
 		vi.stubGlobal(
 			'fetch',
@@ -1593,6 +1713,35 @@ describe('useNotebookSession (app mode)', () => {
 			expect(requests).toHaveLength(2);
 			expect(result.current.isProvisioning).toBe(false);
 			expect(result.current.session).toBeNull();
+		},
+	);
+
+	it.each(['edit', 'app'] as const)(
+		'stops %s provisioning while replacement is still in flight',
+		async (mode) => {
+			const replacement = deferred<Response>();
+			const fetch = vi.fn(async (..._args: Parameters<typeof globalThis.fetch>) =>
+				jsonOk(makeSession({ mode })),
+			);
+			fetch.mockImplementationOnce(async () => jsonOk(makeSession({ mode })));
+			fetch.mockImplementationOnce(() => replacement.promise);
+			vi.stubGlobal('fetch', fetch);
+			const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode }), {
+				toaster: false,
+			});
+			await waitFor(() => expect(result.current.isRunning).toBe(true));
+			act(() => result.current.restart());
+			await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+			expect(result.current.isProvisioning).toBe(true);
+			act(() => result.current.stop());
+			expect(result.current.isProvisioning).toBe(false);
+			await act(async () =>
+				replacement.resolve(jsonOk(makeSession({ mode, session_id: 'replacement' }))),
+			);
+			await settleHook();
+			expect(result.current.isProvisioning).toBe(false);
+			expect(result.current.session).toBeNull();
+			expect(fetch).toHaveBeenCalledTimes(2);
 		},
 	);
 

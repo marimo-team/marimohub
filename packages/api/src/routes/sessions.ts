@@ -18,7 +18,6 @@ import type {
 	EditorSandboxSharing,
 	NotebookId,
 	PreviewId,
-	NotebookPreview,
 	Project,
 	ProjectId,
 	MarimoConfigContributor,
@@ -720,7 +719,7 @@ function capsFor(
 	mode: SessionMode,
 	pid: ProjectId,
 	userId: UserId,
-	onSource?: (source: 'scan' | 'index' | 'shadow') => void,
+	onSource?: (source: 'scan' | 'index') => void,
 ) {
 	const { sessions } = deps.services;
 	const maxSessions = deps.policy.maxConcurrentSessionsPerUser;
@@ -801,7 +800,7 @@ async function assertCapAfterCreate(
 	userId: UserId,
 	sessionId: SessionId,
 	excludedSessionId?: SessionId,
-	onSource?: (source: 'scan' | 'index' | 'shadow') => void,
+	onSource?: (source: 'scan' | 'index') => void,
 ): Promise<void> {
 	const caps = capsFor(deps, mode, pid, userId, onSource);
 	await checkCapQueues(caps, excludedSessionId, (cap) => {
@@ -1390,7 +1389,7 @@ export async function startNotebookSession(input: {
 	pid: ProjectId;
 	nid: NotebookId;
 	body: SessionCreateBody | undefined;
-	preview?: { id: PreviewId; notebook_id: NotebookId; record?: NotebookPreview };
+	preview?: { id: PreviewId; notebook_id: NotebookId };
 	request: {
 		requestId?: string;
 		method: string;
@@ -1542,12 +1541,11 @@ async function startNotebookSessionOnce(
 		);
 	}
 	const previewRecord = isPreview
-		? (input.preview?.record ??
-			(await deps.services.previews.get(
+		? await deps.services.previews.get(
 				pid,
 				notebook.meta.preview!.notebook_id,
 				notebook.meta.preview!.preview_id,
-			)))
+			)
 		: undefined;
 	if (previewRecord && !previewAvailable(previewRecord))
 		throw new NotFoundError('Preview not found');

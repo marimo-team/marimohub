@@ -458,6 +458,23 @@ describe('JobRunService', () => {
 		).toContain('/occurrences/');
 	});
 
+	it('revisits newly eligible records after completing the bounded rotation', async () => {
+		const now = Date.now();
+		const newlyExpired = await finalizedRun(now - 500);
+		await finalizedRun(now - 2000);
+		const oldest = await finalizedRun(now - 3000);
+		const key = paths.project(pid).notebook(nid).job(job.id).run(newlyExpired.run_id).record;
+		expect(await runs.pruneJob(job, 1000, now, 1000, 1)).toBe(1);
+		const restarted = new JobRunService(env.bucket);
+		expect(await restarted.pruneJob(job, 1000, now + 1000, 1000, 1)).toBe(1);
+		expect(await env.bucket.head(key)).not.toBeNull();
+		expect(
+			await env.bucket.head(paths.project(pid).notebook(nid).job(job.id).run(oldest.run_id).record),
+		).toBeNull();
+		expect(await restarted.pruneJob(job, 1000, now + 2000, 1000, 1)).toBe(1);
+		expect(await env.bucket.head(key)).toBeNull();
+	});
+
 	it('bounds expired run deletion and resumes without replaying deleted runs', async () => {
 		const now = Date.now();
 		for (let i = 0; i < 5; i++) await finalizedRun(now - 10_000 - i);
@@ -523,16 +540,39 @@ describe('JobRunService', () => {
 			const now = Date.now();
 			await finalizedRun(now - 10_000);
 			await finalizedRun(now - 11_000);
-			const key = `${paths.project(pid).notebook(nid).job(job.id).base}/prune-${phase}.json`;
+			const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+			const claims = [now - 180_000, now - 120_000, now + 60_000].map((instant) =>
+				occurrenceKey(instant),
+			);
+			for (const claim of claims)
+				await runs.claimOccurrence(job, claim, createRunId(), new Date(now).toISOString());
+			const key = `${jobPaths.base}/prune-${phase}.json`;
 			const put = env.bucket.put.bind(env.bucket);
 			vi.spyOn(env.bucket, 'put').mockImplementation((target, ...args) => {
 				if (target === key) throw new Error('cursor unavailable');
 				return put(target, ...args);
 			});
 			await expect(runs.pruneJob(job, 1000, now, 1000, 1)).rejects.toThrow('cursor unavailable');
+			expect(await env.bucket.head(key)).toBeNull();
+			expect(await env.bucket.head(jobPaths.occurrence(claims[0]))).toEqual(
+				phase === 'occurrences' ? null : expect.anything(),
+			);
+			for (const claim of claims.slice(1))
+				expect(await env.bucket.head(jobPaths.occurrence(claim))).not.toBeNull();
 			vi.restoreAllMocks();
 			expect(await new JobRunService(env.bucket).pruneJob(job, 1000, now, 1000, 1)).toBe(1);
 			expect(await runs.listRuns(pid, nid, job.id)).toEqual([]);
+			await runs.pruneJob(job, 1000, now, 1000, 1);
+			for (const claim of claims.slice(0, 2))
+				expect(await env.bucket.head(jobPaths.occurrence(claim))).toBeNull();
+			expect(await env.bucket.head(jobPaths.occurrence(claims[2]))).not.toBeNull();
+			const claimAgain = await runs.claimOccurrence(
+				job,
+				claims[2],
+				createRunId(),
+				new Date(now).toISOString(),
+			);
+			expect(claimAgain.claimed).toBe(false);
 		},
 	);
 

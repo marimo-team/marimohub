@@ -995,20 +995,26 @@ describe('JobScheduler', () => {
 		expect(listActive).toHaveBeenCalledTimes(2);
 	});
 
-	it('resumes bounded job retention across scheduler restarts', async () => {
-		for (let i = 0; i < 129; i++) await createJob({ name: `job-${i}` });
-		const prune = vi.spyOn(env.jobRuns, 'pruneJob').mockResolvedValue(0);
-		await scheduler(fakeRunner(env)).prune(DAY);
-		expect(prune).toHaveBeenCalledTimes(128);
-		const first = new Set(prune.mock.calls.map(([job]) => job.id));
-		prune.mockClear();
-		await scheduler(fakeRunner(env)).prune(DAY);
-		expect(prune).toHaveBeenCalledOnce();
-		expect(first.has(prune.mock.calls[0][0].id)).toBe(false);
-		prune.mockClear();
-		await scheduler(fakeRunner(env)).prune(DAY);
-		expect(new Set(prune.mock.calls.map(([job]) => job.id))).toEqual(first);
-	});
+	it.each([false, true])(
+		'resumes bounded job retention and retries failures after wrapping (failure: %s)',
+		async (fails) => {
+			for (let i = 0; i < 129; i++) await createJob({ name: `job-${i}` });
+			const prune = vi.spyOn(env.jobRuns, 'pruneJob').mockImplementation(async () => {
+				if (fails) throw new Error('storage unavailable');
+				return 0;
+			});
+			await scheduler(fakeRunner(env)).prune(DAY);
+			expect(prune).toHaveBeenCalledTimes(128);
+			const first = new Set(prune.mock.calls.map(([job]) => job.id));
+			prune.mockClear();
+			await scheduler(fakeRunner(env)).prune(DAY);
+			expect(prune).toHaveBeenCalledOnce();
+			expect(first.has(prune.mock.calls[0][0].id)).toBe(false);
+			prune.mockClear();
+			await scheduler(fakeRunner(env)).prune(DAY);
+			expect(new Set(prune.mock.calls.map(([job]) => job.id))).toEqual(first);
+		},
+	);
 
 	it('prunes terminal runs past retention and stale markers', async () => {
 		const job = await createJob({ schedule: undefined });

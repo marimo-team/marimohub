@@ -2,6 +2,7 @@ import {
 	SessionArtifactCache,
 	probeSessionArtifacts,
 	reusableSessionArtifacts,
+	sameArtifactFingerprints,
 } from './sessionArtifactCache';
 import { mergeRuntimeContributions } from './runtimeContributions';
 import { AGENT_CONTEXT_DIR_ENV } from './sandboxEnvironment';
@@ -1905,7 +1906,7 @@ export class SandboxProvisioner {
 		opts?: { includeWorkspace?: boolean; persistEdits?: boolean; sandboxId?: SandboxId },
 	): Promise<boolean> {
 		if (opts?.persistEdits === false) return false;
-		const { meta, source } = await notebooks.getNotebook(projectId, notebookId);
+		const { source } = await notebooks.getNotebook(projectId, notebookId);
 		const policy = workspaceSourcePolicy(source);
 		const captureMode = effectivePersistenceMode({ persistEdits: true, source, persistWorkspace });
 		if (captureMode === 'none') return false;
@@ -1934,29 +1935,34 @@ export class SandboxProvisioner {
 						reusable,
 					}
 				: undefined;
-		const unchanged =
-			previous &&
-			fingerprints?.code &&
-			source.current_version_id === previous.versionId &&
-			meta.status !== 'deleted' &&
-			!meta.preview &&
-			Object.keys(reusable ?? {}).length === 4;
 		const cache = this.artifactCache;
 		// The commit chain and the workspace mirror are independent best-effort
 		// steps over disjoint bucket keys, so they run concurrently.
 		const { commit, workspace } = await allSettled({
 			async commit() {
-				if (unchanged) return;
-				const artifacts = await readSessionArtifacts(
+				let artifacts = await readSessionArtifacts(
 					sandbox,
 					mountPath,
 					listing,
 					policy.entryNotebook,
 					hints,
 				);
+				let verified = fingerprints;
+				if (fingerprints && reusable && Object.keys(reusable).length > 0) {
+					verified = await probeSessionArtifacts(sandbox, mountPath, policy.entryNotebook);
+					if (!verified || !sameArtifactFingerprints(verified, fingerprints)) {
+						artifacts = await readSessionArtifacts(
+							sandbox,
+							mountPath,
+							listing,
+							policy.entryNotebook,
+						);
+						verified = undefined;
+					}
+				}
 				const result = await notebooks.commitSession(projectId, notebookId, artifacts, actor);
-				if (result && cacheKey && fingerprints)
-					await cache.remember(cacheKey, { fingerprints, artifacts, versionId: result.versionId });
+				if (result && cacheKey && verified)
+					await cache.remember(cacheKey, { fingerprints: verified, artifacts });
 			},
 			async workspace() {
 				if (opts?.includeWorkspace === false) return;

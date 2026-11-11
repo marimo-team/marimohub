@@ -60,8 +60,7 @@ export async function prefetchMarimoAssets(value: string | undefined): Promise<v
 	}
 	base.pathname = `${base.pathname.replace(/\/+$/, '')}/`;
 	// The sandbox resolves {version}; notebook metadata does not establish its installed version.
-	if (value?.includes('{') || !/(?:\/|@)\d+\.\d+\.\d+(?:[-+][\w.-]+)?\//.test(base.pathname))
-		return;
+	if (value?.includes('{') || !/(?:\/|@)\d+\.\d+\.\d+[a-zA-Z0-9.-]*\//.test(base.pathname)) return;
 	if (prefetched.has(base.href) || prefetched.size >= 16) return;
 	prefetched.add(base.href);
 	const controller = new AbortController();

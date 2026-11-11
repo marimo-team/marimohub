@@ -84,6 +84,9 @@ export const SearchHeadSchema = z.object({
 });
 export type SearchHead = z.infer<typeof SearchHeadSchema>;
 export const SearchCursorSchema = z.object({
+	schedule: z.string().max(64).optional(),
+	next_run_at: z.number().nonnegative().optional(),
+	round_started_at: z.number().nonnegative().optional(),
 	after: z.string().max(1024),
 	cleanup: z.string().max(2048).optional(),
 });

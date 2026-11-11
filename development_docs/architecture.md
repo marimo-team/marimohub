@@ -202,9 +202,10 @@ Writes containing overlays stay sequential. If the budget is full, reads run seq
 Packed archives and mounts do not use batch prefetch.
 Failed restores drain pending reads and writes. Cold cleanup cancels prefetch before sandbox destruction.
 
-Periodic saves use one bounded sandbox command to collect artifact sizes and SHA-256 hashes.
+Periodic saves use bounded sandbox commands to collect artifact sizes and SHA-256 hashes.
 Only changed artifacts require a file read. A successful save caches up to 128 sandbox captures within a 64 MiB budget.
-An unchanged capture skips the commit only while its stored version remains current.
+Reused artifacts are probed again before commit; a changed or failed probe falls back to bounded reads.
+Unchanged captures still commit cached contents to repair missing artifacts and descriptors.
 Failed probes use the bounded read path. Failed commits and mismatched probe hashes do not advance the cache.
 
 Persistent editors publish under the source lease and heartbeat it before they proceed.

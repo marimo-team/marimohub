@@ -22,6 +22,7 @@ import type {
 	UserId,
 	WorkloadRef,
 } from '@marimo-hub/core';
+import { JOB_PROVISION_ALLOWANCE_MS } from '@marimo-hub/core/jobs';
 import type { JobRunContext } from '@marimo-hub/core/jobs';
 import type { FederatedCredentialResolver } from '@marimo-hub/core/ports/integrations';
 import { federationFor } from './federation';
@@ -237,7 +238,7 @@ export async function resolveJobSandboxEnv(
 	const fields = { project_id: run.project_id, job_id: run.job_id, run_id: run.run_id };
 	const workload: WorkloadRef = { kind: 'job-run', id: run.run_id };
 	const federatedCredentials = federatedCredentialsFor(deps, project, workload, {
-		minimumReuseLifetimeMs: run.timeout_seconds * 1000,
+		minimumReuseLifetimeMs: run.timeout_seconds * 1000 + JOB_PROVISION_ALLOWANCE_MS,
 	});
 	const [wifVars, render] = await Promise.all([
 		resolveFederatedVars(deps, {

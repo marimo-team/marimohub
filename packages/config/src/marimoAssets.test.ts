@@ -2,8 +2,30 @@ import { expect, it } from 'vitest';
 import { createFromEnv } from './index';
 import { resolveMarimoAssetUrl } from './marimoAssets';
 
-it.each([undefined, '', '  '])('keeps bundled assets as the default: %s', (value) => {
-	expect(resolveMarimoAssetUrl({ MARIMOHUB_COMPUTE_ASSET_URL: value })).toBeUndefined();
+it.each([undefined, '', '  ', 'false', 'FALSE', ' FaLsE '])(
+	'keeps bundled assets as the default: %s',
+	(value) => {
+		expect(resolveMarimoAssetUrl({ MARIMOHUB_COMPUTE_ASSET_URL: value })).toBeUndefined();
+	},
+);
+
+it.each([
+	'https://user:secret@cdn.example/assets',
+	'https://cdn.example/assets?token=secret',
+	'https://cdn.example/assets#fragment',
+	'http://cdn.example/assets',
+	'/assets',
+	'ftp://cdn.example/assets',
+	'true',
+])('rejects unsafe explicit asset bases without echoing their values: %s', (value) => {
+	expect(() => resolveMarimoAssetUrl({ MARIMOHUB_COMPUTE_ASSET_URL: value })).toThrow(
+		'Invalid MARIMOHUB_COMPUTE_ASSET_URL',
+	);
+	try {
+		resolveMarimoAssetUrl({ MARIMOHUB_COMPUTE_ASSET_URL: value });
+	} catch (error) {
+		expect(String(error)).not.toContain(value);
+	}
 });
 
 it.each([

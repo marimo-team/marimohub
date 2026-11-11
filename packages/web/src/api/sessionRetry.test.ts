@@ -43,3 +43,25 @@ it('returns a recovered admission', async () => {
 	await expect(pending).resolves.toBe('session');
 	expect(request).toHaveBeenCalledTimes(2);
 });
+
+it.each(['before-request', 'during-delay'])(
+	'cancels admission %s without sending a later request',
+	async (when) => {
+		vi.useFakeTimers();
+		const controller = new AbortController();
+		const request = vi
+			.fn()
+			.mockRejectedValue(
+				new ApiRequestError('SERVICE_UNAVAILABLE', 'Busy', { status: 503, retryAfterMs: 2000 }),
+			);
+		if (when === 'before-request') controller.abort();
+		const pending = expect(retrySessionAdmission(request, controller.signal)).rejects.toMatchObject(
+			{ name: 'AbortError' },
+		);
+		await vi.advanceTimersByTimeAsync(1);
+		controller.abort();
+		await pending;
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(request).toHaveBeenCalledTimes(when === 'before-request' ? 0 : 1);
+	},
+);

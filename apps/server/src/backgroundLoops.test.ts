@@ -59,6 +59,29 @@ describe('BackgroundLoops', () => {
 		expect(release).toHaveBeenCalledOnce();
 	});
 
+	it.each(['drain', 'dispose'] as const)(
+		'waits for retained lease release during handle %s',
+		async (mode) => {
+			const handle = start(async () => {}, { lock, retainLease: true });
+			await handle.drain();
+			const pending = Promise.withResolvers<void>();
+			const release = vi.spyOn(lock, 'release').mockReturnValue(pending.promise);
+			let finished = false;
+			if (mode === 'drain') handle.stop();
+			const draining = (mode === 'drain' ? handle.drain() : handle[Symbol.asyncDispose]()).then(
+				() => {
+					finished = true;
+				},
+			);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(release).toHaveBeenCalledOnce();
+			expect(finished).toBe(false);
+			pending.resolve();
+			await draining;
+			expect(finished).toBe(true);
+		},
+	);
+
 	it('logs a retained-lease release failure during shutdown without rejecting drain', async () => {
 		const handle = start(async () => {}, { lock, retainLease: true });
 		await handle.drain();

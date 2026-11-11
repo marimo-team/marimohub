@@ -10,7 +10,7 @@ import {
 import type { Sampler, SamplingResult } from '@opentelemetry/sdk-trace-base';
 
 function ratio(value: string | undefined, fallback: number): number {
-	if (value === undefined) return fallback;
+	if (value === undefined || value.trim() === '') return fallback;
 	const parsed = Number(value);
 	return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
 }
@@ -20,7 +20,17 @@ export class LoopSampler implements Sampler {
 	private readonly foreground: Sampler;
 
 	constructor(env: Record<string, string | undefined> = process.env) {
-		const name = env.OTEL_TRACES_SAMPLER ?? 'parentbased_always_on';
+		const configured = env.OTEL_TRACES_SAMPLER ?? '';
+		const name = [
+			'always_on',
+			'always_off',
+			'traceidratio',
+			'parentbased_always_on',
+			'parentbased_always_off',
+			'parentbased_traceidratio',
+		].includes(configured)
+			? configured
+			: 'parentbased_always_on';
 		const root = name.endsWith('always_off')
 			? new AlwaysOffSampler()
 			: name.endsWith('traceidratio')

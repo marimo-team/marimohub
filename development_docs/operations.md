@@ -204,14 +204,15 @@ Each hourly pass visits `ceil(notebook_count / 24)` notebooks, approximately
 one full rotation per day. A deadline limits repeat visits in small catalogs.
 Expired notebook deletions and project upload cleanup run every retention cycle.
 Notebook purges commit each successful catalog removal before attempting the next item.
-Each sweep attempts at most 25 notebook or project deletions, with a five-minute budget between items.
+Each sweep attempts at most 25 notebook or project deletions with one five-minute budget for the whole batch, checked between items. Metadata discovery and an in-progress deletion can extend the elapsed time.
 The project subtree phase deletes at most 1,000 objects per project per sweep and resumes from remaining objects.
 Job retention visits at most 128 jobs and inspects at most 100 run entries and 100 occurrence claims per job.
 CAS cursors preserve job and per-job scan positions across restarts. Failed and retained items cannot starve later work.
 These limits do not interrupt an owner operation. Project prepasses still scan all working branches,
 app pools, deep links, claims, and uploads, and repeat before each subtree batch. Notebook purges,
-upload and import cleanup, run-output deletion, and stale job-marker scans also remain unbounded
-within each selected item. Project metadata discovery reads the full catalog each sweep.
+upload and import cleanup, and run-output deletion also remain unbounded within each selected item.
+The separate stale job-marker cleanup scans all active markers for the retention cycle, not only the selected jobs.
+Project metadata discovery reads the full catalog each sweep.
 `NotebookService.pruneVersions` keeps the last 50 versions.
 `SessionService.reapTerminated` removes terminal session records after 24 hours.
 

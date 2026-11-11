@@ -43,7 +43,7 @@ export function projectRosterQueryOptions() {
 
 export function firstProjectQueryOptions() {
 	return queryOptions({
-		queryKey: [...projectKeys.all, 'first-active'],
+		queryKey: [...projectKeys.list(), 'first-active'],
 		staleTime: 60_000,
 		queryFn: async () =>
 			(

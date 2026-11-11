@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	createServices,
+	createSessionId,
 	PreviewId,
 	PreviewReconcileSchema,
 	NotFoundError,
@@ -152,6 +153,52 @@ async function createLazyBranch() {
 }
 
 describe('PR preview automation', () => {
+	it.each([false, true])(
+		'reuses the materialization ETag and preserves a concurrent admission (race: %s)',
+		async (race) => {
+			const first = (await reconcile(1)).items[0];
+			await reconcile(2, SHA, { eager: false });
+			const current = await record(first.id);
+			const key = paths.preview(pid, nid, current.id);
+			const stale = {
+				...current,
+				name: 'stale',
+				automation: { ...current.automation!, revision: current.automation!.revision - 1 },
+			};
+			await api.bucket.put(key, JSON.stringify(stale));
+			const sid = createSessionId();
+			const put = api.bucket.put.bind(api.bucket);
+			let injected = false;
+			vi.spyOn(api.bucket, 'put').mockImplementation(async (path, body, options) => {
+				if (race && !injected && path === key) {
+					injected = true;
+					await put(
+						key,
+						JSON.stringify({
+							...stale,
+							admissions: [
+								{
+									session_id: sid,
+									notebook_id: nid,
+									expires_at: Date.now() + 60_000,
+									committed: false,
+								},
+							],
+						}),
+					);
+				}
+				return put(path, body, options);
+			});
+			const get = vi.spyOn(api.bucket, 'get');
+			const records = await api.deps.services.previews.projectRecords(pid, nid);
+			const updated = records.find((item) => item.id === current.id)!;
+			expect(updated.name).toBe(current.name);
+			expect(updated.automation).toEqual(current.automation);
+			expect(get.mock.calls.filter(([path]) => path === key)).toHaveLength(race ? 2 : 1);
+			if (race) expect(updated.admissions).toEqual([expect.objectContaining({ session_id: sid })]);
+		},
+	);
+
 	it('resumes exhausted preparation only when the target generation changes', async () => {
 		const first = (await reconcile(1)).items[0];
 		const preview = await record(first.id);

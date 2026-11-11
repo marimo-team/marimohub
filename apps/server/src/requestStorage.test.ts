@@ -3,6 +3,19 @@ import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { expect, it, vi } from 'vitest';
 import { RequestStorage } from './requestStorage';
 
+const emptyCounts = {
+	get: 0,
+	head: 0,
+	list: 0,
+	put: 0,
+	delete: 0,
+	putStream: 0,
+	multipart_create: 0,
+	multipart_putPart: 0,
+	multipart_complete: 0,
+	multipart_abort: 0,
+};
+
 it('isolates concurrent request counts, including failed operations', async () => {
 	const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 	try {
@@ -36,20 +49,79 @@ it('isolates concurrent request counts, including failed operations', async () =
 			)
 			.filter((event) => event.event === 'request');
 		expect(events.find((e) => e.route === '/read')?.storage_ops).toEqual({
+			...emptyCounts,
 			get: 1,
 			head: 1,
-			list: 0,
-			put: 0,
-			delete: 0,
 		});
 		expect(events.find((e) => e.route === '/write')?.storage_ops).toEqual({
-			get: 0,
-			head: 0,
-			list: 0,
+			...emptyCounts,
 			put: 1,
-			delete: 0,
 		});
 		expect(JSON.stringify(events)).not.toContain('secret/path');
+	} finally {
+		log.mockRestore();
+	}
+});
+
+it('counts streaming and multipart calls, including failures, without counting adapter internals', async () => {
+	const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+	try {
+		const raw = new MemoryBucket();
+		Object.assign(raw, {
+			async putStream(key: string, chunks: AsyncIterable<Uint8Array>, _size: number) {
+				expect(this).toBe(raw);
+				for await (const chunk of chunks) await raw.put(key, chunk);
+				return (await raw.head(key))!;
+			},
+			multipart: {
+				isolatedSessions: true as const,
+				async create(_key: string) {
+					expect(this.isolatedSessions).toBe(true);
+					return { uploadId: 'upload' };
+				},
+				async putPart(_key: string, _uploadId: string, _part: number, _bytes: Uint8Array) {
+					throw new Error('part failed');
+				},
+				async complete(key: string, _uploadId: string, _parts: unknown[]) {
+					return raw.put(key, 'complete');
+				},
+				async abort(_key: string, _uploadId: string) {},
+			},
+		});
+		const storage = new RequestStorage();
+		const bucket = storage.wrap(raw);
+		expect(bucket.multipart).toBe(bucket.multipart);
+		expect(bucket.multipart!.putPart).toBe(bucket.multipart!.putPart);
+		const app = new Hono().use('*', storage.middleware);
+		app.post('/upload', async (c) => {
+			await bucket.putStream!(
+				'stream',
+				(async function* () {
+					yield new Uint8Array([1]);
+				})(),
+				1,
+			);
+			const { uploadId } = await bucket.multipart!.create('multipart');
+			await expect(
+				bucket.multipart!.putPart('multipart', uploadId, 1, new Uint8Array()),
+			).rejects.toThrow('part failed');
+			await bucket.multipart!.complete('multipart', uploadId, []);
+			await bucket.multipart!.abort('multipart', uploadId);
+			return c.text('ok');
+		});
+		expect((await app.request('/upload', { method: 'POST' })).status).toBe(200);
+		const event = JSON.parse(String(log.mock.calls.at(-1)![0]));
+		expect(event).toHaveProperty('storage_ops', {
+			...emptyCounts,
+			putStream: 1,
+			multipart_create: 1,
+			multipart_putPart: 1,
+			multipart_complete: 1,
+			multipart_abort: 1,
+		});
+		await bucket.put('outside-request', 'value');
+		expect(log).toHaveBeenCalledTimes(1);
+		expect(storage.wrap(new MemoryBucket()).multipart).toBeUndefined();
 	} finally {
 		log.mockRestore();
 	}

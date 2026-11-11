@@ -1751,7 +1751,7 @@ The service writes it only after a successful readiness probe. Health checks bac
 
 Creation reservations precede provider calls. Claims record their destination session before session publication.
 An assigned claim remains until session reclamation, so an interrupted handoff does not lose ownership.
-Retiring records remain until provider deletion succeeds. A claimed sandbox never returns to `ready`.
+Retiring records remain until provider deletion succeeds. An untouched claim can return to `ready` after cap or editor admission fails, but only after the starting session relinquishes teardown ownership by CAS. Assignment, concurrent stop, expiry, or a stale claim token prevents return. Assigned sandboxes never return to `ready`.
 
 Orphan reconciliation discovers every record under `_system/warm-pools/` after its provider snapshot.
 A failed listing or unreadable warm record prevents orphan deletion during that sweep.
@@ -1881,8 +1881,9 @@ configuration at equal revisions, fences older publication while preserving the 
 snapshot. Incompatible checkpoints restart.
 Publication cannot overwrite a newer head or resurrect a deletion tombstone.
 The global cursor records crawl position, cleanup position, schedule identity, round start, and the next crawl time.
-Notebook search snapshots and crawl checkpoints also store an optional `catalog_fingerprint`.
+Search snapshots and crawl checkpoints can store an optional `catalog_fingerprint` for catalog-backed sources.
 Matching complete snapshots skip source reads for up to 24 hours; partial snapshots remain eligible for recrawl.
+Notebook search does not use this shortcut because HTML and session artifacts can change without a catalog mutation.
 The fingerprint stays outside the bounded head. A full verification after 24 hours detects writes whose catalog update failed.
 Paused ticks check the cursor before acquiring the maintenance lease.
 The maintenance lease uses `_system/search/lock.json`.

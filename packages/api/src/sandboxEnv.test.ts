@@ -306,7 +306,7 @@ describe('resolveIntegrationRender', () => {
 });
 
 describe('resolveJobSandboxEnv', () => {
-	it('refreshes cached credentials when a later job needs more remaining lifetime', async () => {
+	it('refreshes credentials when execution fits but the provisioning allowance does not', async () => {
 		vi.useFakeTimers();
 		try {
 			let issued = 0;
@@ -321,7 +321,7 @@ describe('resolveJobSandboxEnv', () => {
 				(await resolveJobSandboxEnv({ ...deps, wif: config }, first))?.vars?.AWS_ACCESS_KEY_ID,
 			).toBe('AK1');
 			vi.setSystemTime(Date.now() + 20 * 60_000);
-			const later = context({ project: first.project, run: { timeout_seconds: 3000 } });
+			const later = context({ project: first.project, run: { timeout_seconds: 2100 } });
 			expect(
 				(await resolveJobSandboxEnv({ ...deps, wif: config }, later))?.vars?.AWS_ACCESS_KEY_ID,
 			).toBe('AK2');

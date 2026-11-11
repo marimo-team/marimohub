@@ -147,13 +147,17 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 		const started = performance.now();
 		const snapshot = SearchSnapshotSchema.parse(await body.json());
 		const postings = new Map<string, number[]>();
+		let yieldedAt = performance.now();
 		for (const [index, document] of snapshot.documents.entries()) {
 			for (const term of terms(`${document.title} ${document.text}`)) {
 				const list = postings.get(term) ?? [];
 				list.push(index);
 				postings.set(term, list);
 			}
-			if (index % 128 === 127) await sleep(0);
+			if (index % 128 === 127 && performance.now() - yieldedAt >= 8) {
+				await sleep(0);
+				yieldedAt = performance.now();
+			}
 		}
 		this.metrics.histogram?.('search.snapshot.parse_ms', performance.now() - started);
 		const cached = { snapshot, postings, bytes: body.size * 4 };

@@ -21,7 +21,7 @@ export async function writeRetentionCursor(
 		await bucket.put(
 			key,
 			JSON.stringify({ after }),
-			etag ? { onlyIfEtagMatches: etag } : { onlyIfNotExists: true },
+			etag !== undefined ? { onlyIfEtagMatches: etag } : { onlyIfNotExists: true },
 		);
 	} catch (error) {
 		if (!(error instanceof PreconditionFailedError)) throw error;

@@ -101,7 +101,7 @@ export class IdentityService {
 					existing &&
 					IdentityService.signature(existing.email, existing.name, existing.picture_url) === sig
 				)
-					return existing;
+					return;
 				const next = IdentitySchema.parse({
 					id: user.id,
 					email,
@@ -118,7 +118,7 @@ export class IdentityService {
 				return next;
 			});
 			this.written.set(user.id, sig);
-			this.updateCachedRecord(record);
+			if (record) this.updateDirectory(record);
 		})();
 		this.writes.set(user.id, pending);
 		try {
@@ -147,16 +147,16 @@ export class IdentityService {
 			},
 			{ notFound: () => new NotFoundError(`User ${id} not found`) },
 		);
-		this.updateCachedRecord(record);
+		this.updateDirectory(record);
+		this.suspensions.set(record.id, record.suspended_at !== undefined);
 		return record;
 	}
 
-	private updateCachedRecord(record: Identity): void {
+	private updateDirectory(record: Identity): void {
 		this.directory.update(IdentityService.DIRECTORY_CACHE_KEY, (entries) => [
 			...entries.filter((entry) => entry.id !== record.id),
 			record,
 		]);
-		this.suspensions.set(record.id, record.suspended_at !== undefined);
 	}
 
 	/** Resolve a single identity, or null when none has been recorded. */

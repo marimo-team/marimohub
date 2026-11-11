@@ -19,8 +19,11 @@ node scripts/stage-marimo-assets.mjs /path/to/python packages/web/dist
 
 For a container, stage into the directory copied to `/app/public` in the final
 image. For local development, set `MARIMOHUB_STATIC_ROOT=packages/web/dist`.
-The command copies `marimo/_static` to `_marimo/<installed-version>`, adds gzip
-and Brotli variants, and publishes the directory only after copying succeeds.
+The command copies `marimo/_static` to `_marimo/<installed-version>` and publishes
+the directory only after staging succeeds. It adds gzip and Brotli variants for
+HTML, JS, MJS, CSS, JSON, SVG, WASM, and TXT files of at least 1 KiB, only when
+the compressed result is smaller. Other files, including fonts and raster images,
+keep only their original bytes.
 It rejects symlinks and refuses to replace an existing version.
 
 Stage every version used by your sandbox images. Custom images can install a
@@ -42,7 +45,9 @@ The base URL must use HTTP or HTTPS and contain no credentials, query, or fragme
 
 Alternatively, configure an external versioned origin, such as
 `https://assets.example.com/marimo/{version}`. The installed marimo runtime
-substitutes its version. Leave the variable unset to use bundled assets.
+substitutes its version. Explicit asset URLs require HTTPS without credentials,
+query, or fragment. Leave the variable unset, blank, or set it to `false` to use
+bundled assets. The `hub` and `false` sentinels are case-insensitive.
 
 ## Verify a deployment
 

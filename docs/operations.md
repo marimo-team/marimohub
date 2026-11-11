@@ -217,7 +217,7 @@ of the remaining objects. Unreadable or invalid metadata logs
 `projects.cleanup_failed` and leaves the project intact.
 
 The catalog entry remains until cleanup succeeds, so later sweeps can retry failures.
-Each sweep attempts at most 25 projects for up to five minutes between projects.
+Each sweep attempts at most 25 projects with one five-minute budget for the entire purge batch, checked between projects. Metadata discovery and an in-progress deletion can extend the elapsed time.
 Each project deletes at most five pages of 200 objects. Remaining objects preserve progress across restarts.
 App pool tombstones and preview records follow separate retention rules.
 
@@ -496,14 +496,14 @@ straight to its trace.
 
 ### Metrics (OpenTelemetry)
 
-Node request logs include `storage_ops` counts for `get`, `head`, `list`, `put`, and `delete`.
-Counts include failed calls and end with the response. Deferred work is excluded after that point.
+Node request logs include `storage_ops` counts for `get`, `head`, `list`, `put`, `delete`, `putStream`, and the multipart calls `multipart_create`, `multipart_putPart`, `multipart_complete`, and `multipart_abort`. Counts include failed calls and describe bucket-port calls, not provider RPCs.
+Counting ends with the response. Deferred work is excluded after that point.
 Storage keys and credentials are never included in these counts.
 
 `cache.metadata.reads` includes `cache` and `service` labels, plus the existing result and consistency labels.
 `sandbox.reconnect` counts attachment attempts by `path` and `method` (`reference` or `lookup`).
 It measures attempts, not successful provider connections.
-`session_provision.cap_source` identifies the admission read path: `index`, `scan`, or `shadow`.
+`session_provision.cap_source` identifies the admission read path: `index` or `scan`.
 `notebook.artifact_uploads_skipped` counts unchanged HTML and session snapshots omitted from storage writes.
 
 The Node deferred-work queue reserves 16 execution slots for session teardown.

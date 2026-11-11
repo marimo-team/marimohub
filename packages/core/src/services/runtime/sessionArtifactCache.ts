@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { MAX_ARTIFACT_BYTES } from '../../constants';
 import { sha256Hex } from '../../internal/sha256';
 import type { CommitSessionInput } from '../content/NotebookService';
-import type { VersionId } from '../../ids';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { shellQuote } from './shell';
 import { sessionArtifactPaths } from './sandboxFiles';
@@ -11,7 +10,6 @@ export type ArtifactFingerprints = z.infer<typeof FingerprintsSchema>;
 export interface CachedSessionArtifacts {
 	fingerprints: ArtifactFingerprints;
 	artifacts: CommitSessionInput;
-	versionId: VersionId;
 }
 
 const FIELDS = ['code', 'deps', 'html', 'session'] as const;
@@ -86,6 +84,15 @@ export function reusableSessionArtifacts(
 			reusable[field] = previous.artifacts[field];
 	}
 	return reusable;
+}
+
+export function sameArtifactFingerprints(
+	a: ArtifactFingerprints,
+	b: ArtifactFingerprints,
+): boolean {
+	return FIELDS.every(
+		(field) => a[field]?.size === b[field]?.size && a[field]?.sha256 === b[field]?.sha256,
+	);
 }
 
 export class SessionArtifactCache {

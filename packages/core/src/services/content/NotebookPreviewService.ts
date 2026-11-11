@@ -26,6 +26,7 @@ import { paths } from '../../paths';
 import { sha256Hex } from '../../internal/sha256';
 import { parseStored, readStored } from '../../schema';
 import type { GitSource } from '../../schema';
+import type { KnownObject } from '../catalog/cas';
 import { mutateObject, mutateObjectWithOutcome } from '../catalog/cas';
 import { deleteByPrefix } from '../catalog/storage';
 import { AppPoolStore } from '../runtime/AppPoolStore';
@@ -209,7 +210,10 @@ export class NotebookPreviewService {
 		}
 		const current = await readStored(PreviewRecordSchema, object, key);
 		if (!intent.automation || !applyAutomationIntent(current, intent)) return current;
-		return this.mutate(intent, (latest) => applyAutomationIntent(latest, intent));
+		return this.mutate(intent, (latest) => applyAutomationIntent(latest, intent), {
+			value: current,
+			etag: object.etag,
+		});
 	}
 
 	async projectRecords(
@@ -285,6 +289,7 @@ export class NotebookPreviewService {
 	private mutate(
 		record: Pick<NotebookPreview, 'project_id' | 'notebook_id' | 'id'>,
 		update: (record: NotebookPreview) => NotebookPreview | null,
+		known?: KnownObject<NotebookPreview>,
 	) {
 		const key = previewKey(record.project_id, record.notebook_id, record.id);
 		return mutateObject(
@@ -292,7 +297,7 @@ export class NotebookPreviewService {
 			key,
 			(raw) => parseStored(PreviewRecordSchema, raw, key),
 			update,
-			{ notFound: () => new NotFoundError('Preview not found') },
+			{ notFound: () => new NotFoundError('Preview not found'), known },
 		);
 	}
 
@@ -936,9 +941,10 @@ export class NotebookPreviewService {
 	}
 
 	async reapAdmissions(
-		record: NotebookPreview,
+		identity: Pick<NotebookPreview, 'project_id' | 'notebook_id' | 'id'>,
 		isRetained: (id: SessionId) => Promise<boolean | undefined>,
 	): Promise<NotebookPreview> {
+		const record = await this.get(identity.project_id, identity.notebook_id, identity.id);
 		const removable = new Set<SessionId>();
 		for (const entry of record.admissions) {
 			const retained = await isRetained(entry.session_id);

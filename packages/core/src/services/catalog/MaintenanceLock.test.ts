@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MemoryBucket, useFakeClock } from '../../testing';
 import { PreconditionFailedError } from '../../errors';
 import { paths } from '../../paths';
+import { trace } from '@opentelemetry/api';
 import { MaintenanceLock } from './MaintenanceLock';
 
 describe('MaintenanceLock', () => {
@@ -22,6 +23,7 @@ describe('MaintenanceLock', () => {
 
 	it('retains a lease without bucket I/O and renews with its owned ETag', async () => {
 		expect(await lock.hold('A', 3000, 1000)).toBe(true);
+		const initialEtag = (await bucket.head(paths.maintenanceLock))!.etag;
 		const get = vi.spyOn(bucket, 'get');
 		const put = vi.spyOn(bucket, 'put');
 		clock.set(1000);
@@ -31,7 +33,9 @@ describe('MaintenanceLock', () => {
 		clock.set(2001);
 		expect(await lock.hold('A', 3000, 1000)).toBe(true);
 		expect(get).not.toHaveBeenCalled();
-		expect(put).toHaveBeenCalledOnce();
+		expect(put).toHaveBeenCalledExactlyOnceWith(paths.maintenanceLock, expect.any(String), {
+			onlyIfEtagMatches: initialEtag,
+		});
 		await lock.release('A');
 		expect(await new MaintenanceLock(bucket).acquire('B')).toBe(true);
 	});
@@ -220,5 +224,25 @@ describe('MaintenanceLock', () => {
 		const stored = await bucket.get(paths.maintenanceLock);
 		expect(stored).not.toBeNull();
 		expect((await stored!.json<{ holder: string }>()).holder).toBe('B');
+	});
+
+	it('reports retained and renewed ownership, including a lost renewal CAS', async () => {
+		const bucket = new MemoryBucket();
+		const lock = new MaintenanceLock(bucket);
+		const span = trace.wrapSpanContext({
+			traceId: '1'.repeat(32),
+			spanId: '1'.repeat(16),
+			traceFlags: 1,
+		});
+		const attribute = vi.spyOn(span, 'setAttribute');
+		vi.spyOn(trace, 'getActiveSpan').mockReturnValue(span);
+		await lock.hold('holder', 3000, 1000);
+		await lock.hold('holder', 3000, 1000);
+		await lock.hold('holder', 3000, 4000);
+		vi.spyOn(bucket, 'put').mockRejectedValueOnce(new PreconditionFailedError('lost'));
+		expect(await lock.hold('holder', 3000, 4000)).toBe(false);
+		expect(attribute.mock.calls).toEqual(
+			[true, true, true, false].map((value) => ['marimohub.lock.acquired', value]),
+		);
 	});
 });

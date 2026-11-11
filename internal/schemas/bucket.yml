@@ -3893,6 +3893,15 @@ components:
     SearchCursor:
       type: object
       properties:
+        schedule:
+          type: string
+          maxLength: 64
+        next_run_at:
+          type: number
+          minimum: 0
+        round_started_at:
+          type: number
+          minimum: 0
         after:
           type: string
           maxLength: 1024

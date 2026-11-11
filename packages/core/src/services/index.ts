@@ -508,7 +508,7 @@ const preview = (pid: ProjectId, nid: NotebookId, id: string) => ({
 	'marimohub.preview_id': id,
 	'bucket.key': previewKey(pid, nid, id),
 });
-const previewRecord = (record: NotebookPreview) =>
+const previewRecord = (record: Pick<NotebookPreview, 'project_id' | 'notebook_id' | 'id'>) =>
 	preview(record.project_id, record.notebook_id, record.id);
 const session = (projectId: ProjectId, id: SessionId) => ({
 	...project(projectId),

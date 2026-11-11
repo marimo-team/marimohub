@@ -3,7 +3,6 @@ import type { Snapshot } from '../schema';
 import type { Metrics } from '../ports/metrics';
 import { noopMetrics } from '../ports/metrics';
 import { forEachConcurrentUntilFailure } from '../async';
-import { z } from 'zod';
 import { sha256Hex } from '../internal/sha256';
 import { sameSearchBuild, searchSnapshotDigest } from './build';
 import type { Bucket } from '../ports/bucket';
@@ -48,11 +47,6 @@ type IncrementalSearchSource = SearchSource & {
 	): ReturnType<SearchSource['page']>;
 };
 
-const CrawlCursorSchema = SearchCursorSchema.extend({
-	schedule: z.string().max(64).optional(),
-	next_run_at: z.number().nonnegative().optional(),
-	round_started_at: z.number().nonnegative().optional(),
-});
 const MAX_TICK_STEPS = 32;
 const TICK_BUDGET_MS = 100;
 const CLEANUP_DELETE_BATCH_SIZE = 10;
@@ -180,6 +174,7 @@ export class SearchIndexer {
 				: initial();
 		if (
 			state.revision !== loaded.revision ||
+			state.catalog_fingerprint !== catalogFingerprint ||
 			!sameSearchBuild(state.build, build) ||
 			state.pages.length === 0
 		)
@@ -362,7 +357,7 @@ export class SearchIndexer {
 		const object = await this.bucket.get(searchPaths.cursor);
 		if (!object) return true;
 		if (object.size > 4096) throw new Error('Search cursor exceeds budget');
-		const cursor = CrawlCursorSchema.parse(await object.json());
+		const cursor = SearchCursorSchema.parse(await object.json());
 		if ((cursor.next_run_at ?? 0) <= Date.now()) return true;
 		return cursor.schedule !== (await this.schedule(await this.catalog.getCurrentSnapshot()));
 	}
@@ -430,7 +425,7 @@ export class SearchIndexer {
 		const key = searchPaths.cursor;
 		const object = await this.bucket.get(key);
 		if (object && object.size > 4096) throw new Error('Search cursor exceeds budget');
-		const cursor = CrawlCursorSchema.parse(object ? await object.json() : { after: '' });
+		const cursor = SearchCursorSchema.parse(object ? await object.json() : { after: '' });
 		const roundStartedAt = cursor.round_started_at ?? Date.now();
 		const snapshot = await this.catalog.getCurrentSnapshot();
 		const tasks = snapshot.projects

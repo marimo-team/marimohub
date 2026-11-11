@@ -537,6 +537,37 @@ describe('useJobsQuery', () => {
 describe('useStartSession', () => {
 	const sessionsPath = `/api/v1/projects/${PID}/notebooks/${NID}/sessions`;
 
+	it('forwards editor admission cancellation to the POST', async () => {
+		const started = deferred<void>();
+		let signal: AbortSignal | undefined;
+		const fetchMock = stubFetch(async (_url, init) => {
+			signal = init?.signal ?? undefined;
+			return new Promise<Response>((_resolve, reject) => {
+				signal?.addEventListener(
+					'abort',
+					() => reject(new DOMException('Cancelled', 'AbortError')),
+					{ once: true },
+				);
+				started.resolve();
+			});
+		});
+		const controller = new AbortController();
+		const { result } = renderHookWithClient(() => useStartSession(PID, NID), {
+			toaster: false,
+		});
+		let mutation!: ReturnType<typeof result.current.mutateAsync>;
+		act(() => {
+			mutation = result.current.mutateAsync({ signal: controller.signal });
+		});
+		const rejected = expect(mutation).rejects.toMatchObject({ name: 'AbortError' });
+		await started.promise;
+		controller.abort();
+		await rejected;
+		expect(signal?.aborted).toBe(true);
+		expect(await requestOf(fetchMock).clone().text()).toBe('');
+		expect(fetchMock).toHaveBeenCalledOnce();
+	});
+
 	it('creates an edit session with no body at all', async () => {
 		const fetchMock = stubFetch(async () => jsonOk({ session_id: 'sess-1' }));
 

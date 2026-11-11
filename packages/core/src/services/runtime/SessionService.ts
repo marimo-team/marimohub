@@ -773,7 +773,7 @@ export class SessionService {
 		id: SessionId,
 		known?: KnownObject<Session>,
 	): Promise<Session> {
-		return this.heartbeats.run(`${projectId}/${id}`, () =>
+		const touch = () =>
 			this.mutate(
 				projectId,
 				id,
@@ -789,8 +789,10 @@ export class SessionService {
 					return { ...session, last_heartbeat: new Date(now).toISOString() };
 				},
 				known,
-			),
-		);
+			);
+		return known?.etag
+			? this.heartbeats.run(JSON.stringify([projectId, id, known.etag]), touch)
+			: touch();
 	}
 
 	/**

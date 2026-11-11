@@ -45,7 +45,7 @@ Editor and app sessions, including MCP launches, can claim warm sandboxes. Exist
 
 Jobs, diagnostics, personal-home mounts, snapshot restores, and non-default images use cold creation. An empty, unhealthy, or unavailable pool also uses cold creation.
 
-Each claim has one owner. A claimed sandbox never returns to the pool, even if session startup fails. Session teardown destroys assigned sandboxes.
+Each claim has one owner. If cap or editor admission rejects a session before workspace writes, an untouched claim can return to the pool after the starting session relinquishes teardown ownership by CAS. Concurrent stop, assignment, or expiry prevents the return. Assigned sandboxes never return; session teardown destroys them.
 
 Maintenance starts immediately and checks every five seconds. It creates at most two sandboxes concurrently and retries failed creation with increasing delays, capped at five minutes.
 

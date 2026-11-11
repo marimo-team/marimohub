@@ -35,6 +35,10 @@ export function ProjectPicker({
 	const navigate = useNavigate();
 	const [isOpen, setOpen] = useState(false);
 	const createDialog = useDisclosure();
+	const changeOpen = (open: boolean) => {
+		setOpen(open);
+		onOpenChange?.(open);
+	};
 	const options =
 		selectedId && !projects.some((project) => project.id === selectedId)
 			? [...projects, { id: selectedId, name: selectedName ?? 'Current project' }]
@@ -46,7 +50,7 @@ export function ProjectPicker({
 	const createButton = (
 		<Button
 			onPress={() => {
-				setOpen(false);
+				changeOpen(false);
 				createDialog.open();
 			}}
 			className="flex min-h-9 max-md:min-h-11 w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
@@ -64,10 +68,7 @@ export function ProjectPicker({
 					if (typeof id === 'string') openProject(id);
 				}}
 				isOpen={isOpen}
-				onOpenChange={(open) => {
-					setOpen(open);
-					onOpenChange?.(open);
-				}}
+				onOpenChange={changeOpen}
 				placeholder={isPending ? 'Loading projects…' : 'All projects'}
 				className="space-y-2"
 			>
