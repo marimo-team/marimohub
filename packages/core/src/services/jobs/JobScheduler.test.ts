@@ -960,6 +960,46 @@ describe('JobScheduler', () => {
 		expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
 	});
 
+	it('republishes a re-enabled head whose index entry is still disabled', async () => {
+		const job = await env.jobs.updateJob(
+			pid,
+			nid,
+			(await createJob()).id,
+			{ enabled: false },
+			ACTOR,
+		);
+		const head = paths.project(pid).notebook(nid).job(job.id).head;
+		const updatedAt = new Date(Date.parse(job.updated_at) + 1000).toISOString();
+		await env.bucket.put(head, JSON.stringify({ ...job, enabled: true, updated_at: updatedAt }));
+		const s = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
+		now = Date.parse(updatedAt) + CONFIG.catchupWindowMs;
+		expect(await s.tick()).toMatchObject({ fired: 0, errors: 0 });
+		now += CONFIG.catchupWindowMs;
+		expect(await s.tick()).toMatchObject({ fired: 0, errors: 0 });
+		const entry = (await env.catalog.getCurrentSnapshot()).projects
+			.find((p) => p.id === pid)!
+			.notebooks.find((n) => n.id === nid)!
+			.jobs!.find((j) => j.id === job.id)!;
+		expect(entry).toMatchObject({ enabled: true, updated_at: updatedAt });
+		expect(await s.tick()).toMatchObject({ fired: 1, errors: 0 });
+	});
+
+	it('rotates a bounded idle index recovery window once per catch-up window', async () => {
+		for (let i = 0; i < 30; i++) await createJob({ enabled: false });
+		const getJob = vi.spyOn(env.jobs, 'getJob');
+		const s = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
+		await s.tick();
+		expect(getJob).not.toHaveBeenCalled();
+		now += CONFIG.catchupWindowMs;
+		await s.tick();
+		await s.tick();
+		expect(getJob).toHaveBeenCalledTimes(25);
+		now += CONFIG.catchupWindowMs;
+		await s.tick();
+		expect(getJob).toHaveBeenCalledTimes(50);
+		expect(new Set(getJob.mock.calls.map(([, , id]) => id)).size).toBe(30);
+	});
+
 	it('republishes the index when a failed update cannot roll back its head', async () => {
 		const job = await createJob();
 		const head = paths.project(pid).notebook(nid).job(job.id).head;

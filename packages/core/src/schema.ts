@@ -280,6 +280,9 @@ export const SnapshotProjectEntrySchema = z.looseObject({
 			default_role: ProjectDefaultRoleSchema,
 			generation: z.string().optional(),
 			version: z.number().int().positive().optional(),
+			// The entry `updated_at` this summary was confirmed at. v0.6.4 writers advance
+			// `updated_at` on a role-only member edit but never touch `access`.
+			entry_updated_at: z.string().optional(),
 		})
 		.optional(),
 	// A writer can remove only its own marker; other writers may still be active.

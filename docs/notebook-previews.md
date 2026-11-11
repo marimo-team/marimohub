@@ -161,7 +161,8 @@ It checks manual branch previews at most once per minute and selects one due pre
 Maintenance checks PR closure independently of preparation. See [PR closure checks](#pr-closure-checks).
 Each tick visits up to four projects with outstanding preview work.
 Up to three slots go to queued projects with new or requested work. At least one slot advances the rotation through projects.
-A project whose scheduled work fails is queued once more. If that retry also fails, the project waits for the rotation.
+When scheduled work throws for a project, for example on a storage error, the project is queued once more. If that retry also throws, the project waits for the rotation.
+A failed preparation attempt does not throw and is not queued again. It retries with backoff on the rotation.
 Empty retained project records do not participate in scheduling.
 Manual creation and session launch never wait for GitHub. PR reconciliation checks live PR metadata before accepting an event.
 

@@ -63,7 +63,8 @@ Upgrades and rollbacks:
 
 - The reference does not change the configuration fingerprint, so adding it needs no pool reset.
 - During a rolling upgrade, older writers can drop the field. Claims then use discovery until a health check restores it.
-- If the adapter rejects a reference kind, it throws `NotFoundError`, and each member with that kind retires once. The result is one wave of cold starts within a health-check interval, with no leaked sandboxes.
+- A reference that resolves to a missing, mismatched, or terminated sandbox throws `NotFoundError`, and the member retires on that check.
+- An unsupported or malformed reference kind is a configuration error, not proof that the sandbox is gone. Each affected member follows the transient-failure rule and retires after two consecutive failed health checks. The result is one wave of cold starts within two health-check intervals, with no leaked sandboxes.
 - A new reference kind must keep accepting older kinds, so that upgrades and rollbacks do not churn the pool.
 
 After a successful probe, the service drains adapter diagnostics to exclude them from provisioning telemetry.

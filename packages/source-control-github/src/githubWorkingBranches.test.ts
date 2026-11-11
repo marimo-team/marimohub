@@ -239,7 +239,13 @@ describe('GitHub working branches', () => {
 
 	it('inspects with a read-scoped token and writes with a write-scoped token', async () => {
 		const { writer, fetcher } = setup((url) =>
-			url.pathname.endsWith('/pulls') ? response([]) : response({ object: { sha: commit } }),
+			url.pathname === '/graphql'
+				? response({ data: { updateRefs: { clientMutationId: null } } })
+				: url.pathname === '/repos/owner/repo'
+					? response({ node_id: 'repository-node' })
+					: url.pathname.endsWith('/pulls')
+						? response([])
+						: response({ object: { sha: commit } }),
 		);
 		const permissions = () =>
 			fetcher.mock.calls
@@ -250,7 +256,7 @@ describe('GitHub working branches', () => {
 		await writer.inspectBranch({ repository: coordinate, branch });
 		expect(permissions()).toEqual([{ contents: 'read', pull_requests: 'read' }]);
 		fetcher.mockClear();
-		await writer.advanceBranch({ ...refInput, expectedHead: commit }).catch(() => {});
+		await expect(writer.advanceBranch(refInput)).resolves.toEqual({ commit });
 		expect(permissions()).toEqual([{ contents: 'write', pull_requests: 'write' }]);
 	});
 

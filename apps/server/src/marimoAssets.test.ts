@@ -36,6 +36,7 @@ function fixture() {
 	);
 	const code = 'console.log("marimo");'.repeat(100);
 	writeFileSync(join(source, 'assets/index-abcdef12.js'), code);
+	writeFileSync(join(source, 'INDEX.HTM'), '<p>marimo</p>');
 	writeFileSync(join(source, 'config.json'), '{}');
 	const stage = () =>
 		stageMarimoAssets({ sourceRoot: source, version: '0.25.2', staticRoot: target });
@@ -100,6 +101,8 @@ it.each([
 	'/_marimo/0.25.2/%2fetc%2fpasswd',
 	'/_marimo/0.25.2/assets/%2e%2e%2fconfig.json',
 	'/_marimo/9.9.9/index.html',
+	'/_marimo/0.25.2-/assets/index-abcdef12.js',
+	'/_marimo/0.25.2../assets/index-abcdef12.js',
 ])('never serves the SPA for missing or invalid asset paths: %s', async (path) => {
 	const { app, stage } = fixture();
 	stage();
@@ -112,7 +115,9 @@ it.each([
 it('rejects writes and refuses to overwrite a published version', async () => {
 	const { app, stage, target, code } = fixture();
 	stage();
-	expect((await app.request('/_marimo/0.25.2/index.html', { method: 'POST' })).status).toBe(405);
+	const rejected = await app.request('/_marimo/0.25.2/index.html', { method: 'POST' });
+	expect(rejected.status).toBe(405);
+	expect(rejected.headers.get('Cache-Control')).toBe('no-store');
 	expect(stage).toThrow('Refusing to replace immutable assets');
 	expect(readFileSync(join(target, '_marimo/0.25.2/assets/index-abcdef12.js'), 'utf8')).toBe(code);
 });
@@ -122,9 +127,10 @@ it('cleans failed staging and rejects symlinks and version traversal', () => {
 	symlinkSync(join(source, 'index.html'), join(source, 'leak.html'));
 	expect(stage).toThrow('symlinks');
 	expect(readdirSync(join(target, '_marimo'))).toEqual([]);
-	expect(() =>
-		stageMarimoAssets({ sourceRoot: source, version: '../0.25.2', staticRoot: target }),
-	).toThrow('exact marimo release');
+	for (const version of ['../0.25.2', '0.25.2-', '0.25.2..'])
+		expect(() => stageMarimoAssets({ sourceRoot: source, version, staticRoot: target })).toThrow(
+			'exact marimo release',
+		);
 });
 
 it('rejects a missing index and a destination inside the source tree', () => {

@@ -964,14 +964,16 @@ export class SessionService {
 			}
 			// Tolerant scans keep valid records when another record is corrupt.
 			let session: Session;
-			const text = await body.text();
+			let text: string | undefined;
 			try {
-				session = await readStored(SessionSchema, { json: async () => JSON.parse(text) }, obj.key);
+				const raw = await body.text();
+				text = raw;
+				session = await readStored(SessionSchema, { json: async () => JSON.parse(raw) }, obj.key);
 			} catch (err) {
 				if (invalidRecords === 'throw') throw err;
 				if (invalidRecords !== 'skip') {
 					// One user's corrupt record must not block every other user's admission.
-					if (storedUserId(text) === invalidRecords.owner) throw err;
+					if (text !== undefined && storedUserId(text) === invalidRecords.owner) throw err;
 					this.metrics.increment('sessions.index.unattributable');
 				}
 				logOperationalError(
@@ -1357,7 +1359,7 @@ export class SessionService {
 		);
 		return this.liveIndexReferences(
 			userId,
-			records.map((session) => ({
+			records.sort(byCapOrder).map((session) => ({
 				session_id: session.session_id,
 				project_id: session.project_id,
 			})),
@@ -1370,7 +1372,7 @@ export class SessionService {
 		options: { failOnError?: boolean; maxUsers?: number } = {},
 	): Promise<void> {
 		const users = new Map<UserId, SessionReference[]>();
-		for (const session of records) {
+		for (const session of [...records].sort(byCapOrder)) {
 			const entries = users.get(session.user_id) ?? [];
 			if (needsSessionIndexEntry(session))
 				entries.push({ session_id: session.session_id, project_id: session.project_id });
@@ -1446,7 +1448,9 @@ export class SessionService {
 					const others = references.filter((e) => e.session_id !== entry.session_id);
 					if (!needsSessionIndexEntry(current)) return others;
 					// Keep an existing position; index order ranks cap admission.
-					return others.length < references.length ? references : [...others, entry];
+					return others.length < references.length
+						? references.map((e) => (e.session_id === entry.session_id ? entry : e))
+						: [...others, entry];
 				},
 				{ skipUnchanged: true },
 			);

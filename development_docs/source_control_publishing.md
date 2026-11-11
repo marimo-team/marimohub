@@ -273,7 +273,8 @@ An ambiguous dispatch returns immediately; a later request enters the verificati
 Retry loads the current receipt under the lease and does not construct a synthetic save request.
 A transient hub import failure keeps the save at `remote_committed` for a later retry.
 A `ValidationError`, `BadRequestError`, or `ForbiddenError` from the import finishes the save as `conflict`.
-A hub source that advanced past the save's base also finishes it as `conflict`.
+A hub source that advanced from the save's base to a different commit also finishes it as `conflict`.
+A hub source already at the save's commit resumes normally.
 A failed caller authorization check does not end the save.
 
 A failed capture releases admission with a terminal receipt. A new save can retire an abandoned

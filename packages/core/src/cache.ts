@@ -53,6 +53,12 @@ interface Pending<V> {
 	state: { superseded: boolean };
 }
 
+function assertWeight(value: number, name: string): void {
+	if (!Number.isFinite(value) || value < 0) {
+		throw new RangeError(`${name} must be a finite non-negative number`);
+	}
+}
+
 export interface LruWeight<V> {
 	weigh: (value: V) => number;
 	maxWeight: number;
@@ -74,6 +80,7 @@ export class BoundedLruMap<K, V> {
 		if (!Number.isInteger(maxSize) || maxSize <= 0) {
 			throw new RangeError('maxSize must be a positive integer');
 		}
+		if (weight) assertWeight(weight.maxWeight, 'maxWeight');
 	}
 
 	get size(): number {
@@ -99,10 +106,12 @@ export class BoundedLruMap<K, V> {
 	}
 
 	set(key: K, value: V): void {
+		// Weigh before mutating so a throwing or invalid weight leaves the map unchanged.
+		const weight = this.weight?.weigh(value);
+		if (weight !== undefined) assertWeight(weight, 'weight');
 		this.delete(key);
 		this.values.set(key, value);
-		if (this.weight) {
-			const weight = this.weight.weigh(value);
+		if (weight !== undefined) {
 			this.weights.set(key, weight);
 			this.totalWeight += weight;
 		}

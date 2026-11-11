@@ -394,17 +394,22 @@ export class JobsService {
 	}
 
 	/**
-	 * Publishes a head whose index entry was lost after the head write. The deletion check runs
-	 * inside the snapshot CAS, so a concurrent delete's index removal wins.
+	 * Publishes a head whose index entry was lost after the head write. The head and deletion
+	 * checks run inside the snapshot CAS, so a concurrent update or delete wins.
 	 */
 	async republishIndex(job: JobDefinition): Promise<void> {
+		const key = paths.project(job.project_id).notebook(job.notebook_id).job(job.id).head;
 		await this.syncIndex(
 			'job.index.republish',
 			SYSTEM_ACTOR,
 			job,
 			jobIndexEntry(job),
 			undefined,
-			() => this.isDeleting(job),
+			async () => {
+				if (await this.isDeleting(job)) return true;
+				const head = await this.bucket.get(key);
+				return !head || (await readStoredJobDefinition(head, key)).updated_at !== job.updated_at;
+			},
 		);
 	}
 

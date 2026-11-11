@@ -243,8 +243,9 @@ export class NotebookSource implements SearchSource {
 		return { documents: validated, partial: validated.length !== documents.length };
 	}
 	/**
-	 * Drops notebooks whose snapshot label overrides the principal cannot satisfy, so hidden hits
-	 * do not take ranked slots. Indeterminate projections stay for the authoritative return check.
+	 * Drops moving notebooks and those whose snapshot label overrides the principal cannot satisfy,
+	 * so hidden hits do not take ranked slots. Indeterminate projections stay for the authoritative
+	 * return check.
 	 */
 	private async rankable(
 		project: Project,
@@ -254,11 +255,12 @@ export class NotebookSource implements SearchSource {
 		const entries = (await this.catalog.getCurrentSnapshotEntry()).byProjectId.get(
 			project.id,
 		)?.notebooks;
+		const hidden = new Set<string>();
 		const known = new Map<string, ResourceSecurityLabels>();
 		for (const entry of entries ?? [])
-			if (entry.security_labels && !entry.security_labels_pending)
+			if (entry.moving) hidden.add(entry.id);
+			else if (entry.security_labels && !entry.security_labels_pending)
 				known.set(entry.id, entry.security_labels);
-		if (known.size === 0) return documents;
 		const ids = [
 			...new Set(
 				documents.flatMap((d) =>
@@ -268,12 +270,14 @@ export class NotebookSource implements SearchSource {
 				),
 			),
 		];
-		if (ids.length === 0) return documents;
-		const satisfied = await this.authz.projectLabelConstraints(
-			principal,
-			ids.map((id) => known.get(id)!),
-		);
-		const hidden = new Set(ids.filter((_, i) => !satisfied[i]));
+		if (ids.length > 0) {
+			const satisfied = await this.authz.projectLabelConstraints(
+				principal,
+				ids.map((id) => known.get(id)!),
+			);
+			for (const [i, id] of ids.entries()) if (!satisfied[i]) hidden.add(id);
+		}
+		if (hidden.size === 0) return documents;
 		return documents.filter(
 			(d) => d.resource.type !== 'notebook' || !hidden.has(d.resource.notebook_id),
 		);

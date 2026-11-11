@@ -121,6 +121,34 @@ describe('BoundedLruMap', () => {
 		map.set('f', 6);
 		expect(map.size).toBe(0);
 	});
+
+	it.each([-1, Infinity, Number.NaN])('rejects an invalid maxWeight %s', (maxWeight) => {
+		expect(() => new BoundedLruMap(2, { weigh: () => 1, maxWeight })).toThrow(RangeError);
+	});
+
+	it.each([
+		['an invalid weight', -1],
+		['an infinite weight', Infinity],
+		['a NaN weight', Number.NaN],
+		['a throwing weigher', 'throw'],
+	] as const)('leaves the map and accounting unchanged after %s', (_, bad) => {
+		const map = new BoundedLruMap<string, number | 'throw'>(10, {
+			weigh: (value) => {
+				if (value === 'throw') throw new Error('weigh failed');
+				return value;
+			},
+			maxWeight: 5,
+		});
+		map.set('a', 2);
+		map.set('b', 2);
+		expect(() => map.set('a', bad)).toThrow();
+		expect(map.peek('a')).toBe(2);
+		expect(map.size).toBe(2);
+		map.set('c', 1);
+		expect([map.has('a'), map.has('b'), map.has('c')]).toEqual([true, true, true]);
+		map.set('d', 1);
+		expect(map.has('a')).toBe(false);
+	});
 });
 
 describe('LazyMap', () => {

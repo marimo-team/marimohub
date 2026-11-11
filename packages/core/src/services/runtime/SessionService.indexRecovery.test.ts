@@ -90,6 +90,62 @@ describe('session index recovery', () => {
 		expect(await replica.listActiveForUser(ACTOR)).toEqual(ranked);
 	});
 
+	it('ranks recovered sessions by start order, not storage list order', async () => {
+		const { bucket, legacy, sessions, input, index } = fixture();
+		const [a, b] = [createSessionId(), createSessionId()].sort();
+		const listedFirst = await legacy.createSession({ ...input, session_id: a });
+		const startedFirst = await legacy.createSession({ ...input, session_id: b });
+		await bucket.put(
+			paths.session(input.project_id, listedFirst.session_id),
+			JSON.stringify({ ...listedFirst, started_at: '2030-01-01T00:00:01.000Z' }),
+		);
+		await bucket.put(
+			paths.session(input.project_id, startedFirst.session_id),
+			JSON.stringify({ ...startedFirst, started_at: '2030-01-01T00:00:00.000Z' }),
+		);
+		const expected = [startedFirst.session_id, listedFirst.session_id];
+		expect((await sessions.listActiveForUser(ACTOR)).map((s) => s.session_id)).toEqual(expected);
+		expect((await index.read(ACTOR))?.entries.map((e) => e.session_id)).toEqual(expected);
+		const created = await sessions.createSession(input);
+		expect((await index.read(ACTOR))?.entries.map((e) => e.session_id)).toEqual([
+			...expected,
+			created.session_id,
+		]);
+	});
+
+	it('skips a record whose body cannot be read during a tolerant scan', async () => {
+		const { bucket, legacy, input } = fixture();
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		const sessions = new SessionService(bucket, metrics, undefined, () => false);
+		const unreadable = await legacy.createSession(input);
+		const readable = await legacy.createSession(input);
+		const unreadableKey = paths.session(input.project_id, unreadable.session_id);
+		const get = bucket.get.bind(bucket);
+		vi.spyOn(bucket, 'get').mockImplementation(async (key, options) => {
+			const object = await get(key, options);
+			if (object && 'text' in object && key === unreadableKey)
+				object.text = () => Promise.reject(new Error('body stream failed'));
+			return object;
+		});
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		expect((await sessions.listActiveForUser(ACTOR)).map((s) => s.session_id)).toEqual([
+			readable.session_id,
+		]);
+		expect(metrics.increment).toHaveBeenCalledWith('sessions.index.unattributable');
+	});
+
+	it('moves a re-registered session to its new project without changing its rank', async () => {
+		const { sessions, input, index } = fixture();
+		const first = await sessions.createSession(input);
+		const second = await sessions.createSession(input);
+		const project_id = createProjectId();
+		await index.register({ ...first, project_id }, async () => []);
+		expect((await index.read(ACTOR))?.entries).toEqual([
+			{ session_id: first.session_id, project_id },
+			{ session_id: second.session_id, project_id: input.project_id },
+		]);
+	});
+
 	it('recovers a lost index without dropping existing cap occupants', async () => {
 		const { bucket, sessions, input } = fixture();
 		const existing = await sessions.createSession(input);

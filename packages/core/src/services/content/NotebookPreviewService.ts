@@ -476,11 +476,14 @@ export class NotebookPreviewService {
 		};
 	}
 
-	private async prioritize(pid: ProjectId): Promise<void> {
+	/** Resolves false when the queue write failed (logged). */
+	private async prioritize(pid: ProjectId): Promise<boolean> {
 		try {
 			await this.store.prioritize(pid);
+			return true;
 		} catch (error) {
 			logOperationalError('preview_prioritize_failed', { project_id: pid }, error);
+			return false;
 		}
 	}
 
@@ -1168,8 +1171,9 @@ export class NotebookPreviewService {
 						logOperationalError('preview_preparation_failed', { project_id: pid }, error);
 						// One priority retry per failure streak; a persistent error such as a corrupt
 						// record then waits for the rotation instead of taking a slot every tick.
-						if (signal?.aborted || !this.failingProjects.has(pid)) await this.prioritize(pid);
-						if (!signal?.aborted) this.failingProjects.add(pid);
+						if (signal?.aborted) await this.prioritize(pid);
+						else if (!this.failingProjects.has(pid) && (await this.prioritize(pid)))
+							this.failingProjects.add(pid);
 					}
 				}),
 			);

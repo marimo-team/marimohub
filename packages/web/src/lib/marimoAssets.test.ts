@@ -128,6 +128,16 @@ it.each(['0.25.2.dev0', '0.25.2rc1', '0.25.2.post1', '0.25.2-beta.1'])(
 	},
 );
 
+it.each(['0.25.2-', '0.25.2..', 'latest'])(
+	'does not prefetch a malformed version segment %s',
+	async (version) => {
+		const fetch = vi.fn();
+		vi.stubGlobal('fetch', fetch);
+		await prefetchMarimoAssets(`https://malformed.example/_marimo/${version}`);
+		expect(fetch).not.toHaveBeenCalled();
+	},
+);
+
 it('cancels a stalled asset index at the deadline and allows a retry', async () => {
 	vi.useFakeTimers();
 	const cancel = vi.fn(() => new Promise<void>(() => {}));

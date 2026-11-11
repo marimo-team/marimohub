@@ -5010,6 +5010,8 @@ components:
                     type: integer
                     exclusiveMinimum: 0
                     maximum: 9007199254740991
+                  entry_updated_at:
+                    type: string
                 required:
                   - members
                   - default_role

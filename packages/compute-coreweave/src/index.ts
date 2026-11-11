@@ -721,7 +721,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		const existing =
 			this.reconnectId || !this.reuse || cached ? undefined : await this.findByOurId();
 		if (this.existingOnly && !this.reconnectId && !cached && existing?.status !== 'running') {
-			throw new NotFoundError(`CoreWeave sandbox ${this.id} is no longer available`);
+			if (!existing) throw new NotFoundError(`CoreWeave sandbox ${this.id} is no longer available`);
+			throw new Error(`CoreWeave sandbox ${this.id} is no longer available`);
 		}
 		const t1 = Date.now();
 		// Create-then-wait (rather than `waitUntilRunning: true`) keeps the create
@@ -747,7 +748,11 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			(this.reconnectId && sandbox.status !== 'running') ||
 			(this.existingOnly && sandbox.status !== undefined && sandbox.status !== 'running')
 		) {
-			throw new NotFoundError(`CoreWeave sandbox ${this.id} is no longer available`);
+			// Only a dead status proves the sandbox is gone; paused or booting ones stay retryable.
+			if (sandbox.status && isDeadStatus(sandbox.status)) {
+				throw new NotFoundError(`CoreWeave sandbox ${this.id} is no longer available`);
+			}
+			throw new Error(`CoreWeave sandbox ${this.id} is no longer available`);
 		}
 		this.sandbox = sandbox;
 		const fresh = !this.reconnectId && !cached && !existing;

@@ -136,7 +136,7 @@ export class SessionLifecycleService {
 					s.status === 'running'
 						? sessionSandbox(this.compute, s, this.cfg.metrics, 'poll')
 						: s.status === 'expired' && !isPastAuthorizationDeadline(s, now)
-							? reconnectSessionSandbox(this.compute, s)
+							? reconnectSessionSandbox(this.compute, s, this.cfg.metrics, 'poll')
 							: undefined;
 
 				const pool = sessionMode(s) === 'app' ? await readPool(s.project_id, s.notebook_id) : null;

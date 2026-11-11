@@ -73,7 +73,7 @@ export function parseAssetBaseUrl(value: string | undefined): URL | undefined {
 }
 
 /** An exact marimo release version path segment, such as `0.17.2` or `0.17.2.dev3`. */
-export const MARIMO_VERSION_PATTERN = String.raw`\d+\.\d+\.\d+[a-zA-Z0-9.-]*`;
+export const MARIMO_VERSION_PATTERN = String.raw`\d+\.\d+\.\d+(?:[a-zA-Z][a-zA-Z0-9]*)?(?:[.-][a-zA-Z0-9]+)*`;
 
 /** The content-hash suffix that marks a bundler's immutable file name, before its extension. */
 export const HASHED_ASSET_PATTERN = String.raw`[-_][a-zA-Z0-9_-]{6,}`;

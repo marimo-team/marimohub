@@ -399,6 +399,7 @@ summary with `members`, `default_role`, and a code-owned `version`.
 - `access_pending` is empty or absent.
 - The summary's member identities match the entry's `member_ids`, `member_emails`, and `member_groups`.
 - The summary's `default_role` matches the entry's `default_role`.
+- The summary's `entry_updated_at` equals the entry's `updated_at`. Each snapshot write re-confirms the marker for summaries it projected or that were trusted before the write, so a legacy role-only edit that advances `updated_at` drops trust.
 
 Otherwise, readers check roles against `project.json`.
 These projection fields never appear in project-list responses.
@@ -1935,6 +1936,6 @@ catalog pointer directly.
 
 Maintenance scans at most 100 objects per pass with a CAS cursor.
 It marks pre-dispatch saves `expired` one hour past `expires_at`, including saves on retired heads.
-Maintenance does not run while working branches are disabled, so captures remain until the feature is enabled again.
+This cleanup also runs while working branches are disabled, so captures left by an earlier deployment still expire.
 The [publication protocol](source_control_publishing.md#working-branch-publication)
 defines save stages and the dispatch bound.

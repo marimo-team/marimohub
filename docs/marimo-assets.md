@@ -6,11 +6,11 @@ version. This default needs no external asset origin.
 A shared asset origin lets browsers reuse marimo's frontend across sandboxes.
 Set `MARIMOHUB_COMPUTE_ASSET_URL` to one of these values:
 
-| Value                                  | Assets come from                  |
-| -------------------------------------- | --------------------------------- |
-| Unset, blank, or `false`               | Each sandbox's bundled frontend   |
-| `hub`                                  | Pre-staged copies on the Node hub |
-| A versioned HTTPS URL with `{version}` | An external origin, such as a CDN |
+| Value                                        | Assets come from                  |
+| -------------------------------------------- | --------------------------------- |
+| Unset, blank, or `false`                     | Each sandbox's bundled frontend   |
+| `hub`                                        | Pre-staged copies on the Node hub |
+| An HTTPS URL with `{version}` or one version | An external origin, such as a CDN |
 
 The `hub` and `false` values are case-insensitive.
 
@@ -22,9 +22,15 @@ For internet-connected deployments, use the jsDelivr CDN:
 MARIMOHUB_COMPUTE_ASSET_URL='https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist'
 ```
 
-Keep `{version}` in the URL. The installed marimo runtime substitutes its own
-version, which can differ between notebook environments. The origin must contain
-every deployed version. The CDN receives browser requests and the marimo version.
+In a template URL, the installed marimo runtime replaces `{version}` with its
+own version, which can differ between notebook environments. The origin must
+contain every deployed version. The CDN receives browser requests and the marimo
+version.
+
+A fixed-version URL, such as `…/frontend@0.25.2/dist`, serves that one release to
+every sandbox. Use it only when all sandbox images install that exact release.
+A fixed version also enables [browser prefetch](#browser-hints).
+
 Explicit URLs must use HTTPS and contain no credentials, query, or fragment.
 Proxy and subdomain exposure both support a shared origin.
 

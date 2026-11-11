@@ -166,7 +166,7 @@ The app-pool, warm-pool, search, and job scheduler loops keep their lease betwee
 
 Every Node process, including API replicas, also runs two loops without a loop lease.
 `migrations` runs every 5 seconds until all [bucket migrations](https://github.com/marimo-team/marimohub/blob/main/development_docs/migrations.md) complete.
-`warm_pool_preconnect` runs every 5 seconds while [warm pools](./warm-pools.md) are enabled.
+`warm_pool_preconnect` runs every 5 seconds while [warm pools](./warm-pools.md) are enabled, `MARIMOHUB_COMPUTE_WARM_POOL_PRECONNECT` is not `false`, and the compute adapter supports preconnection.
 
 The `app_pools` loop uses `MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS` when session
 lifetimes are enabled. App-pool sweeps run only in this loop. The hourly retention

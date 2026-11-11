@@ -72,8 +72,7 @@ export class ConfiguredSourceControlRegistry implements SourceControlRegistry {
 				{ variable: WORKING_BRANCH_ENABLED_ENV },
 			);
 		for (const provider of this.workingBranchProviderIds) {
-			if (this.publishers.get(provider)?.authorize || this.readers.get(provider)?.authorize)
-				continue;
+			if (this.publishers.get(provider)?.authorize) continue;
 			const policy = `MARIMOHUB_SOURCE_CONTROL_${provider.toUpperCase().replaceAll('-', '_')}_ALLOWED_REPOSITORIES`;
 			console.warn(
 				`${WORKING_BRANCH_ENABLED_ENV} is on without ${policy}; every project editor can create branches, commit, and open PRs through the server identity in every ${provider} repository it can write (for GitHub, every repository the App is installed on). Set ${policy} to restrict this.`,

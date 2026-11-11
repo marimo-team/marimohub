@@ -89,7 +89,7 @@ Warm claims and maintenance health checks run two deadlines in sequence:
 A readiness check therefore takes at most seven seconds.
 Initial sandbox creation uses the configured creation deadline, not the reconnect deadline.
 A failed claim retires the member and falls back to a cold launch, so an unhealthy member delays session start by up to seven seconds.
-A health check retires the member at once when the provider reports the sandbox missing or not running.
+A health check retires the member at once when the provider reports the sandbox missing or in a terminal state. A paused or still-booting sandbox counts as a transient failure.
 A check also retires the member at once when `true` exits with a failure.
 After any other reconnect or command failure, including a timeout, the check keeps the member and tries again five minutes later.
 A second consecutive failure retires it. The pool record stores the count, so a new maintenance process continues it.

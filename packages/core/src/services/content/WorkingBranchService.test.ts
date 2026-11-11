@@ -869,7 +869,16 @@ describe('WorkingBranchService', { timeout: 60_000 }, () => {
 		expect(pending.state).toBe('remote_committed');
 		const other = uid('other-user');
 		expect(service.canResume(pending, other)).toBe(true);
-		expect(service.canResume({ ...pending, state: 'ref_dispatched' }, other)).toBe(false);
+		expect(service.canResume({ ...pending, state: 'hub_synced' }, other)).toBe(true);
+		for (const state of [
+			'ref_dispatched',
+			'complete',
+			'conflict',
+			'expired',
+			'no_changes',
+		] as const)
+			expect(service.canResume({ ...pending, state }, other)).toBe(false);
+		expect(service.canResume({ ...pending, state: 'conflict' }, pending.author)).toBe(true);
 		const getSandbox = vi.fn(sandbox);
 		const done = await service.resume(pid, nid, pending.id, other, { workdir, getSandbox });
 		expect(done.state).toBe('complete');

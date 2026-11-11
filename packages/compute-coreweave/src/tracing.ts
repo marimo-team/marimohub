@@ -120,6 +120,9 @@ function instrumentSandbox(sandbox: CoreWeaveSandbox, endpoint: Attributes): Cor
 		get sandboxId() {
 			return sandbox.sandboxId;
 		},
+		get tags() {
+			return sandbox.tags;
+		},
 		get serviceUrls() {
 			return sandbox.serviceUrls;
 		},

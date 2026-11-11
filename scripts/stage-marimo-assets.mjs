@@ -15,7 +15,8 @@ import { fileURLToPath } from 'node:url';
 import { precompressFile } from './precompress.mjs';
 
 // Mirrors MARIMO_VERSION_PATTERN in packages/core/src/url.ts; marimoAssets.test.ts checks parity.
-export const MARIMO_RELEASE_VERSION = /^\d+\.\d+\.\d+[a-zA-Z0-9.-]*$/;
+export const MARIMO_RELEASE_VERSION =
+	/^\d+\.\d+\.\d+(?:[a-zA-Z][a-zA-Z0-9]*)?(?:[.-][a-zA-Z0-9]+)*$/;
 const COMPRESSIBLE_EXTENSIONS = ['html', 'js', 'mjs', 'css', 'json', 'svg', 'wasm', 'txt'];
 
 function assertOutsideSource(root, source) {

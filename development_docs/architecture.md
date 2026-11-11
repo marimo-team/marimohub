@@ -885,7 +885,7 @@ Tracing one user action through every component:
 5. SPA           POST …/{nid}/sessions      (user clicks "Run")
 6. Service ∥     cold boot or warm probe ∥ SessionService publishes the session record
    Compute       → admission: user cap scan ∥ preview commit ∥ editor claim
-                 (cold boot waits for admission when a session cap applies)
+                 (cold boot waits for admission when a per-user cap applies)
                  rejected on Node: respond at once → destroy sandbox in background work
 7. Compute       SandboxProvisioner → mount bucket / copy files → reserve URL
                  → start marimo → wait for port → confirm URL

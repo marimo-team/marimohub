@@ -1516,17 +1516,32 @@ describe('Kubernetes warm sandbox reconnect', () => {
 		expect(world.client.reconcileRoutes).not.toHaveBeenCalled();
 	});
 
-	it.each(['Pending', 'Succeeded', 'Failed'])(
-		'rejects a %s pod without recreating it',
+	it.each(['Succeeded', 'Failed'])('rejects a %s pod without recreating it', async (phase) => {
+		const world = makeWorld();
+		await makeCompute(world).create(SANDBOX_ID).ready!();
+		world.setPhase(NAME, phase);
+		const ready = makeCompute(world).connectExisting(SANDBOX_ID).ready!();
+		await expect(ready).rejects.toBeInstanceOf(NotFoundError);
+		await expect(ready).rejects.toThrow('no longer running');
+		expect(world.ensured).toHaveLength(1);
+		expect(world.client.reconcileRoutes).not.toHaveBeenCalled();
+	});
+
+	it.each(['Pending', 'Unknown'])(
+		'rejects a %s pod as retryable without recreating it',
 		async (phase) => {
 			const world = makeWorld();
 			await makeCompute(world).create(SANDBOX_ID).ready!();
 			world.setPhase(NAME, phase);
-			const ready = makeCompute(world).connectExisting(SANDBOX_ID).ready!();
-			await expect(ready).rejects.toBeInstanceOf(NotFoundError);
-			await expect(ready).rejects.toThrow('no longer running');
+			const sandbox = makeCompute(world).connectExisting(SANDBOX_ID);
+			const error = await sandbox.ready!().catch((cause: unknown) => cause);
+			expect(error).toBeInstanceOf(Error);
+			expect(error).not.toBeInstanceOf(NotFoundError);
+			expect(error).toHaveProperty('message', expect.stringContaining(`not running (${phase})`));
 			expect(world.ensured).toHaveLength(1);
 			expect(world.client.reconcileRoutes).not.toHaveBeenCalled();
+			world.setPhase(NAME, 'Running');
+			expectExecResult(await sandbox.exec('true'), { success: true });
 		},
 	);
 });

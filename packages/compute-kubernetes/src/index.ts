@@ -379,11 +379,16 @@ class KubernetesSandboxInstance implements SandboxInstance {
 
 	private async existingPod(): Promise<K8sPodPhaseInfo> {
 		const pod = await this.client.getPhase(this.name);
-		if (pod?.phase !== 'Running') {
-			throw new NotFoundError(`Kubernetes sandbox ${this.id} is no longer running`);
-		}
+		if (!pod) throw new NotFoundError(`Kubernetes sandbox ${this.id} is no longer running`);
 		if (pod.managedBy !== MANAGED_BY_VALUE || pod.sandboxId !== this.id) {
 			throw new NotFoundError(`Kubernetes Pod ${this.name} does not belong to sandbox ${this.id}`);
+		}
+		if (pod.phase === 'Succeeded' || pod.phase === 'Failed') {
+			throw new NotFoundError(`Kubernetes sandbox ${this.id} is no longer running`);
+		}
+		// Pending and Unknown can recover (a restarting node, a lost kubelet heartbeat).
+		if (pod.phase !== 'Running') {
+			throw new Error(`Kubernetes sandbox ${this.id} is not running (${pod.phase ?? 'unknown'})`);
 		}
 		return pod;
 	}

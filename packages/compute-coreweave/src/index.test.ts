@@ -2681,25 +2681,29 @@ describe('CoreWeave warm sandbox reconnect', () => {
 		expect(world.created).toHaveLength(1);
 	});
 
-	it.each(['paused', 'completed'] as const)(
-		'rejects a discovered running sandbox whose Get reports %s',
-		async (status) => {
-			const world = makeWorld();
-			await makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!();
-			const fromId = world.client.fromId.bind(world.client);
-			vi.spyOn(world.client, 'fromId').mockImplementation(async (id) => ({
-				...(await fromId(id)),
-				status,
-			}));
+	it.each([
+		['paused', false],
+		['completed', true],
+	] as const)('rejects a discovered running sandbox whose Get reports %s', async (status, gone) => {
+		const world = makeWorld();
+		await makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!();
+		const fromId = world.client.fromId.bind(world.client);
+		vi.spyOn(world.client, 'fromId').mockImplementation(async (id) => ({
+			...(await fromId(id)),
+			status,
+		}));
 
-			await expect(makeCompute(world).connectExisting(SANDBOX_ID).exec('true')).rejects.toThrow(
-				'no longer available',
-			);
-			expect(world.registry.get('cw-1')!.fake.runCalls).toEqual([]);
-			expect(world.listCalls).toEqual([[ID_TAG]]);
-			expect(world.created).toHaveLength(1);
-		},
-	);
+		const error = await makeCompute(world)
+			.connectExisting(SANDBOX_ID)
+			.exec('true')
+			.catch((error: unknown) => error);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toContain('no longer available');
+		expect(error instanceof NotFoundError).toBe(gone);
+		expect(world.registry.get('cw-1')!.fake.runCalls).toEqual([]);
+		expect(world.listCalls).toEqual([[ID_TAG]]);
+		expect(world.created).toHaveLength(1);
+	});
 
 	it('reports direct Get time separately from creation and discovery', async () => {
 		vi.useFakeTimers();
@@ -2724,17 +2728,17 @@ describe('CoreWeave warm sandbox reconnect', () => {
 	});
 
 	it.each([
-		'pending',
-		'creating',
-		'paused',
-		'terminating',
-		'completed',
-		'terminated',
-		'failed',
-		'unspecified',
+		['pending', false],
+		['creating', false],
+		['paused', false],
+		['terminating', false],
+		['completed', true],
+		['terminated', true],
+		['failed', true],
+		['unspecified', false],
 	] as const)(
 		'fails closed when a saved container is %s, without discovering or creating another',
-		async (status) => {
+		async (status, gone) => {
 			const world = makeWorld();
 			const source = makeCompute(world).create(SANDBOX_ID, { reuse: false });
 			await source.ready!();
@@ -2745,7 +2749,8 @@ describe('CoreWeave warm sandbox reconnect', () => {
 				reconnectReference: reference,
 			});
 			const error = await sandbox.exec('true').catch((error: unknown) => error);
-			expect(error).toBeInstanceOf(NotFoundError);
+			expect(error).toBeInstanceOf(Error);
+			expect(error instanceof NotFoundError).toBe(gone);
 			await expect(sandbox.exec('true')).rejects.toThrow('no longer available');
 			expect(get.mock.calls).toEqual([['cw-1'], ['cw-1']]);
 			expect(sandbox.reconnectReference).toBeUndefined();
@@ -2791,19 +2796,32 @@ describe('CoreWeave warm sandbox reconnect', () => {
 		expect(world.listCalls).toEqual([]);
 	});
 
-	it('rejects a referenced provider container without our id tag', async () => {
-		const world = makeWorld();
-		const source = makeCompute(world).create(SANDBOX_ID, { reuse: false });
-		await source.ready!();
-		world.registry.get('cw-1')!.tags = ['marimohub', 'mh-sbx-another-sandbox'];
-		await expect(
-			makeCompute(world)
-				.connectExisting(SANDBOX_ID, { reconnectReference: source.reconnectReference })
-				.exec('true'),
-		).rejects.toBeInstanceOf(NotFoundError);
-		expect(world.registry.get('cw-1')!.fake.runCalls).toEqual([]);
-		expect(world.listCalls).toEqual([]);
-	});
+	it.each([
+		['raw', (world: ReturnType<typeof makeWorld>) => makeCompute(world)],
+		[
+			'instrumented',
+			(world: ReturnType<typeof makeWorld>) =>
+				new CoreWeaveCompute(
+					baseConfig,
+					instrumentCoreWeaveClient(world.client, 'https://gateway.example'),
+				),
+		],
+	] as const)(
+		'rejects a referenced provider container without our id tag (%s client)',
+		async (_, compute) => {
+			const world = makeWorld();
+			const source = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+			await source.ready!();
+			world.registry.get('cw-1')!.tags = ['marimohub', 'mh-sbx-another-sandbox'];
+			await expect(
+				compute(world)
+					.connectExisting(SANDBOX_ID, { reconnectReference: source.reconnectReference })
+					.exec('true'),
+			).rejects.toBeInstanceOf(NotFoundError);
+			expect(world.registry.get('cw-1')!.fake.runCalls).toEqual([]);
+			expect(world.listCalls).toEqual([]);
+		},
+	);
 
 	it('rejects a referenced handle without status metadata', async () => {
 		const world = makeWorld();

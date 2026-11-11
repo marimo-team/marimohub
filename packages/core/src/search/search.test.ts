@@ -216,6 +216,30 @@ describe('authorized search', () => {
 		]);
 		expect(result.partial).toBe(false);
 	});
+	it('does not rank notebooks whose catalog entry is moving', async () => {
+		const f = await setup();
+		const moving = await f.services.notebooks.createNotebook(
+			f.project.id,
+			{ title: 'net_revenue', description: 'net_revenue', code: 'net_revenue = net_revenue' },
+			owner.id,
+		);
+		await f.indexer.step(f.project.id, f.source, signal());
+		const query = { ...f.query, limit: 1 };
+		expect((await f.search.search(owner, query)).items.map((item) => item.resource)).toEqual([
+			{ type: 'notebook', notebook_id: moving.id },
+		]);
+		await f.services.catalog.mutateSnapshot('test.moving', owner.id, (snapshot) => {
+			const entry = snapshot.projects
+				.find((p) => p.id === f.project.id)!
+				.notebooks.find((n) => n.id === moving.id)!;
+			entry.moving = { move_id: 'move-1', destination_project_id: f.project.id };
+			return snapshot;
+		});
+		const result = await f.search.search(owner, query);
+		expect(result.items.map((item) => item.resource)).toEqual([
+			{ type: 'notebook', notebook_id: f.notebook.id },
+		]);
+	});
 	it('rechecks revocation after another source finishes', async () => {
 		const f = await setup();
 		await f.services.projects.addMember(f.project.id, { user_id: outsider.id }, 'viewer', owner.id);

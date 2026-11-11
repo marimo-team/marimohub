@@ -160,8 +160,10 @@ server limits.
 ## Caching
 
 Successful reads carry `Cache-Control: private, no-cache`, unless the route sets
-its own policy. JSON reads of 256 KiB or less also carry a weak `ETag`. Send the
-`ETag` back as `If-None-Match` to revalidate. An unchanged resource returns
+its own policy. The server adds a weak `ETag` to a `GET` or `HEAD` JSON `200`
+response when it declares a `Content-Length` of 256 KiB or less and has no
+`no-store` directive. A route can return its own `ETag` instead, which can be
+strong. Send the `ETag` back as `If-None-Match` to revalidate. An unchanged resource returns
 `304 Not Modified` with no body. Browsers revalidate automatically, which keeps
 the session-status poll loop cheap.
 

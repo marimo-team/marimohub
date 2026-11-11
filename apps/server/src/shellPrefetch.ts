@@ -29,7 +29,7 @@ for (const path of urls) {
   url.searchParams.sort();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
-  responses[url.href] = fetch(url, {credentials: 'include', headers: {Accept: 'application/json'}, signal: controller.signal}).then(response => { clearTimeout(timer); return response.ok ? response : null; }).catch(() => null);
+  responses[url.href] = fetch(url, {credentials: 'include', headers: {Accept: 'application/json'}, signal: controller.signal}).then(response => response.ok ? response : null, () => null).finally(() => clearTimeout(timer));
 }
 setTimeout(() => { if (window.__MARIMOHUB_PREFETCH__?.responses === responses) delete window.__MARIMOHUB_PREFETCH__; }, 30000);
 })();`;
@@ -40,8 +40,11 @@ export const SHELL_PREFETCH_CSP = `'sha256-${createHash('sha256').update(SHELL_P
 // differ), so keeping both would request each URL twice.
 const FETCH_PRELOAD = /<link\b(?=[^>]*\brel=["']?preload\b)(?=[^>]*\bas=["']?fetch\b)[^>]*>\s*/gi;
 
+const BASE_TAG = /(<base\s[^>]*>)/i;
+
 export function injectShellPrefetch(html: string): string {
+	if (!BASE_TAG.test(html)) return html;
 	return html
 		.replace(FETCH_PRELOAD, '')
-		.replace(/(<base\s[^>]*>)/i, `$1<script>${SHELL_PREFETCH_SCRIPT}</script>`);
+		.replace(BASE_TAG, `$1<script>${SHELL_PREFETCH_SCRIPT}</script>`);
 }

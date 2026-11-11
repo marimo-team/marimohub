@@ -76,9 +76,10 @@ export class SessionIndex {
 			else if (initialized)
 				throw new ConflictError('Session index is missing; retry to rebuild it');
 			const entries = exists ? current : await initialEntries();
+			const reference = { session_id: session.session_id, project_id: session.project_id };
 			return entries.some((entry) => entry.session_id === session.session_id)
-				? entries
-				: [...entries, { session_id: session.session_id, project_id: session.project_id }];
+				? entries.map((entry) => (entry.session_id === session.session_id ? reference : entry))
+				: [...entries, reference];
 		});
 	}
 }

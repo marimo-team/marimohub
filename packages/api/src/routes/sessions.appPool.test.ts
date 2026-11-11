@@ -919,37 +919,32 @@ describe('app pool HTTP integration', () => {
 			deps: { policy: { defaultRole: 'editor', appPool: policy } },
 		});
 		const sessions = client.deps.services.sessions;
-		const create = sessions.createSessionWithEtag.bind(sessions);
-		let release!: () => void;
-		let entered!: () => void;
-		const gate = new Promise<void>((resolve) => {
-			release = resolve;
-		});
-		const creating = new Promise<void>((resolve) => {
-			entered = resolve;
-		});
-		vi.spyOn(sessions, 'createSessionWithEtag').mockImplementation(async (input) => {
-			entered();
-			await gate;
-			return create(input);
+		const booting = Promise.withResolvers<void>();
+		const gate = Promise.withResolvers<void>();
+		const release = () => gate.resolve();
+		fake.instance.ready = vi.fn(async () => {
+			booting.resolve();
+			await gate.promise;
 		});
 		const starting = client.request('POST', path(), { mode: 'app' });
-		await creating;
+		await booting.promise;
 		// Past the default 120 s startup timeout plus 30 s, as a cold Kubernetes boot can be.
 		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 200_000);
+		let joined: any;
 		try {
-			await expectError(
-				await api('bob').request('POST', path(), { mode: 'app' }),
-				503,
-				'SERVICE_UNAVAILABLE',
-			);
+			joined = await expectOk<any>(await api('bob').request('POST', path(), { mode: 'app' }));
+			expect(joined).toMatchObject({ status: 'starting', reused: true });
 			const pool = await new AppPoolService(bucket, sessions, policy).store.read(pid, nid);
-			expect(pool!.members.map((member) => member.state)).toEqual(['starting']);
+			expect(pool!.members.map((member) => [member.state, member.session_id])).toEqual([
+				['starting', joined.session_id],
+			]);
 		} finally {
 			release();
 		}
 		const running = await expectOk<any>(await starting);
 		expect(running.status).toBe('running');
+		expect(running.session_id).toBe(joined.session_id);
+		expect(fake.instance.ready).toHaveBeenCalledOnce();
 	});
 
 	it.each([

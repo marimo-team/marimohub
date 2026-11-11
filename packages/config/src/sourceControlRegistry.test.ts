@@ -138,6 +138,12 @@ describe('ConfiguredSourceControlRegistry', () => {
 				expect.stringContaining('MARIMOHUB_SOURCE_CONTROL_TEST_ALLOWED_REPOSITORIES'),
 			);
 			warn.mockClear();
+			new ConfiguredSourceControlRegistry(
+				[{ reader: publisher, authorize: () => {} }, { publisher }],
+				{ workingBranchesEnabled: true },
+			);
+			expect(warn).toHaveBeenCalledOnce();
+			warn.mockClear();
 			new ConfiguredSourceControlRegistry([{ reader: publisher, publisher, authorize: () => {} }], {
 				workingBranchesEnabled: true,
 			});

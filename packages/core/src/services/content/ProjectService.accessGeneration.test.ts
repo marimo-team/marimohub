@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { ACTOR, setupTestEnv, uid } from '../../testing';
 import { paths } from '../../paths';
 import { ProjectService } from './ProjectService';
-import type { Project } from '../../schema';
+import type { Catalog, Project, Snapshot } from '../../schema';
+import { createSnapshotId } from '../../ids';
 
 const subject = { id: uid('member'), email: 'member@example.com' };
 
@@ -13,6 +14,69 @@ async function setup() {
 	const project = await writer.createProject({ name: 'Shared', description: '' }, ACTOR);
 	return { ...env, project, writer, service };
 }
+
+// A v0.6.4 snapshot write: no summary confirmation, and `access` is preserved untouched.
+async function legacySnapshotWrite(
+	bucket: Awaited<ReturnType<typeof setup>>['bucket'],
+	catalog: Awaited<ReturnType<typeof setup>>['catalog'],
+	patch: (project: Snapshot['projects'][number]) => Partial<Snapshot['projects'][number]>,
+) {
+	const current = await catalog.getCurrentSnapshot();
+	const snapshot_id = createSnapshotId();
+	const next: Snapshot = {
+		...current,
+		snapshot_id,
+		operation: 'project.members',
+		projects: current.projects.map((entry) => ({ ...entry, ...patch(entry) })),
+	};
+	await bucket.put(paths.snapshot(snapshot_id), JSON.stringify(next));
+	const pointer: Catalog = {
+		version: 1,
+		updated_at: new Date().toISOString(),
+		current_snapshot_id: snapshot_id,
+		current_snapshot_key: paths.snapshot(snapshot_id),
+		previous_snapshot_id: current.snapshot_id,
+	};
+	await bucket.put(paths.catalog, JSON.stringify(pointer));
+}
+
+describe('legacy role-only member edits', () => {
+	it('stops trusting the summary, even after later writes', async () => {
+		const { bucket, catalog, project, writer, service } = await setup();
+		await writer.addMember(project.id, { user_id: subject.id }, 'viewer', ACTOR);
+		const current = await writer.getProject(project.id);
+		const edited: Project = {
+			...current,
+			members: [{ user_id: subject.id, role: 'app-user' }],
+			updated_at: new Date(Date.parse(current.updated_at) + 1000).toISOString(),
+		};
+		await bucket.put(paths.project(project.id).meta, JSON.stringify(edited));
+		await legacySnapshotWrite(bucket, catalog, (entry) => ({
+			updated_at: entry.updated_at >= edited.updated_at ? entry.updated_at : edited.updated_at,
+		}));
+		await catalog.updateProjectEntry('notebook.update', ACTOR, project.id, () => ({
+			updated_at: new Date(Date.parse(edited.updated_at) + 1000).toISOString(),
+		}));
+		for (const reader of [writer, service()]) {
+			expect(await reader.listProjects({ subject })).toEqual([]);
+			expect(await reader.isAppOnly(subject)).toBe(true);
+		}
+	});
+
+	it('keeps trusting a summary across current writes that only advance updated_at', async () => {
+		const { bucket, catalog, project, writer, service } = await setup();
+		await writer.addMember(project.id, { user_id: subject.id }, 'viewer', ACTOR);
+		const { updated_at } = (await catalog.getCurrentSnapshot()).projects[0];
+		await catalog.updateProjectEntry('notebook.update', ACTOR, project.id, () => ({
+			updated_at: new Date(Date.parse(updated_at) + 1000).toISOString(),
+		}));
+		const get = vi.spyOn(bucket, 'get');
+		expect((await service().listProjects({ subject })).map((entry) => entry.id)).toEqual([
+			project.id,
+		]);
+		expect(get.mock.calls.filter(([key]) => key.endsWith('/project.json'))).toEqual([]);
+	});
+});
 
 describe('project access version compatibility', () => {
 	it.each(['rename', 'security labels'] as const)(

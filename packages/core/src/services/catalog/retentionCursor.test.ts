@@ -1,6 +1,8 @@
-import { expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { MemoryBucket } from '../../testing/MemoryBucket';
 import { readRetentionCursor, retentionBatch, writeRetentionCursor } from './retentionCursor';
+
+afterEach(() => vi.restoreAllMocks());
 
 it('preserves a competing cursor when a stale checkpoint loses CAS', async () => {
 	const bucket = new MemoryBucket();
@@ -40,7 +42,6 @@ it.each([
 		after: '',
 		etag: (await bucket.head(key))!.etag,
 	});
-	log.mockRestore();
 });
 
 it('skips rewriting an unchanged cursor', async () => {

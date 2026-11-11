@@ -1995,6 +1995,27 @@ describe('asynchronous preview preparation', () => {
 		expect(await queued()).toEqual([]);
 	});
 
+	it('keeps the priority retry available when queueing it fails', async () => {
+		const service = api.deps.services.previews;
+		const record = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+		const { revisions: _revisions, ...corrupt } = record;
+		await api.bucket.put(paths.preview(pid, nid, record.id), JSON.stringify(corrupt));
+		vi.spyOn(service.store, 'projectPage')
+			.mockResolvedValueOnce({ projects: [], cursor: undefined })
+			.mockResolvedValue({ projects: [pid], cursor: undefined });
+		const prioritize = vi
+			.spyOn(service.store, 'prioritize')
+			.mockRejectedValueOnce(new Error('storage temporarily unavailable'));
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		const queued = async () =>
+			(await (await api.bucket.get(paths.previewWork))!.json<{ pending?: string[] }>()).pending;
+		await service.preparePending(api.deps.sourceControl!);
+		expect(await queued()).toEqual([]);
+		await service.preparePending(api.deps.sourceControl!);
+		expect(prioritize).toHaveBeenCalledTimes(2);
+		expect(await queued()).toEqual([pid]);
+	});
+
 	it.each(['scan failure', 'shutdown before prepare'] as const)(
 		'retains a dequeued project after %s throws from scheduled work',
 		async (reason) => {

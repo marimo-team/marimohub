@@ -18,7 +18,7 @@ export function serveMarimoAssets(staticRoot: string): MiddlewareHandler {
 	return async (c) => {
 		if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
 			c.header('Allow', 'GET, HEAD');
-			return c.text('Method not allowed', 405);
+			return c.text('Method not allowed', 405, { 'Cache-Control': 'no-store' });
 		}
 		const path = c.req.path;
 		if (

@@ -20,9 +20,11 @@ import type { NotebookService } from '../content/NotebookService';
 import type { ProjectService } from '../content/ProjectService';
 import { occurrenceKey, parseCron, previousOccurrence } from './cron';
 import { indexedJobs } from './JobsService';
-import type { JobsService } from './JobsService';
+import type { IndexedJob, JobsService } from './JobsService';
 import type { JobRunService } from './JobRunService';
 import { isActiveRunStatus, isTerminalRunStatus } from './runState';
+
+const IDLE_RECOVERY_BATCH = 25;
 
 export interface JobSchedulerConfig {
 	/** How stale an occurrence may be and still fire (once). */
@@ -157,6 +159,8 @@ export class JobScheduler {
 	private readonly inFlight = new InFlightWork();
 	private readonly executing = new Map<RunId, LocalExecution>();
 	private readonly completedOccurrences = new BoundedLruMap<string, number>(10_000);
+	private idleRecoveryPosition = 0;
+	private nextIdleRecoveryAt: number | undefined;
 	private readonly metrics: Metrics;
 	private readonly now: () => number;
 
@@ -193,16 +197,21 @@ export class JobScheduler {
 			),
 		);
 		const fireReads = new PromiseMemo();
+		const idle: IndexedJob[] = [];
 		await mapWithConcurrency(
 			beforeFire.complete ? indexedJobs(snapshot) : [],
 			4,
-			async ({ projectId, notebookId, entry }) => {
+			async (indexed) => {
+				const { projectId, notebookId, entry } = indexed;
 				try {
 					const occurrence = this.dueOccurrence(
 						{ ...entry, project_id: projectId, notebook_id: notebookId },
 						now,
 					);
-					if (occurrence === null) return;
+					if (occurrence === null) {
+						idle.push(indexed);
+						return;
+					}
 					const occurrenceId = `${projectId}/${notebookId}/${entry.id}/${occurrence}`;
 					if (this.completedOccurrences.has(occurrenceId)) return;
 					const jobKey = `${projectId}:${entry.id}`;
@@ -234,6 +243,8 @@ export class JobScheduler {
 				}
 			},
 		);
+
+		result.errors += await this.recoverIdleIndexes(idle, now, fireReads);
 
 		const active = await this.deps.runs.listActiveSnapshot();
 		if (!beforeFire.complete || !active.complete) {
@@ -347,6 +358,53 @@ export class JobScheduler {
 		}
 	}
 
+	/** A head that stays newer than its entry lost its index publication. */
+	private lostPublication(job: JobDefinition, entry: SnapshotJobEntry, now: number): boolean {
+		return (
+			entry.updated_at !== undefined &&
+			job.updated_at > entry.updated_at &&
+			now - Date.parse(job.updated_at) >= 2 * this.deps.config.catchupWindowMs
+		);
+	}
+
+	/**
+	 * The due gate reads only the index, so a disabled or not-yet-due entry would never reach
+	 * `fire`'s repair. A rotating window, at most once per catch-up window, bounds the head reads
+	 * and keeps idle ticks free of per-job reads.
+	 */
+	private async recoverIdleIndexes(
+		idle: readonly IndexedJob[],
+		now: number,
+		cache: PromiseMemo,
+	): Promise<number> {
+		this.nextIdleRecoveryAt ??= now + this.deps.config.catchupWindowMs;
+		if (idle.length === 0 || now < this.nextIdleRecoveryAt) return 0;
+		this.nextIdleRecoveryAt = now + this.deps.config.catchupWindowMs;
+		const start = this.idleRecoveryPosition % idle.length;
+		const batch = [...idle.slice(start), ...idle.slice(0, start)].slice(0, IDLE_RECOVERY_BATCH);
+		this.idleRecoveryPosition = start + batch.length;
+		let errors = 0;
+		await mapWithConcurrency(batch, 4, async ({ projectId, notebookId, entry }) => {
+			try {
+				const job = await this.loadJob(projectId, notebookId, entry.id, cache);
+				if (job && this.lostPublication(job, entry, now)) await this.deps.jobs.republishIndex(job);
+			} catch (err) {
+				errors++;
+				logOperationalError(
+					'job_index_recovery_failed',
+					{
+						operation: 'job.scheduler.index_recovery',
+						project_id: projectId,
+						notebook_id: notebookId,
+						job_id: entry.id,
+					},
+					err,
+				);
+			}
+		});
+		return errors;
+	}
+
 	private async fire(
 		projectId: ProjectId,
 		notebookId: JobRun['notebook_id'],
@@ -369,13 +427,7 @@ export class JobScheduler {
 						job.schedule?.timezone === entry.schedule?.timezone
 					: job.updated_at === entry.updated_at;
 			if (!published) {
-				// A head that stays newer than its entry lost its index publication.
-				if (
-					entry.updated_at !== undefined &&
-					job.updated_at > entry.updated_at &&
-					now - Date.parse(job.updated_at) >= 2 * this.deps.config.catchupWindowMs
-				)
-					await this.deps.jobs.republishIndex(job);
+				if (this.lostPublication(job, entry, now)) await this.deps.jobs.republishIndex(job);
 				return 'none';
 			}
 			const occurrence = this.dueOccurrence(job, now);

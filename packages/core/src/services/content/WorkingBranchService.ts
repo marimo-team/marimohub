@@ -928,14 +928,15 @@ export class WorkingBranchService {
 		return session;
 	}
 	/**
-	 * Stages from `remote_committed` on only import an already-public commit, so any principal with
+	 * `remote_committed` and `hub_synced` only import an already-public commit, so any principal with
 	 * `working-branch.write` may finish them. Earlier stages read the author's sandbox or write the
-	 * branch on the author's behalf.
+	 * branch on the author's behalf; terminal receipts stay author-only.
 	 */
 	canResume(receipt: WorkingBranchSave, actor: UserId): boolean {
 		return (
 			receipt.author === actor ||
-			SAVE_STAGES[receipt.state].rank >= SAVE_STAGES.remote_committed.rank
+			receipt.state === 'remote_committed' ||
+			receipt.state === 'hub_synced'
 		);
 	}
 	async resume(

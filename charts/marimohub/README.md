@@ -243,6 +243,7 @@ For mutable tags, set `pullPolicy: Always` and change `revision` when the image 
 Traefik's `Middleware` CRD and `sandboxIngress.namespace`.
 The chart then creates the middleware. It sets `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE` and
 `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE` on the API and optional maintenance Deployments.
+It compresses only kernel Ingresses that the hub publishes (`kernelIngress` without `resolveExposedUrl`); routes from a `resolveExposedUrl` callback need their own compression.
 See [CKS kernel response compression](../../docs/deploying/cks.md#kernel-response-compression) for annotations, existing Ingresses, and older images.
 
 Maintenance pods request 50m CPU and 256Mi memory, with limits of 250m CPU and 768Mi memory.

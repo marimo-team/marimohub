@@ -410,7 +410,8 @@ it('coalesces read-only readiness refreshes, throttles pending checks, and stops
 	vi.spyOn(Date, 'now').mockImplementation(() => now);
 	const get = vi.spyOn(bucket, 'get');
 	const first = service.refreshCompleted();
-	expect(service.refreshCompleted()).toBe(first);
+	// A concurrent caller gets nothing: the refresh already belongs to the first caller.
+	expect(service.refreshCompleted()).toBeUndefined();
 	await first;
 	expect(service.isComplete(id)).toBe(false);
 	expect(service.refreshCompleted()).toBeUndefined();
@@ -475,6 +476,24 @@ it('advances an independent migration while an earlier one keeps failing', async
 	const reader = new MigrationService(bucket, registry);
 	await reader.refreshCompleted();
 	expect(reader.isComplete('test-v2')).toBe(true);
+});
+
+it('advances an independent migration after an earlier batch outlives its lease', async () => {
+	let now = Date.now();
+	vi.spyOn(Date, 'now').mockImplementation(() => now);
+	const bucket = new MemoryBucket();
+	const independent = vi.fn(complete);
+	const service = new MigrationService(bucket, [
+		definition(async () => {
+			now += 60_001;
+			return { done: true };
+		}),
+		{ id: 'test-v2', after: [], runBatch: independent },
+	]);
+	expect(await service.tick()).toBe(false);
+	expect(independent).toHaveBeenCalledOnce();
+	expect(service.isComplete('test-v2')).toBe(true);
+	expect(service.isComplete(id)).toBe(false);
 });
 
 it('rejects a dependency on a migration that is not registered earlier', () => {

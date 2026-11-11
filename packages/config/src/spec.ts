@@ -719,7 +719,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE',
 						name: 'CoreWeave kernel Ingress compression middleware',
 						description:
-							'Traefik compression middleware reference appended to the kernel Ingress middleware annotation. Preserves existing annotations and middleware references, including values from external Secrets. Requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE. The Helm chart supplies this value when sandboxIngress.compression.enabled is true.',
+							'Traefik compression middleware reference appended to the middleware annotation of kernel Ingresses that the hub publishes (`kernelIngress` without `resolveExposedUrl`). Routes from a `resolveExposedUrl` callback need their own compression. Preserves existing annotations and middleware references, including values from external Secrets. Requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE. The Helm chart supplies this value when sandboxIngress.compression.enabled is true.',
 						example: 'sandboxes-marimohub-kernel-compress@kubernetescrd',
 						optIn: true,
 					},

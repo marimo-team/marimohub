@@ -3491,16 +3491,19 @@ describe('NotebookService', () => {
 			const key = '_system/notebook-gc-cursor.json';
 			await bucket.put(key, '{');
 			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-			await notebooks.sweepDeletedNotebooks();
-			expect(uploads.mock.calls.map(([, id]) => id)).toEqual([ids[0]]);
-			expect(await (await bucket.get(key))!.json()).toMatchObject({
-				after: `${projectId}/${ids[0]}`,
-			});
-			expect(log).toHaveBeenCalledOnce();
-			expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({
-				event: 'stored_object_skipped',
-			});
-			log.mockRestore();
+			try {
+				await notebooks.sweepDeletedNotebooks();
+				expect(uploads.mock.calls.map(([, id]) => id)).toEqual([ids[0]]);
+				expect(await (await bucket.get(key))!.json()).toMatchObject({
+					after: `${projectId}/${ids[0]}`,
+				});
+				expect(log).toHaveBeenCalledOnce();
+				expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({
+					event: 'stored_object_skipped',
+				});
+			} finally {
+				log.mockRestore();
+			}
 		});
 
 		it('resumes after its notebook disappears and wraps to entries before the cursor', async () => {

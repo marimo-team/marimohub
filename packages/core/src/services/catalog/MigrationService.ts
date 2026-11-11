@@ -80,8 +80,13 @@ export class MigrationService {
 
 	/** Read-only startup refresh for runtimes whose request isolates do not run ticks. */
 	refreshCompleted(): Promise<void> | undefined {
-		if (this.refreshInFlight) return this.refreshInFlight;
-		if (this.completed.size === this.migrations.length || Date.now() < this.nextRefreshAt)
+		// Only the caller that starts a refresh receives it: the Worker registers the promise on
+		// that invocation's execution context, and a concurrent request must not re-register it.
+		if (
+			this.refreshInFlight ||
+			this.completed.size === this.migrations.length ||
+			Date.now() < this.nextRefreshAt
+		)
 			return undefined;
 		this.nextRefreshAt = Date.now() + 5_000;
 		this.refreshInFlight = this.readCompleted().finally(() => {
@@ -150,7 +155,7 @@ export class MigrationService {
 		return this.completed.size === this.migrations.length;
 	}
 
-	/** Returns whether a batch ran, which ends the tick. */
+	/** Returns whether a batch was checkpointed, which ends the tick. */
 	private async step(migration: BackgroundMigration, signal?: AbortSignal): Promise<boolean> {
 		const key = paths.migration(migration.id);
 		const { state, etag: stateEtag } = await this.readState(migration.id);
@@ -178,7 +183,7 @@ export class MigrationService {
 			signal?.throwIfAborted();
 			const result = await migration.runBatch({ cursor: state?.cursor, signal });
 			signal?.throwIfAborted();
-			if (Date.now() >= expiresAt) return true;
+			if (Date.now() >= expiresAt) return false;
 			published =
 				(await this.writeState(
 					key,
@@ -187,7 +192,7 @@ export class MigrationService {
 						: { ...pending, cursor: result.cursor },
 					etag,
 				)) !== undefined;
-			if (!published) return true;
+			if (!published) return false;
 			if (result.done) this.completed.add(migration.id);
 			if (result.done || result.cursor !== state?.cursor)
 				logEvent({

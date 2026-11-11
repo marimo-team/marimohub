@@ -478,14 +478,17 @@ describe('startMaintenance', () => {
 		});
 	});
 
-	it('skips working-branch cleanup when working branches are disabled', async () => {
-		const prune = vi.spyOn(deps.services.workingBranches, 'pruneExpiredPayloads');
+	it('cleans working-branch captures when working branches are disabled', async () => {
+		expect(deps.services.workingBranches.enabled).toBe(false);
+		const prune = vi
+			.spyOn(deps.services.workingBranches, 'pruneExpiredPayloads')
+			.mockResolvedValue(1);
 		h.track(startMaintenance(deps, metrics));
 		await flushRun();
 
-		expect(prune).not.toHaveBeenCalled();
+		expect(prune).toHaveBeenCalledOnce();
 		expect(h.events().find((event) => event.event === 'maintenance_cycle')).toMatchObject({
-			working_branch_payloads_pruned: null,
+			working_branch_payloads_pruned: 1,
 		});
 	});
 

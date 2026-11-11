@@ -2,11 +2,13 @@ import { runInNewContext } from 'node:vm';
 import { expect, it, vi } from 'vitest';
 import { injectShellPrefetch, SHELL_PREFETCH_SCRIPT } from './shellPrefetch';
 
-function run(path: string, base = '/', respond = true) {
+function run(path: string, base = '/', respond: 'resolve' | 'stall' | 'reject' = 'resolve') {
 	const fetch = vi.fn((_url: URL, _init: RequestInit) =>
-		respond
+		respond === 'resolve'
 			? Promise.resolve(new Response('{}', { headers: { 'content-type': 'application/json' } }))
-			: new Promise<Response>(() => {}),
+			: respond === 'reject'
+				? Promise.reject(new TypeError('Network unavailable'))
+				: new Promise<Response>(() => {}),
 	);
 	const window: Record<string, unknown> = {};
 	const pending = new Map<number, () => void>();
@@ -36,6 +38,7 @@ function run(path: string, base = '/', respond = true) {
 		signals: fetch.mock.calls.map(([, init]) => init.signal!),
 		window,
 		flushTimers,
+		timerCount: () => pending.size,
 	};
 }
 
@@ -77,7 +80,7 @@ it('aborts a prefetch only while its headers are pending', async () => {
 	answered.flushTimers();
 	expect(answered.signals.some((signal) => signal.aborted)).toBe(false);
 
-	const stalled = run('/', '/', false);
+	const stalled = run('/', '/', 'stall');
 	stalled.flushTimers();
 	expect(stalled.signals.length).toBeGreaterThan(0);
 	expect(stalled.signals.every((signal) => signal.aborted)).toBe(true);
@@ -99,4 +102,22 @@ it('drops fetch preloads that the script replaces and keeps other links', () => 
 	expect(html).toContain('rel="modulepreload"');
 	expect(html).toContain('as="font"');
 	expect(html).toContain(SHELL_PREFETCH_SCRIPT);
+});
+
+it('clears abort timers when prefetches settle, including rejections', async () => {
+	for (const mode of ['resolve', 'reject'] as const) {
+		const { window, timerCount } = run('/', '/', mode);
+		const cache = window.__MARIMOHUB_PREFETCH__ as {
+			responses: Record<string, Promise<Response | null>>;
+		};
+		const responses = await Promise.all(Object.values(cache.responses));
+		if (mode === 'reject') expect(responses.every((response) => response === null)).toBe(true);
+		expect(timerCount()).toBe(1);
+	}
+});
+
+it('keeps fetch preloads when a shell has no base tag to anchor the script', () => {
+	const shell =
+		'<head><link rel="preload" href="./api/v1/me" as="fetch" crossorigin="use-credentials" /></head>';
+	expect(injectShellPrefetch(shell)).toBe(shell);
 });

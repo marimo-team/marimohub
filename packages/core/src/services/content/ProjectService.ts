@@ -67,7 +67,7 @@ import type {
 	SnapshotProjectEntry,
 } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
-import { projectedRole } from '../catalog/snapshotCache';
+import { projectedRole, accessProjection } from '../catalog/snapshotCache';
 import { mutateObject, mutateObjectWithOutcome, withCasRetry } from '../catalog/cas';
 import { deleteByPrefix, listAllKeys, listAllPrefixes } from '../catalog/storage';
 import { AppPoolStore } from '../runtime/AppPoolStore';
@@ -830,7 +830,14 @@ export class ProjectService {
 					entry.access = undefined;
 					return;
 				}
-				if (!force && (entry.access?.version ?? 0) >= PROJECT_ACCESS_VERSION) return;
+				// Keep summaries from newer writers; re-project ones current readers distrust,
+				// such as unmarked summaries from older builds.
+				if (
+					!force &&
+					((entry.access?.version ?? 0) > PROJECT_ACCESS_VERSION ||
+						accessProjection(entry) !== undefined)
+				)
+					return;
 				const patch = await loadProjectCatalogPatch(this.bucket, entry.id, entry);
 				if (!patch) {
 					if (entry.status === 'deleted') return;
