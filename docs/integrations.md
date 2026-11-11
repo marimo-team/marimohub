@@ -23,9 +23,7 @@ Runtime tools, such as [marimo Studio](#marimo-studio-experimental), supply thei
 
 Integrations are enabled by default. Set `MARIMOHUB_INTEGRATIONS=off` to make
 the routes return `404` and prevent integration configuration from being
-injected into sessions. Older releases also accepted `true` and `none`. Before
-upgrading, replace those aliases with `on` and `off`; this release no longer
-accepts them.
+injected into sessions.
 
 Integration configuration is versioned. Each save creates an immutable
 revision. Each session records the revisions that it uses.

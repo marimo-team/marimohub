@@ -310,7 +310,7 @@ docker build --build-context notebook_bridge=packages/notebook-bridge \
 For an optional target, add `--target vscode`, `--target opencode`, or `--target tools`.
 The publish workflow supplies this context automatically.
 At launch, the bridge checks its artifact identity and skips installation when the identity matches.
-Custom images and older images retain the offline installation fallback.
+Images without a matching bridge artifact use the offline installation fallback.
 
 For a standalone image without bridge preinstallation, use `examples/sandbox-image`.
 That Dockerfile needs no named context. Hub installs the bridge at launch.

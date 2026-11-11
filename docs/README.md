@@ -4,6 +4,8 @@ marimohub is a self-hostable, provider-agnostic platform for storing and running
 [marimo](https://marimo.io) notebooks. Use these docs to try it locally, choose
 backends, deploy, operate, and troubleshoot the hub.
 
+These docs describe the latest code, including unreleased features.
+
 ## Start
 
 - [Feature gallery](./feature-gallery.md) - a visual tour of notebook workflows, collaboration, and automation.
@@ -27,7 +29,7 @@ Every deployment picks storage, compute, and auth.
 - [Sandbox image](./sandbox-image.md) - the container contract for notebook
   kernels.
 - [Notebook apps](./apps.md) - serve a notebook as a read-only application.
-- [App pools](./app-pools.md) - configure capacity, sticky routing, version rollover, and coordinated upgrades.
+- [App pools](./app-pools.md) - configure capacity, sticky routing, version rollover, and cleanup.
 - [Notebook jobs](./jobs.md) - run notebooks headlessly on a schedule or on
   demand, with run history.
 - [Managed AI](./ai.md) - server-managed AI keys for notebook assistants.

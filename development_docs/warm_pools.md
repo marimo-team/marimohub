@@ -59,13 +59,12 @@ That call resolves exactly the referenced sandbox or fails. It never discovers o
 A failed claim retires the member. Health checks follow the [retirement rules](../docs/warm-pools.md#readiness-budgets). Maintenance replenishes the pool.
 Members without a reference use the adapter's discovery path.
 
-Upgrades and rollbacks:
+Reference handling:
 
-- The reference does not change the configuration fingerprint, so adding it needs no pool reset.
-- During a rolling upgrade, older writers can drop the field. Claims then use discovery until a health check restores it.
+- The reference does not change the configuration fingerprint.
 - A reference that resolves to a missing, mismatched, or terminated sandbox throws `NotFoundError`, and the member retires on that check.
 - An unsupported or malformed reference kind is a configuration error, not proof that the sandbox is gone. Each affected member follows the transient-failure rule and retires after two consecutive failed health checks. The result is one wave of cold starts within two health-check intervals, with no leaked sandboxes.
-- A new reference kind must keep accepting older kinds, so that upgrades and rollbacks do not churn the pool.
+- Adapters must accept stored reference kinds to avoid unnecessary pool replacement.
 
 After a successful probe, the service drains adapter diagnostics to exclude them from provisioning telemetry.
 `warm_pool.claim_ms` measures reservation time.

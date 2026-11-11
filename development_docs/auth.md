@@ -106,9 +106,7 @@ The analyzer uses `credential-resource` for a masked project denial and
 `credential-action` for an action denial. Its `credential` trace stage supports
 both live and synthetic grants.
 
-Scoped PATs use credential version 2. Old replicas reject v2 token records
-and CLI states. During a rolling upgrade, an old replica can reject a valid
-scoped token but cannot accept it without its grant.
+Scoped PATs use credential version 2.
 
 PAT expiry and revocation block later authentication. They do not stop a
 session that is already running. A token that can start a sandbox can run

@@ -417,8 +417,7 @@ preserve those IDs. Migration can complete while these projects still use metada
 
 When no IDs remain, writers publish a current summary. Offline catalog recovery
 rebuilds current summaries with writers stopped. See the migration guide for
-[repair commands](./migrations.md#project-access-v1) and
-[writer compatibility requirements](./migrations.md#upgrade-compatibility).
+[repair commands](./migrations.md#project-access-v1).
 
 **Security-label projection.** Project and notebook entries carry a tri-state
 `security_labels`: an object (labeled), `null` (known unlabeled), or absent
@@ -680,7 +679,7 @@ This legacy singleton claim remains readable during migration. New app admission
 
 `SessionService.releaseApp` CAS-writes the free marker `session_id: null` only when the claim still names the retiring session. A raw delete could remove a different holder acquired after the read. Notebook or project deletion may remove subordinate claims as cleanup.
 
-Legacy apps are adopted as drain-only pool members. Stop singleton writers before enabling pool writers; see [the coordinated rollout requirements](../docs/app-pools.md#upgrade).
+Legacy apps are adopted as drain-only pool members.
 
 ### 4.8.2 `_system/editors/{pid}/{nid}.json`
 
@@ -1559,19 +1558,9 @@ Group rows cannot carry `admin` and never become user rows during invite claimin
 These writes are separate; authorization must use the project head after a projection failure.
 Group mutations use `{ group }` selectors, separate from string selectors for user ids and invite emails.
 
-The schema version remains 1. See [group membership rollout](../docs/auth.md#rolling-out-group-membership) before storing group rows or rolling back.
-
-Older versions parse `project.json` with a stripping schema, so they drop or ignore `default_role`.
-A member change or rename on an old replica rewrites the record without it, and a rollback ignores it.
-Either way the project falls back to the inherited default: the deployment default (`editor` out of the box) or a higher OIDC group or login-policy default-role grant.
-Stop every old replica before storing a value other than `inherit`.
-Before rollback, reset overrides to `inherit`. A project that used `none` then grants nonmembers the inherited default again; explicit memberships do not suppress it.
-Keep such a project members-only by setting the deployment default to `none` and removing the OIDC group and login-policy default-role grants that would apply.
-See [default access rollout](../docs/auth.md#rolling-out-default-access).
+The project schema version is 1.
 
 `app-user`, `viewer`, `editor`, and `manager` are assignable; existing non-owner `admin` memberships remain valid.
-Upgrade every replica before assigning a role that older versions cannot parse.
-Rollback requires removing or explicitly remapping unsupported assignments and configuration.
 Never silently map app-user to viewer, which grants source access.
 
 ### Session permissions
@@ -1788,7 +1777,7 @@ Records hold the source, prepared revision, runtime ownership ledger, and sessio
 - `_system/preview-projects/{pid}.json`: bounded membership, desired configuration, active automation groups, and artifact reservations.
 - `_system/preview-automations/{pid}/{automation_key}.json`: compact, permanent replay fences for retired automation groups.
 - `_system/preview-receipts/{pid}.json`: bounded idempotency receipts, valid for seven days from creation.
-- `_system/preview-work.json`: deployment-wide preparation leases, the rotating project cursor, and a `pending` priority queue of at most 1,000 projects. See [rolling-upgrade behavior](../docs/notebook-previews.md#operation-and-limits).
+- `_system/preview-work.json`: deployment-wide preparation leases, the rotating project cursor, and a `pending` priority queue of at most 1,000 projects. See [preparation scheduling](../docs/notebook-previews.md#operation-and-limits).
 - `_system/preview-cleanup-cursor.json`: independent rotating cleanup cursor.
 
 A one-minute deadline fences each creation attempt, independently of the receipt’s seven-day deduplication window.

@@ -131,6 +131,10 @@ adapter task caches. Service-backed integration tests can use the focused
 
 ## Workflow
 
+- **Documentation targets the latest code**, including unreleased features. Describe
+  current behavior and configuration. Do not add historical upgrade walkthroughs,
+  old-version workarounds, or compatibility matrices to the guides.
+
 - **Final task: remove AI slop comments.** Always add a to-do item to the end of
   your task list to review your changes and strip AI-slop comments — verbose
   restatements of what the code plainly does, narration of the change ("now we

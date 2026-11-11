@@ -137,23 +137,6 @@ pnpm --filter @marimo-hub/server session-index:rebuild
 node dist/session-index-rebuild.mjs
 ```
 
-### Upgrade compatibility
-
-Releases 0.6.4 and earlier are incompatible writers:
-
-- They do not park `access_pending` before permission writes.
-- They keep a v1 `access` summary unchanged when they rewrite `member_ids`,
-  `member_emails`, `member_groups`, and `default_role`.
-- They admit sessions without index registration.
-
-Migration completion cannot prove that these writers have stopped.
-Upgrades from these releases therefore stop every old writer first, and rollback to them is unsupported.
-The [operator procedure](../docs/operations.md#upgrading-from-older-releases) lists the steps and the repair after a mixed rollout.
-
-Readers distrust a v1 summary whose members or default role disagree with the entry.
-A legacy member addition, removal, or default-role change therefore falls back to metadata.
-A legacy change to an existing member's role is not detected. Only the repair command restores that summary.
-
 ### Adding and retiring migrations
 
 1. Add a permanent ID, such as `project-access-v2`. Never reuse an ID or change
