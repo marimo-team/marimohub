@@ -715,14 +715,7 @@ export function createFromEnv(
 	const sourceControlConfig = makeSourceControl(env);
 	const workspaceLimits = parseWorkspaceLimits(env);
 	const services = createServices(bucket, metrics, {
-		sessionIndex: parseEnumOr(
-			env,
-			'MARIMOHUB_SESSION_INDEX',
-			['off', 'shadow', 'on'] as const,
-			'shadow',
-		),
 		workspaceLimits,
-		projectAccessGeneration: env.MARIMOHUB_PROJECT_ACCESS_GENERATION?.trim() || undefined,
 		backgroundWork: options?.backgroundWork,
 		tracing: options?.tracing,
 		repositoryHosts: sourceControlConfig.sourceControl?.repositoryHosts,

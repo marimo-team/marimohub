@@ -19,6 +19,7 @@ import {
 import { bootstrap } from './bootstrap';
 import type { BootstrapOverrides } from './bootstrap';
 import {
+	startMigrations,
 	startJobScheduler,
 	startMaintenance,
 	startPreviewPreparation,
@@ -30,6 +31,7 @@ import { attachSandboxProxyUpgrade } from './sandboxProxyWs';
 import type * as SandboxProxyWs from './sandboxProxyWs';
 
 vi.mock('./cron', () => ({
+	startMigrations: vi.fn(() => vi.fn()),
 	startSearchIndexing: vi.fn(),
 	startPreviewPreparation: vi.fn(() => vi.fn()),
 	startMaintenance: vi.fn(() => vi.fn()),
@@ -102,6 +104,22 @@ describe('bootstrap', () => {
 		vi.restoreAllMocks();
 		vi.useRealTimers();
 	});
+
+	it.each(['true', 'false'])(
+		'starts migrations independently of maintenance (%s)',
+		async (maintenance) => {
+			const stop = vi.fn();
+			vi.mocked(startMigrations).mockReturnValueOnce(stop);
+			const harness = makeHarness(deps);
+			const handle = await bootstrap(
+				{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: maintenance },
+				harness.overrides,
+			);
+			expect(startMigrations).toHaveBeenCalledWith(deps, expect.anything());
+			await handle!.drain();
+			expect(stop).toHaveBeenCalledOnce();
+		},
+	);
 
 	it('configures the shared logger from LOG_LEVEL', async () => {
 		const harness = makeHarness(deps);

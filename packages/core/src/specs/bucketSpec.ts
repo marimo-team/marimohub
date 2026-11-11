@@ -8,6 +8,7 @@ import {
 	workingBranchPaths,
 	WORKING_BRANCH_CLEANUP_KEY,
 } from '../services/content/workingBranchRecords';
+import { MigrationStateSchema } from '../services/catalog/MigrationService';
 import { HostRetryCleanupSchema, HostRetryRecordSchema } from '../services/runtime/HostRetryStore';
 import {
 	SearchHeadSchema,
@@ -698,6 +699,15 @@ const OBJECTS: BucketObject[] = [
 		schema: EventSchema,
 		summary: 'Append-only audit event.',
 		mutability: 'append-only',
+		tag: 'ops',
+	},
+	{
+		name: 'MigrationState',
+		key: paths.migration('{id}'),
+		schema: MigrationStateSchema,
+		summary: 'Background migration lease, resumable cursor, or permanent completion receipt.',
+		mutability: 'cas',
+		owner: 'MigrationService',
 		tag: 'ops',
 	},
 	{

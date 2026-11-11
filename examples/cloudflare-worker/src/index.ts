@@ -19,6 +19,7 @@ import {
 	defaultRegistry,
 	EDITOR_SANDBOX_SHARING_VALUES,
 	foldCase,
+	logOperationalError,
 	MaintenanceLock,
 	OrgIntegrationsStore,
 	paths,
@@ -244,7 +245,19 @@ export default {
 		// Report configuration failures with the binding name for operators.
 		let api: ReturnType<typeof createApi>;
 		try {
-			api = deploymentApi(buildDeps(request, env));
+			const deps = buildDeps(request, env);
+			api = deploymentApi(deps);
+			const refresh = deps.services.migrations.refreshCompleted();
+			if (refresh)
+				ctx.waitUntil(
+					refresh.catch((error) => {
+						logOperationalError(
+							'migration_refresh_failed',
+							{ operation: 'migration.refresh' },
+							error,
+						);
+					}),
+				);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			return new Response(
@@ -255,7 +268,14 @@ export default {
 		return executionContext.run(ctx, () => api.fetch(request, env, ctx));
 	},
 	scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-		return executionContext.run(ctx, () => runScheduled(env, ctx));
+		return executionContext.run(ctx, async () => {
+			const { services } = deploymentResources(env);
+			const results = await Promise.allSettled([
+				runScheduled(env, ctx),
+				services.migrations.tick(),
+			]);
+			for (const result of results) if (result.status === 'rejected') throw result.reason;
+		});
 	},
 };
 

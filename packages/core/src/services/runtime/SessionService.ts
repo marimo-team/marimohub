@@ -1,7 +1,7 @@
 import { MetadataCache } from '../content/metadataCache';
 import type { ReadConsistency } from '../content/metadataCache';
 import { SessionIndex, sameSessionReferences } from './SessionIndex';
-import type { SessionIndexMode, SessionReference } from './SessionIndex';
+import type { SessionReference } from './SessionIndex';
 import { copyMoveObject } from '../content/moveObjects';
 import { readForInspection } from './inspection';
 import type { Bucket, BucketObject } from '../../ports/bucket';
@@ -9,7 +9,7 @@ import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { BUCKET_SCAN_CONCURRENCY, MARIMO_PORT } from '../../constants';
 import type { EditorSandboxSharing, SessionMode } from '../../constants';
-import { mapWithConcurrency } from '../../concurrency';
+import { KeyedSerialQueue, mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
 import { EtagRecordCache } from '../../etagRecordCache';
 import {
@@ -174,6 +174,7 @@ function countsTowardCap(session: Session, scope: CapScope): boolean {
 
 export class SessionService {
 	private readonly index: SessionIndex;
+	private readonly indexMigrationQueue = new KeyedSerialQueue<UserId>();
 	private indexRepairCursor: UserId | undefined;
 	private readonly validatedRecords: MetadataCache<Session>;
 	private readonly editorClaims: MetadataCache<EditorClaim>;
@@ -215,7 +216,7 @@ export class SessionService {
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
 		private readonly recordCache: EtagRecordCache<Session> = new EtagRecordCache(),
-		private readonly indexMode: SessionIndexMode = 'shadow',
+		private readonly indexReady: () => boolean = () => false,
 	) {
 		this.index = new SessionIndex(bucket);
 		this.validatedRecords = new MetadataCache(bucket, undefined, recordCache);
@@ -335,20 +336,16 @@ export class SessionService {
 				);
 			}
 		}
-		if (this.indexMode !== 'off') {
-			try {
-				await this.initializeUserIndex(input.user_id);
-				await this.index.register(session);
-			} catch (error) {
-				this.indexWriteFailed(error);
-				if (this.indexMode === 'on') {
-					await this.failCreatedSession(sessionPath, written.etag, session, {
-						code: 'SESSION_INDEX_UNAVAILABLE',
-						message: 'Session admission could not be registered',
-					});
-					throw error;
-				}
-			}
+		try {
+			await this.initializeUserIndex(input.user_id);
+			await this.index.register(session);
+		} catch (error) {
+			this.indexWriteFailed(error);
+			await this.failCreatedSession(sessionPath, written.etag, session, {
+				code: 'SESSION_INDEX_UNAVAILABLE',
+				message: 'Session admission could not be registered',
+			});
+			throw error;
 		}
 		return { value: session, etag: written.etag };
 	}
@@ -848,12 +845,15 @@ export class SessionService {
 		handle: (session: Session, obj: BucketObject, etag: string) => T | Promise<T>,
 		invalidRecords: 'skip' | 'throw' = 'skip',
 		filter: (session: Session) => boolean = () => true,
+		signal?: AbortSignal,
 	): Promise<Awaited<T>[]> {
-		const objects = await listAllObjects(this.bucket, prefix);
+		const objects = await listAllObjects(this.bucket, prefix, signal);
 		const scanned = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (obj) => {
+			signal?.throwIfAborted();
 			const cached = this.recordCache.get(obj.key, obj.etag);
 			if (cached) return filter(cached) ? handle(structuredClone(cached), obj, obj.etag) : SKIP;
 			const body = await this.bucket.get(obj.key);
+			signal?.throwIfAborted();
 			if (!body) {
 				this.recordCache.delete(obj.key);
 				return SKIP;
@@ -1016,6 +1016,20 @@ export class SessionService {
 		takeoverInProgress?: boolean;
 		sharing: EditorSandboxSharing;
 	}> {
+		const initialClaim = temporary
+			? known
+			: (known ?? { claim: await this.getEditorClaim(projectId, notebookId) });
+		if (!temporary) {
+			const claim = initialClaim?.claim;
+			// The claim is authoritative; unrelated session history cannot change its holder.
+			if (claim?.session_id && !claim.transfer) {
+				const holder = await this.getLiveEditorHolder(projectId, notebookId, claim.session_id);
+				if (!holder || !isReusableSession(holder, Date.now())) return { sharing: claim.sharing };
+				return claim.sharing === 'shared' || holder.user_id === userId
+					? { sharing: claim.sharing, session: holder }
+					: { sharing: claim.sharing, ownedByOther: holder };
+			}
+		}
 		const now = Date.now();
 		const sessions = await this.scanProject(projectId, (session) => session);
 		const live = sessions.filter(
@@ -1117,25 +1131,15 @@ export class SessionService {
 	 * sandboxes for `project`. Apps occupy capacity until reclamation completes.
 	 */
 	async listActiveForUser(userId: UserId, capScope: CapScope = 'user'): Promise<Session[]> {
-		const matches = (session: Session) =>
-			session.user_id === userId && countsTowardCap(session, capScope);
-		const scan = async () =>
-			(await this.scanPrefix(paths.sessionsPrefix, (s) => s, 'skip', matches)).sort(byCapOrder);
-		if (this.indexMode === 'off') return scan();
-		if (this.indexMode === 'on') return this.listIndexedForUser(userId, capScope);
-		const [scanned, projected] = await Promise.allSettled([
-			scan(),
-			this.listIndexedForUser(userId, capScope),
-		]);
-		if (scanned.status === 'rejected') throw scanned.reason;
-		if (
-			projected.status === 'rejected' ||
-			JSON.stringify(scanned.value.map((s) => s.session_id)) !==
-				JSON.stringify(projected.value.map((s) => s.session_id))
-		) {
-			this.metrics.increment('sessions.index.mismatch');
-		}
-		return scanned.value;
+		if (this.indexReady()) return this.listIndexedForUser(userId, capScope);
+		return (
+			await this.scanPrefix(
+				paths.sessionsPrefix,
+				(s) => s,
+				'throw',
+				(s) => s.user_id === userId && countsTowardCap(s, capScope),
+			)
+		).sort(byCapOrder);
 	}
 
 	private async listIndexedForUser(userId: UserId, scope: CapScope): Promise<Session[]> {
@@ -1171,7 +1175,7 @@ export class SessionService {
 	}
 
 	private async removeFinishedIndexEntry(session: Session): Promise<void> {
-		if (this.indexMode === 'off' || needsSessionIndexEntry(session)) return;
+		if (needsSessionIndexEntry(session)) return;
 		await this.writeIndex(() =>
 			this.index.update(
 				session.user_id,
@@ -1215,13 +1219,21 @@ export class SessionService {
 		);
 	}
 
-	private async scanUserIndexReferences(userId: UserId): Promise<SessionReference[]> {
+	private async scanUserIndexReferences(
+		userId: UserId,
+		signal?: AbortSignal,
+	): Promise<SessionReference[]> {
 		// Missing does not mean empty; even a sweep snapshot may predate index loss.
 		const records = await this.scanPrefix(
 			paths.sessionsPrefix,
-			(session) => session,
+			(session, object) => {
+				if (object.key !== paths.session(session.project_id, session.session_id))
+					throw new Error('Session index source mismatch');
+				return session;
+			},
 			'throw',
 			(session) => session.user_id === userId,
+			signal,
 		);
 		return this.liveIndexReferences(
 			userId,
@@ -1229,6 +1241,7 @@ export class SessionService {
 				session_id: session.session_id,
 				project_id: session.project_id,
 			})),
+			signal,
 		);
 	}
 
@@ -1236,7 +1249,6 @@ export class SessionService {
 		records: readonly Session[],
 		options: { failOnError?: boolean; maxUsers?: number } = {},
 	): Promise<void> {
-		if (this.indexMode === 'off') return;
 		const users = new Map<UserId, SessionReference[]>();
 		for (const session of records) {
 			const entries = users.get(session.user_id) ?? [];
@@ -1278,16 +1290,48 @@ export class SessionService {
 	private async liveIndexReferences(
 		userId: UserId,
 		entries: SessionReference[],
+		signal?: AbortSignal,
 	): Promise<SessionReference[]> {
 		const live = await mapWithConcurrency(entries, BUCKET_SCAN_CONCURRENCY, async (entry) => {
+			signal?.throwIfAborted();
 			const session = await this.readIndexedSession(userId, entry);
+			signal?.throwIfAborted();
 			return needsSessionIndexEntry(session) ? entry : null;
 		});
 		return live.filter((entry) => entry !== null);
 	}
 
+	async migrateSessionIndexEntry(key: string, signal?: AbortSignal): Promise<void> {
+		signal?.throwIfAborted();
+		const object = await this.bucket.get(key);
+		if (!object) return;
+		const session = await readStored(SessionSchema, object, key);
+		const entry = { project_id: session.project_id, session_id: session.session_id };
+		if (key !== paths.session(entry.project_id, entry.session_id))
+			throw new Error('Session index source mismatch');
+		// Serialize same-user visitors so a missing index needs only one recovery scan.
+		await this.indexMigrationQueue.run(session.user_id, async () => {
+			signal?.throwIfAborted();
+			await this.index.update(
+				session.user_id,
+				async (entries, exists) => {
+					signal?.throwIfAborted();
+					const references = exists
+						? entries
+						: await this.scanUserIndexReferences(session.user_id, signal);
+					signal?.throwIfAborted();
+					// A stale batch must not undo concurrent index cleanup.
+					const current = await this.readIndexedSession(session.user_id, entry);
+					signal?.throwIfAborted();
+					const others = references.filter((e) => e.session_id !== entry.session_id);
+					return needsSessionIndexEntry(current) ? [...others, entry] : others;
+				},
+				{ skipUnchanged: true },
+			);
+		});
+	}
+
 	async rebuildSessionIndex(): Promise<void> {
-		if (this.indexMode === 'off') throw new ConflictError('Session index is disabled');
 		const records = await this.scanPrefix(paths.sessionsPrefix, (session) => session, 'throw');
 		await this.reconcileSessionIndexes(records, { failOnError: true, maxUsers: Infinity });
 		const users = new Set(records.map((session) => session.user_id));

@@ -23,6 +23,7 @@ export default defineConfig({
 			'src/postgresWorker.ts',
 			'src/catalog-recovery.ts',
 			'src/session-index-rebuild.ts',
+			'src/project-access-rebuild.ts',
 		],
 		platform: 'node',
 		format: ['esm'],

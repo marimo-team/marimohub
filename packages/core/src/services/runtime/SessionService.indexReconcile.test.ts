@@ -6,10 +6,10 @@ import { paths } from '../../paths';
 import { SessionIndex } from './SessionIndex';
 import { SessionService } from './SessionService';
 
-describe.each(['shadow', 'on'] as const)('missing-index reconciliation in %s mode', (mode) => {
+describe.each([false, true])('missing-index reconciliation in %s mode', (mode) => {
 	async function fixture() {
 		const bucket = new MemoryBucket();
-		const sessions = new SessionService(bucket, undefined, undefined, mode);
+		const sessions = new SessionService(bucket, undefined, undefined, () => mode);
 		const input = {
 			project_id: createProjectId(),
 			notebook_id: createNotebookId(),

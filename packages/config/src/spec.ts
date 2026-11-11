@@ -1696,13 +1696,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
-						id: 'MARIMOHUB_SESSION_INDEX',
-						name: 'Session index',
-						description:
-							'Per-user cap index: off, shadow, or on. Keep shadow during mixed-version rollout; rebuild the index before enabling on.',
-						default: 'shadow',
-					},
-					{
 						id: 'MARIMOHUB_MAX_SESSIONS_PER_USER',
 						name: 'Max sessions per user',
 						description:
@@ -1788,15 +1781,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'Comma-separated extra Origins allowed for state-changing requests (CSRF; same-origin is always allowed).',
 						example: 'https://app.example.com',
-					},
-					{
-						id: 'MARIMOHUB_PROJECT_ACCESS_GENERATION',
-						name: 'Project access summary generation',
-						description:
-							'Enables project access summaries from writers using this generation. Unset: read project metadata for roles. ' +
-							'Choose a fresh, unique value only after all legacy writers stop. Use the same value on every replica. ' +
-							'Before rolling back to legacy writers, disable this setting on every replica; select a new value after upgrading again.',
-						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_DEFAULT_ROLE',
@@ -2724,7 +2708,7 @@ See the [secret-source guide](./integration-secrets.md).`,
 						id: 'MARIMOHUB_DATA_PREVIEW_IMAGE',
 						name: 'Data-preview image',
 						description:
-							'OCI image for sandbox previews. It must contain Python, PyIceberg, and PyArrow. The compute backend must support OCI image overrides. The local, E2B, none, and noop backends do not support these overrides. The hub verifies the image at startup.',
+							"OCI image for sandbox previews. It must contain Python, PyIceberg, and PyArrow. The compute backend must support OCI image overrides. The local, E2B, none, and noop backends do not support these overrides. The first sandbox preview validates the image's runtime dependencies; replica startup does not validate the image.",
 						example: 'ghcr.io/example/marimohub-data-preview:1',
 					},
 					{

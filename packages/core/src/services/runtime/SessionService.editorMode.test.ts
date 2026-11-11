@@ -156,6 +156,67 @@ describe('SessionService editor claims', () => {
 		);
 	});
 
+	it.each(['shared', 'exclusive'] as const)(
+		'loads the %s claim holder without scanning history, including on a fresh replica',
+		async (sharing) => {
+			const owner = await running(USER_A);
+			await sessions.claimEditor(projectId, notebookId, owner.session_id, sharing, USER_A);
+			await running(USER_B);
+			const reader = new SessionService(bucket);
+			const list = vi.spyOn(bucket, 'list');
+			const get = vi.spyOn(bucket, 'get');
+			const result = await reader.findReusableEditor(projectId, notebookId, USER_B, sharing, false);
+			expect(sharing === 'shared' ? result.session : result.ownedByOther).toEqual(owner);
+			expect(list).not.toHaveBeenCalled();
+			expect(get.mock.calls.map(([key]) => key)).toEqual([
+				paths.editorClaim(projectId, notebookId),
+				paths.session(projectId, owner.session_id),
+			]);
+			await sessions.markFailed(projectId, owner.session_id);
+			const stale = await reader.findReusableEditor(projectId, notebookId, USER_B, sharing, false);
+			expect(stale).toEqual({ sharing });
+			expect(list).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(['missing', 'wrong-notebook', 'app', 'temporary'] as const)(
+		'does not attach to a %s claim holder',
+		async (state) => {
+			const owner = await running(USER_A);
+			await sessions.claimEditor(projectId, notebookId, owner.session_id, 'shared', USER_A);
+			const key = paths.session(projectId, owner.session_id);
+			if (state === 'missing') await bucket.delete(key);
+			else
+				await bucket.put(
+					key,
+					JSON.stringify({
+						...owner,
+						notebook_id: state === 'wrong-notebook' ? createNotebookId() : notebookId,
+						mode: state === 'app' ? 'app' : 'edit',
+						ephemeral: state === 'temporary',
+					}),
+				);
+			expect(
+				await sessions.findReusableEditor(projectId, notebookId, USER_B, 'shared', false),
+			).toEqual({ sharing: 'shared' });
+		},
+	);
+
+	it('retains legacy adoption and rejects ambiguous unclaimed editors', async () => {
+		const owner = await running(USER_A);
+		const list = vi.spyOn(bucket, 'list');
+		expect(
+			(await sessions.findReusableEditor(projectId, notebookId, USER_A, 'exclusive', false))
+				.session,
+		).toEqual(owner);
+		expect(list).toHaveBeenCalled();
+		await bucket.delete(paths.editorClaim(projectId, notebookId));
+		await running(USER_B);
+		await expect(
+			sessions.findReusableEditor(projectId, notebookId, USER_A, 'exclusive', false),
+		).rejects.toMatchObject({ code: 'CONFLICT' });
+	});
+
 	it('protects a claimed sandbox until teardown confirms it was reclaimed', async () => {
 		const owner = await sessions.createSession({
 			project_id: projectId,

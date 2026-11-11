@@ -29,6 +29,7 @@ vi.mock('@marimo-hub/storage-r2', () => ({
 import {
 	createServices,
 	MaintenanceLock,
+	MigrationService,
 	SessionService,
 	SessionRetirer,
 	paths,
@@ -338,12 +339,12 @@ describe('Cloudflare Worker isolate reuse', () => {
 		});
 		const request = new Request('https://hub.example.com/api/v1/capabilities');
 		expect((await worker.fetch(request, env, ctx)).status).toBe(200);
-		expect(await Promise.all(outcomes)).toEqual([failure]);
+		expect(await Promise.all(outcomes)).toEqual([undefined, failure]);
 		expect((await worker.fetch(new Request(request), env, makeContext())).status).toBe(200);
 		await expect(
 			deps.backgroundWork!.defer('outside-request', () => Promise.reject(failure)),
 		).rejects.toBe(failure);
-		expect(ctx.waitUntil).toHaveBeenCalledOnce();
+		expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
 	});
 
 	it('registers concurrent background work with the originating execution context', async () => {
@@ -376,11 +377,11 @@ describe('Cloudflare Worker isolate reuse', () => {
 		const first = fetch(0);
 		await firstEntered.promise;
 		expect((await fetch(1)).status).toBe(200);
-		expect(contexts[0].waitUntil).not.toHaveBeenCalled();
+		expect(contexts[0].waitUntil).toHaveBeenCalledOnce();
 		expect(contexts[1].waitUntil).toHaveBeenCalledOnce();
 		releaseFirst.resolve();
 		expect((await first).status).toBe(200);
-		expect(contexts[0].waitUntil).toHaveBeenCalledOnce();
+		expect(contexts[0].waitUntil).toHaveBeenCalledTimes(2);
 		expect(contexts[1].waitUntil).toHaveBeenCalledOnce();
 		for (const ctx of contexts)
 			await Promise.all(vi.mocked(ctx.waitUntil).mock.calls.map(([task]) => task));
@@ -770,4 +771,97 @@ describe('Cloudflare Worker sandbox-host isolation guard', () => {
 			} as unknown as Env),
 		).toThrow(/shares an origin/);
 	});
+});
+
+describe('scheduled migrations', () => {
+	it('runs migration batches only on scheduled events', async () => {
+		const bucket = new MemoryBucket();
+		const services = createServices(bucket);
+		await services.catalog.initialize(ACTOR);
+		const project = await services.projects.createProject(
+			{ name: 'Existing', description: '' },
+			ACTOR,
+		);
+		await services.catalog.updateProjectEntry('test.legacy', ACTOR, project.id, () => ({
+			access: undefined,
+		}));
+		const env = makeEnv(bucket);
+		const get = vi.spyOn(bucket, 'get');
+		await fetchApi(env);
+		expect(await bucket.get(paths.migration('project-access-v1'))).toBeNull();
+		await worker.scheduled({} as ScheduledController, env, makeContext());
+		expect((await services.catalog.getCurrentSnapshot()).projects[0].access?.version).toBe(1);
+		await worker.scheduled({} as ScheduledController, env, makeContext());
+		get.mockClear();
+		await worker.scheduled({} as ScheduledController, env, makeContext());
+		expect(get.mock.calls.some(([key]) => key.startsWith('_system/migrations/'))).toBe(false);
+	});
+
+	it('still runs maintenance if a migration fails', async () => {
+		const bucket = new MemoryBucket();
+		await createServices(bucket).catalog.initialize(ACTOR);
+		vi.spyOn(MigrationService.prototype, 'tick').mockRejectedValueOnce(
+			new Error('migration unavailable'),
+		);
+		const expire = vi.spyOn(SessionService.prototype, 'expireStale');
+		await expect(
+			worker.scheduled({} as ScheduledController, makeEnv(bucket), makeContext()),
+		).rejects.toThrow('migration unavailable');
+		expect(expire).toHaveBeenCalled();
+	});
+});
+
+it('does not start scheduled work if shared resource construction fails', async () => {
+	vi.mocked(R2BucketAdapter).mockImplementationOnce(() => {
+		throw new Error('binding unavailable');
+	});
+	const migrations = vi.spyOn(MigrationService.prototype, 'tick');
+	const expire = vi.spyOn(SessionService.prototype, 'expireStale');
+	await expect(
+		worker.scheduled({} as ScheduledController, makeEnv(), makeContext()),
+	).rejects.toThrow('binding unavailable');
+	expect(migrations).not.toHaveBeenCalled();
+	expect(expire).not.toHaveBeenCalled();
+});
+
+it('learns migration completion on a fresh HTTP isolate without running a batch', async () => {
+	const bucket = new MemoryBucket();
+	const services = createServices(bucket);
+	await services.catalog.initialize(ACTOR);
+	while (!(await services.migrations.tick())) {}
+	const env = makeEnv(bucket);
+	const tasks: Promise<unknown>[] = [];
+	const ctx = makeContext(vi.fn((task) => tasks.push(task)));
+	const tick = vi.spyOn(MigrationService.prototype, 'tick');
+	expect((await fetchApi(env, undefined, ctx)).status).toBe(200);
+	await Promise.all(tasks);
+	const deps = buildDeps(new Request('https://hub.example.com'), env);
+	expect(deps.services.migrations.isComplete('session-index-v1')).toBe(true);
+	expect(tick).not.toHaveBeenCalled();
+	const get = vi.spyOn(bucket, 'get');
+	const second = makeContext();
+	await fetchApi(env, undefined, second);
+	expect(second.waitUntil).not.toHaveBeenCalled();
+	expect(get.mock.calls.some(([key]) => key.startsWith('_system/migrations/'))).toBe(false);
+});
+
+it('keeps HTTP requests available when background receipt refresh fails', async () => {
+	const bucket = new MemoryBucket();
+	const get = bucket.get.bind(bucket);
+	vi.spyOn(bucket, 'get').mockImplementation((key, ...args) => {
+		if (key.startsWith('_system/migrations/')) throw new Error('receipts unavailable');
+		return get(key, ...args);
+	});
+	const env = makeEnv(bucket);
+	const tasks: Promise<unknown>[] = [];
+	expect(
+		(await fetchApi(env, undefined, makeContext(vi.fn((task) => tasks.push(task))))).status,
+	).toBe(200);
+	expect(tasks).toHaveLength(1);
+	await Promise.all(tasks);
+	expect(
+		buildDeps(new Request('https://hub.example.com'), env).services.migrations.isComplete(
+			'session-index-v1',
+		),
+	).toBe(false);
 });

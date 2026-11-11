@@ -6,6 +6,7 @@ import type { Session } from '../../schema';
 import { ACTOR, advanceTime, restoreClock } from '../../testing';
 import { MemoryBucket } from '../../testing/MemoryBucket';
 import { RecordingBucket } from '../../testing/RecordingBucket';
+import { legacySessions } from '../../testing/legacy-sessions';
 import { SessionService } from './SessionService';
 
 describe('SessionService scan cache', () => {
@@ -17,7 +18,7 @@ describe('SessionService scan cache', () => {
 	beforeEach(() => {
 		bucket = new RecordingBucket(new MemoryBucket());
 		cache = new EtagRecordCache();
-		sessions = new SessionService(bucket, undefined, cache, 'off');
+		sessions = new SessionService(bucket, undefined, cache);
 	});
 	afterEach(() => {
 		restoreClock();
@@ -25,7 +26,7 @@ describe('SessionService scan cache', () => {
 	});
 
 	const create = (projectId = projects[0]) =>
-		sessions.createSession({
+		legacySessions(bucket).createSession({
 			project_id: projectId,
 			notebook_id: createNotebookId(),
 			user_id: ACTOR,
@@ -70,7 +71,7 @@ describe('SessionService scan cache', () => {
 	it.each(['cold', 'warm'] as const)(
 		'isolates mutations of %s scan results from later reads and expiry writes',
 		async (cacheState) => {
-			const created = await sessions.createSession({
+			const created = await legacySessions(bucket).createSession({
 				project_id: projects[0],
 				notebook_id: createNotebookId(),
 				user_id: ACTOR,
@@ -207,7 +208,7 @@ describe('SessionService scan cache', () => {
 
 	it('returns every record when the scan exceeds cache capacity', async () => {
 		cache = new EtagRecordCache(1);
-		sessions = new SessionService(bucket, undefined, cache, 'off');
+		sessions = new SessionService(bucket, undefined, cache);
 		await create();
 		await create();
 		await create();

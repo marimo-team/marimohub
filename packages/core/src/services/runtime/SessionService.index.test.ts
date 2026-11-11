@@ -7,13 +7,14 @@ import { PreconditionFailedError } from '../../errors';
 import { SessionIndexSchema } from '../../schema';
 import { SessionService } from './SessionService';
 import { SessionIndex } from './SessionIndex';
+import { legacySessions } from '../../testing/legacy-sessions';
 
 afterEach(() => vi.restoreAllMocks());
 
 function fixture() {
 	const bucket = new MemoryBucket();
 	const metrics = { increment: vi.fn(), gauge: vi.fn() };
-	const sessions = new SessionService(bucket, metrics, undefined, 'on');
+	const sessions = new SessionService(bucket, metrics, undefined, () => true);
 	const input = { project_id: createProjectId(), notebook_id: createNotebookId(), user_id: ACTOR };
 	return { bucket, metrics, sessions, input, index: new SessionIndex(bucket) };
 }
@@ -48,7 +49,7 @@ describe('per-user session index', () => {
 		const own = await sessions.createSession(input);
 		for (let i = 0; i < 25; i++)
 			await sessions.createSession({ ...input, user_id: uid(`other-${i}`) });
-		const cold = new SessionService(bucket, undefined, undefined, 'on');
+		const cold = new SessionService(bucket, undefined, undefined, () => true);
 		const get = vi.spyOn(bucket, 'get');
 		const list = vi.spyOn(bucket, 'list');
 		expect((await cold.listActiveForUser(ACTOR)).map((s) => s.session_id)).toEqual([
@@ -66,12 +67,10 @@ describe('per-user session index', () => {
 
 	it('concurrent replicas register both starts and derive the same queue as the scan', async () => {
 		const { bucket, sessions, input, index } = fixture();
-		const other = new SessionService(bucket, undefined, undefined, 'on');
+		const other = new SessionService(bucket, undefined, undefined, () => true);
 		const created = await Promise.all([sessions.createSession(input), other.createSession(input)]);
 		expect((await index.read(ACTOR))!.entries).toHaveLength(2);
-		const scanned = await new SessionService(bucket, undefined, undefined, 'off').listActiveForUser(
-			ACTOR,
-		);
+		const scanned = await new SessionService(bucket, undefined, undefined).listActiveForUser(ACTOR);
 		expect(await sessions.listActiveForUser(ACTOR)).toEqual(scanned);
 		expect(await other.listActiveForUser(ACTOR)).toEqual(scanned);
 		await other.setRunning(input.project_id, created[1].session_id, 'https://kernel.example');
@@ -126,17 +125,17 @@ describe('per-user session index', () => {
 		expect(metrics.increment).toHaveBeenCalledWith('sessions.index.write_failed');
 	});
 
-	it('uses the scan in shadow mode and reports drift without failing creation', async () => {
-		const { bucket, input, metrics } = fixture();
+	it('requires registration even before migration completes', async () => {
+		const { bucket, input, metrics, index } = fixture();
 		const sessions = new SessionService(bucket, metrics);
-		await sessions.listActiveForUser(ACTOR);
+		await index.update(ACTOR, async () => []);
 		failIndexWrites(bucket);
-		const created = await sessions.createSession(input);
-		expect((await sessions.listActiveForUser(ACTOR)).map((s) => s.session_id)).toEqual([
-			created.session_id,
-		]);
+		const session_id = createSessionId();
+		await expect(sessions.createSession({ ...input, session_id })).rejects.toThrow(
+			'index unavailable',
+		);
+		expect((await sessions.getSession(input.project_id, session_id)).status).toBe('failed');
 		expect(metrics.increment).toHaveBeenCalledWith('sessions.index.write_failed');
-		expect(metrics.increment).toHaveBeenCalledWith('sessions.index.mismatch');
 	});
 
 	it('rejects an orphan index stored under another user key during backfill', async () => {
@@ -154,9 +153,7 @@ describe('per-user session index', () => {
 
 	it('backfills legacy records and clears indexes whose last record was deleted', async () => {
 		const { bucket, sessions, input, index } = fixture();
-		const legacy = await new SessionService(bucket, undefined, undefined, 'off').createSession(
-			input,
-		);
+		const legacy = await legacySessions(bucket).createSession(input);
 		const gone = await sessions.createSession({ ...input, user_id: uid('gone') });
 		await bucket.delete(paths.session(input.project_id, gone.session_id));
 		await sessions.rebuildSessionIndex();
@@ -340,7 +337,7 @@ describe('per-user session index', () => {
 
 	it('repairs other users when one user index cannot be written', async () => {
 		const { bucket, sessions, input, index } = fixture();
-		const legacy = new SessionService(bucket, undefined, undefined, 'off');
+		const legacy = legacySessions(bucket);
 		const first = await legacy.createSession(input);
 		const second = await legacy.createSession({ ...input, user_id: uid('other') });
 		failIndexWrites(bucket, new Error('one corrupt index'));
@@ -352,7 +349,7 @@ describe('per-user session index', () => {
 
 	it('backfills across LIST pages with one index write per user', async () => {
 		const { bucket, sessions, input, index } = fixture();
-		const legacy = new SessionService(bucket, undefined, undefined, 'off');
+		const legacy = legacySessions(bucket);
 		const records = await Promise.all([
 			legacy.createSession(input),
 			legacy.createSession(input),

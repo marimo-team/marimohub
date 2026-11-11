@@ -638,7 +638,7 @@ describe('app listing pagination and reads', () => {
 			const metadata = keys.filter((key) => key.endsWith('/meta.json'));
 			expect(metadata).toHaveLength(6);
 			expect(new Set(metadata).size).toBe(6);
-			expect(keys.filter((key) => key.endsWith('/project.json'))).toHaveLength(scoped ? 1 : 4);
+			expect(keys.filter((key) => key.endsWith('/project.json'))).toHaveLength(scoped ? 1 : 2);
 			counts.push(keys.length);
 
 			const next = await recordGets(() =>
@@ -650,7 +650,7 @@ describe('app listing pagination and reads', () => {
 				expect(metadata.slice(0, 5)).not.toContain(key);
 			}
 		}
-		expect(counts).toEqual(scoped ? [8, 8] : [12, 12]);
+		expect(counts).toEqual(scoped ? [8, 8] : [10, 10]);
 	});
 
 	it.each([false, true])(

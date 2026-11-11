@@ -279,6 +279,7 @@ export const SnapshotProjectEntrySchema = z.looseObject({
 			members: z.array(z.lazy(() => ProjectMemberSchema)),
 			default_role: ProjectDefaultRoleSchema,
 			generation: z.string().optional(),
+			version: z.number().int().positive().optional(),
 		})
 		.optional(),
 	// A writer can remove only its own marker; other writers may still be active.

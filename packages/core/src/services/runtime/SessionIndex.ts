@@ -9,7 +9,6 @@ import type { UserId } from '../../ids';
 import { paths } from '../../paths';
 import { withCasRetry } from '../catalog/cas';
 
-export type SessionIndexMode = 'off' | 'shadow' | 'on';
 export type SessionReference = SessionIndexRecord['entries'][number];
 
 export class SessionIndex {

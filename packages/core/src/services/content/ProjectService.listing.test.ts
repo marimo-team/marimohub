@@ -8,10 +8,8 @@ import { CatalogService } from '../catalog/CatalogService';
 import { createProjectId } from '../../ids';
 import { PreconditionFailedError } from '../../errors';
 
-const ACCESS_GENERATION = 'test-deployment';
-
 function projectService(bucket: MemoryBucket, catalog = new CatalogService(bucket)) {
-	return new ProjectService(bucket, catalog, undefined, undefined, undefined, ACCESS_GENERATION);
+	return new ProjectService(bucket, catalog);
 }
 
 async function setupListingEnv() {
@@ -236,7 +234,7 @@ describe('project access projection fencing', () => {
 			access: {
 				members: [{ user_id: subject.id, role: 'manager' }],
 				default_role: 'manager',
-				generation: ACCESS_GENERATION,
+				version: 1,
 			},
 		}));
 		expect(await projects.listProjects({ subject })).toEqual([]);
@@ -273,7 +271,7 @@ describe('project access projection fencing', () => {
 		expect(await projects.getProject(project.id)).toEqual(project);
 	});
 
-	it('requires a generation refresh after offline recovery', async () => {
+	it('rebuilds trusted access from authoritative metadata during offline recovery', async () => {
 		const { bucket, projects, catalog } = await pendingRevocation();
 		const source = { mode: 'rebuild' } as const;
 		const report = await catalog.planRecovery(source);
@@ -288,7 +286,7 @@ describe('project access projection fencing', () => {
 		const get = vi.spyOn(bucket, 'get');
 		expect(await projects.listProjects({ subject })).toEqual([]);
 		expect(await projects.isAppOnly(subject)).toBe(true);
-		expect(metadataReads(get)).toHaveLength(2);
+		expect(metadataReads(get)).toHaveLength(0);
 		await projects.updateProject(entry.id, { name: 'Refreshed' }, ACTOR);
 		get.mockClear();
 		expect(await projects.listProjects({ subject })).toEqual([]);
