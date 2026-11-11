@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { APP_RECONNECT_GRACE_MS } from '../../constants';
+import { APP_RECONNECT_GRACE_MS, APP_USER_LEASE_MS } from '../../constants';
 import { SandboxId, SessionId, UserId, VersionId } from '../../ids';
 
 export interface AppPoolPolicy {
@@ -11,7 +11,7 @@ export interface AppPoolPolicy {
 }
 
 export const DEFAULT_APP_POOL_POLICY: AppPoolPolicy = {
-	userLeaseMs: 240_000,
+	userLeaseMs: APP_USER_LEASE_MS,
 	reconnectGraceMs: APP_RECONNECT_GRACE_MS,
 	idleMs: 1_800_000,
 };

@@ -35,9 +35,12 @@ export function useSaveToBranch(pid: string, nid: string) {
 		}) => {
 			if (operationId)
 				return apiData(
-					apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/saves/{save_id}/retry', {
-						params: { path: { pid, nid, save_id: operationId } },
-					}),
+					apiClient.POST(
+						'/api/v1/projects/{pid}/notebooks/{nid}/working-branch/saves/{save_id}/retry',
+						{
+							params: { path: { pid, nid, save_id: operationId } },
+						},
+					),
 				);
 			if (!sessionId) throw new Error('Start an edit session before saving');
 			const scope = JSON.stringify([pid, nid, sessionId]);
@@ -45,13 +48,16 @@ export function useSaveToBranch(pid: string, nid: string) {
 			const currentAttempt = attempt.current;
 			try {
 				return await apiData(
-					apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/saves', {
-						params: {
-							path: { pid, nid, sid: sessionId },
-							header: { 'idempotency-key': currentAttempt.key },
+					apiClient.POST(
+						'/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/working-branch/saves',
+						{
+							params: {
+								path: { pid, nid, sid: sessionId },
+								header: { 'idempotency-key': currentAttempt.key },
+							},
+							body: {},
 						},
-						body: {},
-					}),
+					),
 				);
 			} catch (error) {
 				if (
@@ -86,8 +92,9 @@ export function useOpenBranchPR(pid: string, nid: string) {
 	return useMutation({
 		mutationFn: () =>
 			apiData(
-				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/change-requests', {
-					params: { path: { pid, nid } },
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/working-branch/change-request', {
+					// The branch has at most one PR, so a fresh key per attempt cannot open a duplicate.
+					params: { path: { pid, nid }, header: { 'idempotency-key': crypto.randomUUID() } },
 					body: { draft: true },
 				}),
 			),

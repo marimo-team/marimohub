@@ -1666,6 +1666,21 @@ describe('ProjectService', () => {
 			expect(await projects.sweepDeletedProjects(0)).toBe(0);
 		});
 
+		it('purges past a corrupt cursor and replaces it', async () => {
+			const doomed = await projects.createProject({ name: 'Doomed', description: '' }, ACTOR);
+			await projects.deleteProject(doomed.id, ACTOR);
+			const key = '_system/project-purge-cursor.json';
+			await bucket.put(key, 'x'.repeat(5000));
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			expect(await projects.sweepDeletedProjects(0)).toBe(1);
+			expect(await (await bucket.get(key))!.json()).toEqual({ after: doomed.id });
+			expect(log).toHaveBeenCalledOnce();
+			expect(JSON.parse(log.mock.calls[0][0] as string)).toMatchObject({
+				event: 'stored_object_skipped',
+			});
+			log.mockRestore();
+		});
+
 		it.each(['read', 'json', 'schema'] as const)(
 			'preserves a project with a metadata %s failure and purges other stale projects',
 			async (failure) => {

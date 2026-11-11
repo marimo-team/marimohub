@@ -105,7 +105,8 @@ adapter task caches. Service-backed integration tests can use the focused
   `{ success: false, error: { code, message } }` (see `packages/api/src`).
   Exceptions: routes serving raw content (e.g. the notebook HTML snapshot at
   `GET …/notebooks/{nid}/html`) return the bytes directly on success; their
-  errors still use the envelope. `GET /api/wif/v1/credentials` also returns a
+  errors still use the envelope. `GET …/working-branch/saves/{save_id}/recovery`
+  returns a raw ZIP. `GET /api/wif/v1/credentials` also returns a
   raw body: the AWS container credential protocol requires it.
   `/api/host/v1` uses the marimo host protocol's JSON, SSE, and RFC 9457 problem responses.
 - **Committed specs.** `packages/api/openapi.yaml` and
@@ -152,6 +153,11 @@ These CAS-managed records also have one writer each:
 - `BucketSearchIndex` owns `_system/search/projects/{pid}/{source}/head.json`, immutable search snapshots, and retained deletion tombstones. `SearchIndexer` owns resumable crawl checkpoints, immutable pages, and `_system/search/cursor.json`. A notebook move's publishing `mutateSnapshot` write sets `search_refresh` on both project entries to request fresh crawls.
 - `ProjectService` owns the retention cursor at `_system/project-purge-cursor.json`.
 - `NotebookService` owns the retention cursor at `_system/notebook-purge-cursor.json`.
+- `NotebookService` owns the notebook artifact rotation cursor at
+  `_system/notebook-gc-cursor.json`, written by CAS in `sweepNotebookArtifacts`.
+- `MaintenanceService` owns the snapshot-expiry cursor at `_system/snapshot-expiry-cursor.json`,
+  written by CAS in `expireSnapshots`. Retention cursors are disposable: a corrupt one restarts
+  its scan and is CAS-replaced.
 - `ThumbnailService` owns each notebook-local `thumbnail.json` CAS record, immutable
   `thumbnails/{id}.png` images, and create-once `thumbnail-attempts/{sandbox-id}.json` markers.
 - `DeepLinkService` owns each slug at `_system/deep-links/{slug}.json` and each
@@ -198,7 +204,7 @@ These CAS-managed records also have one writer each:
   never enter the catalog and inherit live parent authorization.
 - `PreviewStore` owns the bounded project membership and artifact reservations at
   `_system/preview-projects/{pid}.json`, seven-day receipts at `_system/preview-receipts/{pid}.json`,
-  preparation claims at `_system/preview-work.json`, and `_system/preview-cleanup-cursor.json`.
+  preparation claims, the rotation cursor, and the bounded (1,000-project) `pending` priority queue at `_system/preview-work.json`, and `_system/preview-cleanup-cursor.json`.
   Active PR automation groups, retention decisions, event ordering, and pending memberships
   also live in its project CAS head. Desired membership excludes runtime preparation, leases,
   admissions, revisions, and cleanup deadlines. Retired groups move to permanent CAS tombstones
@@ -209,8 +215,12 @@ These CAS-managed records also have one writer each:
   notebook `head.json` CAS records, save `receipt.json` CAS records, immutable captured
   source payloads, and the bounded cleanup cursor. Head records fence publication and
   retain deletion tombstones. Keep creation and save receipts after payload expiry;
-  unresolved dispatched saves retain their capture and baseline. `WorkingBranchStore`
-  implements its CAS claims; notebook deletion retires the claim through that store.
+  saves in `ref_dispatched`, `remote_committed`, or `hub_synced` retain their capture until
+  they finish, and their baseline while the save is `active_save` and the notebook exists.
+  A dispatch unconfirmed after 15 minutes finishes as `conflict` on the next retry.
+  `WorkingBranchStore` implements its CAS claims; `SyncedNotebookService` takes the `head.json`
+  lease through that store on each pull sync of a working-branch notebook, and notebook
+  deletion retires the claim through it.
 - `NotebookProposalService` owns each proposal publication at
   `projects/{pid}/notebooks/{nid}/proposals/{proposal-id}/publication.json`.
 - `ProjectIntegrationsStore` owns each project integration head at

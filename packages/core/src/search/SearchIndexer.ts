@@ -1,4 +1,3 @@
-import { BoundedLruMap } from '../cache';
 import type { Snapshot } from '../schema';
 import type { Metrics } from '../ports/metrics';
 import { noopMetrics } from '../ports/metrics';
@@ -41,7 +40,6 @@ import type {
 
 type IncrementalSearchSource = SearchSource & {
 	readonly incremental?: boolean;
-	readonly catalogBacked?: boolean;
 	page(
 		...args: [...Parameters<SearchSource['page']>, previous?: SearchSnapshot | null]
 	): ReturnType<SearchSource['page']>;
@@ -52,10 +50,6 @@ const TICK_BUDGET_MS = 100;
 const CLEANUP_DELETE_BATCH_SIZE = 10;
 
 export class SearchIndexer {
-	private readonly verifiedCatalogs = new BoundedLruMap<
-		string,
-		{ digest: string | undefined; fingerprint: string; indexedAt: number }
-	>(1024);
 	private previousCrawl:
 		| { key: string; revision: string | null; snapshot: SearchSnapshot | null }
 		| undefined;
@@ -79,7 +73,6 @@ export class SearchIndexer {
 		source: IncrementalSearchSource,
 		signal: AbortSignal,
 		refresh?: string | null,
-		catalogFingerprint?: string,
 	): Promise<boolean> {
 		signal.throwIfAborted();
 		const scope = { projectId, source: source.id };
@@ -130,43 +123,13 @@ export class SearchIndexer {
 		const scopeKey = `${projectId}/${source.id}`;
 		let previous: SearchSnapshot | null = null;
 		if (loaded.verifiedAt && ((this.embeddings && source.embeddable) || source.incremental)) {
-			const cached = this.verifiedCatalogs.get(scopeKey);
-			// Catalog publication can lag a source write; force a full verification every day.
-			if (
-				catalogFingerprint &&
-				cached &&
-				loaded.digest !== undefined &&
-				cached.digest === loaded.digest &&
-				cached.fingerprint === catalogFingerprint &&
-				Date.now() - cached.indexedAt < 24 * 3600_000
-			) {
-				this.metrics.increment('search.projects.unchanged', 1, { source: source.id });
-				return loaded.revision !== null && this.index.touch(scope, loaded.revision, signal);
-			}
 			previous =
 				this.previousCrawl?.key === scopeKey && this.previousCrawl.revision === loaded.revision
 					? this.previousCrawl.snapshot
 					: (await this.index.read(scope, signal)).snapshot;
 			this.previousCrawl = { key: scopeKey, revision: loaded.revision, snapshot: previous };
-			if (
-				catalogFingerprint &&
-				previous?.catalog_fingerprint === catalogFingerprint &&
-				!previous.partial &&
-				Date.now() - Date.parse(previous.indexed_at) < 24 * 3600_000
-			) {
-				this.verifiedCatalogs.set(scopeKey, {
-					digest: loaded.digest,
-					fingerprint: catalogFingerprint,
-					indexedAt: Date.parse(previous.indexed_at),
-				});
-				this.metrics.increment('search.projects.unchanged', 1, { source: source.id });
-				return loaded.revision !== null && this.index.touch(scope, loaded.revision, signal);
-			}
 		}
-		const initial = () => ({
-			...emptyCheckpoint(loaded.revision, build),
-			catalog_fingerprint: catalogFingerprint,
-		});
+		const initial = () => emptyCheckpoint(loaded.revision, build);
 		// Oversized legacy checkpoints restart without parsing their unbounded bodies.
 		let state =
 			stored && stored.size <= MAX_SEARCH_CHECKPOINT_BYTES
@@ -174,7 +137,6 @@ export class SearchIndexer {
 				: initial();
 		if (
 			state.revision !== loaded.revision ||
-			state.catalog_fingerprint !== catalogFingerprint ||
 			!sameSearchBuild(state.build, build) ||
 			state.pages.length === 0
 		)
@@ -312,8 +274,7 @@ export class SearchIndexer {
 			current !== null &&
 			revision !== null &&
 			loaded.digest !== undefined &&
-			loaded.digest === digest &&
-			(!state.catalog_fingerprint || previous?.catalog_fingerprint === state.catalog_fingerprint);
+			loaded.digest === digest;
 		signal.throwIfAborted();
 		// Republishing an unchanged corpus would write a full snapshot on every round-robin visit.
 		const committed = unchanged
@@ -324,7 +285,6 @@ export class SearchIndexer {
 						? {
 								schema_version: 1,
 								indexed_at: new Date().toISOString(),
-								catalog_fingerprint: state.catalog_fingerprint,
 								partial: state.partial,
 								documents,
 							}
@@ -335,13 +295,6 @@ export class SearchIndexer {
 		if (!committed) return false;
 		// A crash after publication leaves a different head revision, which resets the checkpoint on retry.
 		const published = await this.index.head(scope, signal);
-		// A competing publication can replace the head before this read.
-		if (!state.partial && state.catalog_fingerprint && published.digest === digest)
-			this.verifiedCatalogs.set(scopeKey, {
-				digest: published.digest,
-				fingerprint: state.catalog_fingerprint,
-				indexedAt: Date.now(),
-			});
 		this.previousCrawl = undefined;
 		signal.throwIfAborted();
 		try {
@@ -434,9 +387,6 @@ export class SearchIndexer {
 					projectId: p.id,
 					source,
 					refresh: p.search_refresh ?? null,
-					catalogFingerprint: source.catalogBacked
-						? JSON.stringify([p.status, p.search_refresh, p.notebooks])
-						: undefined,
 					id: `${p.id}/${source.id}`,
 				})),
 			)
@@ -476,15 +426,7 @@ export class SearchIndexer {
 			signal.throwIfAborted();
 			const task = tasks[position];
 			try {
-				if (
-					await this.step(
-						task.projectId,
-						task.source,
-						signal,
-						task.refresh,
-						task.catalogFingerprint ? await sha256Hex(task.catalogFingerprint) : undefined,
-					)
-				) {
+				if (await this.step(task.projectId, task.source, signal, task.refresh)) {
 					after = task.id;
 					position++;
 				}

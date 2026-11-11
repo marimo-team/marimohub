@@ -230,8 +230,25 @@ with the
 ## Shutdown
 
 API pods use a 180-second drain budget and a 200-second termination grace period.
+Maintenance pods use a 120-second drain budget and a 140-second grace period.
 This lets background teardown finish before compute clients close.
 See [shutdown budgets](../operations.md#shutdown-budgets) and [session stop and recovery](../operations.md#session-stop-and-recovery).
+
+## Hub resource capacity
+
+The chart requests 250m CPU and 512Mi memory for each API pod. Its default limits
+are 2 CPUs and 1Gi memory. These settings do not change sandbox resources.
+
+With more than a few hundred notebooks, remove the CPU limit. This prevents
+throttling of concurrent catalog parsing. Monitor memory and set its limit for
+your workload. To remove the default CPU limit, set it to `null` in a Helm values
+override:
+
+```yaml
+resources:
+  requests: { cpu: 250m, memory: 512Mi }
+  limits: { cpu: null, memory: 1Gi }
+```
 
 ## Troubleshooting
 
@@ -243,21 +260,4 @@ file-IO errors.
 - [Compute](../compute.md), [Storage](../storage.md), [Auth](../auth.md)
 - `examples/kubernetes` — RBAC + Deployment manifests.
 - [Configuration](../configuration.md) for every variable.
-
-## Hub resource capacity
-
-The chart requests 250m CPU and 512Mi memory for each API pod. Its default limits
-are 2 CPUs and 1Gi memory. These settings do not change sandbox resources.
-
-For deployments with more than a few hundred notebooks, remove the CPU limit
-to avoid throttling concurrent catalog parsing. Monitor memory and adjust its
-limit for the workload. In a Helm values override, use `null` to remove the
-default CPU limit:
-
-```yaml
-resources:
-  requests: { cpu: 250m, memory: 512Mi }
-  limits: { cpu: null, memory: 1Gi }
-```
-
-See [asset caching](./asset-caching.md) to reuse marimo frontend assets across sessions.
+- [Asset caching](./asset-caching.md) to reuse marimo frontend assets across sessions.

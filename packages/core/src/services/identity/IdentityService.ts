@@ -227,8 +227,8 @@ export class IdentityService {
 	/**
 	 * Resolve an email to an identity (case-insensitive), or null if that email
 	 * has never logged in. Ids are the primary key, so two subs can share an
-	 * email (e.g. after an auth-backend migration); the most recently refreshed
-	 * record wins.
+	 * email (e.g. after an auth-backend migration); the most recently changed
+	 * record wins. Logins that change nothing do not advance `updated_at`.
 	 */
 	async getByEmail(email: string): Promise<Identity | null> {
 		const matches = await this.findByEmail(email);

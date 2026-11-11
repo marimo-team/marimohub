@@ -1035,6 +1035,14 @@ describe('app pool admission and lifecycle', () => {
 		},
 	);
 
+	it('reports reconciled visits without object ID tags', async () => {
+		await ready(await admit());
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		const service = new AppPoolService(bucket, sessions, policy, metrics, () => now);
+		await service.reconcile(pid, nid, effects());
+		expect(metrics.gauge).toHaveBeenCalledExactlyOnceWith('app_pool.visits', 1);
+	});
+
 	it('does not treat session lookup failures as missing sandboxes', async () => {
 		await ready(await admit());
 		const before = await pool.store.read(pid, nid);

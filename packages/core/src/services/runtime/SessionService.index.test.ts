@@ -85,16 +85,45 @@ describe('per-user session index', () => {
 		expect(get.mock.calls[1]?.[1]).toMatchObject({ ifNoneMatch: expect.any(String) });
 	});
 
-	it('concurrent replicas register both starts and derive the same queue as the scan', async () => {
+	it('concurrent replicas register both starts and derive the same queue', async () => {
 		const { bucket, sessions, input, index } = fixture();
 		const other = new SessionService(bucket, undefined, undefined, () => true);
 		const created = await Promise.all([sessions.createSession(input), other.createSession(input)]);
 		expect((await index.read(ACTOR))!.entries).toHaveLength(2);
 		const scanned = await new SessionService(bucket, undefined, undefined).listActiveForUser(ACTOR);
-		expect(await sessions.listActiveForUser(ACTOR)).toEqual(scanned);
-		expect(await other.listActiveForUser(ACTOR)).toEqual(scanned);
+		const queue = await sessions.listActiveForUser(ACTOR);
+		expect(await other.listActiveForUser(ACTOR)).toEqual(queue);
+		expect(queue.map((s) => s.session_id).sort()).toEqual(scanned.map((s) => s.session_id).sort());
 		await other.setRunning(input.project_id, created[1].session_id, 'https://kernel.example');
 		expect((await sessions.listActiveForUser(ACTOR))[0]?.session_id).toBe(created[1].session_id);
+	});
+
+	it('ranks a late registration behind a later start that already passed the cap', async () => {
+		const { bucket, sessions, input, index } = fixture();
+		const other = new SessionService(bucket, undefined, undefined, () => true);
+		await index.update(ACTOR, async () => []);
+		vi.useFakeTimers({ toFake: ['Date'] });
+		try {
+			vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+			const gate = pauseNextIndexWrite(bucket);
+			const slow = sessions.createSession(input);
+			await gate.entered;
+			vi.setSystemTime(new Date('2026-01-01T00:00:01.000Z'));
+			const fast = await other.createSession(input);
+			const fastRank = (await other.listActiveForUser(ACTOR)).findIndex(
+				(s) => s.session_id === fast.session_id,
+			);
+			gate.release();
+			const late = await slow;
+			expect(late.started_at < fast.started_at).toBe(true);
+			const lateRank = (await sessions.listActiveForUser(ACTOR)).findIndex(
+				(s) => s.session_id === late.session_id,
+			);
+			// With a cap of one, only rank 0 is admitted.
+			expect([fastRank, lateRank]).toEqual([0, 1]);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('validates and removes missing and terminal entries, retaining unreclaimed apps', async () => {
@@ -276,6 +305,16 @@ describe('per-user session index', () => {
 		expect((await sessions.listActiveForUser(ACTOR)).map((s) => s.session_id)).toEqual([
 			session.session_id,
 		]);
+	});
+
+	it('treats terminal cleanup for a user without an index as a no-op', async () => {
+		const { bucket, metrics, sessions, input, index } = fixture();
+		const legacy = await legacySessions(bucket).createSession(input);
+		expect((await sessions.terminate(input.project_id, legacy.session_id)).status).toBe(
+			'terminated',
+		);
+		expect(metrics.increment).not.toHaveBeenCalledWith('sessions.index.write_failed');
+		expect(await index.read(ACTOR)).toBeNull();
 	});
 
 	it('does not fail termination or count stale entries when index cleanup is unavailable', async () => {

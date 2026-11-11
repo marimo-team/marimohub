@@ -1,17 +1,24 @@
 /**
- * base64url (RFC 4648 §5) helpers, padding-free — safe in a URL path segment and
- * in a JWS/JWT. Shared by `proxyToken.ts` (HMAC routing tokens) and
- * `WorkloadIdentityIssuer.ts` (RS256 JWTs) so the two never drift.
+ * base64 helpers for both RFC 4648 alphabets. base64url (§5) is padding-free — safe in a URL path
+ * segment and in a JWS/JWT. Shared by `proxyToken.ts` (HMAC routing tokens) and
+ * `WorkloadIdentityIssuer.ts` (RS256 JWTs) so the two never drift. Standard base64 (§4) is padded.
  *
  * Uses `btoa`/`atob` (available on Node and Workers) rather than `Buffer`, to
  * keep `core` runtime-agnostic.
  */
 
+/** Encode bytes as padded standard base64. */
+export function toBase64(bytes: Uint8Array): string {
+	let bin = '';
+	// Chunked to stay below the engine's argument-count limit on large payloads.
+	for (let i = 0; i < bytes.length; i += 8192)
+		bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
+	return btoa(bin);
+}
+
 /** Encode bytes as padding-free base64url. */
 export function toBase64Url(bytes: Uint8Array): string {
-	let bin = '';
-	for (const b of bytes) bin += String.fromCharCode(b);
-	return btoa(bin).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+	return toBase64(bytes).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 }
 
 /** Decode padding-free base64url back to bytes. Throws on invalid input. */

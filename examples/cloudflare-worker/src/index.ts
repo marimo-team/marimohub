@@ -332,7 +332,13 @@ async function runScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
 			await idempotency.prune();
 			await hostRetries.compactExpired();
 			await proposals.pruneExpiredPayloads();
-			await workingBranches.pruneExpiredPayloads();
+			if (workingBranches.enabled) {
+				try {
+					await workingBranches.pruneExpiredPayloads();
+				} catch (error) {
+					logOperationalError('working_branch.maintenance_failed', {}, error);
+				}
+			}
 			await projects.claimPendingInvites();
 		} finally {
 			await lock.release('cloudflare-scheduled');

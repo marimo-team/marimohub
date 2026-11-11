@@ -5,7 +5,6 @@ import {
 } from '../catalog/retentionCursor';
 import { BoundedLruMap } from '../../cache';
 import type { PromiseMemo } from '../../cache';
-import { z } from 'zod';
 import { sha256Hex } from '../../internal/sha256';
 import { deferOrAwait } from '../../ports/backgroundWork';
 import type { BackgroundWork } from '../../ports/backgroundWork';
@@ -115,10 +114,6 @@ export const MAX_VERSIONS = 50;
 export const DEFAULT_DELETED_NOTEBOOK_RETENTION_MS = Millis.days(30);
 
 const NOTEBOOK_GC_CURSOR_KEY = '_system/notebook-gc-cursor.json';
-const NotebookGcCursorSchema = z.object({
-	after: z.string(),
-	next_at: z.number(),
-});
 const GC_CYCLES_PER_DAY = 24;
 
 type SessionArtifact = {
@@ -1769,30 +1764,25 @@ export class NotebookService {
 	}
 
 	private async sweepNotebookArtifacts(projects: Snapshot['projects']): Promise<void> {
-		const cursorObject = await this.bucket.get(NOTEBOOK_GC_CURSOR_KEY);
-		const cursor = cursorObject
-			? await readStored(NotebookGcCursorSchema, cursorObject, NOTEBOOK_GC_CURSOR_KEY)
-			: undefined;
+		const cursor = await readRetentionCursor(this.bucket, NOTEBOOK_GC_CURSOR_KEY);
 		const now = Date.now();
-		if (cursor && cursor.next_at > now) return;
-		const notebooks = projects
-			.flatMap((project) =>
-				project.notebooks.map((notebook) => ({
-					projectId: project.id,
-					notebookId: notebook.id,
-					key: `${project.id}/${notebook.id}`,
-				})),
-			)
-			.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+		if (cursor.next_at !== undefined && cursor.next_at > now) return;
+		const notebooks = projects.flatMap((project) =>
+			project.notebooks.map((notebook) => ({
+				projectId: project.id,
+				notebookId: notebook.id,
+				key: `${project.id}/${notebook.id}`,
+			})),
+		);
 		if (notebooks.length === 0) return;
 		const batchSize = Math.ceil(notebooks.length / GC_CYCLES_PER_DAY);
-		const start = Math.max(
-			0,
-			notebooks.findIndex((notebook) => notebook.key > (cursor?.after ?? '')),
-		);
-		const batch = notebooks.slice(start, start + batchSize);
+		const batch = retentionBatch(notebooks, cursor.after, batchSize);
+		const last = batch.at(-1)!.key;
 		this.metrics.gauge('notebook_gc.rotation.total', notebooks.length);
-		this.metrics.gauge('notebook_gc.rotation.position', start + batch.length);
+		this.metrics.gauge(
+			'notebook_gc.rotation.position',
+			notebooks.filter((notebook) => notebook.key <= last).length,
+		);
 		this.metrics.increment('notebook_gc.visited', batch.length);
 		await mapWithConcurrency(batch, BUCKET_SCAN_CONCURRENCY, async ({ projectId, notebookId }) => {
 			await this.workspace.sweepUploads(projectId, notebookId).catch((error) => {
@@ -1810,21 +1800,14 @@ export class NotebookService {
 				);
 			});
 		});
-		try {
-			await this.bucket.put(
-				NOTEBOOK_GC_CURSOR_KEY,
-				JSON.stringify({
-					after: batch.at(-1)!.key,
-					next_at:
-						Math.max(cursor?.next_at ?? now, now - Millis.hours(1)) +
-						Millis.days(1) / Math.ceil(notebooks.length / batchSize),
-				}),
-				cursorObject ? { onlyIfEtagMatches: cursorObject.etag } : { onlyIfNotExists: true },
-			);
-		} catch (error) {
-			// Another maintenance worker progressed; do not move its cursor backwards.
-			if (!(error instanceof PreconditionFailedError)) throw error;
-		}
+		await writeRetentionCursor(
+			this.bucket,
+			NOTEBOOK_GC_CURSOR_KEY,
+			last,
+			cursor,
+			Math.max(cursor.next_at ?? now, now - Millis.hours(1)) +
+				Millis.days(1) / Math.ceil(notebooks.length / batchSize),
+		);
 	}
 
 	/**
@@ -1916,7 +1899,7 @@ export class NotebookService {
 			}
 			after = key;
 		}
-		await writeRetentionCursor(this.bucket, cursorKey, after, cursor.etag);
+		await writeRetentionCursor(this.bucket, cursorKey, after, cursor);
 		return { purged, orphanedSnapshots };
 	}
 }

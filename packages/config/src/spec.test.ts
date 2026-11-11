@@ -59,6 +59,7 @@ function scanReferencedIds(): Set<string> {
 		for (const m of src.matchAll(/MARIMOHUB_[A-Z0-9_]*[A-Z0-9]\b/g)) found.add(m[0]);
 		// `PORT` is read as `process.env.PORT` and does not carry the prefix.
 		if (/process\.env\.PORT\b/.test(src)) found.add('PORT');
+		if (/env\.LOG_LEVEL\b/.test(src)) found.add('LOG_LEVEL');
 	}
 	for (const id of IGNORED) found.delete(id);
 	return found;

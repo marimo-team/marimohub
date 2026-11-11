@@ -462,3 +462,60 @@ it('does not activate a later receipt before its predecessor completes', async (
 	expect(service.isComplete('next-v1')).toBe(false);
 	expect(runBatch).not.toHaveBeenCalled();
 });
+
+it('advances an independent migration while an earlier one keeps failing', async () => {
+	const bucket = new MemoryBucket();
+	const failing = vi.fn<BackgroundMigration['runBatch']>().mockRejectedValue(new Error('stuck'));
+	const independent = vi.fn(complete);
+	const registry = [definition(failing), { id: 'test-v2', after: [], runBatch: independent }];
+	const service = new MigrationService(bucket, registry);
+	await expect(service.tick()).rejects.toThrow('stuck');
+	expect(independent).toHaveBeenCalledOnce();
+	expect(service.isComplete('test-v2')).toBe(true);
+	const reader = new MigrationService(bucket, registry);
+	await reader.refreshCompleted();
+	expect(reader.isComplete('test-v2')).toBe(true);
+});
+
+it('rejects a dependency on a migration that is not registered earlier', () => {
+	expect(
+		() =>
+			new MigrationService(new MemoryBucket(), [
+				{ id: 'test-v2', after: [id], runBatch: complete },
+				definition(),
+			]),
+	).toThrow('must follow');
+});
+
+it('backs off a repeatedly failing migration, then resets after success', async () => {
+	let now = 1_000;
+	vi.spyOn(Date, 'now').mockImplementation(() => now);
+	const bucket = new MemoryBucket();
+	const runBatch = vi
+		.fn<BackgroundMigration['runBatch']>()
+		.mockRejectedValueOnce(new Error('stuck'))
+		.mockRejectedValueOnce(new Error('stuck'))
+		.mockRejectedValueOnce(new Error('stuck'))
+		.mockRejectedValueOnce(new Error('stuck'))
+		.mockResolvedValueOnce({ done: false, cursor: 'next' })
+		.mockRejectedValueOnce(new Error('stuck'))
+		.mockResolvedValue({ done: true });
+	const service = new MigrationService(bucket, [definition(runBatch)]);
+	await expect(service.tick()).rejects.toThrow('stuck');
+	await expect(service.tick()).rejects.toThrow('stuck');
+	await expect(service.tick()).rejects.toThrow('stuck');
+	expect(await service.tick()).toBe(false);
+	now += 29_999;
+	expect(await service.tick()).toBe(false);
+	expect(runBatch).toHaveBeenCalledTimes(3);
+	now += 1;
+	await expect(service.tick()).rejects.toThrow('stuck');
+	now += 59_999;
+	expect(await service.tick()).toBe(false);
+	expect(runBatch).toHaveBeenCalledTimes(4);
+	now += 1;
+	expect(await service.tick()).toBe(false);
+	await expect(service.tick()).rejects.toThrow('stuck');
+	expect(await service.tick()).toBe(true);
+	expect(runBatch).toHaveBeenCalledTimes(7);
+});

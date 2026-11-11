@@ -21,6 +21,7 @@ import {
 	saveWorkingBranch,
 	resumeWorkingBranch,
 	OpenWorkingBranchPrBody,
+	readWorkingBranchSave,
 	SaveWorkingBranchBody,
 	WorkingBranchSaveResponse,
 	toWorkingBranchStatus,
@@ -65,7 +66,7 @@ export function registerWorkingBranchTools(
 		);
 	const saveResult = (receipt: WorkingBranchSave) => ({
 		...WorkingBranchSaveResponse.parse(receipt),
-		recovery_url: `${request.appBaseUrl}/api/v1/projects/${receipt.project_id}/notebooks/${receipt.notebook_id}/saves/${receipt.id}/recovery`,
+		recovery_url: `${request.appBaseUrl}/api/v1/projects/${receipt.project_id}/notebooks/${receipt.notebook_id}/working-branch/saves/${receipt.id}/recovery`,
 	});
 
 	function register<T extends { project: string }>(
@@ -234,18 +235,17 @@ export function registerWorkingBranchTools(
 	);
 	register(
 		'get_branch_save',
-		'Inspect a save receipt and obtain an authenticated recovery archive URL. Captured bytes become eligible for cleanup at expires_at unless retained for unresolved publication.',
+		'Inspect your save receipt and obtain an authenticated recovery archive URL. Only the save author or a project manager can read it. Captured bytes become eligible for cleanup at expires_at unless retained for unresolved publication.',
 		selection.extend({ save_id: saveId }),
 		true,
 		async (input) => {
 			const { project: p, notebook: n } = await resolveNotebook(input);
-			const receipt = await deps.services.workingBranches.getSave(p.id, n.id, input.save_id);
-			return saveResult(receipt);
+			return saveResult(await readWorkingBranchSave(deps, principal, p.id, n.id, input.save_id));
 		},
 	);
 	register(
 		'retry_branch_save',
-		'Resume your existing save by operation id without recapturing changes. Use after reloading or a partial provider/hub failure.',
+		'Resume an existing save by operation id without recapturing changes. Use after reloading or a partial provider/hub failure. Authors can resume any stage; any editor can finish a save already committed on GitHub.',
 		selection.extend({ save_id: saveId }),
 		false,
 		async (input, signal) => {

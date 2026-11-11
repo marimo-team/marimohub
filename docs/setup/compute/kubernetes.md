@@ -18,7 +18,7 @@ the cluster is ready:
 ```bash
 MARIMOHUB_COMPUTE_BACKEND=kubernetes
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
-MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com           # kernels at https://<id>.hub.example.com
+MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=sandboxes.example.net     # kernels at https://<id>.sandboxes.example.net (separate domain from the app)
 MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE=marimo-kernels
 MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS=traefik
 MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls

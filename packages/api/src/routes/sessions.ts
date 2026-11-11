@@ -38,6 +38,7 @@ import {
 	PREVIEW_IDLE_MS,
 	AppVisitSchema,
 	sleep,
+	jitteredBackoff,
 	BadRequestError,
 	ConflictError,
 	PreconditionFailedError,
@@ -1737,8 +1738,9 @@ async function startNotebookSessionOnce(
 		notebookId: nid,
 		userId: user.id,
 		versionId: sourceVersionId!,
-		startupMs:
-			sandbox.startupTimeoutMs === 0 ? 900_000 : (sandbox.startupTimeoutMs ?? 120_000) + 30_000,
+		// The startup timeout bounds only the kernel-port wait, not cold boot, image pull,
+		// or workspace restore, and nothing renews this reservation while a start runs.
+		startupMs: Math.max((sandbox.startupTimeoutMs ?? 0) + 30_000, 900_000),
 		readSession: true,
 	};
 	const admitApp = () =>
@@ -1754,7 +1756,7 @@ async function startNotebookSessionOnce(
 					throw error;
 				if (attempt === 3)
 					throw new UnavailableError('The app is busy. Retry shortly.', { cause: error });
-				await sleep(Math.floor(Math.random() * Math.min(2000, 250 * 2 ** attempt)));
+				await sleep(jitteredBackoff(attempt, { baseMs: 250, capMs: 2000, jitter: 1 }));
 			}
 		}
 	};
@@ -1778,7 +1780,7 @@ async function startNotebookSessionOnce(
 			} catch (error) {
 				if (!(error instanceof NotFoundError)) throw error;
 			}
-			await sleep(Math.floor(Math.min(200, 50 * 2 ** attempt) * (0.5 + Math.random() * 0.5)));
+			await sleep(jitteredBackoff(attempt, { baseMs: 50, capMs: 200, jitter: 0.5 }));
 		}
 		throw new UnavailableError('The app is starting. Retry shortly.');
 	};
@@ -1906,7 +1908,7 @@ async function startNotebookSessionOnce(
 	let sandboxMayExist = false;
 	let workspaceStarted = false;
 	const deferBootForAdmission = capsFor(deps, mode, pid, user.id).some(
-		({ max }) => max !== undefined && max > 0,
+		({ max, preflight }) => !preflight && max !== undefined && max > 0,
 	);
 	const recordSandboxCleanup = async () => {
 		if (sessionRecordAttempted) {

@@ -488,7 +488,7 @@ export async function captureWorkingBranchChanges(
 	tree: SandboxWorkspaceLayout,
 	base: VersionPaths,
 	check?: () => Promise<void>,
-): Promise<CapturedProposalChanges> {
+): Promise<CapturedProposalChanges & { baselineSizes: Map<string, number> }> {
 	let renewedAt = 0;
 	const renew = async () => {
 		if (check && Date.now() - renewedAt >= 30_000) {
@@ -573,5 +573,6 @@ export async function captureWorkingBranchChanges(
 		if (changes.length > MAX_PROPOSAL_CHANGES)
 			throw new ValidationError('Working branch save exceeds the file limit');
 	}
-	return { strategy: 'git-working-tree', changes };
+	const baselineSizes = new Map([...baseline].map(([path, object]) => [path, object.size]));
+	return { strategy: 'git-working-tree', changes, baselineSizes };
 }

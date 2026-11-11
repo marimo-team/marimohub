@@ -1,6 +1,6 @@
 import type { MiddlewareHandler } from 'hono';
 import { compress, COMPRESSIBLE_CONTENT_TYPE_REGEX } from 'hono/compress';
-import { appendVary } from '@marimo-hub/api';
+import { appendVary, hasCacheDirective } from '@marimo-hub/api';
 
 const MIN_COMPRESSION_BYTES = 1024;
 
@@ -29,7 +29,7 @@ export function compressResponse(): MiddlewareHandler {
 			!response.body ||
 			response.headers.has('Content-Encoding') ||
 			response.headers.has('Transfer-Encoding') ||
-			/(?:^|,)\s*no-transform\s*(?:,|$)/i.test(response.headers.get('Cache-Control') ?? '') ||
+			hasCacheDirective(response.headers.get('Cache-Control'), 'no-transform') ||
 			!isCompressible(response.headers.get('Content-Type') ?? '')
 		)
 			return;

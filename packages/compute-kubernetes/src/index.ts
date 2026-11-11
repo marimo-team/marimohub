@@ -59,6 +59,7 @@ import {
 } from '@marimo-hub/compute-commons';
 import { forEachConcurrentUntilFailure } from '@marimo-hub/core/async';
 import { Millis } from '@marimo-hub/core/duration';
+import { NotFoundError } from '@marimo-hub/core/errors';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import type { Timings } from '@marimo-hub/core/timing';
 import { createK8sClient } from './client';
@@ -363,7 +364,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 			await this.client.reconcileRoutes(options);
 			const confirmed = await this.existingPod();
 			if (pod.uid !== confirmed.uid) {
-				throw new Error(`Kubernetes sandbox ${this.id} was replaced during reconnect`);
+				throw new NotFoundError(`Kubernetes sandbox ${this.id} was replaced during reconnect`);
 			}
 			this.resolved = true;
 			return;
@@ -379,10 +380,10 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	private async existingPod(): Promise<K8sPodPhaseInfo> {
 		const pod = await this.client.getPhase(this.name);
 		if (pod?.phase !== 'Running') {
-			throw new Error(`Kubernetes sandbox ${this.id} is no longer running`);
+			throw new NotFoundError(`Kubernetes sandbox ${this.id} is no longer running`);
 		}
 		if (pod.managedBy !== MANAGED_BY_VALUE || pod.sandboxId !== this.id) {
-			throw new Error(`Kubernetes Pod ${this.name} does not belong to sandbox ${this.id}`);
+			throw new NotFoundError(`Kubernetes Pod ${this.name} does not belong to sandbox ${this.id}`);
 		}
 		return pod;
 	}

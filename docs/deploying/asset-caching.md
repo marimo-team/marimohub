@@ -4,52 +4,61 @@ description: Share marimo assets across sessions and configure response compress
 
 # Asset caching and compression
 
-Each sandbox has a different origin or session path. A shared asset URL lets
-browsers reuse marimo's frontend across sessions and projects.
-
-## Shared marimo assets
-
-For internet-connected deployments, set:
-
-```bash
-MARIMOHUB_COMPUTE_ASSET_URL='https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist'
-```
-
-Keep `{version}`: marimo substitutes its installed version, which can differ
-between notebook environments. The CDN must contain each deployed version.
-This setting supports both proxy and subdomain exposure.
-
-The CDN receives browser requests and the marimo version. For disconnected
-deployments, leave the setting unset to use each sandbox's bundled assets.
-
-Before production rollout, run these checks in staging:
-
-1. Open an editor and an app with the setting enabled.
-2. Load workers, WASM, and fonts without CORS or CSP errors.
-3. Open a second session and check for disk or memory cache hits in DevTools.
-4. Compare transferred bytes between the two sessions.
-
-The sandbox's CSP must allow the asset origin for scripts, styles, fonts, and
-fetches. Cross-origin module workers also need `worker-src blob:`.
-The hub SPA's CSP does not control sandbox documents.
-If any check fails, leave the setting unset.
+Each sandbox has a different origin or session path. A shared asset origin lets
+browsers reuse marimo's frontend across sessions and projects. See
+[Shared marimo assets](../marimo-assets.md) for the `MARIMOHUB_COMPUTE_ASSET_URL`
+values, staging, and verification.
 
 ## Hub responses
 
-The Node server compresses eligible API and proxied kernel responses with gzip
-or deflate. It skips declared bodies smaller than 1 KiB, event streams, range
-responses, and already-encoded responses. Unknown-length responses compress
-without a size probe. WebSocket upgrades bypass compression.
+The Node server applies all of these rules. The Cloudflare Worker applies only the
+API revalidation rules.
 
-The frontend build emits Brotli and gzip files when they reduce asset size.
-The static server selects these files and retains immutable caching for
-fingerprinted assets. The HTML shell stays uncompressed for base URL insertion.
+### Compression
 
-Eligible `/api/v1` JSON GET responses up to 256 KiB receive weak ETags unless the route
-already sets one. Matching `If-None-Match` requests return `304 Not Modified`
-with cache metadata and no body. `Cache-Control: no-store` disables revalidation
-and ETag generation. Generated ETags hash the uncompressed body, allowing reuse
-across encodings. Compression weakens strong ETags.
+The Node server compresses eligible `/api/*` and proxied kernel responses with
+gzip or deflate. It does not compress these responses:
+
+- Bodies with a declared length below 1 KiB.
+- Event streams, `HEAD` responses, and range responses.
+- Responses that already have `Content-Encoding` or `Transfer-Encoding`.
+- Responses with `Cache-Control: no-transform`.
+
+The server compresses unknown-length responses without a size probe. WebSocket
+upgrades bypass compression. Compressed and `304` responses carry
+`Vary: Accept-Encoding`. Compression changes a strong `ETag` to a weak `ETag`.
+
+### Static files
+
+The frontend build adds Brotli and gzip files when they are smaller than the
+original. The static server selects these files and adds `Vary: Accept-Encoding`.
+Fingerprinted files under `/assets/` get
+`Cache-Control: public, max-age=31536000, immutable`. The HTML shell and other
+files get `Cache-Control: public, max-age=0, must-revalidate`.
+
+The HTML shell stays uncompressed, because the server inserts the base URL at
+request time. The server also inserts a script that prefetches API data. It
+removes the shell's `fetch` preload tags, because the script would request each
+URL a second time. The Cloudflare Worker and static hosts keep the preload tags.
+
+### Hub-served marimo assets
+
+Hashed files under `/_marimo/{version}/` get
+`Cache-Control: public, max-age=31536000, immutable`. Unhashed files revalidate.
+Errors get `Cache-Control: no-store`. Files from the static root carry
+`Vary: Accept-Encoding`, `Access-Control-Allow-Origin: *`,
+`Cross-Origin-Resource-Policy: cross-origin`, and `X-Content-Type-Options: nosniff`.
+
+### API revalidation
+
+A successful `/api/v1` `GET` gets `Cache-Control: private, no-cache`, unless the
+route sets its own policy. A JSON `GET` or `HEAD` response with a declared length
+of 256 KiB or less gets a weak `ETag`, unless the route sets one. A matching
+`If-None-Match` request returns `304 Not Modified` with cache metadata and no body.
+`Cache-Control: no-store` disables the `ETag` and revalidation. The generated
+`ETag` hashes the uncompressed body, so it stays the same across encodings.
+
+### Verify through the ingress
 
 Before rollout, check these behaviors through the deployed ingress:
 
@@ -62,8 +71,6 @@ See [CKS kernel compression](./cks.md#kernel-response-compression) for Traefik c
 ## Connection capacity
 
 `MARIMOHUB_STORAGE_S3_MAX_SOCKETS` sets the S3 connection limit per origin for
-HTTP and HTTPS. It accepts positive safe integers and defaults to 256.
-Keep-alive and request deadlines remain unchanged.
-
-GCS and Azure have no equivalent per-client socket-count setting.
+HTTP and HTTPS. It accepts positive safe integers. The default is 256.
+GCS and Azure have no equivalent per-client setting.
 See [Kubernetes capacity](./kubernetes.md#hub-resource-capacity) for hub resource limits.

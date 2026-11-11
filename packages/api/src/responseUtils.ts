@@ -9,3 +9,8 @@ export function appendVary(headers: Headers, field: string): void {
 		headers.set('Vary', vary ? `${vary}, ${field}` : field);
 	}
 }
+
+export function hasCacheDirective(cacheControl: string | null, directive: string): boolean {
+	const name = directive.toLowerCase();
+	return (cacheControl ?? '').split(',').some((value) => value.trim().toLowerCase() === name);
+}

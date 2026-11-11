@@ -22,6 +22,7 @@ import type {
 	SourceControlReader,
 	SourceReadOptions,
 	NotebookId,
+	NotebookPreview,
 	ProjectId,
 	Session,
 	AuthorizationAction,
@@ -110,6 +111,19 @@ async function prepare(id: string) {
 		await api.deps.services.previews.get(pid, nid, PreviewId.parse(id)),
 		api.deps.sourceControl,
 	);
+}
+// Clears the retry delay; the failure cap and pinned-commit rule still apply.
+async function prepareDue(
+	record: NotebookPreview,
+	patch: Partial<NotebookPreview> = {},
+	signal?: AbortSignal,
+) {
+	const current = await api.deps.services.previews.get(pid, nid, record.id);
+	await api.bucket.put(
+		paths.preview(pid, nid, record.id),
+		JSON.stringify({ ...current, next_attempt_at: 0, ...patch }),
+	);
+	return api.deps.services.previews.prepare(current, api.deps.sourceControl, signal);
 }
 async function create(input = body) {
 	const result = await expectOk<{ id: string }>(await api.request('POST', base, input), 202);
@@ -312,7 +326,7 @@ describe('Notebook previews', () => {
 			return result;
 		});
 		const controller = new AbortController();
-		const preparing = service.prepare(record, api.deps.sourceControl, false, controller.signal);
+		const preparing = service.prepare(record, api.deps.sourceControl, controller.signal);
 		try {
 			await reached.promise;
 			controller.abort();
@@ -482,7 +496,7 @@ describe('Notebook previews', () => {
 			expect(first).not.toHaveProperty(field);
 
 		head = NEXT;
-		const latest = await api.deps.services.previews.prepare(record, api.deps.sourceControl, true);
+		const latest = await prepareDue(record);
 		const publicPreview = await expectOk<{ version_id: string }>(
 			await appUser.request('GET', `${base}/${record.id}`),
 		);
@@ -670,7 +684,7 @@ describe('Notebook previews', () => {
 			await api.request('POST', `${base}/${record.id}/sessions`, { mode: 'app' }),
 		);
 		head = NEXT;
-		const latest = await api.deps.services.previews.prepare(record, api.deps.sourceControl, true);
+		const latest = await prepareDue(record);
 		const second = await expectOk<Session>(
 			await api.request('POST', `${base}/${record.id}/sessions`, { mode: 'app' }),
 		);
@@ -713,22 +727,15 @@ describe('Notebook previews', () => {
 		);
 		pinned = await api.deps.services.previews.prepare(pinned, api.deps.sourceControl);
 		head = NEXT;
-		const updated = await api.deps.services.previews.prepare(moving, api.deps.sourceControl, true);
+		const updated = await prepareDue(moving);
 		expect(updated.id).toBe(moving.id);
 		expect(updated.current?.commit).toBe(NEXT);
 		expect(updated.current?.notebook_id).not.toBe(moving.current?.notebook_id);
-		const unchanged = await api.deps.services.previews.prepare(
-			pinned,
-			api.deps.sourceControl,
-			true,
-		);
+		const unchanged = await prepareDue(pinned);
 		expect(unchanged.current).toEqual(pinned.current);
 		expect(reader.resolveCommit).toHaveBeenCalledTimes(1);
 		head = SHA;
-		expect(
-			(await api.deps.services.previews.prepare(updated, api.deps.sourceControl, true)).current
-				?.commit,
-		).toBe(SHA);
+		expect((await prepareDue(updated)).current?.commit).toBe(SHA);
 		expect(
 			PreviewCreateSchema.safeParse({ ...body, source: { type: 'branch', branch: SHA } }).success,
 		).toBe(true);
@@ -871,7 +878,7 @@ describe('Notebook previews', () => {
 		reader.fetchWorkspace = async () => {
 			throw new Error('provider failure');
 		};
-		const failed = await api.deps.services.previews.prepare(record, api.deps.sourceControl, true);
+		const failed = await prepareDue(record);
 		expect(failed.preparation).toBe('failed');
 		expect(failed.current).toEqual(record.current);
 		reader.getPullRequest = async () => ({
@@ -881,9 +888,7 @@ describe('Notebook previews', () => {
 			commit: head,
 			sameRepository: true,
 		});
-		expect(
-			(await api.deps.services.previews.prepare(failed, api.deps.sourceControl, true)).state,
-		).toBe('deleting');
+		expect((await prepareDue(failed)).state).toBe('deleting');
 	});
 
 	it.each(['fresh', 'validated'] as const)(
@@ -1028,11 +1033,7 @@ describe('Notebook previews', () => {
 	it('prunes unused old revisions and drops deleted maintenance markers after the grace period', async () => {
 		const original = await create();
 		head = NEXT;
-		const updated = await api.deps.services.previews.prepare(
-			original,
-			api.deps.sourceControl,
-			true,
-		);
+		const updated = await prepareDue(original);
 		await sweepPreviews(api.deps);
 		const pruned = await api.deps.services.previews.get(pid, nid, original.id);
 		expect(pruned.revisions.map((revision) => revision.notebook_id)).toEqual([
@@ -1058,8 +1059,7 @@ describe('Notebook previews', () => {
 	it('shares discovery across previews but rechecks each runtime before reclamation', async () => {
 		const records = [await create(), await create({ ...body, name: 'Second preview' })];
 		head = NEXT;
-		for (const record of records)
-			await api.deps.services.previews.prepare(record, api.deps.sourceControl, true);
+		for (const record of records) await prepareDue(record);
 		const scan = vi.spyOn(api.deps.services.sessions, 'listByProject');
 		await sweepPreviews(api.deps);
 		expect(scan.mock.calls).toEqual([
@@ -1077,8 +1077,7 @@ describe('Notebook previews', () => {
 	it('retains revisions when discovery fails and retries discovery on the next sweep', async () => {
 		const records = [await create(), await create({ ...body, name: 'Second preview' })];
 		head = NEXT;
-		for (const record of records)
-			await api.deps.services.previews.prepare(record, api.deps.sourceControl, true);
+		for (const record of records) await prepareDue(record);
 		const scan = vi
 			.spyOn(api.deps.services.sessions, 'listByProject')
 			.mockRejectedValueOnce(new Error('Unreadable session'));
@@ -1095,7 +1094,7 @@ describe('Notebook previews', () => {
 		const record = await create();
 		head = NEXT;
 		const service = api.deps.services.previews;
-		await service.prepare(record, api.deps.sourceControl, true);
+		await prepareDue(record);
 		const scan = vi
 			.spyOn(api.deps.services.sessions, 'listByProject')
 			.mockImplementationOnce(async () => {
@@ -1114,7 +1113,7 @@ describe('Notebook previews', () => {
 		const record = await create();
 		head = NEXT;
 		const service = api.deps.services.previews;
-		const updated = await service.prepare(record, api.deps.sourceControl, true);
+		const updated = await prepareDue(record);
 		await service.prune(
 			updated,
 			async () => false,
@@ -1344,11 +1343,7 @@ describe('Preview failure recovery and boundaries', () => {
 			409,
 		);
 		expect(await api.deps.services.sessions.listActiveByProject(pid)).toEqual([]);
-		const recovered = await api.deps.services.previews.prepare(
-			record,
-			api.deps.sourceControl,
-			true,
-		);
+		const recovered = await prepareDue(record);
 		expect(recovered.id).toBe(record.id);
 		expect(recovered.preparation).toBe('ready');
 		expect(recovered.error).toBeUndefined();
@@ -1360,7 +1355,7 @@ describe('Preview failure recovery and boundaries', () => {
 		vi.mocked(reader.getBranchHead).mockRejectedValue(
 			new ValidationError('Branch no longer exists'),
 		);
-		const failed = await api.deps.services.previews.prepare(record, api.deps.sourceControl, true);
+		const failed = await prepareDue(record);
 		expect(failed.state).toBe('active');
 		expect(failed.preparation).toBe('failed');
 		expect(failed.current).toEqual(record.current);
@@ -1523,12 +1518,13 @@ describe('Preview failure recovery and boundaries', () => {
 			return [{ path: 'notebook.py', bytes: new TextEncoder().encode('stale') }];
 		});
 		head = NEXT;
-		const stale = api.deps.services.previews.prepare(record, api.deps.sourceControl, true);
+		const stale = prepareDue(record);
 		await started.promise;
 		try {
 			vi.setSystemTime(Date.now() + 600_001);
 			head = 'c'.repeat(40);
-			const winner = await api.deps.services.previews.prepare(record, api.deps.sourceControl, true);
+			expect((await prepareDue(record)).preparation).toBe('failed');
+			const winner = await prepareDue(record);
 			expect(winner.current?.commit).toBe(head);
 			proceed.resolve();
 			expect((await stale).current).toEqual(winner.current);
@@ -1560,11 +1556,7 @@ describe('Preview failure recovery and boundaries', () => {
 			await api.bucket.get(paths.project(pid).notebook(failedRuntime).previewMeta),
 		).not.toBeNull();
 		writes.mockRestore();
-		const recovered = await api.deps.services.previews.prepare(
-			record,
-			api.deps.sourceControl,
-			true,
-		);
+		const recovered = await prepareDue(record);
 		expect(recovered.preparation).toBe('ready');
 		expect(recovered.current?.notebook_id).not.toBe(failedRuntime);
 		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000);
@@ -1580,7 +1572,7 @@ describe('Preview failure recovery and boundaries', () => {
 			await api.request('POST', `${base}/${record.id}/sessions`, { mode: 'edit' }),
 		);
 		head = NEXT;
-		const updated = await api.deps.services.previews.prepare(record, api.deps.sourceControl, true);
+		const updated = await prepareDue(record);
 		await sweepPreviews(api.deps);
 		expect(
 			(await api.deps.services.previews.get(pid, nid, record.id)).revisions.map(
@@ -1648,7 +1640,7 @@ describe('Preview admission fencing', () => {
 			await api.request('POST', `${base}/${record.id}/sessions`, { mode: 'app' }),
 		);
 		head = NEXT;
-		await api.deps.services.previews.prepare(record, api.deps.sourceControl, true);
+		await prepareDue(record);
 		await expectError(
 			await api.request('POST', `${base}/${record.id}/sessions`, { mode: 'app' }),
 			429,
@@ -1691,7 +1683,7 @@ describe('Preview admission fencing', () => {
 		const record = await create();
 		head = NEXT;
 		const service = api.deps.services.previews;
-		const updated = await service.prepare(record, api.deps.sourceControl, true);
+		const updated = await prepareDue(record);
 		const old = record.current!.notebook_id;
 		const sid = createSessionId();
 		await service.prune(
@@ -1715,7 +1707,7 @@ describe('Preview admission fencing', () => {
 		const record = await create();
 		head = NEXT;
 		const service = api.deps.services.previews;
-		const updated = await service.prepare(record, api.deps.sourceControl, true);
+		const updated = await prepareDue(record);
 		await service.prune(
 			updated,
 			async () => false,
@@ -1789,7 +1781,7 @@ describe('Preview admission fencing', () => {
 			return put(key, bytes, options);
 		});
 		head = NEXT;
-		const updating = api.deps.services.previews.prepare(original, api.deps.sourceControl, true);
+		const updating = prepareDue(original);
 		await started.promise;
 		try {
 			const record = await api.deps.services.previews.get(pid, nid, original.id);
@@ -1838,7 +1830,7 @@ describe('Preview source and compute boundaries', () => {
 						: reader.getPullRequest!;
 			vi.mocked(method).mockRejectedValueOnce(new NotFoundError('Source unavailable'));
 			head = NEXT;
-			const failed = await api.deps.services.previews.prepare(record, api.deps.sourceControl, true);
+			const failed = await prepareDue(record);
 			expect(failed).toMatchObject({
 				state: 'active',
 				preparation: 'failed',
@@ -1849,11 +1841,7 @@ describe('Preview source and compute boundaries', () => {
 				await api.request('POST', `${base}/${record.id}/sessions`, { mode: 'app' }),
 			);
 			expect(session.origin!.revision_id).toBe(record.current!.version_id);
-			const recovered = await api.deps.services.previews.prepare(
-				failed,
-				api.deps.sourceControl,
-				true,
-			);
+			const recovered = await prepareDue(failed);
 			expect(recovered).toMatchObject({
 				state: 'active',
 				preparation: 'ready',
@@ -1878,11 +1866,7 @@ describe('Preview source and compute boundaries', () => {
 			await api.request('POST', `${base}/${record.id}/sessions`, { mode: 'app' }),
 			409,
 		);
-		const recovered = await api.deps.services.previews.prepare(
-			record,
-			api.deps.sourceControl,
-			true,
-		);
+		const recovered = await prepareDue(record);
 		expect(recovered).toMatchObject({
 			state: 'active',
 			preparation: 'ready',
@@ -1893,7 +1877,7 @@ describe('Preview source and compute boundaries', () => {
 	it('retires a preview when parent metadata is confirmed missing', async () => {
 		const record = await create();
 		await api.bucket.delete(paths.project(pid).notebook(nid).meta);
-		const result = await api.deps.services.previews.prepare(record, api.deps.sourceControl, true);
+		const result = await prepareDue(record);
 		expect(result.state).toBe('deleting');
 	});
 
@@ -1994,6 +1978,23 @@ describe('asynchronous preview preparation', () => {
 		},
 	);
 
+	it('gives a persistently failing project one priority retry, then leaves it to the rotation', async () => {
+		const service = api.deps.services.previews;
+		const record = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+		const { revisions: _revisions, ...corrupt } = record;
+		await api.bucket.put(paths.preview(pid, nid, record.id), JSON.stringify(corrupt));
+		vi.spyOn(service.store, 'projectPage').mockResolvedValue({ projects: [], cursor: undefined });
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		const queued = async () =>
+			(await (await api.bucket.get(paths.previewWork))!.json<{ pending?: string[] }>()).pending;
+		await service.preparePending(api.deps.sourceControl!);
+		expect(await queued()).toEqual([pid]);
+		await service.preparePending(api.deps.sourceControl!);
+		expect(await queued()).toEqual([]);
+		await service.preparePending(api.deps.sourceControl!);
+		expect(await queued()).toEqual([]);
+	});
+
 	it.each(['scan failure', 'shutdown before prepare'] as const)(
 		'retains a dequeued project after %s throws from scheduled work',
 		async (reason) => {
@@ -2043,16 +2044,21 @@ describe('asynchronous preview preparation', () => {
 		'does not count shutdown cancellation as a preparation failure: published=%s',
 		async (published) => {
 			const service = api.deps.services.previews;
-			const record = published
+			const created = published
 				? await create()
 				: await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
+			await api.bucket.put(
+				paths.preview(pid, nid, created.id),
+				JSON.stringify({ ...created, next_attempt_at: 0 }),
+			);
+			const record = await service.get(pid, nid, created.id);
 			const reached = Promise.withResolvers<void>();
 			vi.mocked(reader.getBranchHead).mockImplementation(() => {
 				reached.resolve();
 				return new Promise(() => {});
 			});
 			const controller = new AbortController();
-			const preparing = service.prepare(record, api.deps.sourceControl, true, controller.signal);
+			const preparing = service.prepare(record, api.deps.sourceControl, controller.signal);
 			await reached.promise;
 			controller.abort(new Error('server shutdown'));
 			const cancelled = await preparing;
@@ -2148,12 +2154,7 @@ describe('asynchronous preview preparation', () => {
 			expect(options?.signal).toBeInstanceOf(AbortSignal);
 			return new Promise(() => {});
 		});
-		const preparing = api.deps.services.previews.prepare(
-			ready,
-			api.deps.sourceControl,
-			true,
-			controller.signal,
-		);
+		const preparing = prepareDue(ready, {}, controller.signal);
 		await started.promise;
 		try {
 			const session = await expectOk<Session>(
@@ -2281,7 +2282,7 @@ describe('preview worker recovery', () => {
 		);
 		const ready = await service.prepare(pending, api.deps.sourceControl);
 		vi.spyOn(service, 'source').mockRejectedValueOnce(new Error('unavailable'));
-		const failed = await service.prepare(ready, api.deps.sourceControl, true);
+		const failed = await prepareDue(ready, { preparation: 'pending' });
 		expect(failed).toMatchObject({ preparation: 'failed', current: ready.current });
 		await expectOk(await api.request('POST', `${base}/${ready.id}/prepare`), 202);
 		expect(await service.get(pid, nid, ready.id)).toMatchObject({
@@ -2306,16 +2307,17 @@ describe('preview worker recovery', () => {
 		expect(reader.fetchWorkspace).toHaveBeenCalledOnce();
 	});
 
-	it('reports exhaustion only at the threshold when forced failures continue', async () => {
+	it('reports exhaustion once at the threshold and stops attempting', async () => {
 		const service = api.deps.services.previews;
 		let preview = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
-		vi.spyOn(service, 'source').mockRejectedValue(new Error('unavailable'));
+		const source = vi.spyOn(service, 'source').mockRejectedValue(new Error('unavailable'));
 		const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-		for (let failures = 1; failures <= 7; failures++) {
-			preview = await service.prepare(preview, api.deps.sourceControl, true);
-			expect(preview.preparation_failures).toBe(failures);
+		for (let failures = 1; failures <= 6; failures++) {
+			preview = await prepareDue(preview);
+			expect(preview.preparation_failures).toBe(Math.min(failures, 5));
 			expect(errors).toHaveBeenCalledTimes(failures < 5 ? 0 : 1);
 		}
+		expect(source).toHaveBeenCalledTimes(5);
 		expect(JSON.parse(errors.mock.calls[0][0])).toMatchObject({
 			event: 'preview_preparation_exhausted',
 			preview_id: preview.id,
@@ -2510,7 +2512,7 @@ describe('preview preparation quota failures', () => {
 			.spyOn(service.store, 'reserveArtifact')
 			.mockRejectedValueOnce(new ResourceExhaustedError('full'));
 		head = NEXT;
-		const failed = await service.prepare(record, api.deps.sourceControl, true);
+		const failed = await prepareDue(record);
 		expect(failed.preparation).toBe('failed');
 		expect(failed.current).toEqual(record.current);
 		expect(failed.revisions.map((revision) => revision.notebook_id)).toEqual(
@@ -2519,7 +2521,7 @@ describe('preview preparation quota failures', () => {
 		expect(failed.revisions).toEqual(record.revisions);
 		expect(reader.fetchWorkspace).toHaveBeenCalledOnce();
 		reserve.mockRestore();
-		const recovered = await service.prepare(failed, api.deps.sourceControl, true);
+		const recovered = await prepareDue(failed);
 		expect(recovered.current?.commit).toBe(NEXT);
 	});
 });
@@ -2548,7 +2550,7 @@ describe('preview session resource identity', () => {
 			expect(stored.notebook_id).toBe(record.current!.notebook_id);
 			expect(stored.origin).toEqual(expectedOrigin);
 			head = NEXT;
-			await api.deps.services.previews.prepare(record, api.deps.sourceControl, true);
+			await prepareDue(record);
 			const path = `/projects/${pid}/notebooks/${nid}/sessions/${started.session_id}`;
 			expect((await expectOk<Session>(await api.request('GET', path))).origin).toEqual(
 				expectedOrigin,
@@ -2742,7 +2744,7 @@ it('pins session provenance to the loaded runtime when the branch advances durin
 	await started.promise;
 	try {
 		head = NEXT;
-		await api.deps.services.previews.prepare(record, api.deps.sourceControl, true);
+		await prepareDue(record);
 	} finally {
 		proceed.resolve();
 	}

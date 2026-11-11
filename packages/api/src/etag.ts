@@ -1,5 +1,6 @@
 import type { MiddlewareHandler } from 'hono';
 import { etag, RETAINED_304_HEADERS } from 'hono/etag';
+import { hasCacheDirective } from './responseUtils';
 
 const MAX_ETAG_BYTES = 256 * 1024;
 const jsonContentType = /^application\/(?:json|[^;\s]+\+json)(?:\s*;|$)/i;
@@ -37,7 +38,7 @@ export function conditionalJsonEtag(): MiddlewareHandler {
 		if (
 			!['GET', 'HEAD'].includes(c.req.method) ||
 			response.status !== 200 ||
-			/(?:^|,)\s*no-store\s*(?:,|$)/i.test(response.headers.get('Cache-Control') ?? '') ||
+			hasCacheDirective(response.headers.get('Cache-Control'), 'no-store') ||
 			!jsonContentType.test(response.headers.get('Content-Type') ?? '')
 		)
 			return;

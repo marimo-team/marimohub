@@ -22,6 +22,8 @@ export const WarmPoolMemberSchema = z.object({
 	ready_until: Timestamp,
 	operation_until: Timestamp,
 	checked_at: Timestamp,
+	/** Consecutive transient health-check failures, cleared by a successful check. */
+	health_failures: z.number().int().nonnegative().optional(),
 	sandbox_deadline_at: Timestamp.optional(),
 	reconnect_reference: SandboxReconnectReferenceSchema.optional(),
 	destination: z

@@ -103,6 +103,24 @@ describe('BoundedLruMap', () => {
 	it.each([0, -1, 1.5, Infinity, Number.NaN])('rejects invalid capacity %s', (maxSize) => {
 		expect(() => new BoundedLruMap(maxSize)).toThrow(RangeError);
 	});
+
+	it('evicts the least recently used entries until the total weight fits', () => {
+		const map = new BoundedLruMap<string, number>(10, { weigh: (value) => value, maxWeight: 5 });
+		map.set('a', 2);
+		map.set('b', 2);
+		map.get('a');
+		map.set('c', 3);
+		expect([map.has('a'), map.has('b'), map.has('c')]).toEqual([true, false, true]);
+		map.set('c', 1);
+		map.set('d', 4);
+		expect(map.has('a')).toBe(false);
+		expect([map.has('c'), map.has('d')]).toEqual([true, true]);
+		map.delete('d');
+		map.set('e', 4);
+		expect([map.has('c'), map.has('e')]).toEqual([true, true]);
+		map.set('f', 6);
+		expect(map.size).toBe(0);
+	});
 });
 
 describe('LazyMap', () => {

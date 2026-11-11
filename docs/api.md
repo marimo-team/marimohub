@@ -159,13 +159,14 @@ server limits.
 
 ## Caching
 
-Most successful reads carry an `ETag` and `Cache-Control: no-cache`. Send the
-ETag back as `If-None-Match` to revalidate; an unchanged resource answers `304
-Not Modified` with no body. Browsers do this automatically, which keeps the
-session-status poll loop cheap.
+Successful reads carry `Cache-Control: private, no-cache`, unless the route sets
+its own policy. JSON reads of 256 KiB or less also carry a weak `ETag`. Send the
+`ETag` back as `If-None-Match` to revalidate. An unchanged resource returns
+`304 Not Modified` with no body. Browsers revalidate automatically, which keeps
+the session-status poll loop cheap.
 
-Content and credential routes can set stricter cache policies, including
-`Cache-Control: private, no-store`. Use the response headers for each route.
+Content and credential routes can set a stricter policy, such as
+`Cache-Control: private, no-store`. Check the response headers of each route.
 
 ### Integration updates
 

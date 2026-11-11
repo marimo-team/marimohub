@@ -16,11 +16,12 @@ MARIMOHUB_COMPUTE_WARM_POOL_SIZE=2
 MARIMOHUB_COMPUTE_WARM_POOL_PROFILES=default
 ```
 
-| Variable                               | Default   | Meaning                                                                                                  |
-| -------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------- |
-| `MARIMOHUB_COMPUTE_WARM_POOL_ENABLED`  | `false`   | Enable warm pools for `coreweave` or `kubernetes`.                                                       |
-| `MARIMOHUB_COMPUTE_WARM_POOL_SIZE`     | `1`       | Positive integer target of idle sandboxes per selected profile.                                          |
-| `MARIMOHUB_COMPUTE_WARM_POOL_PROFILES` | `default` | `default` warms the first profile in each editing and app list; `all` warms every profile in both lists. |
+| Variable                                 | Default   | Meaning                                                                                                                                                                           |
+| ---------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MARIMOHUB_COMPUTE_WARM_POOL_ENABLED`    | `false`   | Enable warm pools for `coreweave` or `kubernetes`.                                                                                                                                |
+| `MARIMOHUB_COMPUTE_WARM_POOL_SIZE`       | `1`       | Positive integer target of idle sandboxes per selected profile.                                                                                                                   |
+| `MARIMOHUB_COMPUTE_WARM_POOL_PROFILES`   | `default` | `default` warms the first profile in each editing and app list; `all` warms every profile in both lists.                                                                          |
+| `MARIMOHUB_COMPUTE_WARM_POOL_PRECONNECT` | `true`    | Prepare CoreWeave Direct credentials and channels for ready members on every Node process. Set `false` to disable. See [Compute](./compute.md#warm-pool-transport-preconnection). |
 
 When `MARIMOHUB_COMPUTE_APP_PROFILES` is set, `default` warms the first profile in each list and `all` warms both lists. Profiles with identical names and resources share a pool; the same name with different resources gets separate pools.
 
@@ -87,7 +88,11 @@ Warm claims and maintenance health checks run two deadlines in sequence:
 
 A readiness check therefore takes at most seven seconds.
 Initial sandbox creation uses the configured creation deadline, not the reconnect deadline.
-A failed check retires the member. A failed claim falls back to a cold launch, so an unhealthy member delays session start by up to seven seconds.
+A failed claim retires the member and falls back to a cold launch, so an unhealthy member delays session start by up to seven seconds.
+A health check retires the member at once when the provider reports the sandbox missing or not running.
+A check also retires the member at once when `true` exits with a failure.
+After any other reconnect or command failure, including a timeout, the check keeps the member and tries again five minutes later.
+A second consecutive failure retires it. The pool record stores the count, so a new maintenance process continues it.
 A late result cannot revive a retired claim. A stale health check cannot retire a member that a session claimed in the meantime.
 
 For readiness failures, `warm_pool_claim_failed` logs include `sandbox_id`, `elapsed_ms`, and `readiness_reason`.

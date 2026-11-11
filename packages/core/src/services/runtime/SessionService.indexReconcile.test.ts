@@ -38,7 +38,8 @@ describe.each([false, true])('missing-index reconciliation in %s mode', (mode) =
 
 	it('does not publish a partial index when a record outside the sweep snapshot is corrupt', async () => {
 		const { bucket, sessions, scanned, second, index } = await fixture();
-		await bucket.put(paths.session(second.project_id, second.session_id), 'not json');
+		const key = paths.session(second.project_id, second.session_id);
+		await bucket.put(key, (await (await bucket.get(key))!.text()).slice(0, -8));
 		await expect(
 			sessions.reconcileSessionIndexes(scanned, { failOnError: true }),
 		).rejects.toThrow();

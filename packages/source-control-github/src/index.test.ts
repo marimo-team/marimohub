@@ -362,9 +362,24 @@ describe('GitHubAppPublisher', () => {
 		);
 	});
 
-	it.each([true, false])(
-		'classifies conditional force update rejection (explicit=%s)',
-		async (explicit) => {
+	it.each([
+		{
+			name: 'explicit',
+			explicit: true,
+			error: { type: 'UNPROCESSABLE', path: ['updateRefs'] },
+			message: 'rejected the branch update',
+		},
+		{ name: 'untyped', explicit: false, error: {}, message: 'Could not confirm' },
+		{
+			name: 'other path',
+			explicit: false,
+			error: { type: 'FORBIDDEN', path: ['repository'] },
+			message: 'Could not confirm',
+		},
+		{ name: 'transport', explicit: false, error: undefined, message: 'GitHub is unavailable' },
+	])(
+		'classifies conditional force update rejection ($name)',
+		async ({ explicit, error: graphqlError, message }) => {
 			const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
 				const parsed = new URL(url);
 				const method = init?.method ?? 'GET';
@@ -416,12 +431,13 @@ describe('GitHubAppPublisher', () => {
 				}
 				if (parsed.pathname === '/repos/owner/repo') return response({ node_id: 'repo-node' });
 				if (parsed.pathname === '/graphql') {
+					if (!graphqlError) throw new Error('socket hang up');
 					return response({
 						data: { updateRefs: null },
 						errors: [
 							{
 								message: 'beforeOid does not match',
-								...(explicit ? { type: 'UNPROCESSABLE', path: ['updateRefs'] } : {}),
+								...graphqlError,
 							},
 						],
 					});
@@ -433,9 +449,7 @@ describe('GitHubAppPublisher', () => {
 				.updateChangeRequest(updateInput)
 				.catch((failure) => failure);
 			expect(error).toBeInstanceOf(explicit ? ConflictError : UnavailableError);
-			expect((error as Error).message).toContain(
-				explicit ? 'rejected the branch update' : 'Could not confirm',
-			);
+			expect((error as Error).message).toContain(message);
 			expect(sourceControlPublishFailure(error)).toEqual({
 				provider: 'github',
 				stage: 'branch',

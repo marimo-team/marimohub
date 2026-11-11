@@ -1166,7 +1166,7 @@ export class ProjectService {
 			}
 			after = p.key;
 		}
-		await writeRetentionCursor(this.bucket, cursorKey, after, cursor.etag);
+		await writeRetentionCursor(this.bucket, cursorKey, after, cursor);
 		return purged;
 	}
 }

@@ -482,6 +482,8 @@ export interface CoreWeaveClient {
 /** The slice of the SDK's `Sandbox` handle this adapter uses. */
 export interface CoreWeaveSandbox {
 	readonly sandboxId: string;
+	/** Empty when the response omitted tags. */
+	readonly tags?: readonly string[];
 	/**
 	 * Per-service public URLs from the handle's last metadata refresh (create,
 	 * readiness polls, and reconnect Gets all update it) — readable without an
@@ -702,7 +704,9 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	 * sandbox, e.g. to read notebook files back before destroy.
 	 */
 	private async ensure(): Promise<CoreWeaveSandbox> {
-		// Thrown on first use, not at attach, so warm-pool readiness reports it as reconnect_failed.
+		// Thrown on first use, not at attach. A malformed reference is not proof that the
+		// sandbox is gone, so it is a configuration error; warm-pool health checks retire
+		// the member after repeated failures.
 		this.assertValidReference();
 		if (this.sandbox) return this.sandbox;
 		this.environment.invalidate();
@@ -717,8 +721,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		const existing =
 			this.reconnectId || !this.reuse || cached ? undefined : await this.findByOurId();
 		if (this.existingOnly && !this.reconnectId && !cached && existing?.status !== 'running') {
-			if (!existing) throw new NotFoundError(`CoreWeave sandbox ${this.id} is no longer available`);
-			throw new Error(`CoreWeave sandbox ${this.id} is no longer available`);
+			throw new NotFoundError(`CoreWeave sandbox ${this.id} is no longer available`);
 		}
 		const t1 = Date.now();
 		// Create-then-wait (rather than `waitUntilRunning: true`) keeps the create
@@ -733,17 +736,18 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 						? await this.client.runFromTemplate(this.config.templateId, this.templateOptions())
 						: await this.client.create(this.createOptions()));
 		const t2 = Date.now();
-		if (this.reconnectId && sandbox.sandboxId !== this.reconnectId) {
-			throw new Error('CoreWeave saved sandbox is no longer available');
+		if (
+			this.reconnectId &&
+			(sandbox.sandboxId !== this.reconnectId ||
+				(sandbox.tags?.length && !sandbox.tags.includes(this.idTag)))
+		) {
+			throw new NotFoundError('CoreWeave saved sandbox is no longer available');
 		}
 		if (
 			(this.reconnectId && sandbox.status !== 'running') ||
 			(this.existingOnly && sandbox.status !== undefined && sandbox.status !== 'running')
 		) {
-			if (sandbox.status && isDeadStatus(sandbox.status)) {
-				throw new NotFoundError(`CoreWeave sandbox ${this.id} is no longer available`);
-			}
-			throw new Error('CoreWeave saved sandbox is no longer available');
+			throw new NotFoundError(`CoreWeave sandbox ${this.id} is no longer available`);
 		}
 		this.sandbox = sandbox;
 		const fresh = !this.reconnectId && !cached && !existing;
@@ -1712,6 +1716,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 	 */
 	readonly capabilities: { multiPort: boolean };
 	readonly preconnect?: SandboxProvider['preconnect'];
+	private preconnectMissingLogged = false;
 	private client?: CoreWeaveClient;
 	private readonly fileWriteSlots: SandboxFileWriteSlots;
 	/**
@@ -1733,7 +1738,16 @@ export class CoreWeaveCompute implements SandboxProvider {
 				options.signal.throwIfAborted();
 				const providerId = reconnectSandboxId(options.reconnectReference, id);
 				if (!providerId) return false;
-				return this.getClient().preconnect!(providerId, options);
+				const client = this.getClient();
+				// The method comes from a version-pinned local SDK patch.
+				if (typeof client.preconnect !== 'function') {
+					if (!this.preconnectMissingLogged) {
+						this.preconnectMissingLogged = true;
+						logEvent({ event: 'coreweave_preconnect_unsupported' }, { channel: 'warn' });
+					}
+					return false;
+				}
+				return client.preconnect(providerId, options);
 			};
 		}
 	}

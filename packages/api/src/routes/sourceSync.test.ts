@@ -299,7 +299,6 @@ describe('Source drift and sync-now routes', () => {
 			.spyOn(deps.services.notebooks, 'getNotebook')
 			.mockImplementationOnce(getNotebook)
 			.mockImplementationOnce(getNotebook)
-			.mockImplementationOnce(getNotebook)
 			.mockRejectedValueOnce(new UnavailableError('Notebook refetch failed'));
 
 		const created = await expectOk<{
@@ -319,7 +318,7 @@ describe('Source drift and sync-now routes', () => {
 
 		expect(created.notebook.status).toBe('draft');
 		expect(created.sync_error).toBeUndefined();
-		expect(notebookLookup).toHaveBeenCalledTimes(4);
+		expect(notebookLookup).toHaveBeenCalledTimes(3);
 		expect(
 			await deps.services.notebooks.listVersions(projectId, created.notebook.id as NotebookId),
 		).toHaveLength(1);

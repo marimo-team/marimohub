@@ -387,7 +387,8 @@ const OBJECTS: BucketObject[] = [
 		name: 'WorkspaceManifest',
 		key: notebook.version(VID).workspaceManifest,
 		schema: WorkspaceManifestSchema,
-		summary: 'Immutable synced workspace paths, byte sizes, and SHA-256 digests.',
+		summary:
+			'Immutable synced workspace paths, byte sizes, and SHA-256 digests; written for working-branch notebook versions only.',
 		mutability: 'immutable',
 		tag: 'notebook',
 	},

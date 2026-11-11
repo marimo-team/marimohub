@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { NotFoundError } from '../../errors';
 import { createSandboxId } from '../../ids';
 import { fakeComputeFrom, makeFakeSandbox, makeSession } from '../../testing';
-import { sessionSandbox } from './sessionSandbox';
+import { reconnectSessionSandbox, sessionSandbox } from './sessionSandbox';
 
 function setup(reference?: string) {
 	const { instance } = makeFakeSandbox();
@@ -64,5 +64,35 @@ describe('sessionSandbox', () => {
 			NotFoundError,
 		);
 		expect(create).not.toHaveBeenCalled();
+	});
+});
+
+describe('reconnectSessionSandbox', () => {
+	it.each([
+		[undefined, 'lookup'],
+		['saved-reference', 'reference'],
+	])('attaches without creating (reference=%s)', (reference, method) => {
+		const { instance, provider, create, connect, session } = setup(reference);
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		expect(reconnectSessionSandbox(provider, session, metrics, 'host')).toBe(instance);
+		expect(connect).toHaveBeenCalledExactlyOnceWith(session.sandbox_id, {
+			owner: { projectId: session.project_id, userId: session.user_id },
+			reconnectReference: reference,
+		});
+		expect(create).not.toHaveBeenCalled();
+		expect(metrics.increment).toHaveBeenCalledExactlyOnceWith('sandbox.reconnect', 1, {
+			path: 'host',
+			method,
+		});
+	});
+
+	it('returns undefined without a metric when the provider cannot attach', () => {
+		const { provider, create, session } = setup('reference');
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		expect(
+			reconnectSessionSandbox({ ...provider, connectExisting: undefined }, session, metrics),
+		).toBeUndefined();
+		expect(create).not.toHaveBeenCalled();
+		expect(metrics.increment).not.toHaveBeenCalled();
 	});
 });

@@ -2745,12 +2745,7 @@ describe('CoreWeave warm sandbox reconnect', () => {
 				reconnectReference: reference,
 			});
 			const error = await sandbox.exec('true').catch((error: unknown) => error);
-			expect(error).toBeInstanceOf(Error);
-			if (['completed', 'terminated', 'failed'].includes(status)) {
-				expect(error).toBeInstanceOf(NotFoundError);
-			} else {
-				expect(error).not.toBeInstanceOf(NotFoundError);
-			}
+			expect(error).toBeInstanceOf(NotFoundError);
 			await expect(sandbox.exec('true')).rejects.toThrow('no longer available');
 			expect(get.mock.calls).toEqual([['cw-1'], ['cw-1']]);
 			expect(sandbox.reconnectReference).toBeUndefined();
@@ -2792,6 +2787,20 @@ describe('CoreWeave warm sandbox reconnect', () => {
 				.connectExisting(SANDBOX_ID, { reconnectReference: source.reconnectReference })
 				.exec('true'),
 		).rejects.toThrow('no longer available');
+		expect(world.registry.get('cw-1')!.fake.runCalls).toEqual([]);
+		expect(world.listCalls).toEqual([]);
+	});
+
+	it('rejects a referenced provider container without our id tag', async () => {
+		const world = makeWorld();
+		const source = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+		await source.ready!();
+		world.registry.get('cw-1')!.tags = ['marimohub', 'mh-sbx-another-sandbox'];
+		await expect(
+			makeCompute(world)
+				.connectExisting(SANDBOX_ID, { reconnectReference: source.reconnectReference })
+				.exec('true'),
+		).rejects.toBeInstanceOf(NotFoundError);
 		expect(world.registry.get('cw-1')!.fake.runCalls).toEqual([]);
 		expect(world.listCalls).toEqual([]);
 	});
@@ -2864,6 +2873,7 @@ describe('CoreWeave warm sandbox reconnect', () => {
 			});
 			await expect(sandbox.ready!()).rejects.toBeInstanceOf(CWSandboxConfigurationError);
 			await expect(sandbox.exec('true')).rejects.toBeInstanceOf(CWSandboxConfigurationError);
+			// An unusable reference is not proof that the sandbox is gone.
 			await expect(sandbox.destroy()).rejects.toBeInstanceOf(CWSandboxConfigurationError);
 			expect(sandbox.reconnectReference).toBeUndefined();
 			expect(get).not.toHaveBeenCalled();

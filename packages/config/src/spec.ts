@@ -712,22 +712,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'JSON object of string annotations for hub-published kernel Ingresses. Requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE. Keys and total size must satisfy Kubernetes annotation limits.',
 						example:
-							'{"traefik.ingress.kubernetes.io/router.middlewares":"sandbox-kernel-compress@kubernetescrd"}',
-						optIn: true,
-					},
-					{
-						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES',
-						name: 'CoreWeave kernel Ingress middlewares',
-						description:
-							'Comma-separated Traefik middleware references appended to the kernel Ingress middleware annotation. Preserves existing annotations and removes duplicate references. Requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE.',
-						example: 'sandboxes-auth@kubernetescrd',
+							'{"traefik.ingress.kubernetes.io/router.middlewares":"sandboxes-auth@kubernetescrd"}',
 						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE',
 						name: 'CoreWeave kernel Ingress compression middleware',
 						description:
-							'Traefik compression middleware reference appended after the configured kernel Ingress middlewares. Preserves existing annotations and middleware references, including values from external Secrets. Requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE. The Helm chart supplies this value when sandboxIngress.compression.enabled is true.',
+							'Traefik compression middleware reference appended to the kernel Ingress middleware annotation. Preserves existing annotations and middleware references, including values from external Secrets. Requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE. The Helm chart supplies this value when sandboxIngress.compression.enabled is true.',
 						example: 'sandboxes-marimohub-kernel-compress@kubernetescrd',
 						optIn: true,
 					},
@@ -1650,6 +1642,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						name: 'HTTP port',
 						description: 'Port the HTTP server listens on.',
 						default: '3000',
+					},
+					{
+						id: 'LOG_LEVEL',
+						name: 'Log level',
+						description:
+							'Minimum severity of JSON log lines and exported OTLP logs: `debug`, `info`, `warn`, or `error`. Unknown values fall back to `info`. Static asset and kernel proxy requests log at `debug`.',
+						default: 'info',
 					},
 					{
 						id: 'MARIMOHUB_BIND_HOST',

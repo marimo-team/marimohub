@@ -29,7 +29,7 @@ These limits can block a new version from starting. Full pools return HTTP 429 w
 
 Each open page sends periodic heartbeats, including while idle, and a departure request on navigation or closure.
 Clients use the advertised `app_pool.heartbeat_interval_seconds`, which defaults to 30 seconds.
-A persisted lease lasts 120 seconds. Heartbeats renew it at most once per minute, with at least 60 seconds of durable coverage.
+A persisted lease lasts 240 seconds. Heartbeats renew it at most once per minute. After each heartbeat, at least 180 seconds of the lease remain.
 Missed departures and browser crashes release slots through lease expiry.
 
 Departure holds that visit's slot for 15 seconds of reconnect grace. Other tabs keep their own slots.
@@ -88,7 +88,9 @@ Pool records and deletion tombstones remain until reclamation finishes; empty de
 
 ## Storage cost
 
-`app_pool_admission` records routing outcomes. `app_pool.visits` measures occupied visit slots.
+`app_pool_admission` records routing outcomes.
+`app_pool.visits` is one deployment-wide gauge of occupied visit slots, without project or notebook labels.
+Each app-pool sweep sets it only when the sweep completes without an error.
 Monitor `app_pool.cas.conflicts` and `app_pool.cas.exhausted` as traffic grows: each notebook uses one CAS record.
 Its size grows with visits and sandbox members.
 See [implementation and storage costs](https://github.com/marimo-team/marimohub/blob/main/development_docs/app_pools.md) for read/write budgets and ownership rules.

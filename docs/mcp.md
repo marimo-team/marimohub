@@ -430,6 +430,24 @@ Each call tracks one attempt. Automatic retries have separate run IDs linked by
 `retry_of`. Failed, timed-out, cancelled, and skipped attempts return normal status
 data. Tool errors indicate invalid input, denied access, or another request failure.
 
+## Working branches
+
+These tools register only when [working notebooks](./syncing.md#working-notebooks) are enabled.
+They require `working-branch.write`. [Recovery](./syncing.md#recovery) defines save stages,
+retry rules, and capture retention.
+
+| Tool                     | Purpose                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------- |
+| `create_branch_notebook` | Create a working branch from a base branch and import an entry notebook.        |
+| `save_to_branch`         | Commit eligible source files from a running edit session to the branch.         |
+| `open_change_request`    | Open or return the branch's draft PR. Does not commit unsaved edits.            |
+| `get_working_branch`     | Read the remote branch, PR state, and latest save stage.                        |
+| `get_branch_save`        | Read your save receipt and its recovery ZIP URL. Managers can read any receipt. |
+| `retry_branch_save`      | Resume a save by ID without a new capture.                                      |
+
+`create_branch_notebook` and `save_to_branch` require `idempotency_key`. After a lost
+response, reuse the key. In project chat, the four tools that write to GitHub need consent.
+
 ## External authorization
 
 With [external OIDC access tokens](./auth.md#external-access-tokens)

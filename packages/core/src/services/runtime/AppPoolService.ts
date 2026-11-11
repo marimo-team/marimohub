@@ -602,9 +602,7 @@ export class AppPoolService {
 		}
 
 		const pool = changed ? await this.store.read(projectId, notebookId) : snapshot;
-		this.metrics.gauge('app_pool.visits', pool?.assignments.length ?? 0, {
-			project_id: projectId,
-			notebook_id: notebookId,
-		});
+		// Object IDs would make one never-evicted series per notebook; the sweep aggregates.
+		this.metrics.gauge('app_pool.visits', pool?.assignments.length ?? 0);
 	}
 }

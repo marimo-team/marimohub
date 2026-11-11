@@ -1,8 +1,14 @@
-import { parseAssetBaseUrl } from '@marimo-hub/core/url';
+import {
+	HASHED_ASSET_PATTERN,
+	MARIMO_VERSION_PATTERN,
+	parseAssetBaseUrl,
+} from '@marimo-hub/core/url';
 import { readResponseBytes } from '@marimo-hub/core/response-body';
 
 const MAX_INDEX_BYTES = 512 * 1024;
 const MAX_ASSETS = 32;
+const HASHED_ASSET = new RegExp(String.raw`${HASHED_ASSET_PATTERN}\.(?:js|css)$`);
+const VERSIONED_BASE = new RegExp(String.raw`(?:/|@)${MARIMO_VERSION_PATTERN}/`);
 const prefetched = new Set<string>();
 const preconnections = new Map<string, HTMLLinkElement>();
 
@@ -27,7 +33,7 @@ export function marimoAssetHints(html: string, base: URL): string[] {
 			url.hash
 		)
 			continue;
-		if (!/[-_][a-zA-Z0-9_-]{6,}\.(?:js|css)$/.test(url.pathname)) continue;
+		if (!HASHED_ASSET.test(url.pathname)) continue;
 		assets.add(url.href);
 		if (assets.size === MAX_ASSETS) break;
 	}
@@ -60,7 +66,7 @@ export async function prefetchMarimoAssets(value: string | undefined): Promise<v
 	}
 	base.pathname = `${base.pathname.replace(/\/+$/, '')}/`;
 	// The sandbox resolves {version}; notebook metadata does not establish its installed version.
-	if (value?.includes('{') || !/(?:\/|@)\d+\.\d+\.\d+[a-zA-Z0-9.-]*\//.test(base.pathname)) return;
+	if (value?.includes('{') || !VERSIONED_BASE.test(base.pathname)) return;
 	if (prefetched.has(base.href) || prefetched.size >= 16) return;
 	prefetched.add(base.href);
 	const controller = new AbortController();

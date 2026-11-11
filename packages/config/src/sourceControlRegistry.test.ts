@@ -114,12 +114,38 @@ describe('ConfiguredSourceControlRegistry', () => {
 		expect(disabled.getPublisher('test')?.workingBranches).toBeUndefined();
 		expect(disabled.workingBranchProviders()).toEqual([]);
 		expect(disabled.workingBranchesEnabled).toBe(false);
-		const unreadable = new ConfiguredSourceControlRegistry([{ publisher }], {
-			workingBranchesEnabled: true,
-		});
-		expect(unreadable.getPublisher('test')?.workingBranches).toBeUndefined();
-		expect(unreadable.workingBranchProviders()).toEqual([]);
-		expect(unreadable.workingBranchesEnabled).toBe(false);
+	});
+
+	it('rejects the working-branch opt-in without a Git-capable working-branch provider', () => {
+		const publisher = Object.assign(new Provider(), { workingBranches: {} as WorkingBranchWriter });
+		for (const registrations of [[], [{ publisher }], [{ reader: new Provider() }]]) {
+			expect(
+				() => new ConfiguredSourceControlRegistry(registrations, { workingBranchesEnabled: true }),
+			).toThrow('MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED requires');
+		}
+	});
+
+	it('warns when working branches are enabled without a repository policy', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			const publisher = Object.assign(new Provider(), {
+				workingBranches: {} as WorkingBranchWriter,
+			});
+			new ConfiguredSourceControlRegistry([{ reader: publisher, publisher }], {
+				workingBranchesEnabled: true,
+			});
+			expect(warn).toHaveBeenCalledExactlyOnceWith(
+				expect.stringContaining('MARIMOHUB_SOURCE_CONTROL_TEST_ALLOWED_REPOSITORIES'),
+			);
+			warn.mockClear();
+			new ConfiguredSourceControlRegistry([{ reader: publisher, publisher, authorize: () => {} }], {
+				workingBranchesEnabled: true,
+			});
+			new ConfiguredSourceControlRegistry([{ reader: publisher, publisher }]);
+			expect(warn).not.toHaveBeenCalled();
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	it('checks reader and publisher repository policy without external calls', () => {

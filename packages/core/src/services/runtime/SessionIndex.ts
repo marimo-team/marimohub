@@ -1,11 +1,9 @@
 import { ConflictError } from '../../errors';
 import type { Bucket } from '../../ports/bucket';
-import { mapWithConcurrency } from '../../concurrency';
-import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
-import { listAllObjects } from '../catalog/storage';
+import { listAllKeys } from '../catalog/storage';
 import type { Session, SessionIndexRecord } from '../../schema';
 import { readStored, SessionIndexSchema } from '../../schema';
-import type { UserId } from '../../ids';
+import { UserId } from '../../ids';
 import { paths } from '../../paths';
 import { withCasRetry } from '../catalog/cas';
 
@@ -18,12 +16,16 @@ export class SessionIndex {
 		return (await this.readObject(paths.sessionIndexForUser(userId)))?.value ?? null;
 	}
 
+	/** Decoded from keys; each index's `user_id` is checked when it is next read. */
 	async listUsers(): Promise<UserId[]> {
-		const objects = await listAllObjects(this.bucket, paths.sessionIndexPrefix);
-		const records = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, (object) =>
-			this.readObject(object.key),
-		);
-		return records.flatMap((record) => (record ? [record.value.user_id] : []));
+		const keys = await listAllKeys(this.bucket, paths.sessionIndexPrefix);
+		return keys.map((key) => {
+			const name = key.slice(paths.sessionIndexPrefix.length);
+			const userId = UserId.parse(decodeURIComponent(name.replace(/\.json$/, '')));
+			if (paths.sessionIndexForUser(userId) !== key)
+				throw new Error('Session index owner mismatch');
+			return userId;
+		});
 	}
 
 	private async readObject(key: string) {
@@ -58,16 +60,26 @@ export class SessionIndex {
 		});
 	}
 
-	async register(session: Session): Promise<void> {
+	/**
+	 * Only a missing index is built from `initialEntries`. Once an index has been seen,
+	 * its disappearance rejects the registration instead of rebuilding it.
+	 */
+	async register(
+		session: Session,
+		initialEntries: () => Promise<SessionReference[]>,
+	): Promise<void> {
+		let initialized = false;
 		// Even an existing reference needs a CAS to fence concurrent reconciliation.
-		await this.update(
-			session.user_id,
-			async (entries) => [
-				...entries.filter((entry) => entry.session_id !== session.session_id),
-				{ session_id: session.session_id, project_id: session.project_id },
-			],
-			{ requireExisting: true },
-		);
+		// It keeps its position: entry order is the cap admission order.
+		await this.update(session.user_id, async (current, exists) => {
+			if (exists) initialized = true;
+			else if (initialized)
+				throw new ConflictError('Session index is missing; retry to rebuild it');
+			const entries = exists ? current : await initialEntries();
+			return entries.some((entry) => entry.session_id === session.session_id)
+				? entries
+				: [...entries, { session_id: session.session_id, project_id: session.project_id }];
+		});
 	}
 }
 

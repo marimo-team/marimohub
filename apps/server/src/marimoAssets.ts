@@ -1,11 +1,17 @@
 import { serveStatic } from '@hono/node-server/serve-static';
 import type { MiddlewareHandler } from 'hono';
+import { appendVary } from '@marimo-hub/api';
+import { HASHED_ASSET_PATTERN, MARIMO_VERSION_PATTERN } from '@marimo-hub/core/url';
 import { IMMUTABLE_ASSET_CACHE_CONTROL, REVALIDATE_STATIC_CACHE_CONTROL } from './staticCache';
 
-const VERSIONED_ASSET =
-	/^\/_marimo\/\d+\.\d+\.\d+[a-zA-Z0-9.-]*\/(?:[a-zA-Z0-9_@.-]+\/)*[a-zA-Z0-9_@.-]+$/;
-const HASHED_FILE =
-	/[-_][a-zA-Z0-9_-]{6,}\.(?:js|mjs|css|wasm|woff2?|ttf|otf|svg|png|jpe?g|webp|avif)$/;
+const VERSIONED_ASSET = new RegExp(
+	String.raw`^/_marimo/${MARIMO_VERSION_PATTERN}/(?:[a-zA-Z0-9_@.-]+/)*[a-zA-Z0-9_@.-]+$`,
+);
+// marimo's index.html must never run as a document on the cookie-bearing hub origin.
+const HTML_FILE = /\.(?:html?|xhtml)$/i;
+const HASHED_FILE = new RegExp(
+	String.raw`${HASHED_ASSET_PATTERN}\.(?:js|mjs|css|wasm|woff2?|ttf|otf|svg|png|jpe?g|webp|avif)$`,
+);
 
 export function serveMarimoAssets(staticRoot: string): MiddlewareHandler {
 	const serve = serveStatic({ root: staticRoot, precompressed: true });
@@ -17,6 +23,7 @@ export function serveMarimoAssets(staticRoot: string): MiddlewareHandler {
 		const path = c.req.path;
 		if (
 			!VERSIONED_ASSET.test(path) ||
+			HTML_FILE.test(path) ||
 			path.split('/').some((part) => part === '.' || part === '..')
 		)
 			return c.text('Asset not found', 404, { 'Cache-Control': 'no-store' });
@@ -27,7 +34,7 @@ export function serveMarimoAssets(staticRoot: string): MiddlewareHandler {
 		response.headers.set('Access-Control-Allow-Origin', '*');
 		response.headers.set('Cross-Origin-Resource-Policy', 'cross-origin');
 		response.headers.set('X-Content-Type-Options', 'nosniff');
-		response.headers.set('Vary', 'Accept-Encoding');
+		appendVary(response.headers, 'Accept-Encoding');
 		response.headers.set(
 			'Cache-Control',
 			response.ok || response.status === 304

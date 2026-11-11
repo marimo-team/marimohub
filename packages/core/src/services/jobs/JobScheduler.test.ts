@@ -943,6 +943,48 @@ describe('JobScheduler', () => {
 		},
 	);
 
+	it('republishes a head whose index publication was lost after the grace period', async () => {
+		const job = await createJob();
+		const head = paths.project(pid).notebook(nid).job(job.id).head;
+		const updatedAt = new Date(Date.parse(job.updated_at) + 1000).toISOString();
+		await env.bucket.put(head, JSON.stringify({ ...job, name: 'renamed', updated_at: updatedAt }));
+		const republish = vi.spyOn(env.jobs, 'republishIndex');
+		const s = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
+		now = Date.parse(updatedAt) + 2 * CONFIG.catchupWindowMs - 1;
+		expect(await s.tick()).toMatchObject({ fired: 0, errors: 0 });
+		expect(republish).not.toHaveBeenCalled();
+		now += 1;
+		expect(await s.tick()).toMatchObject({ fired: 0, errors: 0 });
+		expect(republish).toHaveBeenCalledOnce();
+		expect(await s.tick()).toMatchObject({ fired: 1, errors: 0 });
+		expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
+	});
+
+	it('republishes the index when a failed update cannot roll back its head', async () => {
+		const job = await createJob();
+		const head = paths.project(pid).notebook(nid).job(job.id).head;
+		const publicationError = new Error('snapshot publication failed');
+		vi.spyOn(env.catalog, 'updateNotebookEntry').mockRejectedValueOnce(publicationError);
+		const put = env.bucket.put.bind(env.bucket);
+		let headWrites = 0;
+		vi.spyOn(env.bucket, 'put').mockImplementation((key, ...args) => {
+			if (key === head && ++headWrites === 2) throw new Error('rollback failed');
+			return put(key, ...args);
+		});
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		await expect(env.jobs.updateJob(pid, nid, job.id, { name: 'renamed' }, ACTOR)).rejects.toBe(
+			publicationError,
+		);
+		log.mockRestore();
+		const updated = await env.jobs.getJob(pid, nid, job.id);
+		expect(updated.name).toBe('renamed');
+		const entry = (await env.catalog.getCurrentSnapshot()).projects
+			.find((p) => p.id === pid)!
+			.notebooks.find((n) => n.id === nid)!
+			.jobs!.find((j) => j.id === job.id)!;
+		expect(entry.updated_at).toBe(updated.updated_at);
+	});
+
 	it('rejects a stale snapshot version even when the schedule has not changed', async () => {
 		const job = await createJob();
 		const snapshot = await env.catalog.getCurrentSnapshot();

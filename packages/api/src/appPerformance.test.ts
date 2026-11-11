@@ -490,13 +490,14 @@ describe('app operation budgets', () => {
 		},
 	);
 
-	it('reclaims a crashed startup reservation after the startup timeout and margin', async () => {
+	it('reclaims a crashed startup reservation after the reservation floor', async () => {
 		const f = await fixture();
 		const pool = new AppPoolService(f.bucket, f.services.sessions, undefined, undefined, () =>
 			Date.now(),
 		);
 		const initial = (await pool.store.read(f.project.id, f.notebook.id))!.members[0];
-		expect(initial.operation_expires_at - initial.created_at).toBe(150_000);
+		// The route reserves max(startup timeout + 30 s, 900 s) so slow boots cannot expire mid-start.
+		expect(initial.operation_expires_at - initial.created_at).toBe(900_000);
 		await pool.invalidate(f.project.id, f.notebook.id, f.admission.session_id);
 		const input = {
 			projectId: f.project.id,

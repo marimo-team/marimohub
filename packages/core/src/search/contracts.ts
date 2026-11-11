@@ -59,6 +59,7 @@ export type SearchDocument = z.infer<typeof SearchDocumentSchema>;
 export const SearchSnapshotSchema = z.object({
 	schema_version: z.literal(1),
 	indexed_at: z.iso.datetime(),
+	/** Legacy field; written by no source and ignored on read. */
 	catalog_fingerprint: z.string().max(128).optional(),
 	partial: z.boolean(),
 	documents: z.array(SearchDocumentSchema).max(MAX_INDEX_DOCUMENTS),
@@ -93,6 +94,7 @@ export const SearchCursorSchema = z.object({
 export const SearchCheckpointSchema = z.object({
 	build: SearchBuildSchema.optional(),
 	ready: z.boolean().default(false),
+	/** Legacy field; written by no source and ignored on read. */
 	catalog_fingerprint: z.string().max(128).optional(),
 	schema_version: z.literal(1),
 	generation: z.uuid(),

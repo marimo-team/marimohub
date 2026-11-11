@@ -52,6 +52,7 @@ afterEach(async () => {
 	for (const resolve of pendingFetches.splice(0))
 		resolve(Response.json({ success: true, data: null }));
 	queryClient.clear();
+	vi.useRealTimers();
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
 	document.body.innerHTML = '';
@@ -88,6 +89,18 @@ describe('app bootstrap', () => {
 		await import('./main');
 		await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
 		expect(renderToStaticMarkup(render.mock.calls[0][0])).toContain('marimohub:user');
+		expect(appProps).toHaveBeenLastCalledWith({ initialRoutes: {} });
+	});
+
+	it('renders the lazy routes when initial route loading exceeds its budget', async () => {
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		preloadInitialRoute.mockReturnValue(new Promise(() => {}));
+		await import('./main');
+		await vi.advanceTimersByTimeAsync(1999);
+		expect(render).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(render).toHaveBeenCalledOnce();
+		renderToStaticMarkup(render.mock.calls[0][0]);
 		expect(appProps).toHaveBeenLastCalledWith({ initialRoutes: {} });
 	});
 

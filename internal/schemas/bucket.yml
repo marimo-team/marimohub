@@ -1060,7 +1060,8 @@ paths:
         '204':
           description: Stored.
   /projects/{pid}/notebooks/{nid}/versions/{vid}/workspace-manifest.json:
-    summary: Immutable synced workspace paths, byte sizes, and SHA-256 digests.
+    summary: Immutable synced workspace paths, byte sizes, and SHA-256 digests;
+      written for working-branch notebook versions only.
     parameters:
       - name: pid
         in: path
@@ -6319,16 +6320,16 @@ components:
                 - open
                 - closed
                 - merged
-            headBranch:
+            head_branch:
               type: string
-            baseBranch:
+            base_branch:
               type: string
           required:
             - number
             - url
             - state
-            - headBranch
-            - baseBranch
+            - head_branch
+            - base_branch
         ended_reason:
           type: string
           enum:
@@ -6462,6 +6463,10 @@ components:
                   - operation
         commit:
           type: string
+        dispatched_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
         version_id:
           type: string
         error:
@@ -7319,6 +7324,10 @@ components:
                       minimum: 0
                       maximum: 9007199254740991
                     checked_at:
+                      type: integer
+                      minimum: 0
+                      maximum: 9007199254740991
+                    health_failures:
                       type: integer
                       minimum: 0
                       maximum: 9007199254740991

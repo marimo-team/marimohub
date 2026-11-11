@@ -4,7 +4,7 @@ import { listAllPrefixes } from '../catalog/storage';
 import { NotebookId as NotebookIdValue } from '../../ids';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
-import { ConflictError, NotFoundError, PreconditionFailedError } from '../../errors';
+import { ConflictError, NotFoundError } from '../../errors';
 import {
 	GitSourceConfigSchema,
 	NotebookIdSchema,
@@ -16,9 +16,12 @@ import {
 	readStored,
 } from '../../schema';
 import type { NotebookId, ProjectId } from '../../ids';
-import { withCasRetry } from '../catalog/cas';
+import { putIfAbsent, withCasRetry } from '../catalog/cas';
 
 export const WORKING_BRANCH_RETENTION_MS = 24 * 60 * 60 * 1000;
+// Well above any provider HTTP timeout: a `beforeOid`-fenced ref update still in flight after this
+// window can no longer land, so an unconfirmed dispatch may be finished as a conflict.
+export const WORKING_BRANCH_DISPATCH_BOUND_MS = 15 * 60 * 1000;
 export const WorkingBranchCreationSchema = z.object({
 	fingerprint: z.string(),
 	notebook_id: NotebookIdSchema,
@@ -35,9 +38,10 @@ export const WorkingBranchChangeRequestSchema = z.object({
 	number: z.number().int().positive(),
 	url: z.url(),
 	state: z.enum(['open', 'closed', 'merged']),
-	headBranch: z.string(),
-	baseBranch: z.string(),
+	head_branch: z.string(),
+	base_branch: z.string(),
 });
+export type WorkingBranchChangeRequest = z.infer<typeof WorkingBranchChangeRequestSchema>;
 export const WorkingBranchRecordSchema = z.object({
 	schema_version: z.literal(1),
 	id: z.string().regex(/^[a-f0-9]{64}$/),
@@ -87,6 +91,7 @@ export const WorkingBranchSaveSchema = z.object({
 	]),
 	changes: z.array(ProposalChangeSchema).default([]),
 	commit: z.string().optional(),
+	dispatched_at: utcTimestamp().optional(),
 	version_id: VersionIdSchema.optional(),
 	error: z.string().optional(),
 });
@@ -117,11 +122,7 @@ export class WorkingBranchStore {
 	}
 	async create(record: WorkingBranchRecord): Promise<WorkingBranchRecord> {
 		const key = workingBranchPaths(record.project_id, record.notebook_id).head;
-		try {
-			await this.bucket.put(key, JSON.stringify(record), { onlyIfNotExists: true });
-		} catch (error) {
-			if (!(error instanceof PreconditionFailedError)) throw error;
-		}
+		await putIfAbsent(this.bucket, key, JSON.stringify(record));
 		const stored = await this.read(record.project_id, record.notebook_id);
 		if (stored.id !== record.id)
 			throw new ConflictError('Working branch belongs to another operation');
@@ -174,10 +175,14 @@ export class WorkingBranchStore {
 	async withLease<T>(
 		pid: ProjectId,
 		nid: NotebookId,
-		run: (check: WorkingBranchLease, update: WorkingBranchUpdate) => Promise<T>,
+		run: (
+			check: WorkingBranchLease,
+			update: WorkingBranchUpdate,
+			leased: WorkingBranchRecord,
+		) => Promise<T>,
 	): Promise<T> {
 		const owner = crypto.randomUUID();
-		await this.update(pid, nid, (record) => {
+		const leased = await this.update(pid, nid, (record) => {
 			if (record.state === 'deleted') throw new ConflictError('Working notebook was deleted');
 			if (record.lease && record.lease.until > Date.now())
 				throw new ConflictError('Working branch operation is in progress; retry shortly');
@@ -188,7 +193,7 @@ export class WorkingBranchStore {
 			await update((record) => ({ ...record, lease: { owner, until: Date.now() + 120_000 } }));
 		};
 		try {
-			return await run(Object.assign(check, { owner }), update);
+			return await run(Object.assign(check, { owner }), update, leased);
 		} finally {
 			await this.update(pid, nid, (record) =>
 				record.lease?.owner === owner ? { ...record, lease: undefined } : record,

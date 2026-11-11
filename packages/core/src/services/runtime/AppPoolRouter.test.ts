@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	APP_HEARTBEAT_INTERVAL_MS,
+	APP_PRESENCE_PERSIST_INTERVAL_MS,
 	APP_USER_LEASE_MS,
 	APP_RECONNECT_GRACE_MS,
 } from '../../constants';
@@ -41,7 +42,11 @@ const arrive = (pool: AppPool) =>
 describe('pure app routing', () => {
 	it('keeps presence constants compatible with heartbeat cadence', () => {
 		expect(APP_HEARTBEAT_INTERVAL_MS).toBe(30_000);
-		expect(APP_USER_LEASE_MS).toBe(4 * APP_HEARTBEAT_INTERVAL_MS);
+		expect(DEFAULT_APP_POOL_POLICY.userLeaseMs).toBe(APP_USER_LEASE_MS);
+		// Renewal is persisted at most once per interval, so durable coverage is the remainder.
+		expect(APP_USER_LEASE_MS - APP_PRESENCE_PERSIST_INTERVAL_MS).toBe(
+			6 * APP_HEARTBEAT_INTERVAL_MS,
+		);
 		expect(APP_RECONNECT_GRACE_MS).toBe(15_000);
 		expect(APP_RECONNECT_GRACE_MS).toBeLessThan(APP_USER_LEASE_MS);
 	});

@@ -140,23 +140,40 @@ const TAKEOVER_DRAIN_STAGE_ORDER: Record<TakeoverDrainStage, number> = {
 	finalizing: 3,
 };
 
+// A running session already cleared the cap and cannot be displaced by a new
+// starting record whose random id sorts first in the same millisecond.
+const runningFirst = (a: Session, b: Session) =>
+	Number(a.status !== 'running') - Number(b.status !== 'running');
+
 /**
  * Total order over session records — every replica derives the same queue
  * position from the same records, which is what lets the create route's cap
  * recheck pick one winner instead of every racer rejecting the others.
  */
-const byCapOrder = (a: Session, b: Session) => {
-	// A running session already cleared the cap and cannot be displaced by a new
-	// starting record whose random id sorts first in the same millisecond.
-	const admissionOrder = Number(a.status !== 'running') - Number(b.status !== 'running');
-	return (
-		admissionOrder ||
-		a.started_at.localeCompare(b.started_at) ||
-		a.session_id.localeCompare(b.session_id)
-	);
-};
+const byCapOrder = (a: Session, b: Session) =>
+	runningFirst(a, b) ||
+	a.started_at.localeCompare(b.started_at) ||
+	a.session_id.localeCompare(b.session_id);
 
 type CapScope = 'user' | 'project';
+
+/** `owner` fails closed only for invalid records whose raw `user_id` names that user. */
+type InvalidRecords = 'skip' | 'throw' | { owner: UserId };
+
+// A torn write usually still contains its owner, so fall back to a pattern match.
+function storedUserId(text: string): unknown {
+	try {
+		const raw: unknown = JSON.parse(text);
+		return typeof raw === 'object' && raw !== null && 'user_id' in raw ? raw.user_id : undefined;
+	} catch {
+		const match = /"user_id"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(text);
+		try {
+			return match ? JSON.parse(match[1]) : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+}
 
 function hasUnreclaimedSandbox(session: Session): boolean {
 	return !!session.sandbox_id && !session.sandbox_reclaimed_at;
@@ -358,8 +375,7 @@ export class SessionService {
 			}
 		}
 		try {
-			await this.initializeUserIndex(input.user_id);
-			await this.index.register(session);
+			await this.index.register(session, () => this.scanUserIndexReferences(input.user_id));
 		} catch (error) {
 			this.indexWriteFailed(error);
 			await this.failCreatedSession(sessionPath, written.etag, session, {
@@ -931,7 +947,7 @@ export class SessionService {
 	private async scanPrefix<T>(
 		prefix: string,
 		handle: (session: Session, obj: BucketObject, etag: string) => T | Promise<T>,
-		invalidRecords: 'skip' | 'throw' = 'skip',
+		invalidRecords: InvalidRecords = 'skip',
 		filter: (session: Session) => boolean = () => true,
 		signal?: AbortSignal,
 	): Promise<Awaited<T>[]> {
@@ -948,10 +964,16 @@ export class SessionService {
 			}
 			// Tolerant scans keep valid records when another record is corrupt.
 			let session: Session;
+			const text = await body.text();
 			try {
-				session = await readStored(SessionSchema, body, obj.key);
+				session = await readStored(SessionSchema, { json: async () => JSON.parse(text) }, obj.key);
 			} catch (err) {
 				if (invalidRecords === 'throw') throw err;
+				if (invalidRecords !== 'skip') {
+					// One user's corrupt record must not block every other user's admission.
+					if (storedUserId(text) === invalidRecords.owner) throw err;
+					this.metrics.increment('sessions.index.unattributable');
+				}
 				logOperationalError(
 					'stored_object_skipped',
 					{ operation: 'session.scan', object: obj.key },
@@ -1229,7 +1251,7 @@ export class SessionService {
 			await this.scanPrefix(
 				paths.sessionsPrefix,
 				(s) => s,
-				'throw',
+				{ owner: userId },
 				(s) => s.user_id === userId && countsTowardCap(s, capScope),
 			)
 		).sort(byCapOrder);
@@ -1253,9 +1275,11 @@ export class SessionService {
 		if (records.some((session) => !needsSessionIndexEntry(session))) {
 			await this.writeIndex(() => this.reconcileUserIndex(userId, []));
 		}
+		// Rank by index position, not started_at: a session can register after a later
+		// start has already checked the cap, and must then rank behind it.
 		return records
 			.filter((s): s is Session => s !== null && countsTowardCap(s, scope))
-			.sort(byCapOrder);
+			.sort(runningFirst);
 	}
 
 	private async writeIndex(write: () => Promise<void>, failOnError = false): Promise<void> {
@@ -1275,19 +1299,17 @@ export class SessionService {
 	private async removeFinishedIndexEntry(session: Session): Promise<void> {
 		if (needsSessionIndexEntry(session)) return;
 		await this.writeIndex(() =>
-			this.index.update(
-				session.user_id,
-				async (entries) => {
-					const entry = entries.find((entry) => entry.session_id === session.session_id);
-					// Fence a reconciliation that may still be adding this retired reference.
-					if (!entry) return entries;
-					const current = await this.readIndexedSession(session.user_id, entry);
-					return needsSessionIndexEntry(current)
-						? null
-						: entries.filter((entry) => entry.session_id !== session.session_id);
-				},
-				{ requireExisting: true },
-			),
+			this.index.update(session.user_id, async (entries, exists) => {
+				// A legacy user without an index has nothing to remove; never recreate a lost index.
+				if (!exists) return null;
+				const entry = entries.find((entry) => entry.session_id === session.session_id);
+				// Fence a reconciliation that may still be adding this retired reference.
+				if (!entry) return entries;
+				const current = await this.readIndexedSession(session.user_id, entry);
+				return needsSessionIndexEntry(current)
+					? null
+					: entries.filter((entry) => entry.session_id !== session.session_id);
+			}),
 		);
 	}
 
@@ -1329,7 +1351,7 @@ export class SessionService {
 					throw new Error('Session index source mismatch');
 				return session;
 			},
-			'throw',
+			{ owner: userId },
 			(session) => session.user_id === userId,
 			signal,
 		);
@@ -1422,7 +1444,9 @@ export class SessionService {
 					const current = await this.readIndexedSession(session.user_id, entry);
 					signal?.throwIfAborted();
 					const others = references.filter((e) => e.session_id !== entry.session_id);
-					return needsSessionIndexEntry(current) ? [...others, entry] : others;
+					if (!needsSessionIndexEntry(current)) return others;
+					// Keep an existing position; index order ranks cap admission.
+					return others.length < references.length ? references : [...others, entry];
 				},
 				{ skipUnchanged: true },
 			);

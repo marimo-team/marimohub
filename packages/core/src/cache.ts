@@ -53,11 +53,24 @@ interface Pending<V> {
 	state: { superseded: boolean };
 }
 
-/** Map bounded to `maxSize` entries that evicts the least recently used on insert. */
+export interface LruWeight<V> {
+	weigh: (value: V) => number;
+	maxWeight: number;
+}
+
+/**
+ * Map bounded to `maxSize` entries, and optionally to a total `maxWeight`, that evicts the
+ * least recently used on insert. A value heavier than `maxWeight` is not retained.
+ */
 export class BoundedLruMap<K, V> {
 	private readonly values = new Map<K, V>();
+	private readonly weights = new Map<K, number>();
+	private totalWeight = 0;
 
-	constructor(private readonly maxSize: number) {
+	constructor(
+		private readonly maxSize: number,
+		private readonly weight?: LruWeight<V>,
+	) {
 		if (!Number.isInteger(maxSize) || maxSize <= 0) {
 			throw new RangeError('maxSize must be a positive integer');
 		}
@@ -86,21 +99,33 @@ export class BoundedLruMap<K, V> {
 	}
 
 	set(key: K, value: V): void {
-		this.values.delete(key);
+		this.delete(key);
 		this.values.set(key, value);
-		while (this.values.size > this.maxSize) {
+		if (this.weight) {
+			const weight = this.weight.weigh(value);
+			this.weights.set(key, weight);
+			this.totalWeight += weight;
+		}
+		while (
+			this.values.size > this.maxSize ||
+			(this.weight && this.totalWeight > this.weight.maxWeight)
+		) {
 			const oldest = this.values.keys().next();
 			if (oldest.done) return;
-			this.values.delete(oldest.value);
+			this.delete(oldest.value);
 		}
 	}
 
 	delete(key: K): boolean {
+		this.totalWeight -= this.weights.get(key) ?? 0;
+		this.weights.delete(key);
 		return this.values.delete(key);
 	}
 
 	clear(): void {
 		this.values.clear();
+		this.weights.clear();
+		this.totalWeight = 0;
 	}
 }
 

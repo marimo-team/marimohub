@@ -1,5 +1,5 @@
 import { APP_HEARTBEAT_INTERVAL_MS } from '@marimo-hub/core/constants';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { apiClient, apiData, ApiRequestError } from '@/api/client';
 import { usePreviewQuery } from '@/api/previews';
@@ -76,8 +76,11 @@ export function usePreviewSession(pid: string, nid: string, previewId: string, u
 	};
 	const lazy = preview.data?.eager === false;
 	const canPrepare = !!(preview.data?.can.app || preview.data?.can.edit);
+	// A visit must not restart a failed preview, or each page view would reset its failure cap;
+	// "Prepare latest" is the explicit retry.
+	const visitFailed = useEffectEvent(() => preview.data?.preparation === 'failed');
 	useEffect(() => {
-		if (!lazy || !canPrepare) return;
+		if (!lazy || !canPrepare || visitFailed()) return;
 		let active = true;
 		void apiData(
 			apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}/prepare', {

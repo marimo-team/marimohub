@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BoundedLruMap } from '../../cache';
 import { MAX_ARTIFACT_BYTES } from '../../constants';
 import { sha256Hex } from '../../internal/sha256';
 import type { CommitSessionInput } from '../content/NotebookService';
@@ -95,20 +96,25 @@ export function sameArtifactFingerprints(
 	);
 }
 
+function artifactBytes(value: CachedSessionArtifacts): number {
+	return Object.values(value.artifacts).reduce(
+		(sum, content) => sum + (content?.length ?? 0) * 2,
+		1024,
+	);
+}
+
 export class SessionArtifactCache {
-	private readonly entries = new Map<string, { value: CachedSessionArtifacts; bytes: number }>();
-	private bytes = 0;
+	private readonly entries: BoundedLruMap<string, CachedSessionArtifacts>;
 	constructor(
-		private readonly maxEntries = 128,
+		maxEntries = 128,
 		private readonly maxBytes = 64 * 1024 * 1024,
-	) {}
+	) {
+		this.entries = new BoundedLruMap(maxEntries, { weigh: artifactBytes, maxWeight: maxBytes });
+	}
 
 	get(key: string): CachedSessionArtifacts | undefined {
-		const entry = this.entries.get(key);
-		if (!entry) return;
-		this.entries.delete(key);
-		this.entries.set(key, entry);
-		return structuredClone(entry.value);
+		const value = this.entries.get(key);
+		return value && structuredClone(value);
 	}
 
 	async remember(key: string, value: CachedSessionArtifacts): Promise<void> {
@@ -124,25 +130,7 @@ export class SessionArtifactCache {
 			)
 				return;
 		}
-		const bytes = Object.values(value.artifacts).reduce(
-			(sum, content) => sum + (content?.length ?? 0) * 2,
-			1024,
-		);
-		if (bytes > this.maxBytes) return;
-		const previous = this.entries.get(key);
-		if (previous) {
-			this.bytes -= previous.bytes;
-			this.entries.delete(key);
-		}
-		while (
-			this.entries.size > 0 &&
-			(this.entries.size >= this.maxEntries || this.bytes + bytes > this.maxBytes)
-		) {
-			const oldest = this.entries.keys().next().value!;
-			this.bytes -= this.entries.get(oldest)!.bytes;
-			this.entries.delete(oldest);
-		}
-		this.entries.set(key, { value: structuredClone(value), bytes });
-		this.bytes += bytes;
+		if (artifactBytes(value) > this.maxBytes) return;
+		this.entries.set(key, structuredClone(value));
 	}
 }

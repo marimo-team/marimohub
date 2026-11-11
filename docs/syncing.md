@@ -34,7 +34,15 @@ A deployment can configure multiple providers.
 ## Working notebooks
 
 Working notebooks use dedicated GitHub branches. They require the
-[working-branch opt-in](configuration.md#working-branches) and existing provider credentials.
+[working-branch opt-in](configuration.md#working-branches) and a GitHub App.
+If the opt-in is set without a GitHub App, startup fails with a configuration error.
+
+> **Warning:** Editors write through the GitHub App identity. If
+> `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` is unset, any editor can create
+> branches, commit, and open PRs in every repository where the App is installed.
+> Startup logs a warning in this case.
+> Set a [repository policy](#repository-project-policies) before you enable working branches.
+
 Editors use **New working branch** in the project creation menu. Managers select
 this workflow in the **Sync from git repo** dialog.
 
@@ -52,7 +60,7 @@ synchronized commit.
 **Save before you stop a session.** Session termination does not preserve uncaptured edits.
 Captures include local commits, staged edits, and eligible untracked files under the
 notebook folder. `.gitignore` applies to new files. Captures exclude Git metadata,
-environment/cache directories, and marimo runtime state.
+environment and cache directories, and marimo runtime state.
 
 Captures allow at most 1,000 changed files, 2,000 candidate paths, and 10 MiB of changed content.
 Unchanged imported files do not count toward the content limit. Before publication,
@@ -63,21 +71,41 @@ Deleting a notebook leaves its remote branch and PR intact.
 
 ### Recovery
 
-| Save result                                | Action                                                                                                           |
-| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| Commit succeeded, hub sync pending         | Select **Retry save** to import the exact commit without another capture.                                        |
-| Remote outcome unknown                     | Select **Retry save**. If the head still matches the recorded base, the hub retries the same conditional update. |
-| Branch moved or outcome remains unresolved | Download recovery before restarting. Resolve the conflict outside the hub or create a new working notebook.      |
+A save records its stage in a receipt. While a save is unfinished, the notebook
+blocks new saves, **Sync now**, and **Open PR** for every editor. Select **Retry save**
+to continue the save. A retry reuses the stored capture and commit.
 
-A failed capture releases the save slot. Start a new save after correcting the cause.
-A workspace-limit violation or definite rejection of the first remote update also releases the slot.
-Correct the files or repository rules, then start a new save. Any stored capture remains available for recovery.
-A rejected retry of an earlier uncertain update stays pending until reconciliation.
+| Save result                                      | Action                                                                                                           |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| Commit succeeded, hub sync pending               | Select **Retry save** to import the exact commit without another capture.                                        |
+| Remote outcome unknown                           | Select **Retry save**. If the head still matches the recorded base, the hub retries the same conditional update. |
+| Branch moved, or GitHub rejects a retried update | Wait 15 minutes, then select **Retry save**. The save finishes as `conflict` and releases the notebook.          |
+| Commit succeeded, hub import rejected            | The save finishes as `conflict`. Fix the cause, then use [**Sync now**](#sync-now) to import the commit.         |
 
-Only the save author can retry. A captured operation can resume after its session ends.
-Recovery ZIPs contain captured files and a manifest of deletions. Ordinary captures
-have a 24-hour recovery horizon plus a one-hour cleanup grace. Unresolved dispatched
-saves retain their captures. Maintenance deletes eligible captures, but never publishes them.
+The 15-minute bound starts when the hub sends the branch update to GitHub.
+Each retried update restarts the bound, unless GitHub definitely rejects it.
+Before the bound, a retry that cannot confirm the commit keeps the save pending,
+because an earlier update can still arrive.
+
+Some saves finish as `conflict` before the remote update and release the notebook at once.
+Causes include a failed capture, a moved branch, a workspace-limit violation, and a tree conflict.
+A definite rejection of the first remote update has the same result.
+Correct the files or repository rules, then start a new save.
+
+The save author can retry any stage. Other editors can retry only `remote_committed`
+and `hub_synced` saves, because their commit is already on GitHub.
+A captured save can resume after its session ends.
+
+A recovery ZIP contains the captured files and a manifest of all changes, including deletions.
+Only the save author and project managers can read a save receipt or download its recovery ZIP.
+To keep work from a `conflict` save, download the ZIP and apply the files in a new save.
+
+A save that has not sent its remote update expires 24 hours after it starts.
+Captures of saves in `ref_dispatched`, `remote_committed`, or `hub_synced` stay until
+the save finishes. Maintenance can delete other captures 25 hours after the save starts.
+A dispatched save that finishes after this time can lose its capture on the next maintenance pass.
+Download recovery before you retry a save that is past the 15-minute bound.
+Maintenance never publishes captures.
 
 A closed, merged, or retargeted PR ends publication. An observed branch deletion also
 ends publication, even if someone recreates the branch. These cases require a new
@@ -87,21 +115,21 @@ working notebook. The hub never force-pushes, merges, or rebases.
 
 Create through `POST /api/v1/projects/{pid}/notebooks/git` with
 `"fork": {"base_branch": "main"}` and an `Idempotency-Key` header.
-Save through `POST …/notebooks/{nid}/sessions/{sid}/saves` with a separate stable key.
-After a timeout, reuse the same key.
+The other routes share the prefix `/api/v1/projects/{pid}/notebooks/{nid}`:
 
-The remaining routes share `/api/v1/projects/{pid}/notebooks/{nid}`:
+| Operation     | Route                                          | `Idempotency-Key` |
+| ------------- | ---------------------------------------------- | ----------------- |
+| Save          | `POST /sessions/{sid}/working-branch/saves`    | Required          |
+| Branch status | `GET /working-branch`                          | —                 |
+| Save receipt  | `GET /working-branch/saves/{save_id}`          | —                 |
+| Retry         | `POST /working-branch/saves/{save_id}/retry`   | —                 |
+| Recovery ZIP  | `GET /working-branch/saves/{save_id}/recovery` | —                 |
+| Open PR       | `POST /working-branch/change-request` (`201`)  | Required          |
 
-| Operation     | Route                           |
-| ------------- | ------------------------------- |
-| Branch status | `GET /working-branch`           |
-| Save receipt  | `GET /saves/{save_id}`          |
-| Retry         | `POST /saves/{save_id}/retry`   |
-| Recovery ZIP  | `GET /saves/{save_id}/recovery` |
-| Open PR       | `POST /change-requests`         |
-
+Use a separate key for each operation. After a timeout, reuse the same key.
 The generated OpenAPI schema defines complete requests and responses.
-MCP and project chat expose the same operations with separate consent for remote writes.
+The [MCP working-branch tools](./mcp.md#working-branches) and project chat expose the
+same operations, with separate consent for remote writes.
 Branch status is cached for one minute. The web refreshes on focus and after mutations, without timer polling.
 
 ## How it works
@@ -234,7 +262,7 @@ the subtree, because capture runs with `--relative`. Session startup fails if
 the Git directory cannot be restored completely.
 Provider credentials stay on the server.
 
-Git data larger than 25 MB is rejected. Use push mode for a repository that
+Git data larger than 25 MiB is rejected. Use push mode for a repository that
 exceeds this limit. The stored `.git` covers the whole repository, not only
 `root_path`. Large monorepos, the main use of `root_path`, can exceed this
 limit.
@@ -361,14 +389,14 @@ time and does not change notebook state. Pending source settings always set
 The sync endpoint reads the repository tree at the resolved commit. It applies
 the push-sync file-count and size limits to files under `root_path`. Files
 outside `root_path` do not count against these limits. A pull source's Git
-directory still covers the whole repository at that commit, so the 25 MB Git
+directory still covers the whole repository at that commit, so the 25 MiB Git
 data limit applies to the full tree. A large monorepo can exceed it even when
 its `root_path` is small.
 
 Server sync omits symlinks and other special entries from the workspace. For a
 pull source, proposal capture also ignores these omitted Git index entries.
 
-GitHub archive downloads also have limits of 100 MB compressed and 2 GB uncompressed.
+GitHub archive downloads also have limits of 100 MiB compressed and 2 GiB uncompressed.
 If no settings are pending and the notebook already points to the commit, the
 endpoint returns `synced: false` and creates no version. A sync against pending
 source settings makes those settings active. The response includes the resolved
@@ -484,7 +512,7 @@ This method has these requirements:
 - Set `persist-credentials` to `false`. This prevents the workflow token from
   entering the archive through `.git/config`.
 - Make sure that the archive contains the commit from `X-Marimohub-Commit`.
-- Keep the archive within 1,000 files, 25 MB per file, and 100 MB decompressed.
+- Keep the archive within 1,000 files, 25 MiB per file, and 100 MiB decompressed.
   Files inside `.git` count toward these limits.
 
 marimohub stores `.git` with the immutable version and restores it into each
@@ -618,7 +646,7 @@ POST /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests
 If the synced version [includes `.git`](#include-git-for-multi-file-publishing),
 the proposal can contain changes from the full working tree. Otherwise, the
 proposal contains only the entry notebook. Each proposal supports 1,000 changes
-and 10 MB of added or modified content.
+and 10 MiB of added or modified content.
 
 ## GitHub Enterprise Server
 

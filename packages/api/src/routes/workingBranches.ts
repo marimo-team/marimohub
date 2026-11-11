@@ -1,4 +1,5 @@
 import { createRoute, z } from '@hono/zod-openapi';
+import { idempotentCreate } from '../idempotency';
 import {
 	commonErrors,
 	createApp,
@@ -13,6 +14,7 @@ import {
 	auditWorkingBranch,
 	authorizeWorkingNotebook,
 	OpenWorkingBranchPrBody,
+	readWorkingBranchSave,
 	SaveWorkingBranchBody,
 	saveWorkingBranch,
 	resumeWorkingBranch,
@@ -35,8 +37,8 @@ const saveResponses = {
 const SaveParam = NotebookIdParam.extend({ save_id: z.string().regex(/^[a-f0-9]{64}$/) });
 const save = createRoute({
 	method: 'post',
-	path: '/projects/{pid}/notebooks/{nid}/sessions/{sid}/saves',
-	operationId: 'notebooks.working-branch.save',
+	path: '/projects/{pid}/notebooks/{nid}/sessions/{sid}/working-branch/saves',
+	operationId: 'notebooks.working-branch.saves.create',
 	tags,
 	summary: 'Commit source changes to the working branch',
 	description:
@@ -65,32 +67,33 @@ const status = createRoute({
 });
 const getSave = createRoute({
 	method: 'get',
-	path: '/projects/{pid}/notebooks/{nid}/saves/{save_id}',
+	path: '/projects/{pid}/notebooks/{nid}/working-branch/saves/{save_id}',
 	operationId: 'notebooks.working-branch.saves.get',
 	tags,
 	summary: 'Inspect a captured save operation',
+	description: 'Only the save author or a project manager can read the receipt.',
 	request: { params: SaveParam },
 	responses: saveResponses,
 });
 const retry = createRoute({
 	method: 'post',
-	path: '/projects/{pid}/notebooks/{nid}/saves/{save_id}/retry',
+	path: '/projects/{pid}/notebooks/{nid}/working-branch/saves/{save_id}/retry',
 	operationId: 'notebooks.working-branch.saves.retry',
 	tags,
 	summary: 'Resume an existing save operation',
 	description:
-		'Only the save author can resume. Reuses its immutable capture and commit; does not require the original Idempotency-Key.',
+		'The save author can resume any stage. Any editor can resume a save whose commit is already on GitHub (`remote_committed` or `hub_synced`). Reuses its immutable capture and commit; does not require the original Idempotency-Key.',
 	request: { params: SaveParam },
 	responses: saveResponses,
 });
 const recovery = createRoute({
 	method: 'get',
-	path: '/projects/{pid}/notebooks/{nid}/saves/{save_id}/recovery',
+	path: '/projects/{pid}/notebooks/{nid}/working-branch/saves/{save_id}/recovery',
 	operationId: 'notebooks.working-branch.saves.recovery',
 	tags,
 	summary: 'Download captured source changes for recovery',
 	description:
-		'Returns a ZIP containing a manifest of modifications/deletions and captured file bytes. Requires current notebook authorization. Payloads become eligible for cleanup at expires_at, except unresolved dispatched saves retain their capture. Downloads remain available until the payload is pruned.',
+		'Returns a ZIP containing a manifest of modifications/deletions and captured file bytes. Only the save author or a project manager can download it. Payloads become eligible for cleanup at expires_at. Captures of unfinished dispatched saves (`ref_dispatched`, `remote_committed`, `hub_synced`) stay until the save finishes. Downloads remain available until the payload is pruned.',
 	request: { params: SaveParam },
 	responses: {
 		200: {
@@ -102,15 +105,19 @@ const recovery = createRoute({
 });
 const openPr = createRoute({
 	method: 'post',
-	path: '/projects/{pid}/notebooks/{nid}/change-requests',
-	operationId: 'notebooks.working-branch.change-requests.open',
+	path: '/projects/{pid}/notebooks/{nid}/working-branch/change-request',
+	operationId: 'notebooks.working-branch.change-request.open',
 	tags,
 	summary: 'Open the working branch pull request',
 	description:
-		'Opens or returns the one pull request associated with this working branch. Does not capture or commit unsaved session edits.',
-	request: { params: NotebookIdParam, body: jsonBody(OpenWorkingBranchPrBody) },
+		'Opens or returns the one pull request associated with this working branch. Does not capture or commit unsaved session edits. The Idempotency-Key header is required; retry with the same key after a lost response.',
+	request: {
+		params: NotebookIdParam,
+		headers: RequiredIdempotencyKeyHeader,
+		body: jsonBody(OpenWorkingBranchPrBody),
+	},
 	responses: {
-		200: jsonContent(
+		201: jsonContent(
 			z.object({ success: z.literal(true), data: WorkingBranchChangeRequestResponse }),
 			'Working branch pull request',
 		),
@@ -156,21 +163,13 @@ app.openapi(status, async (c) => {
 app.openapi(getSave, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid, save_id } = c.req.valid('param');
-	await authorizeWorkingNotebook(deps, c.get('user'), pid, nid);
-	return c.json(
-		{
-			success: true,
-			data: WorkingBranchSaveResponse.parse(
-				await deps.services.workingBranches.getSave(pid, nid, save_id),
-			),
-		},
-		200,
-	);
+	const receipt = await readWorkingBranchSave(deps, c.get('user'), pid, nid, save_id);
+	return c.json({ success: true, data: WorkingBranchSaveResponse.parse(receipt) }, 200);
 });
 app.openapi(recovery, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid, save_id } = c.req.valid('param');
-	await authorizeWorkingNotebook(deps, c.get('user'), pid, nid);
+	await readWorkingBranchSave(deps, c.get('user'), pid, nid, save_id);
 	const bytes = await deps.services.workingBranches.recovery(pid, nid, save_id);
 	return c.body(Uint8Array.from(bytes), 200, {
 		'Content-Type': 'application/zip',
@@ -199,24 +198,31 @@ app.openapi(openPr, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	await authorizeWorkingNotebook(deps, user, pid, nid);
-	const data = await deps.services.workingBranches.openChangeRequest(
-		pid,
-		nid,
-		user.id,
-		c.req.valid('json'),
+	const data = await idempotentCreate(
+		c,
+		'POST /projects/{pid}/notebooks/{nid}/working-branch/change-request',
 		async () => {
-			await authorizeWorkingNotebook(deps, user, pid, nid);
+			const opened = await deps.services.workingBranches.openChangeRequest(
+				pid,
+				nid,
+				user.id,
+				c.req.valid('json'),
+				async () => {
+					await authorizeWorkingNotebook(deps, user, pid, nid);
+				},
+			);
+			await auditWorkingBranch(
+				deps,
+				user,
+				{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path },
+				'notebook.working_branch.open_pr',
+				pid,
+				nid,
+				{ change_request: opened.number },
+			);
+			return toWorkingBranchChangeRequest(opened);
 		},
 	);
-	await auditWorkingBranch(
-		deps,
-		user,
-		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path },
-		'notebook.working_branch.open_pr',
-		pid,
-		nid,
-		{ change_request: data.number },
-	);
-	return c.json({ success: true, data: toWorkingBranchChangeRequest(data) }, 200);
+	return c.json({ success: true, data }, 201);
 });
 export default app;

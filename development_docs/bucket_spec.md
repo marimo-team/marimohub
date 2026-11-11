@@ -87,9 +87,7 @@ The involvement index selects candidate projects for project lists and app-only 
 - A subject default also includes projects that inherit default access.
 - Missing or pending access summaries remain candidates, so incomplete projections cannot hide a required role check.
 
-Candidate roles come from trusted `access` summaries or validated `project.json` reads.
-A summary is trusted only with no pending mutation and a matching configured deployment generation (§4.2).
-Without that generation, readers use metadata for role checks.
+Candidate roles come from trusted `access` summaries (§4.2) or validated `project.json` reads.
 Each listing reuses metadata reads across role, tag, and label checks.
 Pending markers prevent a failed projection from preserving revoked access.
 
@@ -227,7 +225,7 @@ s3-bucket/
                         ├── workspace/          ← Git sources only: complete synced tree
                         ├── git/                ← pull-mode Git sources only: credential-free `.git` payload
                         ├── workspace.zip       ← optional packed startup copy of workspace + `.git`
-                        ├── workspace-manifest.json ← synced file sizes and SHA-256 digests
+                        ├── workspace-manifest.json ← working-branch versions only: file sizes and SHA-256 digests
                         ├── notebook.html       ← optional snapshot (see below)
                         └── session.json        ← optional snapshot (see below)
 ```
@@ -253,9 +251,8 @@ tree. Provisioning prefers this single object and falls back to the canonical
 created for combined workspace and Git inputs up to 32 MiB.
 
 `SyncedNotebookService` also writes an immutable `workspace-manifest.json` beside
-new synced versions. It lists each workspace path, byte size, and SHA-256 digest.
-Working-branch capture compares live file digests with this manifest and reads only
-changed payloads. Older versions without this file use baseline byte comparisons.
+new versions of working-branch notebooks. It lists each workspace path, byte size, and SHA-256 digest.
+Other versions omit it. [Save capture](source_control_publishing.md#save-protocol) reads it.
 Version rollback and pruning remove the manifest with the rest of the version.
 
 ### 3.2 Complete Path Reference
@@ -284,14 +281,17 @@ Version rollback and pruning remove the manifest with the rest of the version.
 | `_system/idempotency/{digest}.json`                                       | JSON     | Recorded `POST`-create response for an `Idempotency-Key`, keyed by `sha256(user:route\nkey)`. Replayed on retry; pruned after 24h. See [`idempotency.md`](./idempotency.md).                                                                                                                                                                                                                                                                                                                                                                       |
 | `_system/reconcile/orphans/{sandbox-id}.json`                             | JSON     | First-seen Unix timestamp for an active sandbox that has no session record and no provider creation time. The reconciler creates and deletes these markers.                                                                                                                                                                                                                                                                                                                                                                                        |
 | `_system/sandbox-diagnostics/{user-id}.json`                              | JSON     | Per-admin CAS lease for a sandbox startup diagnostic (`{ sandbox_id, expires_at }`). It prevents overlapping tests across serving replicas and makes the active sandbox visible to reconciliation. `SandboxDiagnosticLease` owns all writes; release CAS-writes a null free marker, and expiry recovers leases left by a crashed request.                                                                                                                                                                                                          |
-| `_system/_maintenance.lock`                                               | JSON     | Advisory lease for snapshot and event retention. `MaintenanceLock` owns this key.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `_system/_maintenance.lock`                                               | JSON     | Advisory lease for the five-minute `maintenance` loop, which expires and reaps sessions and prunes events. `MaintenanceLock` owns this key. Each retention loop has its own `_system/retention-{name}-lock.json`.                                                                                                                                                                                                                                                                                                                                  |
 | `_system/snapshot-expiry-cursor.json`                                     | JSON     | `MaintenanceService` owns this CAS cursor, scan cutoff, newest-snapshot floor, and partial gauge totals.                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `_system/notebook-gc-cursor.json`                                         | JSON     | `NotebookService` owns this CAS cursor and next visit deadline for daily artifact cleanup.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `_system/job-prune-cursor.json`                                           | JSON     | `JobRunService` owns this CAS cursor for the scheduler's bounded job-retention rotation.                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `_system/project-purge-cursor.json`                                       | JSON     | `ProjectService` owns this CAS cursor. Failed deletions advance it so later projects cannot starve.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `_system/notebook-purge-cursor.json`                                      | JSON     | `NotebookService` owns this CAS cursor for bounded deleted-notebook sweeps.                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `_system/session-index/users/{encoded-user-id}.json`                      | JSON     | `SessionService` owns this CAS projection of the sessions that count toward a user's caps. See [Per-user session index](#per-user-session-index).                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `_system/migrations/{id}.json`                                            | JSON     | `MigrationService` owns this CAS record: batch lease, cursor, and the permanent completion receipt for one bucket migration. See [Migrations](./migrations.md#automatic-background-migrations).                                                                                                                                                                                                                                                                                                                                                    |
+| `_system/working-branches/...`                                            | JSON     | `WorkingBranchService` owns creation receipts, notebook `head.json` CAS records, save `receipt.json` CAS records, immutable captures, and the cleanup cursor (§ Working branches). `SyncedNotebookService` also takes the `head.json` lease through `WorkingBranchStore` when it syncs a working notebook outside a save.                                                                                                                                                                                                                          |
 | `projects/{pid}/notebooks/{nid}/jobs/{jid}/prune-runs.json`               | JSON     | `JobRunService` owns this CAS cursor over inspected run-index entries, including retained and corrupt records.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `projects/{pid}/notebooks/{nid}/jobs/{jid}/prune-occurrences.json`        | JSON     | `JobRunService` owns this CAS cursor over inspected occurrence entries, including fresh claims.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `projects/{pid}/notebooks/{nid}/jobs/{jid}/prune-occurrences.json`        | JSON     | `JobRunService` owns this CAS cursor over inspected occurrence entries; a page containing a live claim resets it to the start, because keys sort chronologically.                                                                                                                                                                                                                                                                                                                                                                                  |
 | `_system/_session_lifecycle.lock`                                         | JSON     | Advisory lease for the session lifecycle and reconciliation sweep. The lifecycle loop owns this key.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `projects/{pid}/project.json`                                             | JSON     | Project metadata: name, description, owner, members, tags. Optional `security_labels` (classification + compartments), written only by `ProjectService.setSecurityLabels` under super-admin standing; see §4.3.                                                                                                                                                                                                                                                                                                                                    |
 | `projects/{pid}/alerts.json`                                              | JSON     | Project-scoped Slack and signed-webhook destinations. CAS-managed and written only by `ProjectAlertStore`; endpoint URLs and signing secrets are path-bound managed ciphertext. The record is retained through the soft-delete window so the final project deletion alert can be delivered.                                                                                                                                                                                                                                                        |
@@ -322,7 +322,7 @@ Version rollback and pruning remove the manifest with the rest of the version.
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/version.json`              | JSON     | Version metadata: saved_at, author, message, parent_id, optional snapshot descriptors.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/workspace/`                | any      | Complete immutable tree from one Git sync. Present only for a `git` source version.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/git/`                      | any      | Immutable credential-free `.git` payload for a pull-mode source version. Restored into the sandbox workdir at provision and pruned with the enclosing version. With a `root_path`, `.git` is restored to the Git root (the configured workdir) and the workspace to `<workdir>/<root_path>`.                                                                                                                                                                                                                                                       |
-| `projects/{pid}/notebooks/{nid}/versions/{vid}/workspace-manifest.json`   | JSON     | Immutable workspace paths, byte sizes, and SHA-256 digests written by SyncedNotebookService. Older versions can omit it.                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `projects/{pid}/notebooks/{nid}/versions/{vid}/workspace-manifest.json`   | JSON     | Immutable workspace paths, byte sizes, and SHA-256 digests written by SyncedNotebookService for working-branch notebook versions only. Other versions omit it.                                                                                                                                                                                                                                                                                                                                                                                     |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/workspace.zip`             | ZIP      | Optional duplicate of the final synced sandbox tree used only as a startup fast path. Pull-mode Git metadata is stored under `.git/`. Canonical reads and fallback restores continue to use `workspace/` and `git/`.                                                                                                                                                                                                                                                                                                                               |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.html`             | HTML     | **Optional.** Rendered HTML snapshot, copied from `__marimo__/notebook.html` on session teardown. Immutable once written.                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/session.json`              | JSON     | **Optional.** marimo session state (cell outputs), copied from `__marimo__/session/{notebook}.py.json` on teardown. Immutable.                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -393,10 +393,15 @@ controls how the service reads the structure.
 
 **Project access projection.** Project entries can include `access`, a role
 summary with `members`, `default_role`, and a code-owned `version`.
-When `access_pending` is empty or absent, `/projects` and `/me` use summaries
-with the current supported version. Old `generation` values do not grant trust.
-Missing summaries, unknown versions, and pending mutations require reads of
-`project.json`. These projection fields never appear in project-list responses.
+`/projects` and `/me` trust a summary only when all of these conditions are true:
+
+- `access.version` is `1`.
+- `access_pending` is empty or absent.
+- The summary's member identities match the entry's `member_ids`, `member_emails`, and `member_groups`.
+- The summary's `default_role` matches the entry's `default_role`.
+
+Otherwise, readers check roles against `project.json`.
+These projection fields never appear in project-list responses.
 
 The [automatic migration](./migrations.md#project-access-v1) rebuilds existing
 summaries through `CatalogService.mutateSnapshot`. Its completion receipts and
@@ -581,9 +586,13 @@ Each CAS record stores `user_id` and `entries: [{session_id, project_id}]`.
 User IDs use URI encoding. Empty indexes remain in storage.
 
 Cap checks read the index fresh and validate referenced sessions through the ETag cache.
-Ranking remains: running first, then `started_at`, then `session_id`.
+Indexed checks rank running sessions first, then by index position.
+Registration appends and never moves an existing entry.
+A session that registers late therefore ranks behind every start that already checked the cap.
+Scans before migration completes rank running sessions first, then by `started_at`, then by `session_id`.
 Unreclaimed app sandboxes count until cleanup completes, even for terminal sessions.
 Reads remove stale references. Lifecycle sweeps and terminal reaping also restore missing entries.
+Removal of a finished session from a missing index is a no-op. It never recreates the index.
 Maintenance repairs at most 32 users per pass, rotating through users across passes.
 Matching membership skips session validation and writes. Changed membership is validated inside each CAS attempt.
 Unchanged results preserve the index ETag. Explicit backfill processes every user.
@@ -594,6 +603,8 @@ Admission uses scans until the background runner observes completion, then uses 
 Existing indexes need no deployment-wide session LIST, including on cold replicas after startup checks.
 
 A missing index triggers a strict session scan before admission or registration, including for a new user.
+The scan fails closed on an invalid record whose raw `user_id` names that user.
+It skips other invalid records and increments `sessions.index.unattributable`.
 A missing index never means an empty queue. Recovery failures reject admission.
 Registration requires the initialized index to still exist; concurrent deletion rejects the start.
 
@@ -602,8 +613,6 @@ Read failures and missing candidate membership also reject admission.
 Index write failures increment `sessions.index.write_failed`.
 Cleanup and sweep repair continue after index errors. Explicit repair reports errors, including corrupt records and mismatched owners.
 
-Automatic migration merges each session reference through CAS.
-If an index is missing during migration, recovery scans authoritative sessions before recreating it, including references from earlier pages.
 The optional repair command also removes orphan references. Missing indexes during repair require a fresh session scan.
 
 A no-op heartbeat returns the request's session read. Concurrent termination appears on the next request.
@@ -1473,14 +1482,14 @@ configured process or platform log destination. The bucket has no
 
 ## 11. Snapshot Lifecycle & Retention
 
-| Topic                       | Detail                                                                                                                                                                                                                                                                                                                                |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Retention                   | Keep snapshots for 90 days (with a floor of the N most recent), then delete via the maintenance cron — `MaintenanceService.expireSnapshots` (`packages/core/src/services/catalog/MaintenanceService.ts`). Every commit writes a new snapshot, so without this the bucket grows without bound (the Iceberg "snapshot-expiry" problem). |
-| Recovery                    | Use the [offline recovery procedure](./operations.md#inspect-and-recover-the-catalog) to select a surviving snapshot or rebuild from records.                                                                                                                                                                                         |
-| Compaction                  | Not needed at this scale. If snapshot exceeds 1MB, split into per-project manifest files referenced by the snapshot instead of embedded.                                                                                                                                                                                              |
-| Emergency rollback          | Snapshot recovery restores catalog membership with current metadata. For local notebooks, use `POST /api/v1/projects/{pid}/notebooks/{nid}/versions/{vid}/restore` to roll back code. It copies the selected version's code and dependencies into the live workspace and writes a new version.                                        |
-| Snapshot size at full scale | ~200KB (200 bytes × 1,000 notebooks)                                                                                                                                                                                                                                                                                                  |
-| Version-folder artifacts    | The HTML/session snapshots (§8) live **inside** the immutable `versions/{vid}/` folder, not in `_system/snapshots/`. They need no separate retention job: `NotebookService.pruneVersions` deletes the whole version prefix when it ages out of `MAX_VERSIONS`, reaping `notebook.html` / `session.json` along with the code.          |
+| Topic                       | Detail                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Retention                   | Keep snapshots for 90 days (with a floor of the N most recent), then delete in the hourly `retention_snapshot_expiry` loop — `MaintenanceService.expireSnapshots` (`packages/core/src/services/catalog/MaintenanceService.ts`). Every commit writes a new snapshot, so without this the bucket grows without bound (the Iceberg "snapshot-expiry" problem). |
+| Recovery                    | Use the [offline recovery procedure](./operations.md#inspect-and-recover-the-catalog) to select a surviving snapshot or rebuild from records.                                                                                                                                                                                                               |
+| Compaction                  | Not needed at this scale. If snapshot exceeds 1MB, split into per-project manifest files referenced by the snapshot instead of embedded.                                                                                                                                                                                                                    |
+| Emergency rollback          | Snapshot recovery restores catalog membership with current metadata. For local notebooks, use `POST /api/v1/projects/{pid}/notebooks/{nid}/versions/{vid}/restore` to roll back code. It copies the selected version's code and dependencies into the live workspace and writes a new version.                                                              |
+| Snapshot size at full scale | ~200KB (200 bytes × 1,000 notebooks)                                                                                                                                                                                                                                                                                                                        |
+| Version-folder artifacts    | The HTML/session snapshots (§8) live **inside** the immutable `versions/{vid}/` folder, not in `_system/snapshots/`. They need no separate retention job: `NotebookService.pruneVersions` deletes the whole version prefix when it ages out of `MAX_VERSIONS`, reaping `notebook.html` / `session.json` along with the code.                                |
 
 > **Snapshot protection.** Retention preserves the current and previous snapshots. Normal CAS conflict cleanup deletes only the losing writer's snapshot. If the catalog or its snapshot is missing, follow the [recovery runbook](./operations.md#inspect-and-recover-the-catalog). Surviving project objects or snapshots block empty initialization. Unreferenced snapshots require review because their creation time does not prove commit.
 
@@ -1527,8 +1536,7 @@ A missing `member_groups` field is empty; it grants no directory access.
 Directory search builds membership candidates from the snapshot and confirms them against current project heads.
 A stale projection cannot retain a revoked grant.
 
-Project lists and app-only checks resolve roles from trusted `access` summaries (§4.2).
-Missing summaries, pending mutations, or unmatched deployment generations require validated `project.json` reads.
+Project lists and app-only checks resolve roles from trusted `access` summaries (§4.2), or else from validated `project.json` reads.
 Each listing reuses those reads across role, tag, and label checks.
 Roles, credential scopes, and labels are filtered before pagination and totals.
 This preserves the catalog snapshot model (§7.1) without a separate per-user index.
@@ -1654,6 +1662,11 @@ It then updates `catalog.json` with an ETag conditional write. If another writer
 wins, it removes its uncommitted snapshot and retries against the new catalog.
 Only the successful writer appends the mutation event.
 
+Each process runs one snapshot draft at a time. Retry backoff does not hold this turn.
+After 20 attempts, the mutation fails with `409 CONFLICT` and increments `catalog.cas.exhausted`.
+A notebook save rebuilds its catalog entry from current metadata on each attempt.
+Exhaustion does not fail the save; see [what to watch](./operations.md#6-observability).
+
 ---
 
 ## 14. Scale Analysis
@@ -1748,10 +1761,14 @@ It stores pool configuration fingerprints, retry deadlines, and sandbox members.
 Member states are `creating`, `ready`, `claimed`, and `retiring`.
 A member can carry an optional `reconnect_reference`, an opaque and credential-free provider locator.
 The service writes it only after a successful readiness probe. Health checks backfill it for members without one.
+A `ready` member can carry an optional `health_failures` count of consecutive transient health-check failures.
+A successful check clears it. The [readiness rules](../docs/warm-pools.md#readiness-budgets) define retirement.
 
 Creation reservations precede provider calls. Claims record their destination session before session publication.
 An assigned claim remains until session reclamation, so an interrupted handoff does not lose ownership.
-Retiring records remain until provider deletion succeeds. An untouched claim can return to `ready` after cap or editor admission fails, but only after the starting session relinquishes teardown ownership by CAS. Assignment, concurrent stop, expiry, or a stale claim token prevents return. Assigned sandboxes never return to `ready`.
+Retiring records remain until provider deletion succeeds.
+An untouched claim can return to `ready` only under the [handoff rules](./warm_pools.md#ownership-and-lifecycle).
+A stale claim token also prevents return. Assigned sandboxes never return to `ready`.
 
 Orphan reconciliation discovers every record under `_system/warm-pools/` after its provider snapshot.
 A failed listing or unreadable warm record prevents orphan deletion during that sweep.
@@ -1770,7 +1787,7 @@ Records hold the source, prepared revision, runtime ownership ledger, and sessio
 - `_system/preview-projects/{pid}.json`: bounded membership, desired configuration, active automation groups, and artifact reservations.
 - `_system/preview-automations/{pid}/{automation_key}.json`: compact, permanent replay fences for retired automation groups.
 - `_system/preview-receipts/{pid}.json`: bounded idempotency receipts, valid for seven days from creation.
-- `_system/preview-work.json`: rotating project cursor and deployment-wide preparation leases.
+- `_system/preview-work.json`: deployment-wide preparation leases, the rotating project cursor, and a `pending` priority queue of at most 1,000 projects. See [rolling-upgrade behavior](../docs/notebook-previews.md#operation-and-limits).
 - `_system/preview-cleanup-cursor.json`: independent rotating cleanup cursor.
 
 A one-minute deadline fences each creation attempt, independently of the receipt’s seven-day deduplication window.
@@ -1881,7 +1898,7 @@ configuration at equal revisions, fences older publication while preserving the 
 snapshot. Incompatible checkpoints restart.
 Publication cannot overwrite a newer head or resurrect a deletion tombstone.
 The global cursor records crawl position, cleanup position, schedule identity, round start, and the next crawl time.
-Search snapshots and crawl checkpoints can store an optional `catalog_fingerprint` for catalog-backed sources.
+Search snapshots and crawl checkpoints may contain a legacy optional `catalog_fingerprint`; no source writes it and the indexer ignores it.
 Matching complete snapshots skip source reads for up to 24 hours; partial snapshots remain eligible for recrawl.
 Notebook search does not use this shortcut because HTML and session artifacts can change without a catalog mutation.
 The fingerprint stays outside the bounded head. A full verification after 24 hours detects writes whose catalog update failed.
@@ -1903,22 +1920,21 @@ and performance evidence. The [search guide](../docs/search.md) covers configura
 
 `WorkingBranchService` owns `_system/working-branches/`:
 
-| Object                                          | Write rule                                                                 | Retention                                                      |
-| ----------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `creations/{pid}/{id}.json`                     | Create once; pins request fingerprint, notebook ID, source and fork SHA    | Retained for idempotent creation                               |
-| `notebooks/{pid}/{nid}/head.json`               | CAS; identity, lease, active save, PR association and cached remote status | Retain deletion tombstone                                      |
-| `notebooks/{pid}/{nid}/saves/{id}/receipt.json` | CAS; monotonic save stages and commit/version acknowledgment               | Retain after payload cleanup                                   |
-| `notebooks/{pid}/{nid}/saves/{id}/capture.json` | Create once; manifest plus source bytes                                    | 24 hours plus one-hour grace; unresolved dispatched work stays |
-| `cleanup.json`                                  | CAS; bounded scan cursor                                                   | Retained                                                       |
+| Object                                          | Write rule                                                                 | Retention                                                                                           |
+| ----------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `creations/{pid}/{id}.json`                     | Create once; pins request fingerprint, notebook ID, source and fork SHA    | Retained for idempotent creation                                                                    |
+| `notebooks/{pid}/{nid}/head.json`               | CAS; identity, lease, active save, PR association and cached remote status | Retain deletion tombstone                                                                           |
+| `notebooks/{pid}/{nid}/saves/{id}/receipt.json` | CAS; monotonic save stages and commit/version acknowledgment               | Retain after payload cleanup                                                                        |
+| `notebooks/{pid}/{nid}/saves/{id}/capture.json` | Create once; manifest plus source bytes                                    | Deleted after the save is terminal and one hour past `expires_at`, which is 24 hours after creation |
+| `cleanup.json`                                  | CAS; bounded scan cursor                                                   | Retained                                                                                            |
 
 Notebook and project deletion retire heads through `WorkingBranchStore`.
 Remote branches, deletion tombstones, and replay receipts remain. The generated bucket schema describes
 all fields. Captures are separate from catalog versions and never update the
 catalog pointer directly.
 
-Maintenance scans at most 100 objects per pass with a CAS cursor. It expires abandoned
-pre-dispatch saves and deletes eligible terminal captures after the retention period.
-Failed captures release admission. New saves can retire abandoned empty claims under the branch lease.
-Dispatched operations with unresolved outcomes retain their receipts and captures.
-See the [publication protocol](source_control_publishing.md#working-branch-publication)
-for save ordering and source synchronization.
+Maintenance scans at most 100 objects per pass with a CAS cursor.
+It marks pre-dispatch saves `expired` one hour past `expires_at`, including saves on retired heads.
+Maintenance does not run while working branches are disabled, so captures remain until the feature is enabled again.
+The [publication protocol](source_control_publishing.md#working-branch-publication)
+defines save stages and the dispatch bound.

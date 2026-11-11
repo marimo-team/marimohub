@@ -1,6 +1,6 @@
-import { afterEach, expect, it, vi } from 'vitest';
-import { makeSnapshot, MemoryBucket } from '../../testing';
-import { snapshotCache } from './snapshotCache';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { makeSnapshot, makeSnapshotProjectEntry, MemoryBucket, uid } from '../../testing';
+import { projectedRole, snapshotCache } from './snapshotCache';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -62,4 +62,37 @@ it('shares a failed load, then permits one fresh load and caches its result', as
 	expect(concurrent).toBe(recovered);
 	expect(await cache.read('snapshot', retry)).toBe(recovered);
 	expect(retry).toHaveBeenCalledOnce();
+});
+
+describe('projectedRole', () => {
+	const member = { id: uid('member'), email: 'Member@Example.com' };
+	const trusted = makeSnapshotProjectEntry({
+		default_role: 'none',
+		member_ids: [member.id],
+		member_emails: ['invitee@example.com'],
+		member_groups: ['analysts'],
+		access: {
+			members: [
+				{ user_id: member.id, role: 'editor' },
+				{ email: 'INVITEE@example.com', role: 'viewer' },
+				{ group: 'analysts', role: 'viewer' },
+			],
+			default_role: 'none',
+			version: 1,
+		},
+	});
+
+	it('trusts a summary consistent with the candidate fields', () => {
+		expect(projectedRole(trusted, member)).toBe('editor');
+	});
+
+	// A v0.6.4 writer rewrites the candidate fields and default_role but keeps `access`.
+	it.each([
+		['a removed member', { member_ids: [] }],
+		['an added invite', { member_emails: ['invitee@example.com', 'new@example.com'] }],
+		['a removed group', { member_groups: [] }],
+		['a default-role change', { default_role: 'viewer' as const }],
+	])('falls back to metadata after a legacy writer applies %s', (_, patch) => {
+		expect(projectedRole({ ...trusted, ...patch }, member)).toBeUndefined();
+	});
 });

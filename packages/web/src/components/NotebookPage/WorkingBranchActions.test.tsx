@@ -9,7 +9,13 @@ vi.mock('@/api/workingBranches', () => ({
 	useSaveToBranch: hooks.save,
 	useOpenBranchPR: hooks.open,
 }));
-const props = { projectId: 'proj-1', notebookId: 'nb-1', sessionId: 'sess-1', canWrite: true };
+const props = {
+	projectId: 'proj-1',
+	notebookId: 'nb-1',
+	sessionId: 'sess-1',
+	canWrite: true,
+	userId: 'user-1',
+};
 const mutate = vi.fn();
 beforeEach(() => {
 	vi.clearAllMocks();
@@ -71,6 +77,7 @@ describe('WorkingBranchActions', () => {
 				active_save: 'save-id',
 				last_save: {
 					id: 'save-id',
+					author: 'user-1',
 					state: 'remote_committed',
 					error: 'Committed remotely; hub synchronization is pending.',
 					changes: [{ path: 'app.py' }],
@@ -82,8 +89,25 @@ describe('WorkingBranchActions', () => {
 		expect(screen.getByRole('status')).toHaveTextContent('hub synchronization is pending');
 		expect(screen.getByRole('link', { name: 'Download recovery' })).toHaveAttribute(
 			'href',
-			'/api/v1/projects/proj-1/notebooks/nb-1/saves/save-id/recovery',
+			'/api/v1/projects/proj-1/notebooks/nb-1/working-branch/saves/save-id/recovery',
 		);
+	});
+	it('offers recovery to managers but not to other editors', () => {
+		hooks.status.mockReturnValue({
+			data: {
+				last_save: {
+					id: 'save-id',
+					author: 'someone-else',
+					state: 'conflict',
+					changes: [{ path: 'app.py' }],
+					expires_at: '2099-01-01T00:00:00Z',
+				},
+			},
+		});
+		const { rerender } = render(<WorkingBranchActions {...props} />);
+		expect(screen.queryByRole('link', { name: 'Download recovery' })).toBeNull();
+		rerender(<WorkingBranchActions {...props} canManage />);
+		expect(screen.getByRole('link', { name: 'Download recovery' })).toBeInTheDocument();
 	});
 	it.each([
 		'claimed',
@@ -98,6 +122,7 @@ describe('WorkingBranchActions', () => {
 			data: {
 				last_save: {
 					id: 'save-id',
+					author: 'user-1',
 					state,
 					changes: [{ path: 'app.py' }],
 					expires_at: '2020-01-01T00:00:00Z',
@@ -116,6 +141,7 @@ describe('WorkingBranchActions', () => {
 					active_save: 'save-id',
 					last_save: {
 						id: 'save-id',
+						author: 'user-1',
 						state,
 						changes: [{ path: 'app.py' }],
 						expires_at: '2020-01-01T00:00:00Z',

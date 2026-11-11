@@ -1,4 +1,5 @@
 import type { ThemeConfig } from '../theme';
+import { BoundedLruMap, weakMemo } from '../cache';
 import {
 	generateThemePalette,
 	getNotebookPaletteTokens,
@@ -72,14 +73,15 @@ export const marimoSharingDisabled: MarimoConfigContributor = () => ({
 
 const BRAND_CSS_PATH = `${XDG_CONFIG_HOME}/marimo/brand.css`;
 
-const brandCssCache = new WeakMap<ThemeConfig, { key: string; css: string }>();
+const brandCssCache = weakMemo((_theme: ThemeConfig) => new BoundedLruMap<string, string>(1));
 
 export function renderMarimoBrandCss(theme: ThemeConfig): string {
 	const key = JSON.stringify([theme.notebook_palette, theme.primary_color, theme.secondary_color]);
-	const cached = brandCssCache.get(theme);
-	if (cached?.key === key) return cached.css;
+	const cache = brandCssCache(theme);
+	const cached = cache.get(key);
+	if (cached !== undefined) return cached;
 	const css = computeMarimoBrandCss(theme);
-	brandCssCache.set(theme, { key, css });
+	cache.set(key, css);
 	return css;
 }
 

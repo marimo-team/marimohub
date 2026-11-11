@@ -25,6 +25,30 @@ describe('session index recovery', () => {
 		expect(await index.read(ACTOR)).toEqual({ user_id: ACTOR, entries: [] });
 	});
 
+	it.each([false, true])(
+		'skips corrupt records of other users but fails closed for the owner (migrated: %s)',
+		async (migrated) => {
+			const { bucket, input } = fixture();
+			const metrics = { increment: vi.fn(), gauge: vi.fn() };
+			const sessions = new SessionService(bucket, metrics, undefined, () => migrated);
+			const other = await sessions.createSession({ ...input, user_id: uid('other') });
+			const otherKey = paths.session(input.project_id, other.session_id);
+			await bucket.put(otherKey, (await (await bucket.get(otherKey))!.text()).slice(0, -8));
+			await bucket.put(paths.session(input.project_id, createSessionId()), 'not json');
+			const created = await sessions.createSession(input);
+			expect((await sessions.listActiveForUser(ACTOR)).map((s) => s.session_id)).toEqual([
+				created.session_id,
+			]);
+			expect(metrics.increment).toHaveBeenCalledWith('sessions.index.unattributable');
+
+			const ownKey = paths.session(input.project_id, created.session_id);
+			await bucket.put(ownKey, JSON.stringify({ user_id: ACTOR, status: 'bogus' }));
+			await bucket.delete(paths.sessionIndexForUser(ACTOR));
+			await expect(sessions.listActiveForUser(ACTOR)).rejects.toThrow();
+			await expect(sessions.createSession(input)).rejects.toThrow();
+		},
+	);
+
 	it('recovers legacy sessions before ranking a new start', async () => {
 		const { legacy, sessions, input, index } = fixture();
 		const existing = await legacy.createSession(input);
@@ -89,6 +113,19 @@ describe('session index recovery', () => {
 			paths.sessionIndexForUser(ACTOR),
 			paths.session(input.project_id, existing.session_id),
 		]);
+	});
+
+	it('registers a start with one index read and lists users without reading indexes', async () => {
+		const { bucket, sessions, input, index } = fixture();
+		await sessions.createSession(input);
+		const get = vi.spyOn(bucket, 'get');
+		await sessions.createSession(input);
+		expect(get.mock.calls.filter(([key]) => key === paths.sessionIndexForUser(ACTOR))).toHaveLength(
+			1,
+		);
+		get.mockClear();
+		expect(await index.listUsers()).toEqual([ACTOR]);
+		expect(get).not.toHaveBeenCalled();
 	});
 
 	it('rejects registration when the index disappears after initialization', async () => {

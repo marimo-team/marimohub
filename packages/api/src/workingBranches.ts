@@ -1,9 +1,10 @@
 import {
+	ConflictError,
+	ForbiddenError,
 	NotFoundError,
 	sessionOwner,
 	WorkingBranchSaveSchema,
 	WorkingBranchChangeRequestSchema,
-	WorkingBranchRecordSchema,
 } from '@marimo-hub/core';
 import type {
 	AuthenticatedPrincipal,
@@ -12,6 +13,7 @@ import type {
 	ProjectId,
 	Session,
 	SessionId,
+	WorkingBranchRecord,
 	WorkingBranchService,
 } from '@marimo-hub/core';
 import { z } from '@hono/zod-openapi';
@@ -19,7 +21,9 @@ import type { ApiDeps } from './context';
 import {
 	assertProjectRole,
 	assertSessionAccess,
+	authorizationService,
 	authorizeNotebookMeta,
+	extensibleResponseEnum,
 	loadAuthorizedNotebook,
 } from './shared';
 import { appendAudit } from './log';
@@ -37,15 +41,18 @@ export const WorkingBranchSaveResponse = WorkingBranchSaveSchema.omit({
 	fingerprint: true,
 	co_author: true,
 }).openapi('WorkingBranchSave');
-export const WorkingBranchChangeRequestResponse = WorkingBranchChangeRequestSchema.omit({
-	headBranch: true,
-	baseBranch: true,
-})
-	.extend({
-		head_branch: WorkingBranchChangeRequestSchema.shape.headBranch,
-		base_branch: WorkingBranchChangeRequestSchema.shape.baseBranch,
-	})
-	.openapi('WorkingBranchChangeRequestResponse');
+const CHANGE_REQUEST_STATES = ['open', 'closed', 'merged'] as const satisfies readonly z.infer<
+	typeof WorkingBranchChangeRequestSchema
+>['state'][];
+const ENDED_REASONS = [
+	'branch_deleted',
+	'pr_closed',
+	'pr_merged',
+	'pr_retargeted',
+] as const satisfies readonly NonNullable<WorkingBranchRecord['ended_reason']>[];
+export const WorkingBranchChangeRequestResponse = WorkingBranchChangeRequestSchema.extend({
+	state: extensibleResponseEnum(CHANGE_REQUEST_STATES, 'open'),
+}).openapi('WorkingBranchChangeRequestResponse');
 export const WorkingBranchStatusResponse = z
 	.object({
 		base_branch: z.string(),
@@ -56,20 +63,14 @@ export const WorkingBranchStatusResponse = z
 		checked_at: z.string().optional(),
 		last_save: WorkingBranchSaveResponse.optional(),
 		active_save: z.string().optional(),
-		ended_reason: WorkingBranchRecordSchema.shape.ended_reason,
+		ended_reason: extensibleResponseEnum(ENDED_REASONS, 'pr_merged').optional(),
 	})
 	.openapi('WorkingBranchStatus');
 
-export function toWorkingBranchChangeRequest({
-	headBranch,
-	baseBranch,
-	...request
-}: z.infer<typeof WorkingBranchChangeRequestSchema>) {
-	return WorkingBranchChangeRequestResponse.parse({
-		...request,
-		head_branch: headBranch,
-		base_branch: baseBranch,
-	});
+export function toWorkingBranchChangeRequest(
+	request: z.infer<typeof WorkingBranchChangeRequestSchema>,
+) {
+	return WorkingBranchChangeRequestResponse.parse(request);
 }
 
 export function toWorkingBranchStatus(status: Awaited<ReturnType<WorkingBranchService['status']>>) {
@@ -120,6 +121,42 @@ export async function authorizeWorkingNotebook(
 }
 
 type AuthorizedWorkingNotebook = Awaited<ReturnType<typeof authorizeWorkingNotebook>>;
+
+async function loadAuthorizedSave(
+	deps: ApiDeps,
+	principal: AuthenticatedPrincipal,
+	pid: ProjectId,
+	nid: NotebookId,
+	id: string,
+) {
+	const authorized = await authorizeWorkingNotebook(deps, principal, pid, nid);
+	const receipt = await deps.services.workingBranches.getSave(pid, nid, id);
+	return { authorized, receipt };
+}
+
+/** Captures can hold unpublished, untracked files from the author's private sandbox. */
+export async function readWorkingBranchSave(
+	deps: ApiDeps,
+	principal: AuthenticatedPrincipal,
+	pid: ProjectId,
+	nid: NotebookId,
+	id: string,
+) {
+	const {
+		authorized: { project, detail },
+		receipt,
+	} = await loadAuthorizedSave(deps, principal, pid, nid, id);
+	if (receipt.author === principal.id) return receipt;
+	const manager = await authorizationService(deps).authorize(principal, 'notebook.manage', {
+		kind: 'project',
+		project,
+		notebookLabels: detail.meta.security_labels ?? null,
+	});
+	if (!manager.allowed) {
+		throw new ForbiddenError('Only the save author or a project manager can read this save');
+	}
+	return receipt;
+}
 
 async function saveOptions(
 	deps: ApiDeps,
@@ -193,9 +230,23 @@ export async function resumeWorkingBranch(
 	nid: NotebookId,
 	id: string,
 ) {
-	const authorized = await authorizeWorkingNotebook(deps, principal, pid, nid);
+	const { authorized, receipt } = await loadAuthorizedSave(deps, principal, pid, nid, id);
 	const service = deps.services.workingBranches;
-	const receipt = await service.getSave(pid, nid, id);
+	if (!service.canResume(receipt, principal.id))
+		throw new ConflictError('Only the save author can retry this operation');
+	if (receipt.author !== principal.id) {
+		// Non-authors can finish only stages that import an already-public commit,
+		// so they never need the author's session or sandbox.
+		return service.resume(pid, nid, id, principal.id, {
+			workdir: deps.sandbox.workdir,
+			getSandbox: () => {
+				throw new ForbiddenError('Only the save author can capture session changes');
+			},
+			authorize: async () => {
+				await authorizeWorkingNotebook(deps, principal, pid, nid);
+			},
+		});
+	}
 	const options = await saveOptions(
 		deps,
 		principal,

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
-import { expect, it, vi } from 'vitest';
+import { configureLogLevel } from '@marimo-hub/core/logs';
+import { afterEach, expect, it, vi } from 'vitest';
 import { RequestStorage } from './requestStorage';
 
 const emptyCounts = {
@@ -122,6 +123,44 @@ it('counts streaming and multipart calls, including failures, without counting a
 		await bucket.put('outside-request', 'value');
 		expect(log).toHaveBeenCalledTimes(1);
 		expect(storage.wrap(new MemoryBucket()).multipart).toBeUndefined();
+	} finally {
+		log.mockRestore();
+	}
+});
+
+afterEach(() => configureLogLevel(undefined));
+
+it('logs API and storage-touching requests at info and other traffic at debug', async () => {
+	const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+	try {
+		const storage = new RequestStorage();
+		const bucket = storage.wrap(new MemoryBucket());
+		const app = new Hono().use('*', storage.middleware);
+		app.get('/api/v1/health', (c) => c.text('ok'));
+		app.get('/proxy/:id/*', (c) => c.text('kernel'));
+		app.get('/_marimo/*', (c) => c.text('asset'));
+		app.get('/share/:slug', async (c) => {
+			await bucket.get('deep-link');
+			return c.text('ok');
+		});
+		const requestLines = () =>
+			log.mock.calls
+				.map(
+					([line]) => JSON.parse(String(line)) as { event: string; level: string; route: string },
+				)
+				.filter((event) => event.event === 'request');
+		const paths = ['/api/v1/health', '/proxy/s1/assets/x.js', '/_marimo/0.1.0/a.js', '/share/x'];
+		for (const path of paths) await app.request(path);
+		expect(requestLines().map((event) => event.route)).toEqual(['/api/v1/health', '/share/:slug']);
+		log.mockClear();
+		configureLogLevel('debug');
+		for (const path of paths) await app.request(path);
+		expect(requestLines().map((event) => [event.route, event.level])).toEqual([
+			['/api/v1/health', 'info'],
+			['/proxy/:id/*', 'debug'],
+			['/_marimo/*', 'debug'],
+			['/share/:slug', 'info'],
+		]);
 	} finally {
 		log.mockRestore();
 	}

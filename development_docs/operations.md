@@ -108,53 +108,38 @@ API replicas set `MARIMOHUB_RUN_MAINTENANCE=false` and scale independently.
 On Cloudflare, the platform's `scheduled()` trigger owns maintenance.
 
 `MaintenanceLock` provides an advisory bucket-CAS lease: `onlyIfNotExists` claims
-it, and `onlyIfEtagMatches` replaces an expired lease. Leased Node loops use
-distinct keys and a unique holder for each attempt. Each lease expires at the
-attempt deadline. Outside the Node runner, the default lease TTL is 10 minutes.
+it, and `onlyIfEtagMatches` replaces an expired lease. Leased Node loops use distinct keys.
+Most loops use a unique holder for each attempt, and the lease expires at the attempt deadline.
+The `app_pools`, `job_scheduler`, `warm_pool`, and `search_indexing` loops keep their lease
+between attempts with one holder per process. Their lease TTL is the attempt deadline plus two intervals.
+`hold()` renews the lease by CAS when less than one deadline remains.
+Shutdown releases an idle retained lease. An unfinished attempt leaves its lease to expire.
+Outside the Node runner, the default lease TTL is 10 minutes.
 
 All Node loops run through `BackgroundLoops` (`apps/server/src/backgroundLoops.ts`,
-wired in `apps/server/src/cron.ts`). The loop table, events, health endpoint, and
-signals are documented for operators in
-[`docs/operations.md`](../docs/operations.md#background-loops); this section
-covers the guarantees.
+wired in `apps/server/src/cron.ts`). The operator guide owns the
+[loop table, deadlines, events, and health responses](../docs/operations.md#background-loops).
+This section covers the guarantees.
 
-The default attempt deadline is `max(3 × interval, 10 min)`: 15 minutes for
-maintenance. Each hourly `retention_*` loop overrides it to 15 minutes.
-Search indexing uses 30 seconds. The deadline covers `shouldRun`, lease
-acquisition, the work, and lease release. On timeout the runner aborts the
-attempt's signal and logs
-`<loop>_stalled`. `step()` checks the signal before and after each step but does
-not race it, so hung work keeps the attempt, and the in-flight guard, until it
-settles; no loop starts a second attempt over abandoned work. When the work
-settles the runner logs `<loop>_recovered`, discards the late result, and the
-next tick retries. The guard covers the loop's own work promise only. Inside
-it, the reconciler gives each session reclaim a 60-second budget; a reclaim
-that exceeds it keeps running, so the reconciler records the session and skips
-it (counted as unreclaimed, reason `timeout`) on later cycles until that reclaim
-settles. A stalled attempt does not release its lease; the lease
-expires at the deadline. Another replica can then take the lease while the
-abandoned work is still running, so calls without cancellation support still
-need adapter request timeouts.
+The deadline also covers `shouldRun`. `step()` checks the abort signal before and after each step but does
+not race it. Hung work keeps the attempt and the in-flight guard until it settles,
+so no loop starts a second attempt over abandoned work in the same process.
+The guard covers the loop's own work promise only. Inside
+it, the reconciler gives each session reclaim a 60-second budget. A reclaim
+that exceeds it keeps running. The reconciler skips that session on later cycles until the reclaim
+settles, and counts it as unreclaimed with reason `timeout`. A stalled attempt does not release its lease.
+The lease expires at the deadline, or at its TTL for a retained lease. Another replica can
+then take the lease while the abandoned work runs, so calls without
+cancellation support still need adapter request timeouts.
 
 When a shutdown starts, the maintenance cycle finishes its current step, skips
 the remaining steps, and releases its lease, so a replacement replica does not
 wait for the lease to expire. See
 [shutdown budgets](../docs/operations.md#shutdown-budgets).
 
-Lease-release errors log as `<loop>_release_failed` and preserve the attempt's
-outcome. Skipped attempts (`shouldRun` false or lease held elsewhere) count as
-successes.
-
 `GET /api/health/maintenance` reads only process memory (`deps.loopHealth`, set
-when `MARIMOHUB_RUN_MAINTENANCE=true`). A loop is `stalled` while an attempt is
-past its deadline and unsettled, or when nothing has completed within one
-deadline plus one interval of registration or the last completion. Only
-`stalled` non-retention loops return 503. Stalled retention reports `degraded` with HTTP 200. A `failing` loop reports `degraded` with HTTP 200 because
-restarts cannot fix a dependency outage. A successful `retention_*` loop also
-makes the response `degraded` when `last_duration_ms >= 0.8 × deadline_ms`.
-This means 12 minutes with the 15-minute retention deadline. Its per-loop status
-stays `ok`, and the response intentionally remains HTTP 200. Slow work that
-completes does not need a liveness restart. Loops that do not start are absent.
+when `MARIMOHUB_RUN_MAINTENANCE=true`). The stall clock starts at loop registration or the last completion.
+Loops that do not start are absent from the response.
 
 ---
 
@@ -179,12 +164,18 @@ Operationally, a standard release needs no special handling. Before you deploy a
 release that increments `schema_version`, make sure that it obeys the two-phase
 rule.
 
+**Exception: upgrades from 0.6.4 or earlier are not rolling.** Those releases are
+[incompatible writers](./migrations.md#upgrade-compatibility). Follow the
+[operator procedure](../docs/operations.md#upgrading-from-older-releases).
+
 ---
 
 ## 5. Snapshot & event growth
 
 Each catalog change creates an immutable snapshot and audit event.
-`MaintenanceService` runs from the maintenance cron (§3):
+`MaintenanceService` retention runs in two loops (§3): `expireSnapshots` in the
+hourly `retention_snapshot_expiry` loop, and `pruneEvents` in the 5-minute
+`maintenance` cycle.
 
 - **`expireSnapshots`** keeps snapshots for 90 days, plus the newest 20 and the
   current and previous snapshots. Recency uses object `uploaded` timestamps.
@@ -206,8 +197,13 @@ Expired notebook deletions and project upload cleanup run every retention cycle.
 Notebook purges commit each successful catalog removal before attempting the next item.
 Each sweep attempts at most 25 notebook or project deletions with one five-minute budget for the whole batch, checked between items. Metadata discovery and an in-progress deletion can extend the elapsed time.
 The project subtree phase deletes at most 1,000 objects per project per sweep and resumes from remaining objects.
-Job retention visits at most 128 jobs and inspects at most 100 run entries and 100 occurrence claims per job.
+Job retention visits at most 128 jobs per cycle, with one five-minute budget for the cycle.
+Each visit lists 100-entry pages of runs, then of occurrence claims, until the job is done or the budget ends.
+Occurrence keys sort by time, so a page with a live claim ends the scan and resets its cursor to the start.
 CAS cursors preserve job and per-job scan positions across restarts. Failed and retained items cannot starve later work.
+A corrupt retention cursor restarts its scan, and the next write replaces it by CAS.
+Project, notebook, and job cursors skip unchanged writes.
+[Stored records](./bucket_spec.md#32-complete-path-reference) list each cursor's owner.
 These limits do not interrupt an owner operation. Project prepasses still scan all working branches,
 app pools, deep links, claims, and uploads, and repeat before each subtree batch. Notebook purges,
 upload and import cleanup, and run-output deletion also remain unbounded within each selected item.
@@ -316,8 +312,9 @@ OAuth2 fields.
 What to watch / alert on:
 
 - **CAS conflict rate climbing** → write contention on the catalog.
-  Use the ratio above. An increase in `catalog.cas.exhausted` signals `409 CONFLICT`
-  failures.
+  Use the ratio above. An increase in `catalog.cas.exhausted` usually signals `409 CONFLICT`
+  failures. Notebook saves are the exception: the save succeeds, logs
+  `notebook.catalog_projection_failed`, and retries the catalog update once in the background.
 - **`snapshots.count` / `snapshots.bytes` trending up** without bound → retention
   isn't running (check the maintenance Deployment / lease).
 - **`maintenance_cycle` line missing** for multiple intervals → the reaper is

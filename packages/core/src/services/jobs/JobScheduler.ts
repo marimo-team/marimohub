@@ -368,7 +368,16 @@ export class JobScheduler {
 						job.schedule?.cron === entry.schedule?.cron &&
 						job.schedule?.timezone === entry.schedule?.timezone
 					: job.updated_at === entry.updated_at;
-			if (!published) return 'none';
+			if (!published) {
+				// A head that stays newer than its entry lost its index publication.
+				if (
+					entry.updated_at !== undefined &&
+					job.updated_at > entry.updated_at &&
+					now - Date.parse(job.updated_at) >= 2 * this.deps.config.catchupWindowMs
+				)
+					await this.deps.jobs.republishIndex(job);
+				return 'none';
+			}
 			const occurrence = this.dueOccurrence(job, now);
 			if (occurrence === null) return 'none';
 			const scheduledFor = new Date(occurrence).toISOString();
@@ -689,6 +698,7 @@ export class JobScheduler {
 					now,
 					Math.max(retentionMs, Number(this.deps.config.catchupWindowMs)),
 					100,
+					deadline,
 				);
 			} catch (err) {
 				logOperationalError(
@@ -704,7 +714,7 @@ export class JobScheduler {
 			}
 			after = key;
 		}
-		await this.deps.runs.writePruneCursor(after, cursor.etag);
+		await this.deps.runs.writePruneCursor(after, cursor);
 		const markersPruned = await this.deps.runs.pruneStaleMarkers(now);
 		return { runsPruned, markersPruned };
 	}

@@ -51,19 +51,18 @@ import type { PreviewAutomationGroup, PreviewReconcile } from './previewAutomati
 type RetireRuntime = (pid: ProjectId, nid: NotebookId) => Promise<boolean>;
 const MAX_PREPARATION_FAILURES = 5;
 
-function preparationDue(record: NotebookPreview, force = false): boolean {
+function preparationDue(record: NotebookPreview): boolean {
 	if (record.state !== 'active') return false;
 	if (record.lease) return record.lease.expires_at <= Date.now();
 	return (
-		force ||
-		(record.preparation_failures < MAX_PREPARATION_FAILURES &&
-			(record.next_attempt_at ?? 0) <= Date.now() &&
-			!(
-				record.source.type === 'commit' &&
-				record.current &&
-				!record.pull_request &&
-				record.preparation !== 'pending'
-			))
+		record.preparation_failures < MAX_PREPARATION_FAILURES &&
+		(record.next_attempt_at ?? 0) <= Date.now() &&
+		!(
+			record.source.type === 'commit' &&
+			record.current &&
+			!record.pull_request &&
+			record.preparation !== 'pending'
+		)
 	);
 }
 
@@ -122,6 +121,7 @@ export class NotebookPreviewService {
 	readonly store: PreviewStore;
 	// Maintenance runs on one replica, so a restart only repeats one check per group.
 	private readonly automationChecks = new Map<ProjectId, Map<string, number>>();
+	private readonly failingProjects = new Set<ProjectId>();
 	async finishMove(source: ProjectId, nid: NotebookId): Promise<void> {
 		await this.store.finishMove(source, nid);
 		await deleteByPrefix(this.bucket, paths.previewRecords(source, nid));
@@ -628,24 +628,21 @@ export class NotebookPreviewService {
 	async prepare(
 		initial: NotebookPreview,
 		registry?: SourceControlRegistry,
-		force = false,
 		externalSignal?: AbortSignal,
 	): Promise<NotebookPreview> {
 		externalSignal?.throwIfAborted();
 		if (initial.state !== 'active') return initial;
-		let record = await this.get(initial.project_id, initial.notebook_id, initial.id);
+		const record = await this.get(initial.project_id, initial.notebook_id, initial.id);
 		if (record.state !== 'active') return record;
 		if (previewExpired(record)) return this.retireExpired(record);
-		if (!preparationDue(record, force)) return record;
-		if (record.lease) {
-			record = await this.failPreparation(
+		if (!preparationDue(record)) return record;
+		if (record.lease)
+			return this.failPreparation(
 				record,
 				record.lease.token,
 				new Error('Preview preparation lease expired'),
 				true,
 			);
-			if (!force || record.lease || record.state !== 'active') return record;
-		}
 		const claim = await this.store.claim(record.project_id, record.id);
 		if (!claim) return record;
 		const token = claim.token;
@@ -659,7 +656,7 @@ export class NotebookPreviewService {
 			Math.max(0, claim.expires_at - Date.now() - 1000),
 		);
 		try {
-			return await this.prepareClaimed(record, registry, claim, signal, force, externalSignal);
+			return await this.prepareClaimed(record, registry, claim, signal, externalSignal);
 		} finally {
 			clearTimeout(timeout);
 			await this.store.release(token);
@@ -671,7 +668,6 @@ export class NotebookPreviewService {
 		registry: SourceControlRegistry | undefined,
 		claim: { token: string; expires_at: number },
 		signal: AbortSignal,
-		force: boolean,
 		externalSignal?: AbortSignal,
 	): Promise<NotebookPreview> {
 		const token = claim.token;
@@ -688,7 +684,7 @@ export class NotebookPreviewService {
 		};
 		const claimed = await this.mutate(initial, (current) => {
 			const effective = applyAutomationIntent(current, initial) ?? current;
-			if (!preparationDue(effective, force) || effective.lease) return null;
+			if (!preparationDue(effective) || effective.lease) return null;
 			return {
 				...effective,
 				preparation: 'preparing',
@@ -1162,14 +1158,18 @@ export class NotebookPreviewService {
 								(a.next_attempt_at ?? 0) - (b.next_attempt_at ?? 0) ||
 								a.created_at.localeCompare(b.created_at),
 						);
-						if (records[0]) records[0] = await this.prepare(records[0], registry, false, signal);
+						if (records[0]) records[0] = await this.prepare(records[0], registry, signal);
+						this.failingProjects.delete(pid);
 						if (
 							records.some((record) => record.preparation === 'pending' && preparationDue(record))
 						)
 							await this.prioritize(pid);
 					} catch (error) {
 						logOperationalError('preview_preparation_failed', { project_id: pid }, error);
-						await this.prioritize(pid);
+						// One priority retry per failure streak; a persistent error such as a corrupt
+						// record then waits for the rotation instead of taking a slot every tick.
+						if (signal?.aborted || !this.failingProjects.has(pid)) await this.prioritize(pid);
+						if (!signal?.aborted) this.failingProjects.add(pid);
 					}
 				}),
 			);

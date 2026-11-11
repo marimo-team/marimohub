@@ -1,4 +1,3 @@
-import { logOperationalError } from '@marimo-hub/core/operational-log';
 import { searchPaths } from '@marimo-hub/core/search/paths';
 import {
 	resolveJobSandboxEnv,
@@ -182,14 +181,9 @@ export function startMaintenance(
 				const idempotencyPruned = await step(() => idempotency.prune());
 				const hostRetriesCompacted = await step(() => deps.services.hostRetries.compactExpired());
 				const proposalPayloadsPruned = await step(() => proposals.pruneExpiredPayloads());
-				const workingBranchPayloadsPruned = await step(async () => {
-					try {
-						return await deps.services.workingBranches.pruneExpiredPayloads();
-					} catch (error) {
-						logOperationalError('working_branch.maintenance_failed', {}, error);
-						return null;
-					}
-				});
+				const workingBranchPayloadsPruned = deps.services.workingBranches.enabled
+					? await step(() => deps.services.workingBranches.pruneExpiredPayloads())
+					: null;
 				const inviteRowsClaimed = await step(() => projects.claimPendingInvites());
 				return {
 					holder,

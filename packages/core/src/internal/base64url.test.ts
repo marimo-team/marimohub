@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fromBase64Url, toBase64Url } from './base64url';
+import { fromBase64Url, toBase64, toBase64Url } from './base64url';
 
 describe('base64url', () => {
 	it('round-trips at every len%3 boundary (0, 1, 2 trailing bytes)', () => {
@@ -10,6 +10,12 @@ describe('base64url', () => {
 			expect(encoded).not.toMatch(/[+/=]/);
 			expect([...fromBase64Url(encoded)]).toEqual([...bytes]);
 		}
+	});
+
+	it('encodes padded standard base64 for payloads larger than one chunk', () => {
+		const bytes = new Uint8Array(20_000).map((_, i) => (i * 131 + 7) & 0xff);
+		expect(toBase64(bytes)).toBe(Buffer.from(bytes).toString('base64'));
+		expect(toBase64(new Uint8Array([0xfb, 0xff]))).toBe('+/8=');
 	});
 
 	it('throws on invalid input rather than returning garbage', () => {

@@ -27,13 +27,21 @@ window.__MARIMOHUB_PREFETCH__ = {createdAt: Date.now(), responses};
 for (const path of urls) {
   const url = new URL('api/v1/' + path, base);
   url.searchParams.sort();
-  responses[url.href] = fetch(url, {credentials: 'include', headers: {Accept: 'application/json'}, signal: AbortSignal.timeout(20000)}).then(response => response.ok ? response : null).catch(() => null);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  responses[url.href] = fetch(url, {credentials: 'include', headers: {Accept: 'application/json'}, signal: controller.signal}).then(response => { clearTimeout(timer); return response.ok ? response : null; }).catch(() => null);
 }
 setTimeout(() => { if (window.__MARIMOHUB_PREFETCH__?.responses === responses) delete window.__MARIMOHUB_PREFETCH__; }, 30000);
 })();`;
 
 export const SHELL_PREFETCH_CSP = `'sha256-${createHash('sha256').update(SHELL_PREFETCH_SCRIPT).digest('base64')}'`;
 
+// The script's fetches cannot reuse the shell's `as="fetch"` preloads (their credentials modes
+// differ), so keeping both would request each URL twice.
+const FETCH_PRELOAD = /<link\b(?=[^>]*\brel=["']?preload\b)(?=[^>]*\bas=["']?fetch\b)[^>]*>\s*/gi;
+
 export function injectShellPrefetch(html: string): string {
-	return html.replace(/(<base\s[^>]*>)/i, `$1<script>${SHELL_PREFETCH_SCRIPT}</script>`);
+	return html
+		.replace(FETCH_PRELOAD, '')
+		.replace(/(<base\s[^>]*>)/i, `$1<script>${SHELL_PREFETCH_SCRIPT}</script>`);
 }

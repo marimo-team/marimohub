@@ -12,7 +12,11 @@ import { join } from 'node:path';
 import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import { Hono } from 'hono';
 import { afterEach, expect, it } from 'vitest';
-import { stageMarimoAssets } from '../../../scripts/stage-marimo-assets.mjs';
+import { MARIMO_VERSION_PATTERN } from '@marimo-hub/core/url';
+import {
+	MARIMO_RELEASE_VERSION,
+	stageMarimoAssets,
+} from '../../../scripts/stage-marimo-assets.mjs';
 import { serveMarimoAssets } from './marimoAssets';
 
 const roots: string[] = [];
@@ -72,11 +76,23 @@ it('serves HEAD and identity variants, and revalidates unhashed resources', asyn
 	});
 	expect(head.headers.get('Content-Encoding')).toBe('gzip');
 	expect(await head.text()).toBe('');
-	for (const path of ['index.html', 'config.json']) {
-		const response = await app.request(`/_marimo/0.25.2/${path}`);
-		expect(response.headers.get('Cache-Control')).toBe('public, max-age=0, must-revalidate');
-	}
+	const response = await app.request('/_marimo/0.25.2/config.json');
+	expect(response.headers.get('Cache-Control')).toBe('public, max-age=0, must-revalidate');
 });
+
+it.each(['/_marimo/0.25.2/index.html', '/_marimo/0.25.2/INDEX.HTM'])(
+	'never serves staged HTML on the hub origin: %s',
+	async (path) => {
+		const { app, stage } = fixture();
+		stage();
+		for (const method of ['GET', 'HEAD']) {
+			const response = await app.request(path, { method, headers: { 'Accept-Encoding': 'br' } });
+			expect(response.status).toBe(404);
+			expect(response.headers.get('Content-Type')).not.toMatch(/html/);
+			expect(response.headers.get('Cache-Control')).toBe('no-store');
+		}
+	},
+);
 
 it.each([
 	'/_marimo/0.25.2/assets/missing.js',
@@ -161,4 +177,8 @@ it('respects rejected encodings and serves byte ranges without the SPA fallback'
 	expect(invalid.status).toBe(416);
 	expect(invalid.headers.get('Cache-Control')).toBe('no-store');
 	expect(await invalid.text()).not.toContain('SPA fallback');
+});
+
+it('stages the same release versions that the asset route serves', () => {
+	expect(MARIMO_RELEASE_VERSION.source).toBe(`^${MARIMO_VERSION_PATTERN}$`);
 });

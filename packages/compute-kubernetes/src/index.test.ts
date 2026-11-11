@@ -7,6 +7,7 @@ import {
 	WRITE_BATCH_COMMAND,
 } from '@marimo-hub/compute-commons';
 import { Millis } from '@marimo-hub/core/duration';
+import { NotFoundError } from '@marimo-hub/core/errors';
 import type { NotebookId, ProjectId, SandboxId } from '@marimo-hub/core/ids';
 import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
 import {
@@ -1455,9 +1456,12 @@ describe('Kubernetes warm sandbox reconnect', () => {
 			const world = makeWorld();
 			await makeCompute(world).create(SANDBOX_ID).ready!();
 			Object.assign(world.pods.get(NAME)!, ownership);
-			await expect(makeCompute(world).connectExisting(SANDBOX_ID).exec('true')).rejects.toThrow(
-				'does not belong',
-			);
+			const error = await makeCompute(world)
+				.connectExisting(SANDBOX_ID)
+				.exec('true')
+				.catch((cause: unknown) => cause);
+			expect(error).toBeInstanceOf(NotFoundError);
+			expect(error).toHaveProperty('message', expect.stringContaining('does not belong'));
 			expect(world.client.reconcileRoutes).not.toHaveBeenCalled();
 			expect(world.execCalls).toHaveLength(0);
 		},
@@ -1477,19 +1481,36 @@ describe('Kubernetes warm sandbox reconnect', () => {
 						change === 'replaced' ? { uid: 'new-uid' } : { managedBy: 'someone-else' },
 					);
 			});
-			await expect(makeCompute(world).connectExisting(SANDBOX_ID).exec('true')).rejects.toThrow(
-				/no longer running|was replaced|does not belong/,
+			const error = await makeCompute(world)
+				.connectExisting(SANDBOX_ID)
+				.exec('true')
+				.catch((cause: unknown) => cause);
+			expect(error).toBeInstanceOf(NotFoundError);
+			expect(error).toHaveProperty(
+				'message',
+				expect.stringMatching(/no longer running|was replaced|does not belong/),
 			);
 			expect(world.execCalls).toHaveLength(0);
 			expect(world.ensured).toHaveLength(1);
 		},
 	);
 
+	it('keeps a Pod lookup failure distinct from a missing Pod', async () => {
+		const world = makeWorld();
+		await makeCompute(world).create(SANDBOX_ID).ready!();
+		vi.spyOn(world.client, 'getPhase').mockRejectedValueOnce(new Error('apiserver unavailable'));
+		const error = await makeCompute(world).connectExisting(SANDBOX_ID).ready!().catch(
+			(cause: unknown) => cause,
+		);
+		expect(error).toHaveProperty('message', 'apiserver unavailable');
+		expect(error).not.toBeInstanceOf(NotFoundError);
+	});
+
 	it('fails without creating when the pod is missing', async () => {
 		const world = makeWorld();
-		await expect(makeCompute(world).connectExisting(SANDBOX_ID).ready!()).rejects.toThrow(
-			'no longer running',
-		);
+		const ready = makeCompute(world).connectExisting(SANDBOX_ID).ready!();
+		await expect(ready).rejects.toBeInstanceOf(NotFoundError);
+		await expect(ready).rejects.toThrow('no longer running');
 		expect(world.ensured).toHaveLength(0);
 		expect(world.pods.size).toBe(0);
 		expect(world.client.reconcileRoutes).not.toHaveBeenCalled();
@@ -1501,9 +1522,9 @@ describe('Kubernetes warm sandbox reconnect', () => {
 			const world = makeWorld();
 			await makeCompute(world).create(SANDBOX_ID).ready!();
 			world.setPhase(NAME, phase);
-			await expect(makeCompute(world).connectExisting(SANDBOX_ID).ready!()).rejects.toThrow(
-				'no longer running',
-			);
+			const ready = makeCompute(world).connectExisting(SANDBOX_ID).ready!();
+			await expect(ready).rejects.toBeInstanceOf(NotFoundError);
+			await expect(ready).rejects.toThrow('no longer running');
 			expect(world.ensured).toHaveLength(1);
 			expect(world.client.reconcileRoutes).not.toHaveBeenCalled();
 		},

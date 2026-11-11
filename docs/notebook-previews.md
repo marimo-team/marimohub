@@ -159,13 +159,17 @@ Fork PRs and built-in label triggers are unsupported. Preparation fails if a tra
 The Node preparation worker runs independently every 15 seconds on maintenance replicas.
 It checks manual branch previews at most once per minute and selects one due preview per project.
 Maintenance checks PR closure independently of preparation. See [PR closure checks](#pr-closure-checks).
-Each tick visits up to four projects with outstanding preview work, rotating through projects and due previews.
+Each tick visits up to four projects with outstanding preview work.
+Up to three slots go to queued projects with new or requested work. At least one slot advances the rotation through projects.
+A project whose scheduled work fails is queued once more. If that retry also fails, the project waits for the rotation.
 Empty retained project records do not participate in scheduling.
 Manual creation and session launch never wait for GitHub. PR reconciliation checks live PR metadata before accepting an event.
 
 Preparation has a two-minute lease and aborts network requests before that deadline.
-Failures retry with exponential backoff and jitter, capped near one hour.
+Failed attempts retry with backoff. See [Preparation retries](#preparation-retries).
 At most four preparations run per deployment, with one per project.
+During a rolling upgrade, replicas that run v0.6.4 or earlier drop the queue from `_system/preview-work.json` when they write it.
+This affects only priority order. The rotation still reaches every project.
 The reference Cloudflare Worker does not configure a GitHub App registry or run preparation.
 Previews are unavailable in that example. A custom Worker deployment must configure both before enabling previews.
 Automatic updates, expiry, and cleanup require maintenance.
@@ -196,9 +200,11 @@ Limits return `429 RESOURCE_EXHAUSTED`.
 
 ### Preparation retries
 
-Preparation uses increasing retry delays and stops after five consecutive failures, including expired worker leases.
+After each failure, preparation waits about 1, 2, 4, 8, then 16 minutes, with ±25% jitter.
+It stops after five consecutive failures, including expired worker leases.
 It then logs `preview_preparation_exhausted`.
 The last prepared revision remains available.
 
-**Prepare latest**, the preparation API, or a deferred preview visit can restart attempts after the retry delay.
+**Prepare latest** or the preparation API restarts attempts after the retry delay and resets the failure count.
+Opening a failed preview does not restart attempts.
 PR automation resets the failure count only when the target commit changes.
