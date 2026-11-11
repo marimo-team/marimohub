@@ -1046,13 +1046,7 @@ export class NotebookService {
 			await this.pruneVersions(projectId, notebookId, MAX_VERSIONS, versionId);
 		}
 
-		await this.catalog.updateNotebookEntry(
-			'notebook.update',
-			actor,
-			projectId,
-			notebookId,
-			(entry) => loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry),
-		);
+		await this.reconcileSavedNotebook(projectId, notebookId, actor);
 
 		return updated;
 	}
@@ -1211,13 +1205,7 @@ export class NotebookService {
 				},
 				{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
 			);
-			await this.catalog.updateNotebookEntry(
-				'notebook.update',
-				actor,
-				projectId,
-				notebookId,
-				(entry) => loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry),
-			);
+			await this.reconcileSavedNotebook(projectId, notebookId, actor);
 
 			await this.pruneVersions(projectId, notebookId, MAX_VERSIONS, versionId);
 		} else if (artifacts.length > 0) {
@@ -1255,12 +1243,50 @@ export class NotebookService {
 			}
 		}
 
+		if (!changed) await this.reconcileSavedNotebook(projectId, notebookId, actor, true);
+
 		return {
 			versionId,
 			newVersion: changed,
 			capturedHtml: input.html !== undefined,
 			capturedSession: input.session !== undefined,
 		};
+	}
+
+	private async reconcileSavedNotebook(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		actor: UserId,
+		unchanged = false,
+	): Promise<void> {
+		const reconcile = () =>
+			this.catalog.updateNotebookEntry('notebook.update', actor, projectId, notebookId, (entry) =>
+				loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry),
+			);
+		try {
+			if (unchanged) {
+				const snapshot = await this.catalog.getCurrentSnapshotEntry();
+				const entry = snapshot.byProjectId
+					.get(projectId)
+					?.notebooks.find((notebook) => notebook.id === notebookId);
+				if (!entry) return;
+				// Metadata can advance while the catalog lookup is in flight.
+				const patch = await loadNotebookCatalogPatch(this.bucket, projectId, notebookId, entry);
+				if (!patch || entry.updated_at === patch.updated_at) return;
+			}
+			await reconcile();
+		} catch (error) {
+			// Preserve save success. Each retry reads current metadata to avoid stale updates.
+			const context = { project_id: projectId, notebook_id: notebookId };
+			logOperationalError('notebook.catalog_projection_failed', context, error);
+			await deferOrAwait(
+				this.backgroundWork,
+				'notebook.catalog_reconcile',
+				reconcile,
+				this.metrics,
+				context,
+			);
+		}
 	}
 
 	private writeArtifact(artifact: SessionArtifact) {

@@ -26,7 +26,7 @@ import { CatalogService } from './CatalogService';
 import { createServices, ensureInitialized } from '../index';
 import { EventService } from './EventService';
 
-// Exhaustion tests should not spend 750 ms in production backoff timers.
+// Keep contention tests independent of production backoff timers.
 const ZERO_BACKOFF = { backoffMs: () => 0 };
 
 function casCalls(increment: ReturnType<typeof vi.fn>) {
@@ -1079,7 +1079,7 @@ describe('CatalogService', () => {
 				ConflictError,
 			);
 			expect(casCalls(increment)).toEqual([
-				...Array.from({ length: 5 }, () => [
+				...Array.from({ length: 20 }, () => [
 					['catalog.cas.attempt'],
 					['catalog.cas.conflict'],
 				]).flat(),
@@ -1546,6 +1546,144 @@ describe('CatalogService', () => {
 	});
 
 	describe('concurrent mutateSnapshot calls', () => {
+		it('bounds local drafts to one and commits a burst without CAS conflicts', async () => {
+			await catalog.initialize(ACTOR);
+			const put = vi.spyOn(bucket, 'put');
+			let active = 0;
+			let peak = 0;
+			await Promise.all(
+				Array.from({ length: 20 }, (_, i) =>
+					catalog.mutateSnapshot('test', ACTOR, async (snapshot) => {
+						active++;
+						peak = Math.max(peak, active);
+						await Promise.resolve();
+						snapshot.projects.push(makeSnapshotProjectEntry({ name: String(i) }));
+						active--;
+						return snapshot;
+					}),
+				),
+			);
+			expect(peak).toBe(1);
+			expect(put.mock.calls.filter(([key]) => key === paths.catalog)).toHaveLength(20);
+			expect((await catalog.getCurrentSnapshot()).projects.map((project) => project.name)).toEqual(
+				Array.from({ length: 20 }, (_, i) => String(i)),
+			);
+		});
+
+		it('lets another local mutation commit during CAS backoff', async () => {
+			await catalog.initialize(ACTOR);
+			const startedBackoff = Promise.withResolvers<void>();
+			const backoffMs = vi.fn(() => {
+				startedBackoff.resolve();
+				return 10_000;
+			});
+			const events = new EventService(bucket);
+			const append = vi.spyOn(events, 'append');
+			const service = new CatalogService(bucket, noopMetrics, events, { backoffMs });
+			const put = bucket.put.bind(bucket);
+			let rejectFirst = true;
+			vi.spyOn(bucket, 'put').mockImplementation((key, value, options) => {
+				if (key === paths.catalog && rejectFirst) {
+					rejectFirst = false;
+					throw new PreconditionFailedError('another replica won');
+				}
+				return put(key, value, options);
+			});
+			vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+			const pending: Promise<Snapshot>[] = [];
+			try {
+				const first = service.mutateSnapshot('first', ACTOR, (snapshot) => ({
+					...snapshot,
+					projects: [...snapshot.projects, makeSnapshotProjectEntry({ name: 'First' })],
+				}));
+				pending.push(first);
+				await startedBackoff.promise;
+				let secondCommitted = false;
+				const second = service
+					.mutateSnapshot('second', ACTOR, (snapshot) => ({
+						...snapshot,
+						projects: [...snapshot.projects, makeSnapshotProjectEntry({ name: 'Second' })],
+					}))
+					.then((snapshot) => {
+						secondCommitted = true;
+						return snapshot;
+					});
+				pending.push(second);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(secondCommitted).toBe(true);
+				expect(backoffMs).toHaveBeenCalledTimes(1);
+				expect(
+					(await service.getCurrentSnapshot()).projects.map((project) => project.name),
+				).toEqual(['Second']);
+				await vi.advanceTimersByTimeAsync(10_000);
+				await first;
+				expect(
+					(await service.getCurrentSnapshot()).projects.map((project) => project.name),
+				).toEqual(['Second', 'First']);
+				expect(append.mock.calls.map(([event]) => event.event)).toEqual(['second', 'first']);
+			} finally {
+				await vi.runAllTimersAsync();
+				await Promise.allSettled(pending);
+				vi.useRealTimers();
+			}
+		});
+
+		it('allows independent replicas to retry a twenty-writer burst', async () => {
+			await catalog.initialize(ACTOR);
+			await Promise.all(
+				Array.from({ length: 20 }, (_, i) =>
+					new CatalogService(bucket, noopMetrics, undefined, ZERO_BACKOFF).mutateSnapshot(
+						'test',
+						ACTOR,
+						(snapshot) => ({
+							...snapshot,
+							projects: [...snapshot.projects, makeSnapshotProjectEntry({ name: String(i) })],
+						}),
+					),
+				),
+			);
+			expect((await catalog.getCurrentSnapshot()).projects).toHaveLength(20);
+		});
+
+		it.each(['callback', 'storage', 'CAS exhaustion'] as const)(
+			'releases the local queue after a %s failure',
+			async (failure) => {
+				const service = new CatalogService(bucket, noopMetrics, undefined, {
+					...ZERO_BACKOFF,
+					retries: 2,
+				});
+				await service.initialize(ACTOR);
+				const put = bucket.put.bind(bucket);
+				let operation = '';
+				let remaining = failure === 'CAS exhaustion' ? 2 : 1;
+				vi.spyOn(bucket, 'put').mockImplementation((key, value, options) => {
+					if (
+						operation === 'failed' &&
+						failure !== 'callback' &&
+						key === paths.catalog &&
+						remaining-- > 0
+					) {
+						if (failure === 'CAS exhaustion') throw new PreconditionFailedError('contended');
+						throw new Error('storage failed');
+					}
+					return put(key, value, options);
+				});
+				const failed = service.mutateSnapshot('failed', ACTOR, (snapshot) => {
+					operation = 'failed';
+					if (failure === 'callback') throw new Error('callback failed');
+					return { ...snapshot };
+				});
+				const next = service.mutateSnapshot('next', ACTOR, (snapshot) => {
+					operation = 'next';
+					return { ...snapshot };
+				});
+				await expect(failed).rejects.toThrow(
+					failure === 'CAS exhaustion' ? ConflictError : `${failure} failed`,
+				);
+				await expect(next).resolves.toMatchObject({ operation: 'next' });
+			},
+		);
+
 		it('both succeed without data loss', async () => {
 			const env = await setupTestEnv();
 
