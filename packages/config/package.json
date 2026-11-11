@@ -69,6 +69,7 @@
 		"@ai-sdk/provider": "catalog:",
 		"@aws-sdk/client-s3": "catalog:",
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@types/node": "catalog:",
 		"typescript": "catalog:",
 		"vite-plus": "catalog:",

@@ -11,16 +11,31 @@ const vitestCacheGlobs = ['!node_modules/.vitest-cache/**', '!**/node_modules/.v
 	(pattern) => ({ pattern, base: 'workspace' as const }),
 );
 
+// Variables that opt tests in or out (live suites, integration interpreters, report and
+// snapshot-update switches). Fingerprinting them keeps a run made without one from being
+// replayed as a hit once it is set.
+const testEnv = [
+	'MARIMOHUB_*',
+	'MARIMO_*',
+	'MH_*',
+	'APP_PERFORMANCE_REPORT',
+	'SEARCH_BENCH',
+	'UPDATE_*',
+	'MODAL_*',
+	'GOOGLE_APPLICATION_CREDENTIALS',
+];
+
+/** Cache settings for any task that runs Vitest; spread extra globs into `input`/`output`. */
+export const vitestTaskCache = {
+	env: testEnv,
+	input: [{ auto: true }, ...vitestCacheGlobs],
+	output: [{ auto: true }, ...vitestCacheGlobs],
+};
+
 // The `test` package.json script delegates to this task so the exclusions apply; a
 // script and a task cannot share a name.
 export const testTasks = {
-	'test:vitest': {
-		command: 'vp test',
-		cache: {
-			input: [{ auto: true }, ...vitestCacheGlobs],
-			output: [{ auto: true }, ...vitestCacheGlobs],
-		},
-	},
+	'test:vitest': { command: 'vp test', cache: vitestTaskCache },
 } satisfies Tasks;
 
 export function libraryConfig(overrides: ViteUserConfig = {}): ViteUserConfig {

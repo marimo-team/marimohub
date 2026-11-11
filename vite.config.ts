@@ -1,3 +1,4 @@
+import { vitestTaskCache } from '@marimo-hub/vite-config';
 import { defineConfig } from 'vite-plus';
 
 // Root Vite+ workspace config. Per-package configs live in each package and
@@ -458,9 +459,10 @@ export default defineConfig({
 				command:
 					'vp test tools/oxlint/anti-slop/index.test.ts scripts/sea/launcher.test.ts scripts/sea/payload.test.ts --silent=passed-only --hideSkippedTests',
 				cache: {
+					...vitestTaskCache,
 					// Launcher fixtures must live outside world-writable temp directories.
-					input: [{ auto: true }, '!node_modules/.cache/sea-launcher-*/**'],
-					output: [{ auto: true }, '!node_modules/.cache/sea-launcher-*/**'],
+					input: [...vitestTaskCache.input, '!node_modules/.cache/sea-launcher-*/**'],
+					output: [...vitestTaskCache.output, '!node_modules/.cache/sea-launcher-*/**'],
 				},
 			},
 		},

@@ -36,6 +36,7 @@
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@opentelemetry/core": "catalog:",
 		"@types/node": "catalog:",
 		"tsx": "catalog:",

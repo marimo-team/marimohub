@@ -23,6 +23,7 @@ import contextlib, io, json, os, sys, traceback
 spec = json.loads(sys.stdin.buffer.read().decode('utf-8'))
 code = compile(spec['source'], spec['filename'], 'exec')
 environment = dict(os.environ)
+start_dir = os.getcwd()
 results = []
 for case in spec['cases']:
     out, err = io.StringIO(), io.StringIO()
@@ -31,10 +32,9 @@ for case in spec['cases']:
     os.environ.clear()
     os.environ.update(environment)
     os.environ.update(case.get('env', {}))
-    if case.get('cwd'):
-        os.chdir(case['cwd'])
     status = 0
     try:
+        os.chdir(case.get('cwd') or start_dir)
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             exec(code, {'__name__': '__main__', '__file__': spec['filename']})
     except SystemExit as exit:
@@ -51,9 +51,9 @@ sys.__stdout__.write(json.dumps(results))
 `;
 
 /**
- * Run `source` once per case inside a single `python3 -I` process. Cases must
- * not depend on each other's interpreter state; filesystem state they create
- * is visible to later cases, so give each case its own directories.
+ * Run `source` once per case inside a single `python3 -I` process. Each case
+ * starts from the harness's environment and working directory; filesystem
+ * state a case creates is visible to later cases, so give each its own directories.
  */
 export function runPythonCases(
 	source: string,
@@ -76,7 +76,13 @@ export function runPythonCases(
 				);
 				return;
 			}
-			const results = JSON.parse(Buffer.concat(stdout).toString()) as PythonCaseResult[];
+			let results: PythonCaseResult[];
+			try {
+				results = JSON.parse(Buffer.concat(stdout).toString()) as PythonCaseResult[];
+			} catch (error) {
+				reject(new Error('python case harness produced no result document', { cause: error }));
+				return;
+			}
 			if (results.length !== cases.length) {
 				reject(
 					new Error(`python case harness returned ${results.length} of ${cases.length} results`),

@@ -63,7 +63,9 @@ export async function setupWorkingBranchHarness(): Promise<WorkingBranchHarness>
 			return { commit: fromCommit };
 		}),
 		prepareCommit: vi.fn(async ({ parentCommit, changes }) => {
-			const tree = new Map(remote.snapshots.get(parentCommit));
+			const parent = remote.snapshots.get(parentCommit);
+			if (!parent) throw new Error(`unknown parent commit ${parentCommit}`);
+			const tree = new Map(parent);
 			for (const change of changes) {
 				if (change.operation === 'delete') tree.delete(change.path);
 				else tree.set(change.path, change.content);

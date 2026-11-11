@@ -24,6 +24,7 @@
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@types/node": "catalog:",
 		"openapi-typescript": "7.13.0",
 		"typescript": "catalog:",

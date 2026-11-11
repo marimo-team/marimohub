@@ -166,6 +166,9 @@ export interface HostAppOptions {
 	realm?: string;
 	/** Observe failures the host answered with 5xx. */
 	onError?: (error: unknown, response: Response) => void;
-	/** How often a catalog event stream polls for a moved catalog pointer. Default: one second. */
+	/**
+	 * How often a catalog event stream polls for a moved catalog pointer, at least 1 ms.
+	 * Default (and fallback for smaller or non-numeric values): one second.
+	 */
 	pollIntervalMs?: number;
 }

@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from 'react-router-dom';
 import { ProjectMembersPanel } from '.';
@@ -902,12 +901,10 @@ describe('project default access', () => {
 			await renderPanel('manager', {
 				default_role: default_role === 'inherit' ? 'none' : 'inherit',
 			});
-			await userEvent
-				.setup()
-				.selectOptions(
-					screen.getByRole('combobox', { name: 'Default access for signed-in users' }),
-					default_role,
-				);
+			await setupUser().selectOptions(
+				screen.getByRole('combobox', { name: 'Default access for signed-in users' }),
+				default_role,
+			);
 			await waitFor(() =>
 				expect(calls).toContainEqual({
 					url: `/api/v1/projects/${PID}`,

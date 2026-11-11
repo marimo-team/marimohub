@@ -23,6 +23,7 @@
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@types/node": "catalog:",
 		"@types/nodemailer": "8.0.1",
 		"typescript": "catalog:",

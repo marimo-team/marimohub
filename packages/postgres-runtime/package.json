@@ -25,6 +25,7 @@
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@types/node": "catalog:",
 		"@types/pg": "catalog:",
 		"@types/pg-cursor": "catalog:",

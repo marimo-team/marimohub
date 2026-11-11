@@ -1,7 +1,6 @@
 import { MAX_UPLOAD_BYTES } from '@marimo-hub/core/uploads';
 import { QueryClient } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiRequestError } from '@/api/client';
 import { refreshBrowseQueries } from '@/api/hooks';
@@ -9,6 +8,7 @@ import { browseKeys } from '@/api/queryKeys';
 import { formatBytes } from '@/lib/formatBytes';
 import { resumableUpload } from '@/lib/resumableUpload';
 import { ObjectUploadButton } from './ObjectUploadButton';
+import { setupUser } from '@/test/render';
 
 vi.mock('@/lib/resumableUpload', () => ({ resumableUpload: vi.fn() }));
 const uploader = vi.mocked(resumableUpload);
@@ -105,7 +105,7 @@ describe('ObjectUploadButton', () => {
 		blockUploadsUntilAbort();
 		const { onComplete } = setup([first, second]);
 		const signal = uploader.mock.calls[0]?.[3]?.signal;
-		await userEvent.click(screen.getByRole('button', { name: 'Cancel upload' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Cancel upload' }));
 		expect(await screen.findByRole('alert')).toHaveTextContent('Upload cancelled.');
 		expect(signal?.aborted).toBe(true);
 		expect(uploader).toHaveBeenCalledTimes(1);
@@ -129,7 +129,7 @@ describe('ObjectUploadButton', () => {
 				}),
 		);
 		const { onComplete } = setup([first, second]);
-		await userEvent.click(screen.getByRole('button', { name: 'Cancel upload' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Cancel upload' }));
 		expect(await screen.findByRole('alert')).toHaveTextContent('Upload cancelled.');
 		expect(uploader).toHaveBeenCalledTimes(1);
 		expect(onComplete).toHaveBeenCalledTimes(1);
@@ -156,10 +156,10 @@ describe('ObjectUploadButton', () => {
 			.spyOn(window, 'confirm')
 			.mockReturnValueOnce(false)
 			.mockReturnValueOnce(true);
-		await userEvent.click(restart);
+		await setupUser().click(restart);
 		expect(uploader).toHaveBeenCalledTimes(1);
 		uploader.mockResolvedValueOnce(new Response());
-		await userEvent.click(restart);
+		await setupUser().click(restart);
 		await waitFor(() => expect(uploader).toHaveBeenCalledTimes(2));
 		expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Check the destination first'));
 		expect(uploader.mock.calls[1]?.[3]).toMatchObject({ restart: true });

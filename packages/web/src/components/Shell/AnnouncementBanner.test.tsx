@@ -2,8 +2,7 @@ import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
 import { BrandingContext } from '@/context/BrandingContext';
 import { afterEach, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { renderWithClient } from '@/test/render';
+import { renderWithClient, setupUser } from '@/test/render';
 import { AnnouncementBanner } from './AnnouncementBanner';
 
 afterEach(() => {
@@ -13,7 +12,7 @@ afterEach(() => {
 it('persists dismissal by ID and shows a new announcement', async () => {
 	const announcement = { id: 'a1', text: 'Maintenance Friday', dismissible: true };
 	const first = renderWithClient(<AnnouncementBanner />, { branding: { announcement } });
-	await userEvent.click(screen.getByRole('button', { name: 'Dismiss announcement' }));
+	await setupUser().click(screen.getByRole('button', { name: 'Dismiss announcement' }));
 	expect(screen.queryByLabelText('Announcement')).not.toBeInTheDocument();
 	first.unmount();
 	const second = renderWithClient(<AnnouncementBanner />, { branding: { announcement } });
@@ -46,7 +45,7 @@ it('works when browser storage is unavailable', async () => {
 	renderWithClient(<AnnouncementBanner />, {
 		branding: { announcement: { id: '1', text: 'News', dismissible: true } },
 	});
-	await userEvent.click(screen.getByRole('button', { name: 'Dismiss announcement' }));
+	await setupUser().click(screen.getByRole('button', { name: 'Dismiss announcement' }));
 	expect(screen.queryByText('News')).not.toBeInTheDocument();
 });
 
@@ -69,7 +68,7 @@ it('shows a replacement announcement without remounting the shell', async () => 
 			<AnnouncementBanner />
 		</BrandingContext>,
 	);
-	await userEvent.click(screen.getByRole('button', { name: 'Dismiss announcement' }));
+	await setupUser().click(screen.getByRole('button', { name: 'Dismiss announcement' }));
 	rerender(
 		<BrandingContext
 			value={{ ...first, announcement: { ...first.announcement, id: '2', text: 'Second' } }}

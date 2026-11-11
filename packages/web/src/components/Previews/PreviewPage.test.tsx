@@ -240,7 +240,7 @@ describe('PreviewPage', () => {
 	);
 
 	it('does not restart a failed lazy preview on each visit', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const prepares = (calls: { url: string }[]) =>
 			calls.filter((call) => call.url === `${endpoint}/prepare`);
 		const first = setup({ lazy: true, failed: true });

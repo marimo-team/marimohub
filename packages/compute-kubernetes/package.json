@@ -26,6 +26,7 @@
 	"devDependencies": {
 		"@kubernetes/client-node": "catalog:",
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@types/node": "catalog:",
 		"typescript": "catalog:",
 		"vite-plus": "catalog:",

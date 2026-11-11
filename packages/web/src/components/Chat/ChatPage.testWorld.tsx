@@ -46,6 +46,7 @@ export function uiStream(
 	const encoder = new TextEncoder();
 	const encode = (chunk: unknown) =>
 		encoder.encode(`data: ${typeof chunk === 'string' ? chunk : JSON.stringify(chunk)}\n\n`);
+	let cancelled = false;
 	const body = new ReadableStream<Uint8Array>({
 		async start(controller) {
 			try {
@@ -56,11 +57,18 @@ export function uiStream(
 				}
 				controller.enqueue(encode('[DONE]'));
 				controller.close();
-			} catch {
-				// The consumer cancelled the stream (stop, or leaving the conversation).
+			} catch (error) {
+				// Enqueueing after the consumer stopped or left the conversation throws; any
+				// other failure must surface instead of leaving the stream open.
+				if (!cancelled) throw error;
 			} finally {
+				// Fires when the producer is done, consumed or not: tests use it to flip the
+				// saved record over once the server-side turn would have finished.
 				options.onDone?.();
 			}
+		},
+		cancel() {
+			cancelled = true;
 		},
 	});
 	return new Response(body, {

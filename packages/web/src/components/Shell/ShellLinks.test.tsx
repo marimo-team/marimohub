@@ -4,11 +4,16 @@ import { projectKeys, userKeys } from '@/api/queryKeys';
 import { DOCS_BASE } from '@/lib/links';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import type { ThemeLinkRole } from '@marimo-hub/core/theme';
 import { HelpMenu } from '@/components/Header/HelpMenu';
 import { AuthProvider } from '@/context/AuthContext';
-import { createTestQueryClient, jsonError, jsonOk, renderWithClient } from '@/test/render';
+import {
+	createTestQueryClient,
+	jsonError,
+	jsonOk,
+	renderWithClient,
+	setupUser,
+} from '@/test/render';
 import { useShellLinks } from './useShellLinks';
 
 function HeaderLinks() {
@@ -67,7 +72,7 @@ it.each(['app-user', 'viewer', 'editor', 'manager', 'admin'] as const)(
 		expect(screen.getByRole('link', { name: 'Platform' })).toBeInTheDocument();
 		expect(screen.queryByText('Hidden')).not.toBeInTheDocument();
 		expect(screen.queryByText('Support portal')).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole('button', { name: 'Help' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Help' }));
 		expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
 			'Documentation',
 			'Get help',
@@ -173,7 +178,7 @@ it('keeps public links and default documentation available when identity lookup 
 	await waitFor(() => expect(client.getQueryState(userKeys.me())?.fetchStatus).toBe('idle'));
 	expect(screen.getByRole('link', { name: 'Public' })).toBeInTheDocument();
 	expect(screen.queryByText('Admins')).not.toBeInTheDocument();
-	await userEvent.click(screen.getByRole('button', { name: 'Help' }));
+	await setupUser().click(screen.getByRole('button', { name: 'Help' }));
 	expect(screen.getByRole('menuitem', { name: 'Documentation' })).toHaveAttribute(
 		'href',
 		DOCS_BASE,

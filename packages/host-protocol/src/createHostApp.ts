@@ -126,7 +126,10 @@ export function createHostApp<
 >(platform: HostPlatform<P, N, R, S>, options: HostAppOptions = {}): Hono<HostAppEnv> {
 	const app = new Hono<HostAppEnv>();
 	const challenge = `Bearer realm="${options.realm ?? 'marimo-host'}"`;
-	const pollIntervalMs = options.pollIntervalMs ?? 1_000;
+	const pollIntervalMs =
+		options.pollIntervalMs !== undefined && options.pollIntervalMs >= 1
+			? options.pollIntervalMs
+			: 1_000;
 	const toResponse = (error: unknown) => errorResponse(error, platform.errorStatus?.bind(platform));
 	let retries: HostRetries | undefined;
 	const runtimeRefreshes = new RuntimeCatalogRefreshes();

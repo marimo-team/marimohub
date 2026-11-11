@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { setupUser } from '@/test/render';
 import { sessionKeys } from '@/api/queryKeys';
 import {
@@ -626,7 +625,7 @@ describe('NotebookPage viewer modes', () => {
 			});
 			const { container } = renderPage(testCase.variant);
 
-			await userEvent.click(
+			await setupUser().click(
 				await screen.findByRole('button', { name: 'Session Starting — details' }),
 			);
 			expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
@@ -702,7 +701,7 @@ describe('NotebookPage viewer modes', () => {
 		});
 		renderPage();
 
-		await userEvent.click(await screen.findByRole('button', { name: /Session Running/ }));
+		await setupUser().click(await screen.findByRole('button', { name: /Session Running/ }));
 		expect(await screen.findByText('large — 8 CPU · 32 Gi')).toBeInTheDocument();
 	});
 

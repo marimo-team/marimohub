@@ -21,21 +21,26 @@ interface StoredObject {
 export class MemoryBucket implements Bucket {
 	private store = new Map<string, StoredObject>();
 	private etagCounter = 0;
+	private etagPrefix = 'etag-';
+	private clones = 0;
 
 	private nextEtag(): string {
 		this.etagCounter++;
-		return `etag-${this.etagCounter}`;
+		return `${this.etagPrefix}${this.etagCounter}`;
 	}
 
 	/**
-	 * A detached copy that keeps every ETag, so CAS tokens and ETag fingerprints
-	 * taken from one copy stay valid on another. Stored objects are never mutated
-	 * in place, so sharing them is safe.
+	 * A copy with its own key space that keeps every existing ETag, so CAS tokens
+	 * and ETag fingerprints taken from the source stay valid on it. New writes on
+	 * the copy mint ETags under a distinct prefix, so the two never collide after
+	 * they diverge. Stored objects are never mutated in place (`put` replaces the
+	 * entry), so sharing the entries and their bodies is safe.
 	 */
 	clone(): MemoryBucket {
 		const copy = new MemoryBucket();
 		copy.store = new Map(this.store);
 		copy.etagCounter = this.etagCounter;
+		copy.etagPrefix = `${this.etagPrefix}c${++this.clones}-`;
 		return copy;
 	}
 

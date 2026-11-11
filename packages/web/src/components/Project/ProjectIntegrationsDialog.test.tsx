@@ -3,7 +3,6 @@ import { icebergRest } from '../../../../core/src/services/integrations/kinds/ic
 import { IntegrationRegistry } from '../../../../core/src/services/integrations/registry';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { OrgIntegrationsDialog, ProjectIntegrationsPanel } from './ProjectIntegrationsDialog';
@@ -613,7 +612,7 @@ describe('ProjectIntegrationsPanel — query failures', () => {
 describe('ProjectIntegrationsPanel — kind catalog', () => {
 	it("shows each kind's declared notebook packages on its card", async () => {
 		setup({}, { kinds: [postgresKind, customEnvKind], entries: [] });
-		await userEvent.click(await screen.findByRole('button', { name: /Add integration/ }));
+		await setupUser().click(await screen.findByRole('button', { name: /Add integration/ }));
 		expect(await screen.findByText(/Notebook packages:/)).toBeInTheDocument();
 		expect(screen.getByText('sqlalchemy>=2')).toBeInTheDocument();
 	});

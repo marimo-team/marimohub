@@ -41,7 +41,12 @@ export async function execInLocalShell(
 		maxBuffer: 20 * 1024 * 1024,
 		env: hermeticGitEnv(),
 	});
-	return execResult(result.status === 0, result.stdout ?? '', result.stderr ?? '');
+	// A timeout or spawn failure reports through `error` with an empty stderr.
+	return execResult(
+		result.status === 0,
+		result.stdout ?? '',
+		result.stderr || result.error?.message || '',
+	);
 }
 
 export interface GitRepoTemplate {
@@ -62,9 +67,17 @@ export function createGitRepoTemplate(
 	return {
 		instantiate() {
 			if (!template) {
-				template = mkdtempSync(join(tmpdir(), prefix));
-				gitInRepo(template, 'init', '-q');
-				setup(template, (...args) => gitInRepo(template!, ...args));
+				// Publish the directory only once setup succeeds, so a failed build is
+				// retried rather than copied.
+				const building = mkdtempSync(join(tmpdir(), prefix));
+				try {
+					gitInRepo(building, 'init', '-q');
+					setup(building, (...args) => gitInRepo(building, ...args));
+				} catch (error) {
+					rmSync(building, { recursive: true, force: true });
+					throw error;
+				}
+				template = building;
 			}
 			const copy = mkdtempSync(join(tmpdir(), prefix));
 			cpSync(template, copy, { recursive: true });

@@ -2,7 +2,6 @@ import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { Suspense } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import type { QueryClient } from '@tanstack/react-query';
 import { Route, Routes } from 'react-router-dom';
@@ -156,7 +155,7 @@ describe('stakeholder apps', () => {
 			},
 		});
 		expect(await screen.findByText('New release')).toBeInTheDocument();
-		await userEvent.click(screen.getByRole('button', { name: 'Help' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Help' }));
 		expect(screen.getByRole('menuitem', { name: 'Get help' })).toHaveAttribute(
 			'href',
 			'https://help.example.com',

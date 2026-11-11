@@ -8,7 +8,7 @@ import {
 	paths,
 	signProxyToken,
 } from '@marimo-hub/core';
-import type { AppVisit, SessionId } from '@marimo-hub/core';
+import type { AppPoolPolicy, AppVisit, SessionId } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import {
 	ACTOR,
@@ -21,7 +21,20 @@ import { createTestApi, expectOk } from './index';
 
 const SECRET = 'app-performance-test-secret-at-least-32-bytes';
 
-export async function createAppSessionFixture<T extends MemoryBucket>(bucket: T, labeled = false) {
+export interface AppSessionFixtureOptions {
+	labeled?: boolean;
+	/**
+	 * App pool policy overrides. The default flushes heartbeat renewals at once so a
+	 * test does not wait out the production batching second; pass `{}` for the
+	 * production policy when that batching is itself under test.
+	 */
+	appPool?: Partial<AppPoolPolicy>;
+}
+
+export async function createAppSessionFixture<T extends MemoryBucket>(
+	bucket: T,
+	{ labeled = false, appPool = { heartbeatBatchMs: 0 } }: AppSessionFixtureOptions = {},
+) {
 	await new CatalogService(bucket).initialize(ACTOR);
 	const services = createServices(bucket);
 	const project = await services.projects.createProject(
@@ -40,8 +53,7 @@ export async function createAppSessionFixture<T extends MemoryBucket>(bucket: T,
 			compute: makeFakeCompute(),
 			deps: {
 				resourceSecurity,
-				// Heartbeat renewals flush without the production batching window.
-				policy: { appPool: { ...DEFAULT_APP_POOL_POLICY, heartbeatBatchMs: 0 } },
+				policy: { appPool: { ...DEFAULT_APP_POOL_POLICY, ...appPool } },
 				sandbox: {
 					bucket: { name: 'test', endpoint: '' },
 					hostname: 'localhost',
