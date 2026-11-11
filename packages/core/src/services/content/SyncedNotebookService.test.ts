@@ -4,6 +4,7 @@ import { MAX_WORKSPACE_FILE_BYTES } from '../../constants';
 import { PreconditionFailedError } from '../../errors';
 import { ACTOR, restoreClock, setupTestEnv, useFakeClock } from '../../testing';
 import type { MemoryBucket } from '../../testing';
+import { createNotebookId } from '../../ids';
 import type { ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { noopMetrics } from '../../ports/metrics';
@@ -12,6 +13,7 @@ import type { CatalogService } from '../catalog/CatalogService';
 import type { NotebookService } from './NotebookService';
 import type { ProjectService } from './ProjectService';
 import { SyncedNotebookService } from './SyncedNotebookService';
+import { WorkingBranchStore } from './workingBranchRecords';
 import type { CreateSyncedNotebookInput } from '../../integrations/syncedSource';
 import { MAX_PACKED_WORKSPACE_INPUT_BYTES } from '../../integrations/packedWorkspace';
 
@@ -624,7 +626,58 @@ describe('SyncedNotebookService', () => {
 			);
 		});
 
-		it.each(['/workspace/app.py', '/workspace-manifest.json'])(
+		it('writes the digest manifest only for working-branch notebooks', async () => {
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+			const ordinary = await notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa'));
+			expect(
+				await bucket.get(
+					paths.project(projectId).notebook(meta.id).version(ordinary.versionId!).workspaceManifest,
+				),
+			).toBeNull();
+
+			const nid = createNotebookId();
+			const id = 'a'.repeat(64);
+			const source = {
+				repo: 'owner/repo',
+				branch: `marimohub/${projectId}/${nid}`,
+				root_path: '',
+				entry_notebook: 'app.py',
+			};
+			await new WorkingBranchStore(bucket).create({
+				schema_version: 1,
+				id,
+				project_id: projectId,
+				notebook_id: nid,
+				provider: 'github',
+				source,
+				base_branch: 'main',
+				fork_commit: 'commit-aaaa',
+				created_by: ACTOR,
+				created_at: new Date().toISOString(),
+				state: 'ready',
+			});
+			await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, ...source, sync_mode: 'pull' },
+				ACTOR,
+				{
+					notebookId: nid,
+					workingBranch: { id, base_branch: 'main', fork_commit: 'commit-aaaa', created_by: ACTOR },
+				},
+			);
+			const working = await notebooks.synced.sync(projectId, nid, {
+				...syncInput('commit-aaaa'),
+				branch: source.branch,
+				git_files: [{ path: 'HEAD', bytes: enc('ref: refs/heads/main\n') }],
+			});
+			expect(
+				await bucket.get(
+					paths.project(projectId).notebook(nid).version(working.versionId!).workspaceManifest,
+				),
+			).not.toBeNull();
+		});
+
+		it.each(['/workspace/app.py'])(
 			'removes all version objects when %s fails to write',
 			async (failedPath) => {
 				const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);

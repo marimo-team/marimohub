@@ -43,6 +43,12 @@ These bindings come pre-wired; you generally only rename them:
 - **Assets** → the web UI build (`packages/web/dist`).
 - **Cron** → `*/5 * * * *` runs session maintenance (there's no always-on replica).
 
+Each isolate reuses its storage adapter, services, and API while its bindings stay
+the same. The Worker does not pass `MARIMOHUB_COMPUTE_ASSET_URL` to sandboxes, so
+each sandbox serves its bundled marimo frontend. The web UI keeps its `fetch`
+preload tags. The compression and static-file rules in
+[asset caching](./asset-caching.md#hub-responses) apply to the Node server only.
+
 ## 2. Create the R2 bucket
 
 ```bash
@@ -211,5 +217,3 @@ can't lazily `import()` it), so `src/e2b.ts` injects a static import into
 
 [Auth](../auth.md) · [Storage](../storage.md) · [Compute](../compute.md) ·
 [Managed AI](../ai.md) · [Configuration](../configuration.md)
-
-See [asset caching](./asset-caching.md) to reuse marimo frontend assets across sessions.

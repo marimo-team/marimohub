@@ -1,6 +1,14 @@
+import { runInNewContext } from 'node:vm';
 import { afterEach, expect, it, vi } from 'vitest';
+import { SHELL_PREFETCH_SCRIPT } from '../../../../apps/server/src/shellPrefetch';
+import { readListFilters } from '@/lib/listFilters';
 import { createTestQueryClient, jsonError, jsonOk } from '@/test/render';
-import { firstProjectQueryOptions, projectRosterQueryOptions } from './routePrefetch';
+import { notebooksQueryOptions } from './hooks';
+import {
+	firstProjectQueryOptions,
+	NOTEBOOK_STATUS_FILTERS,
+	projectRosterQueryOptions,
+} from './routePrefetch';
 import { projectKeys } from './queryKeys';
 import type { ProjectSummary } from '@/types';
 
@@ -21,6 +29,9 @@ function project(id: string, name = id): ProjectSummary {
 afterEach(() => {
 	vi.unstubAllGlobals();
 	vi.useRealTimers();
+	delete window.__MARIMOHUB_PREFETCH__;
+	document.querySelector('base')?.remove();
+	window.history.replaceState(null, '', '/');
 });
 
 it('invalidates the landing project with project-list mutations without colliding with the roster', async () => {
@@ -104,3 +115,32 @@ it('keeps the complete cached roster when a later page fails and retries from th
 	expect(requested).toHaveLength(4);
 	expect(requested.slice(2)).toEqual(requested.slice(0, 2));
 });
+
+it.each([...NOTEBOOK_STATUS_FILTERS.map((status) => status.value), 'garbage'])(
+	'consumes the server shell prefetch for the notebook list (status=%s)',
+	async (status) => {
+		const base = document.createElement('base');
+		base.href = '/';
+		document.head.append(base);
+		window.history.replaceState(null, '', `/projects/p1?q=%20revenue%20&tag=ml&status=${status}`);
+		runInNewContext(SHELL_PREFETCH_SCRIPT, {
+			document,
+			location: window.location,
+			window,
+			fetch: async () => jsonOk({ items: [], next_cursor: null }),
+			URL,
+			URLSearchParams,
+			AbortController,
+			setTimeout,
+			clearTimeout,
+		});
+		const fetch = vi.fn(async () => jsonOk({ items: [], next_cursor: null }));
+		vi.stubGlobal('fetch', fetch);
+		const filters = readListFilters(
+			new URLSearchParams(window.location.search),
+			NOTEBOOK_STATUS_FILTERS,
+		);
+		await createTestQueryClient().fetchInfiniteQuery(notebooksQueryOptions('p1', filters));
+		expect(fetch).not.toHaveBeenCalled();
+	},
+);

@@ -146,9 +146,10 @@ New starts stay blocked until the compute backend confirms that the sandbox is d
 
 ## Background loops
 
-The maintenance replica runs these loops. Each loop starts immediately, then
-repeats at its interval. Each leased loop takes its own bucket-CAS lease per
-attempt, so only one replica does the work even when several run maintenance.
+The maintenance replica runs these loops. Each loop starts at once, then repeats at its interval.
+Each leased loop has its own bucket-CAS lease, so only one replica does the work.
+Most loops take the lease for each attempt.
+The app-pool, warm-pool, search, and job scheduler loops keep their lease between attempts.
 
 | Loop                        | Interval                                                                 | Lease                                         | Runs when                     |
 | --------------------------- | ------------------------------------------------------------------------ | --------------------------------------------- | ----------------------------- |
@@ -163,6 +164,10 @@ attempt, so only one replica does the work even when several run maintenance.
 | `search_indexing`           | 5 s                                                                      | `_system/search/lock.json`                    | Search is configured          |
 | `preview_preparation`       | 15 s                                                                     | None                                          | Source control is configured  |
 
+Every Node process, including API replicas, also runs two loops without a loop lease.
+`migrations` runs every 5 seconds until all [bucket migrations](https://github.com/marimo-team/marimohub/blob/main/development_docs/migrations.md) complete.
+`warm_pool_preconnect` runs every 5 seconds while [warm pools](./warm-pools.md) are enabled, `MARIMOHUB_COMPUTE_WARM_POOL_PRECONNECT` is not `false`, and the compute adapter supports preconnection.
+
 The `app_pools` loop uses `MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS` when session
 lifetimes are enabled. App-pool sweeps run only in this loop. The hourly retention
 loops run independently of maintenance and each other. `retention_notebook_gc`
@@ -173,12 +178,13 @@ Each retention attempt has a 15-minute deadline. Search indexing has a 30-second
 deadline. [Search](./search.md) covers its configuration and index freshness.
 Other attempts have a deadline of `max(3 × interval, 10 min)`.
 The deadline covers lease acquisition, the work, and lease release.
-When an attempt passes its deadline, the runner aborts it, logs `<loop>_stalled` (`level: error`, with `holder`,
-`deadline_ms`, and `duration_ms`), and starts no new attempt for that loop until
-the abandoned work settles, so a loop never has two writers. When the work
-settles, the runner logs `<loop>_recovered` (`level: debug`), discards the late
-result, and the next tick retries. Skipped attempts (another replica holds the
-lease, or there is nothing to do) count as successes.
+When an attempt passes its deadline, the runner aborts it and logs `<loop>_stalled` at `level: error`.
+The event carries `holder`, `deadline_ms`, and `duration_ms`.
+This process starts no new attempt for that loop until the abandoned work settles.
+The lease still expires, so another replica can take it while the abandoned work runs.
+When the work settles, the runner logs `<loop>_recovered` at `level: debug` and discards the late result.
+The next tick retries.
+A skipped attempt counts as a success. An attempt skips when another replica holds the lease or when there is no work.
 
 Other loop events: `<loop>_failed` (`warm_pool_sweep_failed` for the warm pool)
 when an attempt fails, `<loop>_release_failed` when releasing the lease fails
@@ -342,6 +348,39 @@ The `marimohub-linux-*` binaries do not include the command. From a repository c
 
 ## Upgrades
 
+### Upgrading from older releases
+
+Releases after 0.6.4 migrate project access summaries and session indexes in the background.
+The migration starts when the first new pod boots.
+Writers from 0.6.4 and earlier do not maintain these records, so old and new pods must not run at the same time.
+A normal rolling `helm upgrade` runs both versions at the same time.
+
+1. Scale the API and maintenance Deployments to zero.
+
+   ```bash
+   kubectl scale deployment marimohub marimohub-maintenance --replicas=0
+   ```
+
+2. Stop every other process that uses the old image, such as recovery jobs and command-line tools.
+3. Run `helm upgrade`. It restores the configured replica counts.
+
+Do not roll back to 0.6.4 or earlier after the new version starts. The migrations begin at boot.
+
+Old and new pods can run at the same time after a rolling upgrade, or after `helm rollback` and a new upgrade.
+If this occurs, stop the old pods.
+Then run both repair commands once from the new image, with only the new version running.
+Use the pod overrides from the [catalog recovery](#catalog-recovery) example:
+
+```bash
+node dist/project-access-rebuild.mjs
+node dist/session-index-rebuild.mjs
+```
+
+From a repository checkout, use `pnpm --filter @marimo-hub/server project-access:rebuild`
+and `pnpm --filter @marimo-hub/server session-index:rebuild`.
+
+### All upgrades
+
 Before upgrading from 0.4.8, check `MARIMOHUB_SESSION_CONNECTION_AWARE` and
 `MARIMOHUB_AUTOMATIC_THUMBNAILS`. Both now accept only `true` or `false`, ignoring
 case and surrounding whitespace. Unset or blank values keep the default, `true`.
@@ -360,7 +399,7 @@ everything.
 ```bash
 helm upgrade marimohub oci://ghcr.io/marimo-team/charts/marimohub \
   --version <VERSION> -n marimohub -f values.yaml
-helm rollback marimohub -n marimohub     # revert
+helm rollback marimohub -n marimohub     # revert (not to 0.6.4 or earlier)
 helm history marimohub -n marimohub      # what's running
 ```
 
@@ -496,6 +535,11 @@ straight to its trace.
 
 ### Metrics (OpenTelemetry)
 
+The Node server writes one `request` log line per HTTP request.
+Requests to `/api/*` and requests that call the bucket log at `info`.
+Other requests log at `debug`. These include static files, `/_marimo` assets, and kernel proxy traffic.
+[`LOG_LEVEL`](/configuration) sets the minimum level.
+
 Node request logs include `storage_ops` counts for `get`, `head`, `list`, `put`, `delete`, `putStream`, and the multipart calls `multipart_create`, `multipart_putPart`, `multipart_complete`, and `multipart_abort`. Counts include failed calls and describe bucket-port calls, not provider RPCs.
 Counting ends with the response. Deferred work is excluded after that point.
 Storage keys and credentials are never included in these counts.
@@ -612,11 +656,7 @@ Compute backends differ in cost model — pick per [Compute](/compute):
 
 ### Background performance metrics
 
-Search exports `search.documents.reused`, `search.documents.read`, and `search.projects.unchanged`, tagged by source.
+Search exports `search.documents.reused` and `search.documents.read`, tagged by source.
 `search.round.duration_ms` measures crawl rounds. `search.snapshot.parse_ms` measures snapshot parsing and posting-list construction.
 Notebook cleanup exports `notebook_gc.visited`, `notebook_gc.rotation.position`, and `notebook_gc.rotation.total`.
 The rotation gauges show progress through the current notebook catalog.
-
-App-pool, warm-pool, search, and job loops retain their leases between ticks.
-They renew by CAS before the remaining lease becomes shorter than the next attempt's deadline.
-Shutdown releases an idle retained lease. An unfinished attempt leaves its lease to expire.

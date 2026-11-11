@@ -676,6 +676,22 @@ describe('SessionLifecycleService', () => {
 			expect((await getStored(s)).sandbox_reclaimed_at).toBeDefined();
 		});
 
+		it('records the lifecycle reconnect metric when attaching to an expired sandbox', async () => {
+			const metrics = { increment: vi.fn(), gauge: vi.fn() };
+			await putSession({
+				status: 'expired',
+				last_heartbeat: iso(-10 * 60 * 1000),
+				reconnect_reference: 'saved-reference',
+			});
+
+			await makeService({ metrics }).sweep(now);
+
+			expect(metrics.increment).toHaveBeenCalledWith('sandbox.reconnect', 1, {
+				path: 'poll',
+				method: 'reference',
+			});
+		});
+
 		it('spares and snapshots an expired record with editors when it still owns the notebook', async () => {
 			probe.mockResolvedValue(1);
 			const s = await putSession({ status: 'expired', last_heartbeat: iso(-10 * 60 * 1000) });

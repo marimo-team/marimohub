@@ -59,8 +59,12 @@ export class RequestStorage {
 				await next();
 			} finally {
 				request.closed = true;
+				// Static, `/_marimo`, and kernel-proxy traffic would dominate info-level log volume.
+				const notable =
+					c.req.path.startsWith('/api/') ||
+					Object.values(request.counts).some((count) => count > 0);
 				logEvent({
-					level: 'info',
+					level: notable ? 'info' : 'debug',
 					event: 'request',
 					method: c.req.method,
 					route: routePath(c, -1) || 'unmatched',

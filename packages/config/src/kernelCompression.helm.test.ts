@@ -8,7 +8,6 @@ import { makeCompute } from './compute';
 const root = fileURLToPath(new URL('../../..', import.meta.url));
 const annotation = 'traefik.ingress.kubernetes.io/router.middlewares';
 const annotationsKey = 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS';
-const middlewaresKey = 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES';
 const compressionKey = 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE';
 
 interface Container {
@@ -88,7 +87,14 @@ describe.runIf(process.env.MARIMOHUB_HELM_TEST === 'true')('Helm kernel compress
 			const middleware = resources.find((entry) => entry.kind === 'Middleware');
 			expect(middleware).toBeDefined();
 			const compression = `${middleware!.metadata.namespace}-${middleware!.metadata.name}@kubernetescrd`;
-			if (duplicate) secret.stringData![middlewaresKey] += `, ${compression}`;
+			if (duplicate) {
+				const annotations = JSON.parse(secret.stringData![annotationsKey]) as Record<
+					string,
+					string
+				>;
+				annotations[annotation] += `, ${compression}`;
+				secret.stringData![annotationsKey] = JSON.stringify(annotations);
+			}
 			resources.push(secret);
 			const deployments = resources.filter((entry) => entry.kind === 'Deployment');
 			expect(deployments).toHaveLength(maintenance ? 2 : 1);
@@ -97,14 +103,13 @@ describe.runIf(process.env.MARIMOHUB_HELM_TEST === 'true')('Helm kernel compress
 				const container = deployment.spec!.template.spec.containers[0];
 				const env = environment(container, resources);
 				expect(env[annotationsKey]).toBe(secret.stringData![annotationsKey]);
-				expect(env[middlewaresKey]).toBe(secret.stringData![middlewaresKey]);
 				expect(env[compressionKey]).toBe(compression);
 				makeCompute(env);
 				expect(createPublisher).toHaveBeenLastCalledWith({
 					namespace: 'sandboxes',
 					ingressClassName: 'traefik',
 					ingressAnnotations: {
-						[annotation]: `sandboxes-auth@kubernetescrd,sandboxes-rate-limit@kubernetescrd,${compression}`,
+						[annotation]: `sandboxes-auth@kubernetescrd,${compression}`,
 						'example.com/source': 'external-secret',
 					},
 				});

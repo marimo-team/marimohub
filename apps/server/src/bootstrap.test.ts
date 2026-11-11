@@ -246,7 +246,7 @@ describe('bootstrap', () => {
 	});
 
 	it.each(['false', 'true'])(
-		'preconnects only API replicas and keeps health non-blocking (maintenance=%s)',
+		'preconnects on every replica and keeps health non-blocking (maintenance=%s)',
 		async (maintenance) => {
 			const connect = vi.fn(async () => {
 				throw new Error('Direct endpoint unavailable');
@@ -286,7 +286,7 @@ describe('bootstrap', () => {
 				harness.overrides,
 			);
 			await vi.advanceTimersByTimeAsync(0);
-			expect(connect).toHaveBeenCalledTimes(maintenance === 'false' ? 1 : 0);
+			expect(connect).toHaveBeenCalledOnce();
 			const response = (await harness.serveFn.mock.calls[0][0].fetch(
 				new Request('http://localhost/api/health'),
 				{} as never,

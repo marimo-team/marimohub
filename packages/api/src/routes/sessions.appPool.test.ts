@@ -910,6 +910,75 @@ describe('app pool HTTP integration', () => {
 		},
 	);
 
+	it('keeps a startup reservation through a boot longer than the kernel startup timeout', async () => {
+		const fake = makeFakeSandbox();
+		const client = createTestApi({
+			bucket,
+			userId: uid('alice'),
+			compute: fakeComputeFrom(fake.instance),
+			deps: { policy: { defaultRole: 'editor', appPool: policy } },
+		});
+		const sessions = client.deps.services.sessions;
+		const booting = Promise.withResolvers<void>();
+		const gate = Promise.withResolvers<void>();
+		const release = () => gate.resolve();
+		fake.instance.ready = vi.fn(async () => {
+			booting.resolve();
+			await gate.promise;
+		});
+		const starting = client.request('POST', path(), { mode: 'app' });
+		await booting.promise;
+		// Past the default 120 s startup timeout plus 30 s, as a cold Kubernetes boot can be.
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 200_000);
+		let joined: any;
+		try {
+			joined = await expectOk<any>(await api('bob').request('POST', path(), { mode: 'app' }));
+			expect(joined).toMatchObject({ status: 'starting', reused: true });
+			const pool = await new AppPoolService(bucket, sessions, policy).store.read(pid, nid);
+			expect(pool!.members.map((member) => [member.state, member.session_id])).toEqual([
+				['starting', joined.session_id],
+			]);
+		} finally {
+			release();
+		}
+		const running = await expectOk<any>(await starting);
+		expect(running.status).toBe('running');
+		expect(running.session_id).toBe(joined.session_id);
+		expect(fake.instance.ready).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		{ maxAppsPerProject: 2, deferred: false },
+		{ maxAppsPerProject: 2, maxConcurrentSessionsPerUser: 2, deferred: true },
+	])('defers cold boot only for caps checked after publication (%j)', async (caps) => {
+		const fake = makeFakeSandbox();
+		const ready = vi.fn(async () => {});
+		fake.instance.ready = ready;
+		const client = createTestApi({
+			bucket,
+			userId: uid('alice'),
+			compute: fakeComputeFrom(fake.instance),
+			deps: {
+				policy: {
+					defaultRole: 'editor',
+					appPool: policy,
+					maxAppsPerProject: caps.maxAppsPerProject,
+					maxConcurrentSessionsPerUser: caps.maxConcurrentSessionsPerUser ?? 0,
+				},
+			},
+		});
+		const sessions = client.deps.services.sessions;
+		const create = sessions.createSessionWithEtag.bind(sessions);
+		let bootedBeforePublication: boolean | undefined;
+		vi.spyOn(sessions, 'createSessionWithEtag').mockImplementation(async (input) => {
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			bootedBeforePublication = ready.mock.calls.length > 0;
+			return create(input);
+		});
+		await expectOk(await client.request('POST', path(), { mode: 'app' }));
+		expect(bootedBeforePublication).toBe(!caps.deferred);
+	});
+
 	it('leaves a concurrent stop in control of sandbox teardown', async () => {
 		const selected = await start();
 		const fake = makeFakeSandbox();

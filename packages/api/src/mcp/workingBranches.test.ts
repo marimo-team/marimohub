@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NotebookId } from '@marimo-hub/core';
+import { NotebookId, UserId } from '@marimo-hub/core';
 import { ACTOR, localResourceSecurity, makeSubjectContext } from '@marimo-hub/core/testing';
 import { connectMcpClient } from '../testing/mcp';
 import { workingBranchFixture } from '../testing/workingBranches';
@@ -83,6 +83,28 @@ describe('working branch MCP and chat', { timeout: 30000 }, () => {
 			expect(receipt.isError, JSON.stringify(receipt)).not.toBe(true);
 			expect(receipt.structuredContent).toEqual(saved.structuredContent);
 		}
+		const editor = UserId.parse('editor');
+		await env.deps.services.projects.addMember(
+			env.project.id,
+			{ user_id: editor },
+			'editor',
+			ACTOR,
+		);
+		const other = await connectMcpClient(env.deps, {
+			...principal,
+			id: editor,
+			email: 'editor@example.com',
+		});
+		const denied = await other.callTool({
+			name: 'get_branch_save',
+			arguments: {
+				project: env.project.id,
+				notebook: data.notebook_id,
+				save_id: (saved.structuredContent as { id: string }).id,
+			},
+		});
+		expect(denied.isError).toBe(true);
+		expect(JSON.stringify(denied.content)).toContain('save author');
 		const cards: unknown[] = [];
 		const decision = await checkPermission(
 			{

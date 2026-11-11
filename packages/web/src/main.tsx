@@ -7,6 +7,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import './index.css';
 import App from './App.tsx';
 import { preloadInitialRoute } from './lib/initialRoute';
+import type { InitialRoutes } from './lib/initialRoute';
 import { queryClient } from './api/queryClient';
 import { capabilitiesQueryOptions, userQueryOptions } from './api/hooks';
 
@@ -19,8 +20,16 @@ const ReactQueryDevtools = import.meta.env.DEV
 		)
 	: () => null;
 
+// Same cap as the theme request: a slow API must not hold the page blank. Prefetches continue.
+const INITIAL_ROUTE_BUDGET_MS = 2000;
+
 async function bootstrap() {
-	const initialRoute = preloadInitialRoute(queryClient).catch(() => ({}));
+	const initialRoute = Promise.race([
+		preloadInitialRoute(queryClient).catch(() => ({})),
+		new Promise<InitialRoutes>((resolve) => {
+			setTimeout(() => resolve({}), INITIAL_ROUTE_BUDGET_MS);
+		}),
+	]);
 	// Hooks reuse these requests while the theme and route load.
 	void queryClient.prefetchQuery(userQueryOptions());
 	void queryClient.prefetchQuery(capabilitiesQueryOptions());

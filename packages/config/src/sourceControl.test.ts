@@ -39,6 +39,33 @@ describe('makeSourceControl', () => {
 		expect(() =>
 			makeSourceControl({ MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED: 'on' }),
 		).toThrow('expected true or false');
+		expect(() =>
+			makeSourceControl({ MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED: 'true' }),
+		).toThrow('MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID');
+	});
+
+	it('warns that working branches reach every App repository without a policy', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			const env = {
+				MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID: '123',
+				MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: privateKey(),
+				MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED: 'true',
+			};
+			makeSourceControl(env);
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining('every repository the App is installed on'),
+			);
+			warn.mockClear();
+			makeSourceControl({
+				...env,
+				MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES:
+					'[{"resource":"team/repo","projects":["proj-0000000000000000"]}]',
+			});
+			expect(warn).not.toHaveBeenCalled();
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	it('treats whitespace-only credentials as absent', () => {
@@ -364,14 +391,13 @@ describe('GitLab source control', () => {
 			registry.getReader('gitlab')?.supportsRepository('https://gitlab.com/Group/Sub/Project'),
 		).toBe(false);
 	});
-	it('does not enable working-branch tools for a GitLab-only deployment', () => {
-		const registry = makeSourceControl({
-			...env,
-			MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED: 'true',
-		}).sourceControl!;
-		expect(registry.workingBranchesEnabled).toBe(false);
-		expect(registry.workingBranchProviders?.()).toEqual([]);
-		expect(registry.getPublisher('gitlab')?.workingBranches).toBeUndefined();
+	it('rejects the working-branch opt-in for a GitLab-only deployment', () => {
+		expect(() =>
+			makeSourceControl({
+				...env,
+				MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED: 'true',
+			}),
+		).toThrow('requires a provider that supports working branches');
 	});
 	it('defaults to GitLab.com', () => {
 		const registry = makeSourceControl({

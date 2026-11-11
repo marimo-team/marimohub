@@ -13,6 +13,8 @@ The record contains reservations, visit assignments, leases, and a retained dele
 2. An existing `(user_id, visit_id)` keeps its assignment, including an older version.
 3. New visits fill current-version members. Otherwise, admission reserves a member or returns busy.
 4. The reservation persists before compute creation. Completion requires the current operation token and an unexpired reservation.
+   A reservation lasts `max(startup timeout + 30 s, 15 min)`. Nothing renews it.
+   The startup timeout is one deadline shared by Python-environment setup and the kernel-port wait. It does not bound cold boot, image pulls, or workspace restore.
 
 Member states are `starting`, `ready`, `draining`, and `retiring`.
 Retiring members remain recorded until sandbox reclamation succeeds.

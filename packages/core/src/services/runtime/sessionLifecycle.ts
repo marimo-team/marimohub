@@ -11,7 +11,7 @@ import { mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
 import type { NotebookId, SessionId } from '../../ids';
 import type { SandboxProvider } from '../../ports/sandbox';
-import { sessionConnectOptions, sessionSandbox } from './sessionSandbox';
+import { reconnectSessionSandbox, sessionSandbox } from './sessionSandbox';
 import { createSlidingWindowBudget } from '../../rateLimit';
 import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
@@ -136,7 +136,7 @@ export class SessionLifecycleService {
 					s.status === 'running'
 						? sessionSandbox(this.compute, s, this.cfg.metrics, 'poll')
 						: s.status === 'expired' && !isPastAuthorizationDeadline(s, now)
-							? this.compute.connectExisting?.(s.sandbox_id!, sessionConnectOptions(s))
+							? reconnectSessionSandbox(this.compute, s, this.cfg.metrics, 'poll')
 							: undefined;
 
 				const pool = sessionMode(s) === 'app' ? await readPool(s.project_id, s.notebook_id) : null;

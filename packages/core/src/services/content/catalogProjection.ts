@@ -79,6 +79,7 @@ export function projectCatalogPatch(
 ) {
 	const pending = entry.access_pending?.filter((id) => id !== options?.finalizeAccess);
 	const defaultRole = project.default_role ?? 'inherit';
+	const updatedAt = entry.updated_at >= project.updated_at ? entry.updated_at : project.updated_at;
 	return {
 		access_pending: pending?.length ? pending : undefined,
 		access: pending?.length
@@ -90,13 +91,14 @@ export function projectCatalogPatch(
 						members: project.members,
 						default_role: defaultRole,
 						version: PROJECT_ACCESS_VERSION,
+						entry_updated_at: updatedAt,
 					},
 		name: project.name,
 		description: project.description,
 		status: project.status,
 		tags: project.tags,
 		default_role: defaultRole,
-		updated_at: entry.updated_at >= project.updated_at ? entry.updated_at : project.updated_at,
+		updated_at: updatedAt,
 		member_ids: project.members.flatMap((member) =>
 			member.user_id !== undefined ? [member.user_id] : [],
 		),

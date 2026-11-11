@@ -12,7 +12,11 @@ import { join } from 'node:path';
 import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import { Hono } from 'hono';
 import { afterEach, expect, it } from 'vitest';
-import { stageMarimoAssets } from '../../../scripts/stage-marimo-assets.mjs';
+import { MARIMO_VERSION_PATTERN } from '@marimo-hub/core/url';
+import {
+	MARIMO_RELEASE_VERSION,
+	stageMarimoAssets,
+} from '../../../scripts/stage-marimo-assets.mjs';
 import { serveMarimoAssets } from './marimoAssets';
 
 const roots: string[] = [];
@@ -32,6 +36,7 @@ function fixture() {
 	);
 	const code = 'console.log("marimo");'.repeat(100);
 	writeFileSync(join(source, 'assets/index-abcdef12.js'), code);
+	writeFileSync(join(source, 'INDEX.HTM'), '<p>marimo</p>');
 	writeFileSync(join(source, 'config.json'), '{}');
 	const stage = () =>
 		stageMarimoAssets({ sourceRoot: source, version: '0.25.2', staticRoot: target });
@@ -72,11 +77,23 @@ it('serves HEAD and identity variants, and revalidates unhashed resources', asyn
 	});
 	expect(head.headers.get('Content-Encoding')).toBe('gzip');
 	expect(await head.text()).toBe('');
-	for (const path of ['index.html', 'config.json']) {
-		const response = await app.request(`/_marimo/0.25.2/${path}`);
-		expect(response.headers.get('Cache-Control')).toBe('public, max-age=0, must-revalidate');
-	}
+	const response = await app.request('/_marimo/0.25.2/config.json');
+	expect(response.headers.get('Cache-Control')).toBe('public, max-age=0, must-revalidate');
 });
+
+it.each(['/_marimo/0.25.2/index.html', '/_marimo/0.25.2/INDEX.HTM'])(
+	'never serves staged HTML on the hub origin: %s',
+	async (path) => {
+		const { app, stage } = fixture();
+		stage();
+		for (const method of ['GET', 'HEAD']) {
+			const response = await app.request(path, { method, headers: { 'Accept-Encoding': 'br' } });
+			expect(response.status).toBe(404);
+			expect(response.headers.get('Content-Type')).not.toMatch(/html/);
+			expect(response.headers.get('Cache-Control')).toBe('no-store');
+		}
+	},
+);
 
 it.each([
 	'/_marimo/0.25.2/assets/missing.js',
@@ -84,6 +101,8 @@ it.each([
 	'/_marimo/0.25.2/%2fetc%2fpasswd',
 	'/_marimo/0.25.2/assets/%2e%2e%2fconfig.json',
 	'/_marimo/9.9.9/index.html',
+	'/_marimo/0.25.2-/assets/index-abcdef12.js',
+	'/_marimo/0.25.2../assets/index-abcdef12.js',
 ])('never serves the SPA for missing or invalid asset paths: %s', async (path) => {
 	const { app, stage } = fixture();
 	stage();
@@ -96,7 +115,9 @@ it.each([
 it('rejects writes and refuses to overwrite a published version', async () => {
 	const { app, stage, target, code } = fixture();
 	stage();
-	expect((await app.request('/_marimo/0.25.2/index.html', { method: 'POST' })).status).toBe(405);
+	const rejected = await app.request('/_marimo/0.25.2/index.html', { method: 'POST' });
+	expect(rejected.status).toBe(405);
+	expect(rejected.headers.get('Cache-Control')).toBe('no-store');
 	expect(stage).toThrow('Refusing to replace immutable assets');
 	expect(readFileSync(join(target, '_marimo/0.25.2/assets/index-abcdef12.js'), 'utf8')).toBe(code);
 });
@@ -106,9 +127,10 @@ it('cleans failed staging and rejects symlinks and version traversal', () => {
 	symlinkSync(join(source, 'index.html'), join(source, 'leak.html'));
 	expect(stage).toThrow('symlinks');
 	expect(readdirSync(join(target, '_marimo'))).toEqual([]);
-	expect(() =>
-		stageMarimoAssets({ sourceRoot: source, version: '../0.25.2', staticRoot: target }),
-	).toThrow('exact marimo release');
+	for (const version of ['../0.25.2', '0.25.2-', '0.25.2..'])
+		expect(() => stageMarimoAssets({ sourceRoot: source, version, staticRoot: target })).toThrow(
+			'exact marimo release',
+		);
 });
 
 it('rejects a missing index and a destination inside the source tree', () => {
@@ -161,4 +183,8 @@ it('respects rejected encodings and serves byte ranges without the SPA fallback'
 	expect(invalid.status).toBe(416);
 	expect(invalid.headers.get('Cache-Control')).toBe('no-store');
 	expect(await invalid.text()).not.toContain('SPA fallback');
+});
+
+it('stages the same release versions that the asset route serves', () => {
+	expect(MARIMO_RELEASE_VERSION.source).toBe(`^${MARIMO_VERSION_PATTERN}$`);
 });

@@ -221,6 +221,29 @@ export async function putIfAbsent(
 	}
 }
 
+/**
+ * Create-if-absent without an ETag, ETag-conditional otherwise. Returns the new ETag,
+ * or undefined when the conditional PUT lost the race. Every other failure propagates.
+ */
+export async function putIfMatch(
+	bucket: Bucket,
+	key: string,
+	value: string | Uint8Array,
+	etag?: string,
+): Promise<string | undefined> {
+	try {
+		const written = await bucket.put(
+			key,
+			value,
+			etag === undefined ? { onlyIfNotExists: true } : { onlyIfEtagMatches: etag },
+		);
+		return written.etag;
+	} catch (err) {
+		if (err instanceof PreconditionFailedError) return undefined;
+		throw err;
+	}
+}
+
 export interface KnownObject<T> {
 	value: T;
 	etag: string;

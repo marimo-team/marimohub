@@ -455,7 +455,43 @@ describe('JobRunService', () => {
 		expect(
 			list.mock.calls.find(([options]) => options?.prefix?.endsWith('/occurrences/'))?.[0]
 				?.startAfter,
-		).toContain('/occurrences/');
+		).toBeUndefined();
+	});
+
+	it('restarts the occurrence scan at the first live claim', async () => {
+		const now = Date.parse('2026-09-02T12:00:00.000Z');
+		const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+		const keys = Array.from({ length: 450 }, (_, i) => occurrenceKey(now + (i - 150) * 60_000));
+		for (const key of keys) await env.bucket.put(jobPaths.occurrence(key), '{}');
+		const cursorKey = `${jobPaths.base}/prune-occurrences.json`;
+		await runs.pruneJob(job, 1000, now, 1000, 100);
+		await runs.pruneJob(job, 1000, now, 1000, 100);
+		for (const key of keys.slice(0, 150))
+			expect(await env.bucket.head(jobPaths.occurrence(key))).toBeNull();
+		expect(await env.bucket.head(jobPaths.occurrence(keys[150]))).not.toBeNull();
+		expect(await (await env.bucket.get(cursorKey))!.json()).toEqual({ after: '' });
+		const put = vi.spyOn(env.bucket, 'put');
+		await runs.pruneJob(job, 1000, now, 1000, 100);
+		expect(put.mock.calls.filter(([key]) => key === cursorKey)).toEqual([]);
+	});
+
+	it('keeps listing run pages until the deadline passes', async () => {
+		const now = Date.now();
+		for (let i = 0; i < 7; i++) await finalizedRun(now - 10_000 - i);
+		expect(await runs.pruneJob(job, 1000, now, 1000, 2, Date.now() + 60_000)).toBe(7);
+		for (let i = 0; i < 7; i++) await finalizedRun(now - 20_000 - i);
+		const deadline = Date.now() + 60_000;
+		const clock = vi.spyOn(Date, 'now');
+		const list = env.bucket.list.bind(env.bucket);
+		let pages = 0;
+		vi.spyOn(env.bucket, 'list').mockImplementation(async (options) => {
+			if (options?.prefix?.endsWith('/run-index/') && ++pages === 2)
+				clock.mockReturnValue(deadline);
+			return list(options);
+		});
+		expect(await runs.pruneJob(job, 1000, now, 1000, 2, deadline)).toBe(4);
+		clock.mockRestore();
+		expect(await runs.pruneJob(job, 1000, now, 1000, 2)).toBe(2);
 	});
 
 	it('revisits newly eligible records after completing the bounded rotation', async () => {

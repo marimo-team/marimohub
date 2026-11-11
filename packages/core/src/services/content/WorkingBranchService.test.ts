@@ -31,11 +31,12 @@ import type {
 	WorkingBranchWriter,
 } from '../../ports/sourceControl';
 import { execResult } from '../../ports/sandbox';
-import { ConflictError, ValidationError } from '../../errors';
+import { ConflictError, ForbiddenError, ValidationError } from '../../errors';
 import { WorkingBranchService } from './WorkingBranchService';
 import {
 	workingBranchPaths,
 	WORKING_BRANCH_CLEANUP_KEY,
+	WORKING_BRANCH_DISPATCH_BOUND_MS,
 	WorkingBranchStore,
 	WorkingBranchSaveSchema,
 	WorkingBranchRecordSchema,
@@ -191,6 +192,13 @@ describe('WorkingBranchService', { timeout: 60_000 }, () => {
 		});
 	}
 
+	it('validates the working source only at admission, dispatch, and sync', async () => {
+		writeFileSync(join(workdir, 'dashboard.py'), 'edit');
+		const get = vi.spyOn(env.bucket, 'get');
+		expect((await save('source-reads')).state).toBe('complete');
+		const reads = (key: string) => get.mock.calls.filter(([read]) => read === key).length;
+		expect(reads(paths.project(pid).meta)).toBe(3);
+	});
 	it('includes the effective co-author in the idempotency fingerprint', async () => {
 		const input = {
 			projectId: pid,
@@ -313,6 +321,12 @@ describe('WorkingBranchService', { timeout: 60_000 }, () => {
 		expect(
 			await env.bucket.head(workingBranchPaths(pid, nid).capture(record.active_save!)),
 		).toBeNull();
+	});
+	it('does not rewrite the cleanup cursor when one page covers every record', async () => {
+		const put = vi.spyOn(env.bucket, 'put');
+		expect(await service.pruneExpiredPayloads(Date.now() + 26 * 3600_000)).toBe(0);
+		expect(put).not.toHaveBeenCalled();
+		expect(await env.bucket.get(WORKING_BRANCH_CLEANUP_KEY)).toBeNull();
 	});
 	it('rejects malformed record IDs and timestamps before expiry decisions', async () => {
 		const record = await new WorkingBranchStore(env.bucket).read(pid, nid);
@@ -559,8 +573,8 @@ describe('WorkingBranchService', { timeout: 60_000 }, () => {
 		const list = vi.spyOn(env.bucket, 'list');
 		vi.mocked(writer.inspectBranch).mockClear();
 		expect((await save('single-tally')).state).toBe('complete');
-		// Capture enumerates the baseline once; preparation tallies the resulting tree once.
-		expect(list.mock.calls.filter(([options]) => options?.prefix === prefix)).toHaveLength(2);
+		// Preparation reuses the baseline sizes that capture enumerated.
+		expect(list.mock.calls.filter(([options]) => options?.prefix === prefix)).toHaveLength(1);
 		expect(writer.inspectBranch).toHaveBeenCalledTimes(2);
 	});
 	it('rejects a remote change during preparation before dispatching', async () => {
@@ -598,8 +612,22 @@ describe('WorkingBranchService', { timeout: 60_000 }, () => {
 				];
 			return result;
 		});
-		const rejected = await save('too-large');
-		expect(rejected.state).toBe('conflict');
+		// Stop after capture so the resumed preparation tallies a fresh baseline listing.
+		const put = env.bucket.put.bind(env.bucket);
+		vi.spyOn(env.bucket, 'put').mockImplementation(async (key, value, options) => {
+			const written = await put(key, value, options);
+			if (key.endsWith('/receipt.json') && String(value).includes('"state":"captured"'))
+				throw new Error('receipt response lost');
+			return written;
+		});
+		await expect(save('too-large')).rejects.toThrow('receipt response lost');
+		vi.mocked(env.bucket.put).mockImplementation(put);
+		const pending = (await service.status(pid, nid)).last_save!;
+		const rejected = await service.resume(pid, nid, pending.id, ACTOR, {
+			workdir,
+			getSandbox: sandbox,
+		});
+		expect(rejected).toMatchObject({ state: 'conflict', error: expect.stringContaining('limits') });
 		expect(writer.advanceBranch).not.toHaveBeenCalled();
 		expect((await service.status(pid, nid)).active_save).toBeUndefined();
 	});
@@ -658,6 +686,9 @@ describe('WorkingBranchService', { timeout: 60_000 }, () => {
 			'saved',
 		);
 	});
+	function afterDispatch(receipt: { dispatched_at?: string }, elapsed: number) {
+		vi.spyOn(Date, 'now').mockReturnValue(Date.parse(receipt.dispatched_at!) + elapsed);
+	}
 	it('does not replay against a different head or permit a second save', async () => {
 		writeFileSync(join(workdir, 'dashboard.py'), 'saved');
 		vi.mocked(writer.advanceBranch).mockRejectedValueOnce(new Error('unknown'));
@@ -666,6 +697,57 @@ describe('WorkingBranchService', { timeout: 60_000 }, () => {
 		expect((await save('one')).state).toBe('ref_dispatched');
 		await expect(save('two')).rejects.toThrow('Another save');
 		expect(writer.advanceBranch).toHaveBeenCalledTimes(1);
+	});
+	it('finishes a dispatch as a conflict once the branch moved past the bound', async () => {
+		writeFileSync(join(workdir, 'dashboard.py'), 'saved');
+		vi.mocked(writer.advanceBranch).mockRejectedValueOnce(new Error('unknown'));
+		const pending = await save('one');
+		expect(pending.dispatched_at).toBeDefined();
+		head = 'external';
+		afterDispatch(pending, WORKING_BRANCH_DISPATCH_BOUND_MS - 1);
+		expect((await save('one')).state).toBe('ref_dispatched');
+		afterDispatch(pending, WORKING_BRANCH_DISPATCH_BOUND_MS);
+		const ended = await save('one');
+		expect(ended).toMatchObject({ state: 'conflict', commit: pending.commit });
+		expect(ended.error).toContain('moved without the saved commit');
+		vi.mocked(Date.now).mockRestore();
+		expect((await new WorkingBranchStore(env.bucket).read(pid, nid)).active_save).toBeUndefined();
+		expect(await service.recovery(pid, nid, ended.id)).toBeInstanceOf(Uint8Array);
+		expect(writer.advanceBranch).toHaveBeenCalledTimes(1);
+		expect((await save('two')).state).toBe('conflict');
+	});
+	it('finishes a repeatedly rejected retry as a conflict only past the bound', async () => {
+		writeFileSync(join(workdir, 'dashboard.py'), 'captured');
+		vi.mocked(writer.advanceBranch)
+			.mockRejectedValueOnce(new Error('request lost'))
+			.mockRejectedValue(new ConflictError('rule rejected retry'));
+		const pending = await save('rejected');
+		afterDispatch(pending, WORKING_BRANCH_DISPATCH_BOUND_MS - 1);
+		const fenced = await save('rejected');
+		expect(fenced.state).toBe('ref_dispatched');
+		expect(fenced.dispatched_at).toBe(pending.dispatched_at);
+		afterDispatch(pending, WORKING_BRANCH_DISPATCH_BOUND_MS);
+		const ended = await save('rejected');
+		expect(ended.state).toBe('conflict');
+		expect(ended.error).toContain('Remote update rejected');
+		expect(writer.advanceBranch).toHaveBeenCalledTimes(3);
+		vi.mocked(Date.now).mockRestore();
+		expect((await new WorkingBranchStore(env.bucket).read(pid, nid)).active_save).toBeUndefined();
+	});
+	it('restarts the bound when a retry outcome is unknown', async () => {
+		writeFileSync(join(workdir, 'dashboard.py'), 'captured');
+		vi.mocked(writer.advanceBranch)
+			.mockRejectedValueOnce(new Error('request lost'))
+			.mockRejectedValueOnce(new Error('request lost again'))
+			.mockRejectedValueOnce(new ConflictError('rule rejected retry'));
+		const pending = await save('unknown-retry');
+		afterDispatch(pending, WORKING_BRANCH_DISPATCH_BOUND_MS);
+		const retried = await save('unknown-retry');
+		expect(retried.state).toBe('ref_dispatched');
+		expect(Date.parse(retried.dispatched_at!)).toBe(
+			Date.parse(pending.dispatched_at!) + WORKING_BRANCH_DISPATCH_BOUND_MS,
+		);
+		expect((await save('unknown-retry')).state).toBe('ref_dispatched');
 	});
 	it('retries an unapplied dispatch with exactly the captured commit and expected head', async () => {
 		writeFileSync(join(workdir, 'dashboard.py'), 'captured');
@@ -714,10 +796,15 @@ describe('WorkingBranchService', { timeout: 60_000 }, () => {
 						}
 					: {}),
 			});
-			expect((await save('ended-retry')).state).toBe('ref_dispatched');
+			const fenced = await save('ended-retry');
+			expect(fenced.state).toBe('ref_dispatched');
 			expect((await new WorkingBranchStore(env.bucket).read(pid, nid)).ended_reason).toBe(
 				ended === 'deleted' ? 'branch_deleted' : 'pr_closed',
 			);
+			afterDispatch(fenced, WORKING_BRANCH_DISPATCH_BOUND_MS);
+			const finished = await save('ended-retry');
+			expect(finished.state).toBe('conflict');
+			expect(finished.error).toContain('publication ended');
 			expect(writer.advanceBranch).toHaveBeenCalledTimes(1);
 		},
 	);
@@ -745,6 +832,57 @@ describe('WorkingBranchService', { timeout: 60_000 }, () => {
 		expect(pending.state).toBe('remote_committed');
 		writeFileSync(join(workdir, 'dashboard.py'), 'later');
 		expect((await save('one')).state).toBe('complete');
+		expect(writer.advanceBranch).toHaveBeenCalledTimes(1);
+	});
+	it('ends a save whose commit the hub deterministically cannot import', async () => {
+		writeFileSync(join(workdir, 'dashboard.py'), 'saved');
+		vi.spyOn(env.notebooks.synced, 'sync').mockRejectedValueOnce(
+			new ValidationError('Git directory exceeds limits'),
+		);
+		const ended = await save('invalid');
+		expect(ended.state).toBe('conflict');
+		expect(ended.error).toContain('Committed remotely');
+		expect(ended.error).toContain('Sync now');
+		expect((await new WorkingBranchStore(env.bucket).read(pid, nid)).active_save).toBeUndefined();
+		expect(head).toBe(ended.commit);
+	});
+	it('keeps a committed save pending when the caller is not authorized to import it', async () => {
+		writeFileSync(join(workdir, 'dashboard.py'), 'saved');
+		vi.mocked(reader.fetchWorkspace).mockRejectedValueOnce(new Error('outage'));
+		const pending = await save('authorized');
+		expect(pending.state).toBe('remote_committed');
+		await expect(
+			service.resume(pid, nid, pending.id, ACTOR, {
+				workdir,
+				getSandbox: sandbox,
+				authorize: async () => {
+					throw new ForbiddenError('revoked');
+				},
+			}),
+		).rejects.toThrow('revoked');
+		expect((await service.getSave(pid, nid, pending.id)).state).toBe('remote_committed');
+	});
+	it('lets another editor finish a save after its commit is public', async () => {
+		writeFileSync(join(workdir, 'dashboard.py'), 'saved');
+		vi.mocked(reader.fetchWorkspace).mockRejectedValueOnce(new Error('outage'));
+		const pending = await save('handoff');
+		expect(pending.state).toBe('remote_committed');
+		const other = uid('other-user');
+		expect(service.canResume(pending, other)).toBe(true);
+		expect(service.canResume({ ...pending, state: 'hub_synced' }, other)).toBe(true);
+		for (const state of [
+			'ref_dispatched',
+			'complete',
+			'conflict',
+			'expired',
+			'no_changes',
+		] as const)
+			expect(service.canResume({ ...pending, state }, other)).toBe(false);
+		expect(service.canResume({ ...pending, state: 'conflict' }, pending.author)).toBe(true);
+		const getSandbox = vi.fn(sandbox);
+		const done = await service.resume(pid, nid, pending.id, other, { workdir, getSandbox });
+		expect(done.state).toBe('complete');
+		expect(getSandbox).not.toHaveBeenCalled();
 		expect(writer.advanceBranch).toHaveBeenCalledTimes(1);
 	});
 	it('retains a conflicted capture for export and never overwrites the branch', async () => {

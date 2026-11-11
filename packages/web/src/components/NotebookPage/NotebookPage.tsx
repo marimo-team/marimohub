@@ -623,6 +623,8 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 					{notebook?.source.type === 'git' && notebook.source.working_branch ? (
 						<WorkingBranchActions
 							onSaved={model.acknowledgeWorkingBranchSave}
+							canManage={canManageLinks}
+							userId={userQuery.data?.id}
 							projectId={pid!}
 							notebookId={nid!}
 							sessionId={

@@ -37,3 +37,19 @@ export function sessionSandbox(
 	recordSessionReconnect({ ...session, reconnect_reference: undefined }, metrics, path);
 	return provider.create(session.sandbox_id, { owner: sessionOwner(session) });
 }
+
+/**
+ * Attach to the session's existing sandbox without the create fallback, which can launch a
+ * replacement when the original is gone. Undefined when the provider cannot attach.
+ */
+export function reconnectSessionSandbox(
+	provider: SandboxProvider,
+	session: Session,
+	metrics?: Metrics,
+	path = 'other',
+): SandboxInstance | undefined {
+	if (!provider.connectExisting) return undefined;
+	if (!session.sandbox_id) throw new NotFoundError('Session has no sandbox');
+	recordSessionReconnect(session, metrics, path);
+	return provider.connectExisting(session.sandbox_id, sessionConnectOptions(session));
+}

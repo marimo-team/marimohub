@@ -1,11 +1,11 @@
 import { gunzipSync, gzipSync, inflateSync } from 'node:zlib';
-import { createApp } from '@marimo-hub/api';
+import { createApp, sizedJsonResponses } from '@marimo-hub/api';
 import { createTestApi } from '@marimo-hub/api/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { compressResponse } from './compression';
 
 function compressionApp() {
-	return createApp().use('*', compressResponse());
+	return createApp().use('/api/v1/*', sizedJsonResponses).use('*', compressResponse());
 }
 
 describe('response compression', () => {

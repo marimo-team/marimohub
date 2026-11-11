@@ -26,11 +26,14 @@ export function backgroundMigrations(
 				}
 			},
 		},
-		bucketMigration({
-			id: SESSION_INDEX_MIGRATION,
-			bucket,
-			prefix: paths.sessionsPrefix,
-			migrate: (key, signal) => sessions.migrateSessionIndexEntry(key, signal),
-		}),
+		{
+			...bucketMigration({
+				id: SESSION_INDEX_MIGRATION,
+				bucket,
+				prefix: paths.sessionsPrefix,
+				migrate: (key, signal) => sessions.migrateSessionIndexEntry(key, signal),
+			}),
+			after: [],
+		},
 	];
 }

@@ -427,5 +427,7 @@ async function planProject({
 			});
 		}
 	}
+	// The summary was rebuilt from project.json; notebooks may have advanced updated_at since.
+	if (entry.access) entry.access = { ...entry.access, entry_updated_at: entry.updated_at };
 	return { entry, issues };
 }

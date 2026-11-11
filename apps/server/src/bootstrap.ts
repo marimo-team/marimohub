@@ -207,10 +207,8 @@ export async function bootstrap(
 		}
 	}
 
-	if (validatedEnv.MARIMOHUB_RUN_MAINTENANCE !== 'true') {
-		const preconnect = startWarmPoolPreconnect(deps, loops);
-		if (preconnect) stops.push(preconnect.stop);
-	}
+	const preconnect = startWarmPoolPreconnect(deps, loops);
+	if (preconnect) stops.push(preconnect.stop);
 
 	const port = Number(validatedEnv.PORT ?? 3000);
 	// Unset listens on every interface, which a container needs to publish the port.

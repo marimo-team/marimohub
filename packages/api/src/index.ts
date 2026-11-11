@@ -15,7 +15,7 @@ export type {
 } from './context';
 export { DEFAULT_CHAT_CONFIG, DEFAULT_JOBS_CONFIG } from './context';
 export { resolveJobSandboxEnv } from './sandboxEnv';
-export { createApp, assertProjectRole } from './shared';
+export { createApp, assertProjectRole, sizedJsonResponses } from './shared';
 export { scheduleProjectAlert } from './notifications';
 export {
 	authorizeProxyRequest,
@@ -27,7 +27,7 @@ export {
 } from './sandboxProxy';
 export type { ProxyDecision } from './sandboxProxy';
 export { SANDBOX_PROXY_PREFIXES } from './proxyRoutes';
-export { appendVary } from './responseUtils';
+export { appendVary, hasCacheDirective } from './responseUtils';
 
 export { sweepAppPools } from './appPools';
 

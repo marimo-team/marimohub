@@ -9,12 +9,16 @@ export function WorkingBranchActions({
 	notebookId,
 	sessionId,
 	canWrite,
+	canManage = false,
+	userId,
 	onSaved,
 }: {
 	projectId: string;
 	notebookId: string;
 	sessionId?: string;
 	canWrite: boolean;
+	canManage?: boolean;
+	userId?: string;
 	onSaved?: (sessionId: string, versionId: string) => void;
 }) {
 	const status = useWorkingBranch(projectId, notebookId, canWrite);
@@ -36,6 +40,7 @@ export function WorkingBranchActions({
 			'expired',
 		].includes(last.state) &&
 		Date.parse(last.expires_at) <= Date.now();
+	const canRecover = !!last && (canManage || last.author === userId);
 	const ended = data?.ended_reason || (pr && pr.state !== 'open') || data?.remote_commit === null;
 	const busy = save.isPending || open.isPending;
 	const error = save.error ?? open.error ?? status.error;
@@ -87,11 +92,11 @@ export function WorkingBranchActions({
 						: (last.error ?? `Save: ${last.state}`)}
 				</output>
 			)}
-			{last && last.changes.length > 0 && !recoveryExpired && (
+			{last && canRecover && last.changes.length > 0 && !recoveryExpired && (
 				<a
 					className="text-primary underline"
 					href={withBasePath(
-						`/api/v1/projects/${encodeURIComponent(projectId)}/notebooks/${encodeURIComponent(notebookId)}/saves/${last.id}/recovery`,
+						`/api/v1/projects/${encodeURIComponent(projectId)}/notebooks/${encodeURIComponent(notebookId)}/working-branch/saves/${last.id}/recovery`,
 					)}
 					download
 					title={`Captured source files; expiry ${last.expires_at}`}
@@ -99,7 +104,7 @@ export function WorkingBranchActions({
 					Download recovery
 				</a>
 			)}
-			{recoveryExpired && last.changes.length > 0 && (
+			{recoveryExpired && canRecover && last.changes.length > 0 && (
 				<span className="text-muted-foreground">Recovery capture expired.</span>
 			)}
 			{ended && (

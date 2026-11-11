@@ -152,7 +152,12 @@ describe('working branch routes', { timeout: 30000 }, () => {
 			userId: editor,
 			deps: { sourceControl: env.sourceControl },
 		});
-		const response = await api.request('POST', `${env.path}/change-requests`, {});
+		const response = await api.request(
+			'POST',
+			`${env.path}/working-branch/change-request`,
+			{},
+			{ 'Idempotency-Key': 'pr' },
+		);
 		await expectError(response, 403, 'FORBIDDEN');
 		expect(env.writer.openBranchChangeRequest).not.toHaveBeenCalled();
 	});
@@ -163,7 +168,7 @@ describe('working branch routes', { timeout: 30000 }, () => {
 		const receipt = await expectOk(
 			await env.request(
 				'POST',
-				`${env.path}/sessions/${env.sid}/saves`,
+				`${env.path}/sessions/${env.sid}/working-branch/saves`,
 				{ message: 'Update app' },
 				{ 'Idempotency-Key': 'save' },
 			),
@@ -213,16 +218,33 @@ describe('working branch routes', { timeout: 30000 }, () => {
 			(await expectOk(await env.request('GET', `${env.path}/working-branch`))).last_save.id,
 		).toBe(receipt.id);
 		expect(
-			(await expectOk(await env.request('GET', `${env.path}/saves/${receipt.id}`))).commit,
+			(await expectOk(await env.request('GET', `${env.path}/working-branch/saves/${receipt.id}`)))
+				.commit,
 		).toBe(receipt.commit);
-		const archive = await env.request('GET', `${env.path}/saves/${receipt.id}/recovery`);
+		const archive = await env.request(
+			'GET',
+			`${env.path}/working-branch/saves/${receipt.id}/recovery`,
+		);
 		expect(archive.headers.get('content-type')).toBe('application/zip');
 		expect(
 			new TextDecoder().decode(
 				unzipSync(new Uint8Array(await archive.arrayBuffer()))['files/app.py'],
 			),
 		).toBe('changed');
-		const pr = await expectOk(await env.request('POST', `${env.path}/change-requests`, {}));
+		const openPr = () =>
+			env.request(
+				'POST',
+				`${env.path}/working-branch/change-request`,
+				{},
+				{ 'Idempotency-Key': 'pr' },
+			);
+		await expectError(
+			await env.request('POST', `${env.path}/working-branch/change-request`, {}),
+			422,
+		);
+		const pr = await expectOk(await openPr(), 201);
+		expect(await expectOk(await openPr(), 201)).toEqual(pr);
+		expect(env.writer.openBranchChangeRequest).toHaveBeenCalledTimes(1);
 		expect(pr).toMatchObject({
 			number: 42,
 			base_branch: 'main',
@@ -236,6 +258,78 @@ describe('working branch routes', { timeout: 30000 }, () => {
 			expect.objectContaining({ draft: true, baseBranch: 'main' }),
 		);
 	});
+	it('limits save receipts and recovery captures to the author and managers', async () => {
+		const env = await setup();
+		env.edit('private');
+		const receipt = await expectOk(
+			await env.request(
+				'POST',
+				`${env.path}/sessions/${env.sid}/working-branch/saves`,
+				{},
+				{ 'Idempotency-Key': 'save' },
+			),
+		);
+		const as = async (id: string, role: 'editor' | 'manager') => {
+			const user = UserId.parse(id);
+			await env.deps.services.projects.addMember(env.project.id, { user_id: user }, role, ACTOR);
+			return createTestApi({
+				bucket: env.bucket,
+				userId: user,
+				deps: { sourceControl: env.sourceControl },
+			});
+		};
+		const savePath = `${env.path}/working-branch/saves/${receipt.id}`;
+		const editor = await as('editor', 'editor');
+		await expectError(await editor.request('GET', savePath), 403, 'FORBIDDEN');
+		await expectError(await editor.request('GET', `${savePath}/recovery`), 403, 'FORBIDDEN');
+		const manager = await as('manager', 'manager');
+		expect((await expectOk(await manager.request('GET', savePath))).id).toBe(receipt.id);
+		const archive = await manager.request('GET', `${savePath}/recovery`);
+		expect(archive.status).toBe(200);
+		expect(archive.headers.get('content-type')).toBe('application/zip');
+	});
+	it('lets another editor finish a remotely committed save but not an unconfirmed one', async () => {
+		const env = await setup();
+		const editor = UserId.parse('editor');
+		await env.deps.services.projects.addMember(
+			env.project.id,
+			{ user_id: editor },
+			'editor',
+			ACTOR,
+		);
+		const api = createTestApi({
+			bucket: env.bucket,
+			userId: editor,
+			deps: { sourceControl: env.sourceControl },
+		});
+		env.edit('first');
+		vi.mocked(env.writer.advanceBranch).mockImplementationOnce(async ({ commit }) => {
+			env.setHead(commit);
+			throw new Error('lost response');
+		});
+		const dispatched = await expectOk(
+			await env.request(
+				'POST',
+				`${env.path}/sessions/${env.sid}/working-branch/saves`,
+				{},
+				{ 'Idempotency-Key': 'dispatched' },
+			),
+		);
+		expect(dispatched.state).toBe('ref_dispatched');
+		await expectError(
+			await api.request('POST', `${env.path}/working-branch/saves/${dispatched.id}/retry`),
+			409,
+		);
+		vi.mocked(env.reader.fetchWorkspace).mockRejectedValueOnce(new Error('unavailable'));
+		const committed = await expectOk(
+			await env.request('POST', `${env.path}/working-branch/saves/${dispatched.id}/retry`),
+		);
+		expect(committed.state).toBe('remote_committed');
+		const done = await expectOk(
+			await api.request('POST', `${env.path}/working-branch/saves/${committed.id}/retry`),
+		);
+		expect(done.state).toBe('complete');
+	});
 	it('resumes a lost update by receipt ID without recapturing later edits', async () => {
 		const env = await setup();
 		env.edit('captured');
@@ -246,14 +340,16 @@ describe('working branch routes', { timeout: 30000 }, () => {
 		const pending = await expectOk(
 			await env.request(
 				'POST',
-				`${env.path}/sessions/${env.sid}/saves`,
+				`${env.path}/sessions/${env.sid}/working-branch/saves`,
 				{},
 				{ 'Idempotency-Key': 'save' },
 			),
 		);
 		expect(pending.state).toBe('ref_dispatched');
 		env.edit('later');
-		const done = await expectOk(await env.request('POST', `${env.path}/saves/${pending.id}/retry`));
+		const done = await expectOk(
+			await env.request('POST', `${env.path}/working-branch/saves/${pending.id}/retry`),
+		);
 		expect(done.state).toBe('complete');
 		expect(env.writer.prepareCommit).toHaveBeenCalledTimes(1);
 		expect(env.writer.advanceBranch).toHaveBeenCalledTimes(1);
@@ -310,7 +406,7 @@ describe('working branch routes', { timeout: 30000 }, () => {
 		await expectError(
 			await api.request(
 				'POST',
-				`${env.path}/sessions/${env.sid}/saves`,
+				`${env.path}/sessions/${env.sid}/working-branch/saves`,
 				{},
 				{ 'Idempotency-Key': 'save' },
 			),
@@ -325,7 +421,7 @@ describe('working branch routes', { timeout: 30000 }, () => {
 		await expectError(
 			await env.request(
 				'POST',
-				`/projects/${env.project.id}/notebooks/${other.id}/sessions/${env.sid}/saves`,
+				`/projects/${env.project.id}/notebooks/${other.id}/sessions/${env.sid}/working-branch/saves`,
 				{},
 				{ 'Idempotency-Key': 'save' },
 			),

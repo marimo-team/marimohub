@@ -241,19 +241,13 @@ For mutable tags, set `pullPolicy: Always` and change `revision` when the image 
 
 `sandboxIngress.compression.enabled` defaults to `false`. Enabling it requires
 Traefik's `Middleware` CRD and `sandboxIngress.namespace`.
-It applies to hub-published CoreWeave kernel Ingresses: `kernelIngress` configured without `resolveExposedUrl`.
-Routes from a `resolveExposedUrl` callback need separate compression configuration.
-The chart sets `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE` and
+The chart then creates the middleware. It sets `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE` and
 `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE` on the API and optional maintenance Deployments.
-The app combines the compression reference with `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES` and existing annotations, including values from external Secrets.
-It applies the combined middleware references to new hub-published kernel Ingresses.
-The chart namespace overrides any namespace in an external Secret.
-Set other middleware references in `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES` or `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS`.
-See the [CKS recipe](../../docs/deploying/cks.md#kernel-response-compression) for existing Ingresses and older application images.
+It compresses only kernel Ingresses that the hub publishes (`kernelIngress` without `resolveExposedUrl`); routes from a `resolveExposedUrl` callback need their own compression.
+See [CKS kernel response compression](../../docs/deploying/cks.md#kernel-response-compression) for annotations, existing Ingresses, and older images.
 
 Maintenance pods request 50m CPU and 256Mi memory, with limits of 250m CPU and 768Mi memory.
-The memory limit accommodates Node startup and DuckDB-Wasm preflight when the full data browser is enabled.
+The memory limit covers Node startup and the DuckDB-Wasm preflight of the full data browser.
 Measure memory and loop duration with your catalog size before reducing these limits.
 
-API pods request 250m CPU and 512Mi memory, with limits of 2 CPUs and 1Gi memory.
-See [hub capacity](../../docs/deploying/kubernetes.md#hub-resource-capacity) to adjust these limits.
+See [hub capacity](../../docs/deploying/kubernetes.md#hub-resource-capacity) to adjust the API pod limits.

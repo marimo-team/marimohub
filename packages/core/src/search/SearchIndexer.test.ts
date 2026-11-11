@@ -100,10 +100,9 @@ it('finishes 200 projects in one round and stays idle across indexer restarts', 
 	expect(get.mock.calls.filter(([key]) => key.startsWith(searchPaths.projects))).toHaveLength(0);
 });
 
-it('wakes for refresh tokens, skips unchanged catalogs, and periodically verifies sources', async () => {
+it('wakes for refresh tokens and verifies sources after the recrawl interval', async () => {
 	vi.useFakeTimers({ toFake: ['Date'] });
 	const f = await seed(1, 1);
-	Object.assign(f.source, { catalogBacked: true });
 	await f.indexer().tick(signal());
 	const page = vi.spyOn(f.source, 'page');
 	await f.indexer().tick(signal());
@@ -115,9 +114,6 @@ it('wakes for refresh tokens, skips unchanged catalogs, and periodically verifie
 	await f.indexer().tick(signal());
 	expect(page).toHaveBeenCalledOnce();
 	vi.setSystemTime(Date.now() + 5 * 60_000);
-	await f.indexer().tick(signal());
-	expect(page).toHaveBeenCalledTimes(1);
-	vi.setSystemTime(Date.now() + 24 * 3600_000);
 	await f.indexer().tick(signal());
 	expect(page).toHaveBeenCalledTimes(2);
 });
@@ -454,7 +450,6 @@ it('shouldRun respects the paused schedule and wakes for a refresh token', async
 it('never skips a partial snapshot solely because its catalog is unchanged', async () => {
 	vi.useFakeTimers({ toFake: ['Date'] });
 	const f = await seed(1, 1);
-	Object.assign(f.source, { catalogBacked: true });
 	const original = f.source.page.bind(f.source);
 	const page = vi
 		.spyOn(f.source, 'page')
@@ -468,7 +463,6 @@ it('never skips a partial snapshot solely because its catalog is unchanged', asy
 it('does not memoize a competing partial publication as a complete crawl', async () => {
 	vi.useFakeTimers({ toFake: ['Date'] });
 	const f = await seed(1, 1);
-	Object.assign(f.source, { catalogBacked: true });
 	const publish = f.index.publish.bind(f.index);
 	vi.spyOn(f.index, 'publish').mockImplementationOnce(async (scope, snapshot, revision) => {
 		const committed = await publish(scope, snapshot, revision);
@@ -486,19 +480,6 @@ it('does not memoize a competing partial publication as a complete crawl', async
 	expect((await f.snapshot())?.partial).toBe(false);
 });
 
-it('restarts an unfinished crawl when its catalog fingerprint changes', async () => {
-	const f = await seed(1, 0);
-	const page = vi.fn<SearchSource['page']>(async () => ({
-		documents: [],
-		partial: false,
-		cursor: 'old-position',
-	}));
-	const source = stubSearchSource({ page });
-	const indexer = f.indexer(source);
-	expect(await indexer.step(f.entries[0].id, source, signal(), undefined, 'old')).toBe(false);
-	expect(await indexer.step(f.entries[0].id, source, signal(), undefined, 'new')).toBe(false);
-	expect(page.mock.calls.map((call) => call[1])).toEqual([undefined, undefined]);
-});
 it.each(['html', 'session'] as const)(
 	'refreshes notebook %s changed without a catalog mutation',
 	async (artifact) => {

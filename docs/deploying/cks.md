@@ -4,8 +4,6 @@ description: Deploy marimohub on CoreWeave Kubernetes Service with Sandboxes, CA
 
 # Deploying on CoreWeave (CKS)
 
-See [asset caching](./asset-caching.md) to reuse marimo frontend assets across sessions.
-
 marimohub on CoreWeave: a CKS cluster runs the hub, CoreWeave Sandboxes run
 notebook kernels, CAIOS (CoreWeave's S3-compatible object store) holds all
 state, and your OIDC provider signs users in. When you're done:
@@ -791,6 +789,77 @@ rolling the hub.
 
 :::
 
+### Kernel response compression
+
+_Gets you: compressed HTML and JSON from hub-published kernel Ingresses._
+
+This option applies when the hub publishes kernel Ingresses: `kernelIngress`
+without a `resolveExposedUrl` callback. Routes from a `resolveExposedUrl`
+callback bypass Ingress publication. Configure their compression separately.
+
+Install Traefik's `Middleware` CRD. Then enable compression in the chart values:
+
+```yaml
+sandboxIngress:
+  namespace: sandboxes
+  compression:
+    enabled: true
+```
+
+Replace `sandboxes` with the namespace where the runner creates sandbox Services.
+The chart creates the middleware. It sets two variables on the API and optional
+maintenance Deployments:
+
+- `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE`
+- `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE`
+
+The hub appends the compression reference to the
+`traefik.ingress.kubernetes.io/router.middlewares` annotation in
+`MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS`. This includes annotations
+from an external Secret. The hub removes duplicate references and applies the
+result to new kernel Ingresses. You do not need to change a Secret or an
+annotation. Put other middleware references in
+`MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS`.
+
+The chart namespace overrides the namespace in an external Secret. Keep these
+namespaces equal when you change the runner or its API principal.
+
+The middleware uses zstd, Brotli, or gzip. It skips bodies smaller than 1 KiB
+and `text/event-stream` responses.
+
+Use matching chart and application versions. Images `0.6.4` and older do not
+read `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE`. For those
+images, add these values to your Helm configuration:
+
+```yaml
+config:
+  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: sandboxes
+  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: >-
+    {"traefik.ingress.kubernetes.io/router.middlewares":"sandboxes-marimohub-kernel-compress@kubernetescrd"}
+```
+
+Replace `sandboxes` and `marimohub` with your namespace and chart fullname.
+If `secrets.existingSecret` supplies these variables, update that Secret instead.
+Its value overrides the chart ConfigMap. Set its
+`MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS` key to the JSON string above.
+Use `stringData` or your external secret provider. Keep the existing annotations
+and middleware references in the JSON, and append the compression reference.
+
+The hub adds the reference only to new Ingresses. For an existing Ingress, append
+the reference to its comma-separated `traefik.ingress.kubernetes.io/router.middlewares`
+annotation. Keep the existing entries. This change does not stop active sessions.
+Sandbox recreation stops kernel sessions, so save active work before you recreate
+sandboxes.
+
+Before you disable compression, remove its reference from existing kernel
+Ingresses and manual annotations. Otherwise, those routes point to a deleted
+middleware.
+
+Before rollout, check compressed HTML and JSON responses through Traefik. Make
+sure that kernel events arrive without compression or buffering. See
+[Traefik compression](https://doc.traefik.io/traefik/v3.3/middlewares/http/compress/)
+for supported versions and encoding behavior.
+
 ## Production cautions
 
 - Pin the chart version; upgrade deliberately.
@@ -858,60 +927,4 @@ More in [Troubleshooting](../troubleshooting.md).
 - [Storage](../storage.md), [Compute](../compute.md), [Auth](../auth.md).
 - [Configuration](../configuration.md) — every `MARIMOHUB_*` variable.
 - [Security](../security.md) — the origin-isolation model for kernels.
-
-## Kernel response compression
-
-This option applies to hub-published CoreWeave kernel Ingresses: `kernelIngress` configured without `resolveExposedUrl`.
-A `resolveExposedUrl` callback bypasses Ingress publication, so its routes need separate compression configuration.
-
-If Traefik's `Middleware` CRD is installed, enable kernel compression in the
-namespace where the runner creates sandbox Services:
-
-```yaml
-sandboxIngress:
-  namespace: sandboxes
-  compression:
-    enabled: true
-```
-
-Replace `sandboxes` with the namespace where the runner creates sandbox Services.
-The chart creates the middleware and sets the ingress namespace and middleware reference on the API and optional maintenance Deployments.
-The app combines this reference with existing annotations and `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES`, including values from an external Secret.
-It applies the combined middleware references to new hub-published kernel Ingresses.
-Duplicate middleware references are removed. No Doppler annotation change is required.
-The chart namespace takes precedence over the namespace in an external Secret.
-Keep these namespaces equal when you change the runner or its API principal.
-
-Use matching chart and application versions. Older images, including `0.6.4`,
-do not read `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE`.
-For those images, add these values to your Helm configuration:
-
-```yaml
-config:
-  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE: sandboxes
-  MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS: >-
-    {"traefik.ingress.kubernetes.io/router.middlewares":"sandboxes-marimohub-kernel-compress@kubernetescrd"}
-```
-
-Replace `sandboxes` and `marimohub` with your namespace and chart fullname.
-If `secrets.existingSecret` supplies these variables, update that Secret instead.
-Set its `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS` key to the JSON string shown above, through `stringData` or the external secret provider.
-The Secret value takes precedence over the chart ConfigMap.
-If the JSON already contains annotations or middleware references, preserve them and append the compression reference.
-
-Compression uses zstd, Brotli, or gzip and skips bodies smaller than 1 KiB and
-`text/event-stream` responses.
-
-For existing Ingresses, append the middleware reference to their comma-separated
-`traefik.ingress.kubernetes.io/router.middlewares` annotation without removing existing entries.
-This applies compression without terminating active sessions.
-If you recreate sandboxes instead, save active work first. Recreation terminates
-their kernel sessions.
-
-Before disabling compression, remove its reference from existing kernel Ingresses and any manually configured annotations.
-Otherwise, deleting the middleware leaves those routes pointing to a missing resource.
-
-Before rollout, check compressed HTML and JSON responses through Traefik.
-Check that kernel events arrive without compression or buffering.
-See [Traefik compression](https://doc.traefik.io/traefik/v3.3/middlewares/http/compress/)
-for supported versions and encoding behavior.
+- [Asset caching](./asset-caching.md): shared marimo assets and hub compression.

@@ -1,5 +1,9 @@
 import { copyMovePrefix, moveJson } from '../content/moveObjects';
 import type { Bucket } from '../../ports/bucket';
+import { deferOrAwait } from '../../ports/backgroundWork';
+import type { BackgroundWork } from '../../ports/backgroundWork';
+import { noopMetrics } from '../../ports/metrics';
+import type { Metrics } from '../../ports/metrics';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import {
@@ -9,7 +13,7 @@ import {
 	ValidationError,
 	assertVersionMatch,
 } from '../../errors';
-import { createJobId, JobId } from '../../ids';
+import { createJobId, JobId, SYSTEM_ACTOR } from '../../ids';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
@@ -150,6 +154,8 @@ export class JobsService {
 	constructor(
 		private bucket: Bucket,
 		private catalog: CatalogService,
+		private readonly backgroundWork?: BackgroundWork,
+		private readonly metrics: Metrics = noopMetrics,
 	) {}
 
 	async listJobs(projectId: ProjectId, notebookId: NotebookId): Promise<JobDefinition[]> {
@@ -331,6 +337,15 @@ export class JobsService {
 							);
 						},
 					);
+				} else {
+					// The head kept the update, so the scheduler ignores it until the index catches up.
+					await deferOrAwait(
+						this.backgroundWork,
+						'job.index_republish',
+						async () => this.republishIndex(await this.getJob(projectId, notebookId, jobId)),
+						this.metrics,
+						{ project_id: projectId, notebook_id: notebookId, job_id: jobId },
+					);
 				}
 			}
 			throw err;
@@ -378,19 +393,41 @@ export class JobsService {
 		await this.bucket.delete(paths.jobDeletionClaim(projectId, notebookId, jobId));
 	}
 
+	/**
+	 * Publishes a head whose index entry was lost after the head write. The head and deletion
+	 * checks run inside the snapshot CAS, so a concurrent update or delete wins.
+	 */
+	async republishIndex(job: JobDefinition): Promise<void> {
+		const key = paths.project(job.project_id).notebook(job.notebook_id).job(job.id).head;
+		await this.syncIndex(
+			'job.index.republish',
+			SYSTEM_ACTOR,
+			job,
+			jobIndexEntry(job),
+			undefined,
+			async () => {
+				if (await this.isDeleting(job)) return true;
+				const head = await this.bucket.get(key);
+				return !head || (await readStoredJobDefinition(head, key)).updated_at !== job.updated_at;
+			},
+		);
+	}
+
 	private async syncIndex(
 		operation: string,
 		actor: UserId,
 		job: JobDefinition,
 		entry: SnapshotJobEntry | null,
 		maxPerNotebook?: number,
+		skip?: () => Promise<boolean>,
 	): Promise<void> {
 		await this.catalog.updateNotebookEntry(
 			operation,
 			actor,
 			job.project_id,
 			job.notebook_id,
-			(notebook) => {
+			async (notebook) => {
+				if (await skip?.()) return { jobs: notebook.jobs };
 				const current = (notebook.jobs ?? []).find((candidate) => candidate.id === job.id);
 				if (
 					entry &&

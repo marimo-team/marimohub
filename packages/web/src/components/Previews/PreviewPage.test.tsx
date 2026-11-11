@@ -38,6 +38,7 @@ function setup({
 	deleteStatus = 200,
 	startupTimeoutSeconds = 120,
 	pending = false,
+	failed = false,
 	lazy = false,
 	prepareStatus = 200,
 	canPrepare = true,
@@ -48,7 +49,7 @@ function setup({
 } = {}) {
 	let heartbeatResponse = heartbeat;
 	let preparationStatus = prepareStatus;
-	let preparation = pending ? (lazy ? 'deferred' : 'pending') : 'ready';
+	let preparation = failed ? 'failed' : pending ? (lazy ? 'deferred' : 'pending') : 'ready';
 	let userId: string | null = 'alice';
 	let version = 'first-version';
 	let appStarts = 0;
@@ -238,6 +239,24 @@ describe('PreviewPage', () => {
 			expect(calls.filter((call) => call.url === `${endpoint}/sessions`)).toHaveLength(0);
 		},
 	);
+
+	it('does not restart a failed lazy preview on each visit', async () => {
+		const user = userEvent.setup();
+		const prepares = (calls: { url: string }[]) =>
+			calls.filter((call) => call.url === `${endpoint}/prepare`);
+		const first = setup({ lazy: true, failed: true });
+		await screen.findByRole('button', { name: 'Prepare latest' });
+		await act(async () => {
+			await first.client.invalidateQueries({
+				queryKey: previewKeys.detail('project', 'notebook', 'preview'),
+			});
+		});
+		expect(prepares(first.calls)).toHaveLength(0);
+		first.unmount();
+		const second = setup({ lazy: true, failed: true });
+		await user.click(await screen.findByRole('button', { name: 'Prepare latest' }));
+		await waitFor(() => expect(prepares(second.calls)).toHaveLength(1));
+	});
 
 	it('retries a failed preparation request without starting compute', async () => {
 		const user = userEvent.setup();

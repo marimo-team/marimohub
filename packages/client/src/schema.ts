@@ -1603,7 +1603,7 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/saves': {
+	'/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/working-branch/saves': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -1616,7 +1616,7 @@ export interface paths {
 		 * Commit source changes to the working branch
 		 * @description Requires working-branch.write and access to the session. Reuse Idempotency-Key to resume the same captured changes. The returned state distinguishes confirmed commits from pending synchronization and conflicts. Does not save excluded runtime files.
 		 */
-		post: operations['notebooks.working-branch.save'];
+		post: operations['notebooks.working-branch.saves.create'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -1640,14 +1640,17 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/v1/projects/{pid}/notebooks/{nid}/saves/{save_id}': {
+	'/api/v1/projects/{pid}/notebooks/{nid}/working-branch/saves/{save_id}': {
 		parameters: {
 			query?: never;
 			header?: never;
 			path?: never;
 			cookie?: never;
 		};
-		/** Inspect a captured save operation */
+		/**
+		 * Inspect a captured save operation
+		 * @description Only the save author or a project manager can read the receipt.
+		 */
 		get: operations['notebooks.working-branch.saves.get'];
 		put?: never;
 		post?: never;
@@ -1657,7 +1660,7 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/v1/projects/{pid}/notebooks/{nid}/saves/{save_id}/recovery': {
+	'/api/v1/projects/{pid}/notebooks/{nid}/working-branch/saves/{save_id}/recovery': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -1666,7 +1669,7 @@ export interface paths {
 		};
 		/**
 		 * Download captured source changes for recovery
-		 * @description Returns a ZIP containing a manifest of modifications/deletions and captured file bytes. Requires current notebook authorization. Payloads become eligible for cleanup at expires_at, except unresolved dispatched saves retain their capture. Downloads remain available until the payload is pruned.
+		 * @description Returns a ZIP containing a manifest of modifications/deletions and captured file bytes. Only the save author or a project manager can download it. Payloads become eligible for cleanup at expires_at. Captures of unfinished dispatched saves (`ref_dispatched`, `remote_committed`, `hub_synced`) stay until the save finishes. Downloads remain available until the payload is pruned.
 		 */
 		get: operations['notebooks.working-branch.saves.recovery'];
 		put?: never;
@@ -1677,7 +1680,7 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/v1/projects/{pid}/notebooks/{nid}/saves/{save_id}/retry': {
+	'/api/v1/projects/{pid}/notebooks/{nid}/working-branch/saves/{save_id}/retry': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -1688,7 +1691,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Resume an existing save operation
-		 * @description Only the save author can resume. Reuses its immutable capture and commit; does not require the original Idempotency-Key.
+		 * @description The save author can resume any stage. Any editor can resume a save whose commit is already on GitHub (`remote_committed` or `hub_synced`). Reuses its immutable capture and commit; does not require the original Idempotency-Key.
 		 */
 		post: operations['notebooks.working-branch.saves.retry'];
 		delete?: never;
@@ -1697,7 +1700,7 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/v1/projects/{pid}/notebooks/{nid}/change-requests': {
+	'/api/v1/projects/{pid}/notebooks/{nid}/working-branch/change-request': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -1708,9 +1711,9 @@ export interface paths {
 		put?: never;
 		/**
 		 * Open the working branch pull request
-		 * @description Opens or returns the one pull request associated with this working branch. Does not capture or commit unsaved session edits.
+		 * @description Opens or returns the one pull request associated with this working branch. Does not capture or commit unsaved session edits. The Idempotency-Key header is required; retry with the same key after a lost response.
 		 */
-		post: operations['notebooks.working-branch.change-requests.open'];
+		post: operations['notebooks.working-branch.change-request.open'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -4498,6 +4501,8 @@ export interface components {
 				  }
 			)[];
 			commit?: string;
+			/** Format: date-time */
+			dispatched_at?: string;
 			version_id?: string;
 			error?: string;
 		};
@@ -4510,15 +4515,23 @@ export interface components {
 			checked_at?: string;
 			last_save?: components['schemas']['WorkingBranchSave'];
 			active_save?: string;
-			/** @enum {string} */
-			ended_reason?: 'branch_deleted' | 'pr_closed' | 'pr_merged' | 'pr_retargeted';
+			/**
+			 * @description Known values: branch_deleted, pr_closed, pr_merged, pr_retargeted. Unrecognized values normalize to unknown.
+			 * @example pr_merged
+			 * @enum {string}
+			 */
+			ended_reason?: 'branch_deleted' | 'pr_closed' | 'pr_merged' | 'pr_retargeted' | 'unknown';
 		};
 		WorkingBranchChangeRequestResponse: {
 			number: number;
 			/** Format: uri */
 			url: string;
-			/** @enum {string} */
-			state: 'open' | 'closed' | 'merged';
+			/**
+			 * @description Known values: open, closed, merged. Unrecognized values normalize to unknown.
+			 * @example open
+			 * @enum {string}
+			 */
+			state: 'open' | 'closed' | 'merged' | 'unknown';
 			head_branch: string;
 			base_branch: string;
 		};
@@ -6226,7 +6239,7 @@ export interface operations {
 			/** @description Project details */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -6446,7 +6459,7 @@ export interface operations {
 			/** @description Project updated */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -6554,7 +6567,7 @@ export interface operations {
 			/** @description Security labels updated */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -6658,7 +6671,7 @@ export interface operations {
 			/** @description Security labels removed */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -7692,7 +7705,7 @@ export interface operations {
 			/** @description Alert destination created */
 			201: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -7969,7 +7982,7 @@ export interface operations {
 			/** @description Alert destination updated */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -8085,7 +8098,7 @@ export interface operations {
 			/** @description Test delivered and destination verified */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -11831,7 +11844,7 @@ export interface operations {
 			/** @description Notebook detail */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -12052,7 +12065,7 @@ export interface operations {
 			/** @description Notebook updated */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -12264,7 +12277,7 @@ export interface operations {
 			/** @description Security labels updated */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -12369,7 +12382,7 @@ export interface operations {
 			/** @description Security labels removed */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -13062,7 +13075,7 @@ export interface operations {
 			/** @description Notebook moved */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -17426,7 +17439,7 @@ export interface operations {
 			};
 		};
 	};
-	'notebooks.working-branch.save': {
+	'notebooks.working-branch.saves.create': {
 		parameters: {
 			query?: never;
 			header: {
@@ -17985,10 +17998,13 @@ export interface operations {
 			};
 		};
 	};
-	'notebooks.working-branch.change-requests.open': {
+	'notebooks.working-branch.change-request.open': {
 		parameters: {
 			query?: never;
-			header?: never;
+			header: {
+				/** @description Stable client-generated key reused for retries of the same operation. */
+				'idempotency-key': string;
+			};
 			path: {
 				pid: string;
 				nid: string;
@@ -18007,7 +18023,7 @@ export interface operations {
 		};
 		responses: {
 			/** @description Working branch pull request */
-			200: {
+			201: {
 				headers: {
 					[name: string]: unknown;
 				};
@@ -19426,7 +19442,7 @@ export interface operations {
 			/** @description Job created */
 			201: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -19532,7 +19548,7 @@ export interface operations {
 			/** @description Job */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -19733,7 +19749,7 @@ export interface operations {
 			/** @description Job updated */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -20715,7 +20731,7 @@ export interface operations {
 			/** @description Integration detail (config redacted) */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -20921,7 +20937,7 @@ export interface operations {
 			/** @description Integration updated (config redacted) */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -23717,7 +23733,7 @@ export interface operations {
 			/** @description Integration detail (config redacted) */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};
@@ -23921,7 +23937,7 @@ export interface operations {
 			/** @description Integration updated (config redacted) */
 			200: {
 				headers: {
-					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					/** @description Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write. */
 					ETag: string;
 					[name: string]: unknown;
 				};

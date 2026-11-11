@@ -216,6 +216,50 @@ describe('GitHub working branches', () => {
 		});
 	});
 
+	it('prefers an open PR, then the newest, over older closed PRs for the branch', async () => {
+		const numbered = (number: number, state: string) =>
+			pull({ number, state, html_url: `https://github.com/owner/repo/pull/${number}` });
+		const { writer } = setup((url) =>
+			url.pathname.endsWith('/pulls')
+				? response([numbered(3, 'closed'), numbered(9, 'open'), numbered(12, 'closed')])
+				: response({ object: { sha: commit } }),
+		);
+		await expect(writer.inspectBranch({ repository: coordinate, branch })).resolves.toMatchObject({
+			changeRequest: { number: 9, state: 'open' },
+		});
+		const closed = setup((url) =>
+			url.pathname.endsWith('/pulls')
+				? response([numbered(3, 'closed'), numbered(12, 'closed')])
+				: response({ object: { sha: commit } }),
+		);
+		await expect(
+			closed.writer.inspectBranch({ repository: coordinate, branch }),
+		).resolves.toMatchObject({ changeRequest: { number: 12, state: 'closed' } });
+	});
+
+	it('inspects with a read-scoped token and writes with a write-scoped token', async () => {
+		const { writer, fetcher } = setup((url) =>
+			url.pathname === '/graphql'
+				? response({ data: { updateRefs: { clientMutationId: null } } })
+				: url.pathname === '/repos/owner/repo'
+					? response({ node_id: 'repository-node' })
+					: url.pathname.endsWith('/pulls')
+						? response([])
+						: response({ object: { sha: commit } }),
+		);
+		const permissions = () =>
+			fetcher.mock.calls
+				.filter(([url]) => String(url).endsWith('/access_tokens'))
+				.map(
+					([, init]) => (JSON.parse(String(init?.body)) as { permissions: unknown }).permissions,
+				);
+		await writer.inspectBranch({ repository: coordinate, branch });
+		expect(permissions()).toEqual([{ contents: 'read', pull_requests: 'read' }]);
+		fetcher.mockClear();
+		await expect(writer.advanceBranch(refInput)).resolves.toEqual({ commit });
+		expect(permissions()).toEqual([{ contents: 'write', pull_requests: 'write' }]);
+	});
+
 	it('recognizes an uppercase requested commit without an ancestry lookup', async () => {
 		const { writer, requests } = setup((url) =>
 			url.pathname.endsWith('/pulls') ? response([]) : response({ object: { sha: base } }),
@@ -349,7 +393,11 @@ describe('GitHub working branches', () => {
 			const { writer, requests } = setup((url) =>
 				url.pathname.endsWith('/pulls')
 					? response([
-							pull({ number: 18, html_url: 'https://github.com/owner/repo/pull/18' }),
+							pull({
+								number: 16,
+								state: 'closed',
+								html_url: 'https://github.com/owner/repo/pull/16',
+							}),
 							pull(overrides),
 						])
 					: response({ object: { sha: commit } }),

@@ -8,6 +8,8 @@ import type { ProjectId } from '@marimo-hub/core/ids';
 import type { GitProvider, GitProviderHosts } from '@marimo-hub/core/git-repo';
 import { ConfigError } from './errors';
 
+const WORKING_BRANCH_ENABLED_ENV = 'MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED';
+
 export type AuthorizeRepository = (repository: string, projectId?: ProjectId) => void;
 type RepositoryArgument = string | { repository: string };
 
@@ -62,8 +64,20 @@ export class ConfiguredSourceControlRegistry implements SourceControlRegistry {
 					this.readers.get(publisher.provider)?.reader.fetchGitDirectory,
 			)
 			.map(({ publisher }) => publisher.provider);
-		this.workingBranchesEnabled =
-			(options.workingBranchesEnabled ?? false) && this.workingBranchProviderIds.length > 0;
+		this.workingBranchesEnabled = options.workingBranchesEnabled ?? false;
+		if (!this.workingBranchesEnabled) return;
+		if (this.workingBranchProviderIds.length === 0)
+			throw new ConfigError(
+				`${WORKING_BRANCH_ENABLED_ENV} requires a provider that supports working branches. Configure the GitHub App (MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID and MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY) or unset it.`,
+				{ variable: WORKING_BRANCH_ENABLED_ENV },
+			);
+		for (const provider of this.workingBranchProviderIds) {
+			if (this.publishers.get(provider)?.authorize) continue;
+			const policy = `MARIMOHUB_SOURCE_CONTROL_${provider.toUpperCase().replaceAll('-', '_')}_ALLOWED_REPOSITORIES`;
+			console.warn(
+				`${WORKING_BRANCH_ENABLED_ENV} is on without ${policy}; every project editor can create branches, commit, and open PRs through the server identity in every ${provider} repository it can write (for GitHub, every repository the App is installed on). Set ${policy} to restrict this.`,
+			);
+		}
 	}
 
 	assertRepositoryAllowed(provider: string, repository: string, projectId: ProjectId): void {

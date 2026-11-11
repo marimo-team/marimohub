@@ -1,6 +1,7 @@
 import { BoundedLruMap, weakMemo } from '../../cache';
 import { cachedRead } from '../../async';
 import { sleep } from '../../duration';
+import { jitteredBackoff } from '../../backoff';
 import { NotebookId, ProjectId } from '../../ids';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
@@ -283,7 +284,7 @@ export class AppPoolStore {
 			},
 			{
 				retries: 12,
-				backoffMs: (attempt) => Math.floor(Math.random() * Math.min(1000, 50 * 2 ** attempt)),
+				backoffMs: (attempt) => jitteredBackoff(attempt, { baseMs: 50, capMs: 1000, jitter: 1 }),
 				onConflict: () => this.metrics.increment('app_pool.cas.conflicts'),
 				onExhausted: () => this.metrics.increment('app_pool.cas.exhausted'),
 			},

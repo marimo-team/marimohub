@@ -129,8 +129,14 @@ async function reconcile(
 async function record(id: string) {
 	return api.deps.services.previews.get(pid, nid, PreviewId.parse(id));
 }
+// Clears the retry delay; the failure cap still applies.
 async function prepare(id: string) {
-	return api.deps.services.previews.prepare(await record(id), api.deps.sourceControl, true);
+	const current = await record(id);
+	await api.bucket.put(
+		paths.preview(pid, nid, current.id),
+		JSON.stringify({ ...current, next_attempt_at: 0 }),
+	);
+	return api.deps.services.previews.prepare(current, api.deps.sourceControl);
 }
 
 async function groups() {

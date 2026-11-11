@@ -3,7 +3,7 @@ import { weakMemo } from '@marimo-hub/core/cache';
 import { SessionLinkSchema } from '@marimo-hub/core/session-links';
 import { SEARCH_KINDS } from '@marimo-hub/core/search';
 import { OpenAPIHono, z } from '@hono/zod-openapi';
-import type { Context, TypedResponse } from 'hono';
+import type { Context, MiddlewareHandler, TypedResponse } from 'hono';
 import { all } from 'better-all';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
@@ -846,23 +846,24 @@ export function createApp() {
 			}
 		},
 	});
-	app.use('/api/v1/*', async (c, next) => {
-		// Hono omits JSON lengths. Both compression and ETag limits need them.
-		c.json = ((object, arg, headers) => {
-			const body = new TextEncoder().encode(JSON.stringify(object));
-			const contentLength = String(body.byteLength);
-			// Set both: Hono retains context headers, but explicit response headers can override them.
-			c.header('Content-Length', contentLength);
-			return c.newResponse(body, arg, {
-				'Content-Type': 'application/json',
-				...headers,
-				'Content-Length': contentLength,
-			});
-		}) as typeof c.json;
-		await next();
-	});
 	return app;
 }
+
+/** Hono omits JSON lengths. Both compression and ETag limits need them. */
+export const sizedJsonResponses: MiddlewareHandler<HonoEnv> = async (c, next) => {
+	c.json = ((object, arg, headers) => {
+		const body = new TextEncoder().encode(JSON.stringify(object));
+		const contentLength = String(body.byteLength);
+		// Set both: Hono retains context headers, but explicit response headers can override them.
+		c.header('Content-Length', contentLength);
+		return c.newResponse(body, arg, {
+			'Content-Type': 'application/json',
+			...headers,
+			'Content-Length': contentLength,
+		});
+	}) as typeof c.json;
+	await next();
+};
 
 // --- Helpers ---
 
@@ -942,7 +943,8 @@ export function etagFor(updatedAt: string): string {
 /** OpenAPI response schema documenting the `ETag` header carrying the resource version. */
 export const EtagResponseHeader = z.object({
 	ETag: z.string().openapi({
-		description: 'Strong validator (the resource version). Echo as `If-Match` to guard a write.',
+		description:
+			'Validator for the resource version. It may be weak (`W/`) when the response is compressed. Send it back unchanged as `If-Match` to guard a write.',
 		example: '"2025-03-05T14:00:00Z"',
 	}),
 });

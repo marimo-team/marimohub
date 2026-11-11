@@ -274,7 +274,7 @@ it.each(['list', 'read', 'corrupt', 'wrong-source', 'write'] as const)(
 		await bucket.delete(indexKey);
 		const first = [...records].sort((a, b) => a.session_id.localeCompare(b.session_id))[0];
 		const firstKey = paths.session(first.project_id, first.session_id);
-		if (failure === 'corrupt') await bucket.put(firstKey, '{');
+		if (failure === 'corrupt') await bucket.put(firstKey, JSON.stringify(first).slice(0, -8));
 		if (failure === 'wrong-source')
 			await bucket.put(firstKey, JSON.stringify({ ...first, project_id: createProjectId() }));
 		const list = bucket.list.bind(bucket);

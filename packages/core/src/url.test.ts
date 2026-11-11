@@ -3,11 +3,24 @@ import {
 	baseHrefFromUrl,
 	basePathFromUrl,
 	joinUrlPath,
+	MARIMO_VERSION_PATTERN,
 	normalizeBasePath,
 	normalizeBaseUrl,
 	parseAssetBaseUrl,
 	parseHttpUrl,
 } from './url';
+
+describe('MARIMO_VERSION_PATTERN', () => {
+	const exact = new RegExp(`^${MARIMO_VERSION_PATTERN}$`);
+	it.each(['0.25.2', '0.25.2rc1', '0.25.2.dev1', '0.25.2.post1', '0.25.2-beta.1'])(
+		'accepts release version %s',
+		(version) => expect(exact.test(version)).toBe(true),
+	);
+	it.each(['0.25', '0.25.2-', '0.25.2..', '0.25.2.', '0.25.2.-1', 'v0.25.2', '0.25.2/x'])(
+		'rejects malformed version %s',
+		(version) => expect(exact.test(version)).toBe(false),
+	);
+});
 
 describe('parseAssetBaseUrl', () => {
 	it.each([

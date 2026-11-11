@@ -64,6 +64,7 @@ import {
 	resolvePublicBaseUrl,
 	initializeForSubject,
 	rejectsMcpOnlyCredential,
+	sizedJsonResponses,
 } from './shared';
 import type { ErrorCode } from './shared';
 
@@ -154,6 +155,8 @@ function requestResourceContext(path: string) {
  */
 export function createApi(rawDeps: ApiDeps) {
 	const app = createApp();
+	// Only the root sees full paths; a sub-app's own `/api/v1/*` pattern would gain its mount prefix.
+	app.use(`${API_PREFIX}/*`, sizedJsonResponses);
 	app.notFound((c) => {
 		if (c.req.path === AI_PROXY_PREFIX || c.req.path.startsWith(`${AI_PROXY_PREFIX}/`)) {
 			return c.json({ error: { type: 'invalid_request_error', message: 'Route not found' } }, 404);
@@ -592,9 +595,10 @@ export function createApi(rawDeps: ApiDeps) {
 	app.use(`${API_PREFIX}/*`, async (c, next) => {
 		await next();
 		// Routes that set their own Cache-Control (e.g. the no-store HTML snapshot)
-		// keep it; everything else revalidates per poll.
+		// keep it; everything else revalidates per poll. `private` keeps per-user bodies
+		// out of shared caches, which could otherwise revalidate them with another user's cookie.
 		if (c.req.method === 'GET' && c.res.status === 200 && !c.res.headers.has('Cache-Control')) {
-			c.res.headers.set('Cache-Control', 'no-cache');
+			c.res.headers.set('Cache-Control', 'private, no-cache');
 		}
 	});
 

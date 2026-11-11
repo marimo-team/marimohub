@@ -3,3 +3,4 @@ export function stageMarimoAssets(options: {
 	version: string;
 	staticRoot: string;
 }): string;
+export const MARIMO_RELEASE_VERSION: RegExp;

@@ -1,4 +1,5 @@
 import { readRetentionCursor, writeRetentionCursor } from '../catalog/retentionCursor';
+import type { RetentionCursor } from '../catalog/retentionCursor';
 import { encodeTime } from 'ulidx';
 import { copyMovePrefix, moveJson } from '../content/moveObjects';
 import type { Bucket } from '../../ports/bucket';
@@ -729,17 +730,18 @@ export class JobRunService {
 		return { runs, sandboxIds };
 	}
 
-	readPruneCursor(): Promise<{ after: string; etag?: string }> {
+	readPruneCursor(): Promise<RetentionCursor> {
 		return readRetentionCursor(this.bucket, '_system/job-prune-cursor.json');
 	}
 
-	writePruneCursor(after: string, etag?: string): Promise<void> {
-		return writeRetentionCursor(this.bucket, '_system/job-prune-cursor.json', after, etag);
+	writePruneCursor(after: string, previous: RetentionCursor): Promise<void> {
+		return writeRetentionCursor(this.bucket, '_system/job-prune-cursor.json', after, previous);
 	}
 
 	/**
 	 * Keep runs and occurrence claims through both retention windows so catch-up
-	 * cannot recreate a completed run.
+	 * cannot recreate a completed run. A finite `maxRecords` sets the page size;
+	 * pages continue until `deadline`, so by default one page is listed.
 	 */
 	async pruneJob(
 		job: Pick<JobDefinition, 'project_id' | 'notebook_id' | 'id'>,
@@ -747,6 +749,7 @@ export class JobRunService {
 		now: number = Date.now(),
 		occurrenceRetentionMs: number = retentionMs,
 		maxRecords = Infinity,
+		deadline = 0,
 	): Promise<number> {
 		if (maxRecords <= 0) return 0;
 		const cutoff = now - Math.max(retentionMs, occurrenceRetentionMs);
@@ -757,7 +760,7 @@ export class JobRunService {
 			`run_${encodeTime(Math.max(0, Math.ceil(cutoff)), 10)}${'0'.repeat(16)}`,
 		);
 		if (Number.isFinite(maxRecords))
-			return this.pruneJobBatch(jobPaths, cutoff, cutoffRunId, maxRecords);
+			return this.pruneJobBatch(jobPaths, cutoff, cutoffRunId, maxRecords, deadline);
 		let pruned = 0;
 		for await (const run of this.iterateRuns(
 			job.project_id,
@@ -788,65 +791,68 @@ export class JobRunService {
 		cutoff: number,
 		cutoffRunId: RunId,
 		limit: number,
+		deadline: number,
 	): Promise<number> {
 		const runsKey = `${jobPaths.base}/prune-runs.json`;
 		const cursor = await readRetentionCursor(this.bucket, runsKey);
 		const cutoffKey = jobPaths.runIndex(cutoffRunId);
-		const page = await this.bucket.list({
-			prefix: jobPaths.runIndexPrefix,
-			limit,
-			startAfter:
-				cursor.after.startsWith(jobPaths.runIndexPrefix) && cursor.after > cutoffKey
-					? cursor.after
-					: cutoffKey,
-		});
+		let startAfter =
+			cursor.after.startsWith(jobPaths.runIndexPrefix) && cursor.after > cutoffKey
+				? cursor.after
+				: cutoffKey;
+		let after = '';
 		let pruned = 0;
-		for (const item of page.objects) {
-			const id = this.runIdFromIndex(jobPaths.runIndexPrefix, item.key);
-			if (!id) continue;
-			const key = jobPaths.run(id).record;
-			try {
-				const object = await this.bucket.get(key);
-				if (!object) continue;
-				const run = await readStoredJobRun(object, key);
-				if (await this.pruneRun(run, cutoff, jobPaths, item.key)) pruned++;
-			} catch (error) {
-				if (error instanceof Error && error.name === 'AbortError') throw error;
-				logOperationalError(
-					error instanceof StoredObjectError ? 'stored_object_skipped' : 'job_run_prune_failed',
-					{ operation: 'job.run.prune', object: key },
-					error,
-				);
+		for (;;) {
+			const page = await this.bucket.list({ prefix: jobPaths.runIndexPrefix, limit, startAfter });
+			for (const item of page.objects) {
+				const id = this.runIdFromIndex(jobPaths.runIndexPrefix, item.key);
+				if (!id) continue;
+				const key = jobPaths.run(id).record;
+				try {
+					const object = await this.bucket.get(key);
+					if (!object) continue;
+					const run = await readStoredJobRun(object, key);
+					if (await this.pruneRun(run, cutoff, jobPaths, item.key)) pruned++;
+				} catch (error) {
+					if (error instanceof Error && error.name === 'AbortError') throw error;
+					logOperationalError(
+						error instanceof StoredObjectError ? 'stored_object_skipped' : 'job_run_prune_failed',
+						{ operation: 'job.run.prune', object: key },
+						error,
+					);
+				}
 			}
+			after = page.truncated ? (page.objects.at(-1)?.key ?? '') : '';
+			if (!after || Date.now() >= deadline) break;
+			startAfter = after;
 		}
-		await writeRetentionCursor(
-			this.bucket,
-			runsKey,
-			page.truncated ? (page.objects.at(-1)?.key ?? '') : '',
-			cursor.etag,
-		);
+		await writeRetentionCursor(this.bucket, runsKey, after, cursor);
 		const occurrencesKey = `${jobPaths.base}/prune-occurrences.json`;
 		const occurrenceCursor = await readRetentionCursor(this.bucket, occurrencesKey);
-		const occurrences = await this.bucket.list({
-			prefix: jobPaths.occurrencesPrefix,
-			limit,
-			startAfter: occurrenceCursor.after.startsWith(jobPaths.occurrencesPrefix)
-				? occurrenceCursor.after
-				: undefined,
-		});
-		const expired = occurrences.objects.filter(({ key }) => {
-			const instant = occurrenceKeyToInstant(
-				key.slice(jobPaths.occurrencesPrefix.length).replace(/\.json$/, ''),
-			);
-			return instant !== null && instant < cutoff;
-		});
-		if (expired.length > 0) await this.bucket.delete(expired.map(({ key }) => key));
-		await writeRetentionCursor(
-			this.bucket,
-			occurrencesKey,
-			occurrences.truncated ? (occurrences.objects.at(-1)?.key ?? '') : '',
-			occurrenceCursor.etag,
-		);
+		let occurrenceAfter = occurrenceCursor.after.startsWith(jobPaths.occurrencesPrefix)
+			? occurrenceCursor.after
+			: '';
+		for (;;) {
+			const occurrences = await this.bucket.list({
+				prefix: jobPaths.occurrencesPrefix,
+				limit,
+				startAfter: occurrenceAfter || undefined,
+			});
+			let live = false;
+			const expired = occurrences.objects.filter(({ key }) => {
+				const instant = occurrenceKeyToInstant(
+					key.slice(jobPaths.occurrencesPrefix.length).replace(/\.json$/, ''),
+				);
+				if (instant !== null && instant >= cutoff) live = true;
+				return instant !== null && instant < cutoff;
+			});
+			if (expired.length > 0) await this.bucket.delete(expired.map(({ key }) => key));
+			// Keys sort chronologically, so everything after a live key is live too.
+			occurrenceAfter =
+				occurrences.truncated && !live ? (occurrences.objects.at(-1)?.key ?? '') : '';
+			if (!occurrenceAfter || Date.now() >= deadline) break;
+		}
+		await writeRetentionCursor(this.bucket, occurrencesKey, occurrenceAfter, occurrenceCursor);
 		if (pruned > 0) this.metrics.increment('jobs.runs.pruned', pruned);
 		return pruned;
 	}

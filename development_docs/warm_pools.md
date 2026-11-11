@@ -19,13 +19,17 @@ Notebook files, credentials, and kernels load after assignment.
    A cap or editor-admission rejection can return an untouched claim before workspace writes start.
    The session CAS must relinquish ownership before the pool makes that sandbox available again.
    A concurrent stop or expired claim prevents this return.
+   Maintenance leaves a relinquished, unassigned claim to its releaser until the claim expires. Then it destroys the sandbox.
 
 If the probe fails or the claim expires, the route replaces the starting session's sandbox ID and repeats URL preparation.
 The old member remains owned until cleanup succeeds.
 
 Maintenance runs every five seconds under its own lease. Capacity gauges update each sweep; each service instance logs capacity at most once per minute.
 A healthy idle sweep reads the pool once and performs no writes. Health checks run every five minutes.
-Transport failures and timeouts retain the member for a later check. A missing sandbox or failed command retires it.
+Health-check retirement follows the rules in [Readiness budgets](../docs/warm-pools.md#readiness-budgets).
+Adapters must throw `NotFoundError` when a sandbox is missing, not running, or not theirs.
+Other reconnect and command transport errors, including timeouts, count as transient, and [`health_failures`](./bucket_spec.md#warm-pool-records) counts them.
+The retry delay is in memory, so the stored count bounds retries across maintenance processes.
 Each assignment still requires a fresh probe.
 Healthy idle members rotate after at most six hours, sooner for limited provider lifetimes. Health checks do not extend this limit.
 The idle policy preserves existing pool keys. Maintenance extends legacy 30-minute idle deadlines from the original creation time, subject to provider limits.
@@ -52,19 +56,20 @@ They are server-owned mappings, not authorization tokens.
 
 Claims and health checks pass the stored reference to `connectExisting(id, { reconnectReference })`.
 That call resolves exactly the referenced sandbox or fails. It never discovers or creates a sandbox.
-Failed lookups or probes retire the member. Maintenance replenishes the pool.
+A failed claim retires the member. Health checks follow the [retirement rules](../docs/warm-pools.md#readiness-budgets). Maintenance replenishes the pool.
 Members without a reference use the adapter's discovery path.
 
 Upgrades and rollbacks:
 
 - The reference does not change the configuration fingerprint, so adding it needs no pool reset.
 - During a rolling upgrade, older writers can drop the field. Claims then use discovery until a health check restores it.
-- If the adapter rejects a reference kind, each member with that kind retires once. The result is one wave of cold starts within a health-check interval, with no leaked sandboxes.
+- A reference that resolves to a missing, mismatched, or terminated sandbox throws `NotFoundError`, and the member retires on that check.
+- An unsupported or malformed reference kind is a configuration error, not proof that the sandbox is gone. Each affected member follows the transient-failure rule and retires after two consecutive failed health checks. The result is one wave of cold starts within two health-check intervals, with no leaked sandboxes.
 - A new reference kind must keep accepting older kinds, so that upgrades and rollbacks do not churn the pool.
 
 After a successful probe, the service drains adapter diagnostics to exclude them from provisioning telemetry.
 `warm_pool.claim_ms` measures reservation time.
-The CoreWeave reference format is in its [adapter README](../packages/compute-coreweave/README.md#warm-pool-references).
+The CoreWeave reference format is in its [adapter README](../packages/compute-coreweave/README.md#reconnect-references).
 
 ## Code
 

@@ -10,6 +10,7 @@ import {
 	acquireSingletonClaim,
 	mutateObject,
 	mutateObjectWithOutcome,
+	putIfMatch,
 	releaseSingletonClaim,
 	withCasRetry,
 } from './cas';
@@ -605,5 +606,24 @@ describe('known mutation snapshots', () => {
 		).toEqual({ value: 1, written: false });
 		expect(get).not.toHaveBeenCalled();
 		expect(put).not.toHaveBeenCalled();
+	});
+});
+
+describe('putIfMatch', () => {
+	it('creates once, then writes only against the current ETag', async () => {
+		const bucket = new MemoryBucket();
+		const created = await putIfMatch(bucket, 'k', 'a');
+		expect(created).toBeDefined();
+		expect(await putIfMatch(bucket, 'k', 'b')).toBeUndefined();
+		const updated = await putIfMatch(bucket, 'k', 'c', created);
+		expect(updated).toBeDefined();
+		expect(await putIfMatch(bucket, 'k', 'd', created)).toBeUndefined();
+		expect(await (await bucket.get('k'))!.text()).toBe('c');
+	});
+
+	it('propagates storage failures', async () => {
+		const bucket = new MemoryBucket();
+		vi.spyOn(bucket, 'put').mockRejectedValue(new Error('unavailable'));
+		await expect(putIfMatch(bucket, 'k', 'a')).rejects.toThrow('unavailable');
 	});
 });

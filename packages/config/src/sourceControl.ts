@@ -200,7 +200,7 @@ export function makeSourceControl(env: Env): SourceControlConfig {
 	const registrations = Object.values(SOURCE_CONTROL_FACTORIES).flatMap(
 		(factory) => factory?.(env) ?? [],
 	);
-	return registrations.length === 0
+	return registrations.length === 0 && !workingBranchesEnabled
 		? {}
 		: {
 				sourceControl: new ConfiguredSourceControlRegistry(registrations, {

@@ -273,9 +273,10 @@ export function makeWorld(opts?: {
 	};
 
 	// Reconnect returns a handle backed by the SAME recorded FakeSandbox state.
-	function reconnect(entry: { fake: FakeSandbox }, cwId: string) {
+	function reconnect(entry: { fake: FakeSandbox; tags: string[] }, cwId: string) {
 		return {
 			sandboxId: cwId,
+			tags: entry.tags,
 			get status() {
 				return entry.fake.status;
 			},

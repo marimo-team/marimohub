@@ -8,6 +8,7 @@ import { assertNotMoving } from '../services/content/notebookMoveRecord';
 import type { AuthorizationService } from '../services/authorization/AuthorizationService';
 import type { AuthenticatedPrincipal } from '../ports/auth';
 import type { Project } from '../schema';
+import type { ResourceSecurityLabels } from '../securityLabels';
 import { NotebookMetaSchema, SourceSchema } from '../schema';
 import { paths } from '../paths';
 import { remoteWorkspaceEntry, workspaceSourcePolicy } from '../integrations/remoteWorkspace';
@@ -207,7 +208,8 @@ export class NotebookSource implements SearchSource {
 	) {
 		signal.throwIfAborted();
 		// SearchService checks the selected page before exposing any results.
-		if (phase === 'rank') return { documents, partial: false };
+		if (phase === 'rank')
+			return { documents: await this.rankable(project, documents, principal), partial: false };
 		const ids = [
 			...new Set(
 				documents.flatMap((d) => (d.resource.type === 'notebook' ? [d.resource.notebook_id] : [])),
@@ -239,6 +241,46 @@ export class NotebookSource implements SearchSource {
 				allowed.get(d.resource.notebook_id) === parseNotebookFingerprint(d.fingerprint).content,
 		);
 		return { documents: validated, partial: validated.length !== documents.length };
+	}
+	/**
+	 * Drops moving notebooks and those whose snapshot label overrides the principal cannot satisfy,
+	 * so hidden hits do not take ranked slots. Indeterminate projections stay for the authoritative
+	 * return check.
+	 */
+	private async rankable(
+		project: Project,
+		documents: SearchDocument[],
+		principal: AuthenticatedPrincipal,
+	) {
+		const entries = (await this.catalog.getCurrentSnapshotEntry()).byProjectId.get(
+			project.id,
+		)?.notebooks;
+		const hidden = new Set<string>();
+		const known = new Map<string, ResourceSecurityLabels>();
+		for (const entry of entries ?? [])
+			if (entry.moving) hidden.add(entry.id);
+			else if (entry.security_labels && !entry.security_labels_pending)
+				known.set(entry.id, entry.security_labels);
+		const ids = [
+			...new Set(
+				documents.flatMap((d) =>
+					d.resource.type === 'notebook' && known.has(d.resource.notebook_id)
+						? [d.resource.notebook_id]
+						: [],
+				),
+			),
+		];
+		if (ids.length > 0) {
+			const satisfied = await this.authz.projectLabelConstraints(
+				principal,
+				ids.map((id) => known.get(id)!),
+			);
+			for (const [i, id] of ids.entries()) if (!satisfied[i]) hidden.add(id);
+		}
+		if (hidden.size === 0) return documents;
+		return documents.filter(
+			(d) => d.resource.type !== 'notebook' || !hidden.has(d.resource.notebook_id),
+		);
 	}
 }
 

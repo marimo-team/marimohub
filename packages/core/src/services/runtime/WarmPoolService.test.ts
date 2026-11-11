@@ -650,6 +650,33 @@ describe('warm sandbox pools', () => {
 		},
 	);
 
+	it.each([true, false])(
+		'never forgets a relinquished unassigned claim without destroying it (released: %s)',
+		async (released) => {
+			const w = setup();
+			await w.service.sweep();
+			const request = w.request();
+			const claim = (await claimWarm(w.service, request))!;
+			const id = claim.member.sandbox_id;
+			await w.sessions.createSession({ ...request.destination, user_id: ACTOR, sandbox_id: id });
+			const { project_id, session_id } = request.destination;
+			expect(await w.sessions.relinquishStartingSandbox(project_id, session_id, id)).toBe(true);
+			await w.replica().sweep();
+			expect(await w.service.store.getMember(id)).toMatchObject({ state: 'claimed' });
+			expect(w.destroyed).toEqual([]);
+			if (released) {
+				expect(await w.service.releaseUnused(claim)).toBe(true);
+				expect(await w.service.store.getMember(id)).toMatchObject({ state: 'ready' });
+				return;
+			}
+			// The releaser died between the two writes.
+			w.advance(61_000);
+			await w.replica().sweep();
+			expect(w.destroyed).toEqual([id]);
+			expect(await w.service.store.getMember(id)).toBeUndefined();
+		},
+	);
+
 	it('retains assigned ownership when the destination read fails', async () => {
 		const w = setup();
 		await w.service.sweep();
@@ -1369,14 +1396,55 @@ describe('warm pool failure boundaries', () => {
 				w.advance(1);
 				await w.service.sweep();
 				expect(ready).toHaveBeenCalledTimes(2);
-				expect(await w.service.store.getMember(id)).toMatchObject({
-					state: 'ready',
-					checked_at: w.now(),
-				});
+				const member = await w.service.store.getMember(id);
+				expect(member).toMatchObject({ state: 'ready', checked_at: w.now() });
+				expect(member?.health_failures).toBeUndefined();
 				expect(w.destroyed).toEqual([]);
 			}
 		},
 	);
+
+	it('retires and replaces a member whose provider reports it missing', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const id = w.created[0];
+		w.live.get(id)!.ready = async () => {
+			throw new NotFoundError('pod is gone');
+		};
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		w.advance(300_001);
+		await w.service.sweep();
+		expect(w.destroyed).toEqual([id]);
+		const members = await w.members();
+		expect(members).toHaveLength(1);
+		expect(members[0]).toMatchObject({ state: 'ready' });
+		expect(members[0].sandbox_id).not.toBe(id);
+	});
+
+	it('retires a member after consecutive transient health failures', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const id = w.created[0];
+		w.live.get(id)!.ready = async () => {
+			throw new Error('provider temporarily unavailable');
+		};
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		w.advance(300_001);
+		await w.service.sweep();
+		expect(await w.service.store.getMember(id)).toMatchObject({
+			state: 'ready',
+			health_failures: 1,
+		});
+		// Another replica's sweep sees the persisted count, not this replica's retry delay.
+		w.advance(300_000);
+		await w.replica().sweep();
+		expect(w.destroyed).toEqual([id]);
+		expect(await w.service.store.getMember(id)).toBeUndefined();
+		expect((await w.members()).map((member) => member.state)).toEqual(['ready']);
+		expect(await w.service.reserve(w.request())).not.toMatchObject({
+			member: { sandbox_id: id },
+		});
+	});
 
 	it('lets initial creation exceed the reconnect deadline', async () => {
 		vi.useFakeTimers();

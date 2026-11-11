@@ -2,10 +2,14 @@ import { createHash } from 'node:crypto';
 import { describe, it, expect, vi } from 'vitest';
 import { conditionalJsonEtag } from './etag';
 import { createTestApi } from './testing';
-import { createApp, fail } from './shared';
+import { createApp, fail, sizedJsonResponses } from './shared';
+
+function apiApp() {
+	return createApp().use('/api/v1/*', sizedJsonResponses);
+}
 
 function etagApp() {
-	return createApp().use('*', conditionalJsonEtag());
+	return apiApp().use('*', conditionalJsonEtag());
 }
 
 async function expectSizedJson(response: Response, expected: unknown): Promise<void> {
@@ -21,7 +25,7 @@ describe('conditional GET (ETag)', () => {
 		expect(res.status).toBe(200);
 		const etag = res.headers.get('etag');
 		expect(etag).toBeTruthy();
-		expect(res.headers.get('cache-control')).toBe('no-cache');
+		expect(res.headers.get('cache-control')).toBe('private, no-cache');
 
 		const revalidated = await app.request('/api/v1/projects', {
 			headers: { 'if-none-match': etag! },
@@ -29,7 +33,7 @@ describe('conditional GET (ETag)', () => {
 		expect(revalidated.status).toBe(304);
 		expect(await revalidated.text()).toBe('');
 		expect(revalidated.headers.get('etag')).toBe(etag);
-		expect(revalidated.headers.get('cache-control')).toBe('no-cache');
+		expect(revalidated.headers.get('cache-control')).toBe('private, no-cache');
 	});
 
 	it('returns 200 with a fresh body when the ETag is stale', async () => {
@@ -347,14 +351,14 @@ describe('serialized API JSON', () => {
 	);
 
 	it.each([null, '', false, 0])('preserves a scalar JSON body: %j', async (payload) => {
-		const app = createApp();
+		const app = apiApp();
 		app.get('/api/v1/example', (c) => c.json(payload));
 		const response = await app.request('/api/v1/example');
 		await expectSizedJson(response, payload);
 	});
 
 	it('replaces stale length headers while retaining cookies and custom JSON content types', async () => {
-		const app = createApp();
+		const app = apiApp();
 		app.get('/api/v1/example', (c) => {
 			c.header('Content-Length', '999');
 			c.header('Set-Cookie', 'first=1; HttpOnly', { append: true });
@@ -384,7 +388,7 @@ describe('serialized API JSON', () => {
 
 	it('serializes once and preserves status, headers, and UTF-8 bytes', async () => {
 		const toJSON = vi.fn(() => ({ message: 'café 😀' }));
-		const app = createApp();
+		const app = apiApp();
 		app.post('/api/v1/example', (c) => {
 			c.header('X-Prepared', 'prepared');
 			return c.json({ toJSON }, 201, { 'X-Route': 'route' });
@@ -399,7 +403,7 @@ describe('serialized API JSON', () => {
 	});
 
 	it('preserves the ResponseInit overload', async () => {
-		const app = createApp();
+		const app = apiApp();
 		app.get('/api/v1/example', (c) =>
 			c.json(
 				{ ok: true },

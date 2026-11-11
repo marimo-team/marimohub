@@ -274,8 +274,10 @@ export class SyncedNotebookService {
 		input: SyncNotebookInput,
 		actor: UserId = SYSTEM_ACTOR,
 	): Promise<{ meta: NotebookMeta; versionId: VersionId | null }> {
-		const { source } = await this.hooks.getNotebook(projectId, notebookId);
-		if (source.type === 'git' && source.working_branch && !input.working_branch_fence?.check) {
+		if (input.working_branch_fence?.check)
+			return this.syncUnderFence(projectId, notebookId, input, actor);
+		const detail = await this.hooks.getNotebook(projectId, notebookId);
+		if (detail.source.type === 'git' && detail.source.working_branch) {
 			return new WorkingBranchStore(this.bucket).withLease(projectId, notebookId, (check) =>
 				this.syncUnderFence(
 					projectId,
@@ -285,7 +287,7 @@ export class SyncedNotebookService {
 				),
 			);
 		}
-		return this.syncUnderFence(projectId, notebookId, input, actor);
+		return this.syncUnderFence(projectId, notebookId, input, actor, detail);
 	}
 
 	private async syncUnderFence(
@@ -293,9 +295,11 @@ export class SyncedNotebookService {
 		notebookId: NotebookId,
 		input: SyncNotebookInput,
 		actor: UserId,
+		detail?: { meta: NotebookMeta; source: Source },
 	): Promise<{ meta: NotebookMeta; versionId: VersionId | null }> {
 		await input.working_branch_fence?.check();
-		const { meta: existing, source } = await this.hooks.getNotebook(projectId, notebookId);
+		const { meta: existing, source } =
+			detail ?? (await this.hooks.getNotebook(projectId, notebookId));
 		if (existing.status === 'deleted') {
 			throw new NotFoundError(`Notebook ${notebookId} not found`);
 		}
@@ -390,7 +394,10 @@ export class SyncedNotebookService {
 			...prepared.config,
 			commit: prepared.commit,
 		};
-		const manifest = await workspaceManifest(prepared.files);
+		// Only working-branch save capture diffs against the manifest.
+		const manifest = syncedSource.working_branch
+			? await workspaceManifest(prepared.files)
+			: undefined;
 		let versionToKeep = versionId;
 
 		await saga(metricsObserver(this.metrics, 'saga.synced_notebook_sync'))
@@ -400,7 +407,9 @@ export class SyncedNotebookService {
 				compensableWrite(
 					[
 						() => this.bucket.put(versionPaths.meta, JSON.stringify(version)),
-						() => this.bucket.put(versionPaths.workspaceManifest, JSON.stringify(manifest)),
+						...(manifest
+							? [() => this.bucket.put(versionPaths.workspaceManifest, JSON.stringify(manifest))]
+							: []),
 						...(workspaceArchive
 							? [
 									async () => {

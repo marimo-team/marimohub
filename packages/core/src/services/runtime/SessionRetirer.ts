@@ -7,7 +7,7 @@ import { sessionResourceNotebookId } from '../../sessionOrigin';
 import { captureThumbnail, THUMBNAIL_MAINTENANCE_BUDGET_MS } from './captureThumbnail';
 import type { Bucket } from '../../ports/bucket';
 import type { SandboxProvider } from '../../ports/sandbox';
-import { recordSessionReconnect, sessionConnectOptions, sessionSandbox } from './sessionSandbox';
+import { reconnectSessionSandbox, sessionSandbox } from './sessionSandbox';
 import { readStored, VersionSchema } from '../../schema';
 import type { GitSource, Session } from '../../schema';
 import { paths } from '../../paths';
@@ -433,10 +433,11 @@ export class SessionRetirer {
 		if ((capture || probe) && session.sandbox_id) {
 			// create().read/exec may launch a replacement when the original is gone.
 			try {
-				recordSessionReconnect(session, this.deps.metrics, 'teardown');
-				existing = this.deps.compute.connectExisting!(
-					session.sandbox_id,
-					sessionConnectOptions(session),
+				existing = reconnectSessionSandbox(
+					this.deps.compute,
+					session,
+					this.deps.metrics,
+					'teardown',
 				);
 			} catch (error) {
 				if (error instanceof NotFoundError) {
@@ -450,6 +451,7 @@ export class SessionRetirer {
 				);
 				return this.skipReclaim(session, 'attachment_failed');
 			}
+			if (!existing) return this.skipReclaim(session, 'attachment_unsupported');
 		}
 		if (probe && existing) {
 			let active: number | null;

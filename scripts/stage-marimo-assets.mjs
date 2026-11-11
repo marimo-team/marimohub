@@ -6,15 +6,18 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
-	readFileSync,
 	realpathSync,
 	renameSync,
 	rmSync,
-	writeFileSync,
 } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
+import { precompressFile } from './precompress.mjs';
+
+// Mirrors MARIMO_VERSION_PATTERN in packages/core/src/url.ts; marimoAssets.test.ts checks parity.
+export const MARIMO_RELEASE_VERSION =
+	/^\d+\.\d+\.\d+(?:[a-zA-Z][a-zA-Z0-9]*)?(?:[.-][a-zA-Z0-9]+)*$/;
+const COMPRESSIBLE_EXTENSIONS = ['html', 'js', 'mjs', 'css', 'json', 'svg', 'wasm', 'txt'];
 
 function assertOutsideSource(root, source) {
 	if (root === source || root.startsWith(`${source}${sep}`))
@@ -22,7 +25,7 @@ function assertOutsideSource(root, source) {
 }
 
 export function stageMarimoAssets({ sourceRoot, version, staticRoot }) {
-	if (!/^\d+\.\d+\.\d+[a-zA-Z0-9.-]*$/.test(version))
+	if (!MARIMO_RELEASE_VERSION.test(version))
 		throw new Error('Expected an exact marimo release version');
 	if (!lstatSync(sourceRoot).isDirectory()) throw new Error('Marimo assets must be a directory');
 	const root = join(staticRoot, '_marimo');
@@ -55,17 +58,7 @@ export function stageMarimoAssets({ sourceRoot, version, staticRoot }) {
 			!lstatSync(join(temporary, 'index.html')).isFile()
 		)
 			throw new Error('Marimo assets have no index.html');
-		for (const path of files) {
-			if (!/\.(?:html|js|mjs|css|json|svg|wasm|txt)$/.test(path)) continue;
-			const bytes = readFileSync(path);
-			if (bytes.length < 1024) continue;
-			for (const [suffix, compressed] of Object.entries({
-				br: brotliCompressSync(bytes, { params: { [constants.BROTLI_PARAM_QUALITY]: 6 } }),
-				gz: gzipSync(bytes, { level: 9 }),
-			})) {
-				if (compressed.length < bytes.length) writeFileSync(`${path}.${suffix}`, compressed);
-			}
-		}
+		for (const path of files) precompressFile(path, { extensions: COMPRESSIBLE_EXTENSIONS });
 		// Publish only complete versions; an interrupted build leaves no partially usable origin.
 		renameSync(temporary, destination);
 		return destination;

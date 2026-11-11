@@ -23,12 +23,61 @@ type ProjectInvolvement = {
 	inheritedAccess: ProjectId[];
 };
 
-function accessProjection(entry: SnapshotProjectEntry): SnapshotProjectEntry['access'] {
+function sameSet(a: readonly string[] | undefined, b: readonly string[]): boolean {
+	if (a === undefined) return false;
+	const left = new Set(a);
+	const right = new Set(b);
+	return left.size === right.size && [...left].every((value) => right.has(value));
+}
+
+export function accessProjection(entry: SnapshotProjectEntry): SnapshotProjectEntry['access'] {
 	// Unknown versions and in-flight mutations require authoritative metadata.
-	if (entry.access?.version !== PROJECT_ACCESS_VERSION || entry.access_pending?.length) {
+	const access = entry.access;
+	if (access?.version !== PROJECT_ACCESS_VERSION || entry.access_pending?.length) {
 		return undefined;
 	}
-	return entry.access;
+	// v0.6.4 writers refresh the candidate fields, default_role, and updated_at but preserve
+	// `access` unchanged, so a disagreement means the summary predates a legacy member edit.
+	// A role-only edit changes only updated_at, unless clock skew keeps it from advancing.
+	const members = access.members;
+	const consistent =
+		access.entry_updated_at === entry.updated_at &&
+		access.default_role === entry.default_role &&
+		sameSet(
+			entry.member_ids,
+			members.flatMap((member) => (member.user_id !== undefined ? [member.user_id] : [])),
+		) &&
+		sameSet(
+			entry.member_emails?.map(normalizeEmail),
+			members.flatMap((member) =>
+				member.email !== undefined ? [normalizeEmail(member.email)] : [],
+			),
+		) &&
+		sameSet(
+			entry.member_groups,
+			members.flatMap((member) => (member.group !== undefined ? [member.group] : [])),
+		);
+	return consistent ? access : undefined;
+}
+
+/**
+ * Every snapshot write re-confirms summaries whose entry `updated_at` changed: either this
+ * write projected a fresh summary, or it preserved one that was trusted before the write.
+ */
+export function confirmAccessSummaries(previous: Snapshot, next: Snapshot): Snapshot {
+	let before: ReadonlyMap<ProjectId, SnapshotProjectEntry> | undefined;
+	let changed = false;
+	const projects = next.projects.map((entry) => {
+		const access = entry.access;
+		if (access?.version !== PROJECT_ACCESS_VERSION || access.entry_updated_at === entry.updated_at)
+			return entry;
+		const prior = (before ??= projectsById(previous)).get(entry.id);
+		const projected = access.entry_updated_at !== prior?.access?.entry_updated_at;
+		if (!projected && (prior === undefined || accessProjection(prior) === undefined)) return entry;
+		changed = true;
+		return { ...entry, access: { ...access, entry_updated_at: entry.updated_at } };
+	});
+	return changed ? { ...next, projects } : next;
 }
 
 export function projectedRole(

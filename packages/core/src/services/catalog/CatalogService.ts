@@ -25,7 +25,7 @@ import {
 } from '../../schema';
 import type { Catalog, Snapshot, SnapshotNotebookEntry, SnapshotProjectEntry } from '../../schema';
 import { MetadataCache } from '../content/metadataCache';
-import { projectsById, snapshotCache, snapshotJson } from './snapshotCache';
+import { confirmAccessSummaries, projectsById, snapshotCache, snapshotJson } from './snapshotCache';
 import { withCasRetry } from './cas';
 import { planCatalogRecovery } from './recovery';
 import type { CatalogRecoverySource } from './recovery';
@@ -391,7 +391,7 @@ export class CatalogService {
 					const currentSnapshot = await this.readSnapshot(catalog);
 
 					const draft = structuredClone(currentSnapshot);
-					const result = await mutateFn(draft);
+					const result = confirmAccessSummaries(currentSnapshot, await mutateFn(draft));
 					if (result === draft && JSON.stringify(result) === snapshotJson(currentSnapshot)) {
 						return { snapshot: currentSnapshot, committed: false };
 					}

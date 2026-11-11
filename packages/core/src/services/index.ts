@@ -260,11 +260,7 @@ export { kernelActiveConnections } from './runtime/kernelActiveConnections';
 export type { ConnectionProbe } from './runtime/kernelActiveConnections';
 export { SessionLifecycleService } from './runtime/sessionLifecycle';
 export { sessionOwner } from './runtime/sessionOwner';
-export {
-	recordSessionReconnect,
-	sessionConnectOptions,
-	sessionSandbox,
-} from './runtime/sessionSandbox';
+export { reconnectSessionSandbox, sessionSandbox } from './runtime/sessionSandbox';
 export type { SessionLifecycleConfig, SweepResult } from './runtime/sessionLifecycle';
 export {
 	bearerToken,
@@ -685,15 +681,19 @@ export function createServices(
 		new OAuthAuthorizationService(bucket, tokens),
 	);
 	const oauthRateLimits = wrap('OAuthRateLimitService', new OAuthRateLimitService(bucket));
-	const jobs = wrap('JobsService', new JobsService(bucket, catalog), {
-		listJobs: notebook,
-		listJobsPage: notebook,
-		createJob: notebook,
-		getJob: job,
-		updateJob: job,
-		beginDelete: job,
-		finishDelete: job,
-	});
+	const jobs = wrap(
+		'JobsService',
+		new JobsService(bucket, catalog, options?.backgroundWork, metrics),
+		{
+			listJobs: notebook,
+			listJobsPage: notebook,
+			createJob: notebook,
+			getJob: job,
+			updateJob: job,
+			beginDelete: job,
+			finishDelete: job,
+		},
+	);
 	const jobRuns = wrap('JobRunService', new JobRunService(bucket, metrics), {
 		getRun: run,
 		runExists: run,

@@ -6,13 +6,15 @@ import { zipSync } from 'fflate';
 import {
 	BadRequestError,
 	ConflictError,
+	ForbiddenError,
 	NotFoundError,
-	PreconditionFailedError,
 	UnavailableError,
+	ValidationError,
 } from '../../errors';
 import { createNotebookId } from '../../ids';
 import type { NotebookId, ProjectId, SessionId, UserId } from '../../ids';
 import { sha256Hex } from '../../internal/sha256';
+import { toBase64 } from '../../internal/base64url';
 import { createGitSource, prepareSync } from '../../integrations/syncedSource';
 import type { CreateSyncedNotebookInput } from '../../integrations/syncedSource';
 import { paths } from '../../paths';
@@ -22,6 +24,7 @@ import type {
 	SourceControlRegistry,
 	SourceControlReader,
 	WorkingBranchWriter,
+	WorkingBranchInspection,
 	SourceControlChange,
 	SourceControlCommitIdentity,
 } from '../../ports/sourceControl';
@@ -31,7 +34,7 @@ import type { NotebookService } from './NotebookService';
 import type { SessionService } from '../runtime/SessionService';
 import { sessionPersistsEdits } from '../runtime/sessionState';
 import { sandboxWorkspaceLayout } from '../runtime/workspaceLayout';
-import { withCasRetry } from '../catalog/cas';
+import { putIfAbsent, putIfMatch, withCasRetry } from '../catalog/cas';
 import { listAllObjects } from '../catalog/storage';
 import { WORKSPACE_LIMITS } from '../../integrations/remoteWorkspace';
 import { captureWorkingBranchChanges } from './proposalCapture';
@@ -40,6 +43,7 @@ import {
 	WorkingBranchSaveSchema,
 	WorkingBranchStore,
 	WORKING_BRANCH_RETENTION_MS,
+	WORKING_BRANCH_DISPATCH_BOUND_MS,
 	workingBranchPaths,
 	WorkingBranchCreationSchema,
 	WorkingBranchCaptureSchema,
@@ -47,6 +51,7 @@ import {
 	WORKING_BRANCH_CLEANUP_KEY,
 } from './workingBranchRecords';
 import type {
+	WorkingBranchChangeRequest,
 	WorkingBranchRecord,
 	WorkingBranchSave,
 	WorkingBranchLease,
@@ -85,6 +90,7 @@ interface SaveContext {
 	reader: SourceControlReader;
 	writer: WorkingBranchWriter;
 	check: WorkingBranchLease;
+	baselineSizes?: Map<string, number>;
 	update: (
 		apply: (record: WorkingBranchRecord) => WorkingBranchRecord,
 	) => Promise<WorkingBranchRecord>;
@@ -113,8 +119,10 @@ export interface SaveWorkingBranchInput {
 export class WorkingBranchService {
 	private readonly store: WorkingBranchStore;
 	private readonly statusRefreshes = new SingleFlight<string, WorkingBranchRecord>();
+	readonly enabled: boolean;
 	constructor(private readonly deps: WorkingBranchDependencies) {
 		this.store = new WorkingBranchStore(deps.bucket);
+		this.enabled = deps.sourceControl?.workingBranchesEnabled === true;
 	}
 
 	private provider(provider: string, repo: string, pid: ProjectId) {
@@ -130,13 +138,6 @@ export class WorkingBranchService {
 			throw new UnavailableError('Working branch publishing is not enabled for this repository');
 		}
 		return { reader, writer };
-	}
-	private async immutable(key: string, value: string): Promise<void> {
-		try {
-			await this.deps.bucket.put(key, value, { onlyIfNotExists: true });
-		} catch (error) {
-			if (!(error instanceof PreconditionFailedError)) throw error;
-		}
 	}
 	private key(value: string) {
 		if (!value.trim() || value.length > 256)
@@ -180,7 +181,8 @@ export class WorkingBranchService {
 				root_path: initial.root_path,
 				entry_notebook: initial.entry_notebook,
 			};
-			await this.immutable(
+			await putIfAbsent(
+				this.deps.bucket,
 				receiptKey,
 				JSON.stringify({
 					fingerprint,
@@ -210,8 +212,8 @@ export class WorkingBranchService {
 			created_at: new Date().toISOString(),
 			state: 'claimed',
 		});
-		return this.store.withLease(pid, nid, async (check, update) => {
-			let record = await this.store.read(pid, nid);
+		return this.store.withLease(pid, nid, async (check, update, leased) => {
+			let record = leased;
 			if (record.state === 'ready') {
 				const detail = await this.deps.notebooks.getNotebook(pid, nid);
 				await authorize?.(detail.meta);
@@ -301,7 +303,10 @@ export class WorkingBranchService {
 		});
 	}
 
-	private async source(pid: ProjectId, nid: NotebookId): Promise<GitSource> {
+	private async source(
+		pid: ProjectId,
+		nid: NotebookId,
+	): Promise<{ source: GitSource; record: WorkingBranchRecord }> {
 		await this.assertActiveProject(pid);
 		const { meta, source } = await this.deps.notebooks.getNotebook(pid, nid);
 		if (meta.status === 'deleted' || source.type !== 'git' || !source.working_branch)
@@ -316,11 +321,12 @@ export class WorkingBranchService {
 		}
 		if (record.state !== 'ready')
 			throw new ConflictError('Working notebook creation needs completion');
-		return source;
+		return { source, record };
 	}
 	async status(pid: ProjectId, nid: NotebookId) {
-		const source = await this.source(pid, nid);
-		let record = await this.store.read(pid, nid);
+		const found = await this.source(pid, nid);
+		const { source } = found;
+		let record = found.record;
 		const { writer } = this.provider(record.provider, source.repo, pid);
 		if (
 			record.remote_commit === undefined ||
@@ -335,7 +341,7 @@ export class WorkingBranchService {
 				});
 				return this.store.update(pid, nid, (current) => ({
 					...current,
-					change_request: remote.changeRequest ?? current.change_request,
+					change_request: storedChangeRequest(remote) ?? current.change_request,
 					ended_reason: current.ended_reason ?? branchEndedReason(remote, current.base_branch),
 					remote_commit: remote.headCommit,
 					checked_at:
@@ -426,10 +432,9 @@ export class WorkingBranchService {
 
 	private async runSave(input: SaveOperationInput): Promise<WorkingBranchSave> {
 		const { projectId: pid, notebookId: nid, actor, id, fingerprint } = input;
-		await this.source(pid, nid);
-		return this.store.withLease(pid, nid, async (check, update) => {
-			const source = await this.source(pid, nid);
-			const record = await this.store.read(pid, nid);
+		// Source identity is pinned by the head record; only dispatch and sync re-validate the notebook.
+		const { source } = await this.source(pid, nid);
+		return this.store.withLease(pid, nid, async (check, update, record) => {
 			const { reader, writer } = this.provider(record.provider, source.repo, pid);
 			let receipt: WorkingBranchSave;
 			try {
@@ -472,9 +477,9 @@ export class WorkingBranchService {
 					changes: [],
 				};
 			}
-			if (!fingerprint && receipt.author !== actor)
+			if (!fingerprint && !this.canResume(receipt, actor))
 				throw new ConflictError('Only the save author can retry this operation');
-			if (receipt.author !== actor || (fingerprint && receipt.fingerprint !== fingerprint))
+			if (fingerprint && (receipt.author !== actor || receipt.fingerprint !== fingerprint))
 				throw new ConflictError('Idempotency key was used for a different save');
 			if (SAVE_STAGES[receipt.state].terminal) {
 				await update((current) =>
@@ -554,13 +559,15 @@ export class WorkingBranchService {
 				});
 				throw error;
 			}
+			context.baselineSizes = changes.baselineSizes;
 			await check();
-			await this.immutable(
+			await putIfAbsent(
+				this.deps.bucket,
 				captureKey,
 				JSON.stringify(
 					changes.changes.map(({ change, content }) => ({
 						...change,
-						...(content ? { content: bytesBase64(content) } : {}),
+						...(content ? { content: toBase64(content) } : {}),
 					})),
 				),
 			);
@@ -605,7 +612,7 @@ export class WorkingBranchService {
 		receipt: WorkingBranchSave,
 		context: SaveContext,
 	): Promise<WorkingBranchSave> {
-		const { finish } = context;
+		const { finish, baselineSizes } = context;
 		const { project_id: pid, notebook_id: nid } = receipt;
 		if (receipt.changes.length === 0)
 			return finish({ ...receipt, state: 'no_changes', commit: receipt.base_commit });
@@ -614,10 +621,11 @@ export class WorkingBranchService {
 			.notebook(nid)
 			.version(receipt.base_version_id).workspacePrefix;
 		const sizes = new Map(
-			(await listAllObjects(this.deps.bucket, prefix)).map((file) => [
-				file.key.slice(prefix.length),
-				file.size,
-			]),
+			baselineSizes ??
+				(await listAllObjects(this.deps.bucket, prefix)).map((file) => [
+					file.key.slice(prefix.length),
+					file.size,
+				]),
 		);
 		for (const change of receipt.changes) {
 			if (change.operation === 'delete') sizes.delete(change.path);
@@ -691,15 +699,17 @@ export class WorkingBranchService {
 		if (SAVE_STAGES[validated.state].terminal) return validated;
 
 		await input.authorize?.();
-		await this.source(pid, nid);
-		if ((await this.store.read(pid, nid)).ended_reason) {
+		if ((await this.source(pid, nid)).record.ended_reason) {
 			return finish({
 				...receipt,
 				state: 'conflict',
 				error: 'Working branch publication ended; captured work remains available for recovery',
 			});
 		}
-		const dispatched = await this.putSave({ ...receipt, state: 'ref_dispatched' }, check);
+		const dispatched = await this.putSave(
+			{ ...receipt, state: 'ref_dispatched', dispatched_at: new Date(Date.now()).toISOString() },
+			check,
+		);
 		try {
 			await writer.advanceBranch({
 				repository: source.repo,
@@ -730,7 +740,7 @@ export class WorkingBranchService {
 		receipt: WorkingBranchSave,
 		context: SaveContext,
 	): Promise<WorkingBranchSave> {
-		const { input, source, record, writer, check, update } = context;
+		const { input, source, record, writer, check, update, finish } = context;
 		const { projectId: pid, notebookId: nid } = input;
 		const remote = await writer.inspectBranch({
 			repository: source.repo,
@@ -739,6 +749,13 @@ export class WorkingBranchService {
 			changeRequestNumber: record.change_request?.number,
 		});
 		if (!remote.containsCommit) {
+			const settled =
+				Date.now() - Date.parse(receipt.dispatched_at ?? receipt.created_at) >=
+				WORKING_BRANCH_DISPATCH_BOUND_MS;
+			const unresolved = (error: string, settledError: string) =>
+				settled
+					? finish({ ...receipt, state: 'conflict', error: settledError })
+					: this.putSave({ ...receipt, error }, check);
 			const ended = record.ended_reason ?? branchEndedReason(remote, record.base_branch);
 			if (ended)
 				await update((current) => ({
@@ -746,40 +763,57 @@ export class WorkingBranchService {
 					ended_reason: current.ended_reason ?? ended,
 				}));
 			if (ended || remote.headCommit !== receipt.base_commit)
-				return this.putSave(
-					{
-						...receipt,
-						error: 'Remote update remains unresolved; preserve the capture for recovery',
-					},
-					check,
+				return unresolved(
+					'Remote update remains unresolved; preserve the capture for recovery',
+					ended
+						? 'Working branch publication ended before the update was confirmed; captured work remains available for recovery'
+						: 'The branch moved without the saved commit; captured work remains available for recovery',
 				);
 			await input.authorize?.();
-			await this.source(pid, nid);
-			if ((await this.store.read(pid, nid)).ended_reason)
-				return this.putSave(
-					{
-						...receipt,
-						error: 'Working branch publication ended; preserve the capture for recovery',
-					},
-					check,
+			if ((await this.source(pid, nid)).record.ended_reason)
+				return unresolved(
+					'Working branch publication ended; preserve the capture for recovery',
+					'Working branch publication ended before the update was confirmed; captured work remains available for recovery',
 				);
-			await check();
+			// The retry is itself a request that may land later, so it restarts the bound unless
+			// GitHub definitely rejects it.
+			const retried = await this.putSave(
+				{ ...receipt, dispatched_at: new Date(Date.now()).toISOString() },
+				check,
+			);
 			try {
 				await writer.advanceBranch({
 					repository: source.repo,
 					branch: source.branch,
-					expectedHead: receipt.base_commit,
-					commit: receipt.commit!,
+					expectedHead: retried.base_commit,
+					commit: retried.commit!,
 				});
-			} catch {
+			} catch (error) {
+				if (!(error instanceof ConflictError))
+					return this.putSave(
+						{
+							...retried,
+							error: 'Remote update remains unresolved; retry to reconcile the branch',
+						},
+						check,
+					);
 				// A rejected retry cannot rule out the earlier request still being in flight.
-				return this.putSave(
-					{
-						...receipt,
-						error: 'Remote update remains unresolved; retry to reconcile the branch',
-					},
-					check,
-				);
+				return settled
+					? finish({
+							...retried,
+							dispatched_at: receipt.dispatched_at,
+							state: 'conflict',
+							error:
+								'Remote update rejected. Check the branch head and repository rules before starting a new save; captured work is available for recovery',
+						})
+					: this.putSave(
+							{
+								...retried,
+								dispatched_at: receipt.dispatched_at,
+								error: 'Remote update remains unresolved; retry to reconcile the branch',
+							},
+							check,
+						);
 			}
 		}
 		return this.putSave({ ...receipt, state: 'remote_committed', error: undefined }, check);
@@ -791,8 +825,10 @@ export class WorkingBranchService {
 	): Promise<WorkingBranchSave> {
 		const { input, source, record, reader, check, finish } = context;
 		const { projectId: pid, notebookId: nid, actor, id } = input;
+		// Authorization failures belong to this caller, not the save, so they must not end it.
+		await input.authorize?.();
 		try {
-			const current = await this.source(pid, nid);
+			const { source: current } = await this.source(pid, nid);
 			if (current.commit !== receipt.base_commit && current.commit !== receipt.commit)
 				return await finish({
 					...receipt,
@@ -805,7 +841,6 @@ export class WorkingBranchService {
 				reader.fetchGitDirectory!(source.repo, receipt.commit!, source.branch),
 			]);
 			await check();
-			await input.authorize?.();
 			await this.deps.notebooks.synced.sync(
 				pid,
 				nid,
@@ -819,8 +854,8 @@ export class WorkingBranchService {
 				},
 				actor,
 			);
-			const synced = await this.source(pid, nid);
-			if (!synced.current_version_id || synced.commit !== receipt.commit)
+			const { source: synced } = await this.deps.notebooks.getNotebook(pid, nid);
+			if (synced.type !== 'git' || !synced.current_version_id || synced.commit !== receipt.commit)
 				throw new ConflictError('Hub source changed during save completion');
 			return await this.putSave(
 				{
@@ -832,6 +867,16 @@ export class WorkingBranchService {
 				check,
 			);
 		} catch (error) {
+			if (
+				error instanceof ValidationError ||
+				error instanceof BadRequestError ||
+				error instanceof ForbiddenError
+			)
+				return finish({
+					...receipt,
+					state: 'conflict',
+					error: `Committed remotely, but the hub could not import the commit: ${error.message}. Use Sync now to pull it once the problem is fixed.`,
+				});
 			logOperationalError(
 				'working_branch.sync_pending',
 				{ project_id: pid, notebook_id: nid, save_id: id },
@@ -881,6 +926,18 @@ export class WorkingBranchService {
 		if (!(await this.deps.sessions.ownsEditorClaim(session)))
 			throw new ConflictError('Session no longer owns the editor');
 		return session;
+	}
+	/**
+	 * `remote_committed` and `hub_synced` only import an already-public commit, so any principal with
+	 * `working-branch.write` may finish them. Earlier stages read the author's sandbox or write the
+	 * branch on the author's behalf; terminal receipts stay author-only.
+	 */
+	canResume(receipt: WorkingBranchSave, actor: UserId): boolean {
+		return (
+			receipt.author === actor ||
+			receipt.state === 'remote_committed' ||
+			receipt.state === 'hub_synced'
+		);
 	}
 	async resume(
 		pid: ProjectId,
@@ -935,8 +992,7 @@ export class WorkingBranchService {
 	) {
 		await this.source(pid, nid);
 		return this.store.withLease(pid, nid, async (check, update) => {
-			const source = await this.source(pid, nid);
-			const record = await this.store.read(pid, nid);
+			const { source, record } = await this.source(pid, nid);
 			if (record.active_save)
 				throw new ConflictError('Complete the pending save before opening a PR');
 			const { writer } = this.provider(record.provider, source.repo, pid);
@@ -949,7 +1005,7 @@ export class WorkingBranchService {
 			await update((current) => ({
 				...current,
 				ended_reason: current.ended_reason ?? ended,
-				change_request: remote.changeRequest ?? current.change_request,
+				change_request: storedChangeRequest(remote) ?? current.change_request,
 				remote_commit: remote.headCommit,
 				checked_at: new Date().toISOString(),
 			}));
@@ -957,7 +1013,8 @@ export class WorkingBranchService {
 				throw new ConflictError('Working branch publication ended; create a new working notebook');
 			if (remote.headCommit !== source.commit)
 				throw new ConflictError('Working branch moved; synchronize before opening its PR');
-			if (remote.changeRequest) return remote.changeRequest;
+			const existing = storedChangeRequest(remote);
+			if (existing) return existing;
 			if (record.change_request) throw new ConflictError('The recorded PR could not be verified');
 			const { meta } = await this.deps.notebooks.getNotebook(pid, nid);
 			await check();
@@ -976,15 +1033,16 @@ export class WorkingBranchService {
 				branch: source.branch,
 				changeRequestNumber: result.number,
 			});
-			if (!inspected.changeRequest) throw new UnavailableError('Could not verify the opened PR');
+			const opened = storedChangeRequest(inspected);
+			if (!opened) throw new UnavailableError('Could not verify the opened PR');
 			await update((current) => ({
 				...current,
-				change_request: inspected.changeRequest,
+				change_request: opened,
 				remote_commit: inspected.headCommit,
 				ended_reason: current.ended_reason ?? branchEndedReason(inspected, current.base_branch),
 				checked_at: new Date().toISOString(),
 			}));
-			return inspected.changeRequest;
+			return opened;
 		});
 	}
 	private async expireRetiredSave(receipt: WorkingBranchSave): Promise<WorkingBranchSave> {
@@ -1067,24 +1125,23 @@ export class WorkingBranchService {
 				logOperationalError('working_branch.cleanup_failed', { object: item.key }, error);
 			}
 		}
-		try {
-			await this.deps.bucket.put(
-				WORKING_BRANCH_CLEANUP_KEY,
-				JSON.stringify({ cursor: page.cursor }),
-				cursorObject ? { onlyIfEtagMatches: cursorObject.etag } : { onlyIfNotExists: true },
-			);
-		} catch (error) {
-			if (!(error instanceof PreconditionFailedError)) throw error;
-		}
+		if (page.cursor === cursor) return count;
+		await putIfMatch(
+			this.deps.bucket,
+			WORKING_BRANCH_CLEANUP_KEY,
+			JSON.stringify({ cursor: page.cursor }),
+			cursorObject?.etag,
+		);
 		return count;
 	}
 }
 
-function bytesBase64(bytes: Uint8Array): string {
-	let binary = '';
-	for (let i = 0; i < bytes.length; i += 8192)
-		binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-	return btoa(binary);
+function storedChangeRequest({
+	changeRequest,
+}: WorkingBranchInspection): WorkingBranchChangeRequest | undefined {
+	if (!changeRequest) return undefined;
+	const { number, url, state, headBranch, baseBranch } = changeRequest;
+	return { number, url, state, head_branch: headBranch, base_branch: baseBranch };
 }
 
 function branchEndedReason(

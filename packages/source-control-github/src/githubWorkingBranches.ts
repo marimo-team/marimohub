@@ -43,9 +43,9 @@ function fullCommit(commit: string): string {
 export class GitHubWorkingBranches implements WorkingBranchWriter {
 	constructor(private readonly client: GitHubClient) {}
 
-	private async context(coordinate: string) {
+	private async context(coordinate: string, access: 'preview' | 'write' = 'write') {
 		const { owner, repo } = parseRepository(coordinate, this.client.origin);
-		const token = await this.client.installationToken(owner, repo, 'write');
+		const token = await this.client.installationToken(owner, repo, access);
 		return {
 			owner,
 			repo,
@@ -148,7 +148,10 @@ export class GitHubWorkingBranches implements WorkingBranchWriter {
 		) {
 			throw new UnavailableError('GitHub returned an unexpected working branch pull request');
 		}
-		return pulls.sort((a, b) => a.number - b.number)[0];
+		// A branch can have closed PRs from before the current one was opened.
+		return pulls.sort(
+			(a, b) => Number(b.state === 'open') - Number(a.state === 'open') || b.number - a.number,
+		)[0];
 	}
 
 	async inspectBranch(input: Input<'inspectBranch'>): Promise<WorkingBranchInspection> {
@@ -160,7 +163,8 @@ export class GitHubWorkingBranches implements WorkingBranchWriter {
 		) {
 			throw new ValidationError('Invalid working branch pull request number');
 		}
-		const ctx = await this.context(input.repository);
+		// 'preview' is the read-only contents + pull requests scope.
+		const ctx = await this.context(input.repository, 'preview');
 		const headCommit = await ctx.repository.getRef(input.branch);
 		let containsCommit = Boolean(commit && headCommit?.toLowerCase() === commit);
 		if (commit && headCommit && !containsCommit) {

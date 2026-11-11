@@ -30,10 +30,12 @@ describe('project access summary rebuild', () => {
 			}),
 		);
 		expect(await reader.migrateAccessSummaries({ force })).toEqual({ done: true });
-		expect((await catalog.getCurrentSnapshot()).projects[0].access).toEqual({
+		const [entry] = (await catalog.getCurrentSnapshot()).projects;
+		expect(entry.access).toEqual({
 			members: [{ user_id: subject.id, role: 'viewer' }],
 			default_role: 'none',
 			version: 1,
+			entry_updated_at: entry.updated_at,
 			extension,
 		});
 	});
@@ -85,6 +87,7 @@ describe('project access summary rebuild', () => {
 			members: [{ user_id: subject.id, role: 'viewer' }],
 			default_role: 'inherit',
 			version: 1,
+			entry_updated_at: snapshot.projects[0].updated_at,
 		});
 		const get = vi.spyOn(bucket, 'get');
 		expect((await reader.listProjects({ subject })).map((p) => p.id)).toEqual([project.id]);

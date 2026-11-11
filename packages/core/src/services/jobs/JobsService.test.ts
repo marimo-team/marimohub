@@ -48,6 +48,14 @@ describe('JobsService', () => {
 		expect(await env.jobs.listJobs(destination.id, nid)).toEqual([]);
 	});
 
+	it('does not republish a job deleted after its head was read', async () => {
+		const job = await env.jobs.createJob(pid, nid, { name: 'deleted' }, ACTOR);
+		await env.jobs.beginDelete(pid, nid, job.id, ACTOR);
+		await env.jobs.finishDelete(pid, nid, job.id);
+		await env.jobs.republishIndex(job);
+		expect([...indexedJobs(await env.catalog.getCurrentSnapshot())]).toEqual([]);
+	});
+
 	it('creates a definition, indexes it in the snapshot, and lists it', async () => {
 		const job = await env.jobs.createJob(
 			pid,

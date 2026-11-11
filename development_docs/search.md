@@ -53,6 +53,8 @@ Each query checks current project access before index retrieval and again after 
 Sources check permissions and freshness against that freshly read project before returning results. Authorization decisions are never cached.
 
 Notebook candidates use snapshot content for ranking. Only the selected page reads current notebook metadata, security labels, and artifact ETags.
+The `rank` phase removes candidates whose catalog entry has security labels the caller cannot satisfy. It reads no notebook records, so hidden notebooks take no result slots.
+Entries with pending or absent catalog labels stay until the `return` check.
 These checks exclude deleted, inaccessible, or changed content. A later crawl must publish matching documents before changed content appears again.
 HTML extraction excludes hidden attributes and literal inline `display:none` or `visibility:hidden` declarations.
 It does not evaluate stylesheets or browser layout.

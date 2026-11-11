@@ -27,6 +27,8 @@ const CLAIM_TIMEOUT_MS = 60_000;
 const RECONNECT_TIMEOUT_MS = 5_000;
 const PROBE_TIMEOUT_MS = 2_000;
 const HEALTH_INTERVAL_MS = 5 * 60_000;
+// Other replicas cannot see the in-memory retry delay, so retire members that keep failing.
+const MAX_HEALTH_FAILURES = 2;
 const MAX_CONCURRENT_CREATIONS = 2;
 
 export interface WarmPoolProfile {
@@ -233,8 +235,17 @@ export class WarmPoolService {
 								throw error;
 							});
 						if (session?.sandbox_id === member.sandbox_id) {
-							if (session.sandbox_reclaimed_at) await this.store.removeMember(member);
 							// A visible session owns teardown, even when the publisher died before handoff.
+							if (!session.sandbox_reclaimed_at) continue;
+							if (member.assigned) {
+								await this.store.removeMember(member);
+								continue;
+							}
+							// The session relinquished an unassigned sandbox without destroying it. Its
+							// releaser may still return it to the pool; after the claim expires, destroy it.
+							if (member.operation_until > this.now()) continue;
+							await this.retire(member);
+							await this.cleanup(member);
 							continue;
 						}
 						if (!session && member.assigned) {
@@ -278,6 +289,7 @@ export class WarmPoolService {
 								const reference = this.readReference(sandbox);
 								await this.store.updateMember(member, 'ready', (current) => {
 									current.checked_at = this.now();
+									delete current.health_failures;
 									if (reference !== undefined) current.reconnect_reference = reference;
 								});
 								continue;
@@ -289,10 +301,17 @@ export class WarmPoolService {
 									error.reason !== 'command_failed' &&
 									!(cause instanceof NotFoundError)
 								) {
-									this.healthRetryAt.set(member.sandbox_id, this.now() + HEALTH_INTERVAL_MS);
-									continue;
-								}
-								await this.retire(member);
+									let retiring = false;
+									await this.store.updateMember(member, 'ready', (current) => {
+										current.health_failures = (current.health_failures ?? 0) + 1;
+										if (current.health_failures >= MAX_HEALTH_FAILURES) current.state = 'retiring';
+										retiring = current.state === 'retiring';
+									});
+									if (!retiring) {
+										this.healthRetryAt.set(member.sandbox_id, this.now() + HEALTH_INTERVAL_MS);
+										continue;
+									}
+								} else await this.retire(member);
 							}
 						} else continue;
 					}

@@ -187,7 +187,7 @@ describe('working branch mutations', () => {
 			await result.current.mutateAsync({ operationId: 'saved-op' });
 		});
 		expect(String(fetch.mock.calls[0][0])).toBe(
-			'/api/v1/projects/proj-1/notebooks/nb-1/saves/saved-op/retry',
+			'/api/v1/projects/proj-1/notebooks/nb-1/working-branch/saves/saved-op/retry',
 		);
 		expect(keys(fetch)).toEqual([null]);
 	});

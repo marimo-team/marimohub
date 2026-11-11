@@ -43,7 +43,6 @@ helm template test charts/marimohub \
       abort "incorrect kernel ingress namespace" unless env["MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE"] == namespace
       abort "middleware reference does not match the resource" unless env["MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_COMPRESSION_MIDDLEWARE"] == expected
       abort "external annotations overridden" if env.key?("MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS")
-      abort "external middlewares overridden" if env.key?("MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MIDDLEWARES")
       abort "external Secret missing" unless container.fetch("envFrom").include?({"secretRef" => {"name" => "external-config", "optional" => true}})
     end
   '

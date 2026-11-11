@@ -1,4 +1,4 @@
-import { BoundedLruMap } from '@marimo-hub/core/cache';
+import { BoundedLruMap, weakMemo } from '@marimo-hub/core/cache';
 import {
 	AppPoolService,
 	AppPoolStore,
@@ -24,7 +24,10 @@ import type { Bucket, Metrics } from '@marimo-hub/core';
 import type { ApiDeps } from './context';
 import { previewAppPoolPolicy } from './previewPolicy';
 
-const inertPools = new WeakMap<Bucket, BoundedLruMap<string, string>>();
+// Each complete pass replaces the etags, so pools that stopped being inert drop out.
+const inertPools = weakMemo((_bucket: Bucket) => ({
+	etags: new BoundedLruMap<string, string>(10_000),
+}));
 
 export async function sweepAppPools(
 	deps: Pick<
@@ -35,9 +38,9 @@ export async function sweepAppPools(
 	},
 ): Promise<void> {
 	const { sessions } = deps.services;
-	const cached = inertPools.get(deps.bucket) ?? new BoundedLruMap<string, string>(10_000);
+	const inert = inertPools(deps.bucket);
+	const cached = inert.etags;
 	const next = new BoundedLruMap<string, string>(10_000);
-	inertPools.set(deps.bucket, cached);
 	const projectSessions = new Map<ProjectId, ReturnType<typeof sessions.listActiveByProject>>();
 	const readSessions = (pid: ProjectId) => {
 		let pending = projectSessions.get(pid);
@@ -232,6 +235,6 @@ export async function sweepAppPools(
 		});
 		cursor = page.truncated ? page.cursor : undefined;
 	} while (cursor);
-	if (complete) inertPools.set(deps.bucket, next);
+	if (complete) inert.etags = next;
 	if (complete) deps.metrics?.gauge('app_pool.visits', visits);
 }
