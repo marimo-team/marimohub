@@ -857,6 +857,7 @@ it('keeps HTTP requests available when background receipt refresh fails', async 
 	expect(
 		(await fetchApi(env, undefined, makeContext(vi.fn((task) => tasks.push(task))))).status,
 	).toBe(200);
+	expect(tasks).toHaveLength(1);
 	await Promise.all(tasks);
 	expect(
 		buildDeps(new Request('https://hub.example.com'), env).services.migrations.isComplete(

@@ -118,7 +118,7 @@ const ENDPOINTS: Endpoint[] = [
 	},
 	{ name: 'GET /search?q=revenue', call: (a) => a.request('GET', '/search?q=revenue&limit=20') },
 	{
-		name: 'GET /search?q=&project_id=',
+		name: 'GET /search?q=revenue&project_id=',
 		call: (a, s) => a.request('GET', `/search?q=revenue&project_id=${s.pid}`),
 	},
 	{
@@ -182,7 +182,10 @@ async function measure(
 				expect(data.items.length).toBeGreaterThan(0);
 				expect(data.coverage.map((c) => c.status)).not.toContain('timeout');
 			}
-		} else expect(result).toBeDefined();
+		} else {
+			expect(result).toBeDefined();
+			expect(result).not.toBeNull();
+		}
 	});
 	const background = await api.measuredBucket.measure(() => api.background.runAll());
 	return { foreground: foreground.cost, background: background.cost };

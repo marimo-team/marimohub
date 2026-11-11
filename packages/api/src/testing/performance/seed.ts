@@ -123,9 +123,13 @@ export async function seed(
 	const users = Object.values(USERS);
 	const put = (s: Session) =>
 		bucket.put(paths.session(s.project_id, s.session_id), JSON.stringify(s));
+	let otherProject = 0;
 	for (let k = 0; k < opts.terminalSessions; k++) {
-		const project = k % 10 === 0 ? projects[0] : projects[k % projects.length];
-		const started = new Date(now - ((k * 43_000) % 86_400_000) - 3_600_000).toISOString();
+		const project =
+			k % 10 === 0 || projects.length === 1
+				? projects[0]
+				: projects[1 + (otherProject++ % (projects.length - 1))];
+		const started = new Date(now - ((k * 43_000) % 82_800_000) - 3_600_000).toISOString();
 		await put({
 			session_id: SessionId.parse(`sess-${String(k).padStart(16, '0')}`),
 			project_id: project.id,

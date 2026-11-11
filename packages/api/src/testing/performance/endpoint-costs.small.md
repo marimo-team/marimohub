@@ -48,7 +48,7 @@ Cold uses fresh services; warm repeats on the same services. Each scenario start
 | GET /apps?limit=20 (unscoped) | cold | deferred | 0 | 0 | 0 | — | — |
 | GET /apps?limit=20 (unscoped) | warm | response | 32 | 6 | 150 | get: 4, get304: 28 | 1, 5, 1, 4, 16, 5 |
 | GET /apps?limit=20 (unscoped) | warm | deferred | 0 | 0 | 0 | — | — |
-| GET /projects/{pid}/sessions | cold | response | 414 | 35 | 875 | get: 411, head: 1, list: 1, put: 1 | 1×8, 16×25, 3×2 |
+| GET /projects/{pid}/sessions | cold | response | 214 | 22 | 550 | get: 211, head: 1, list: 1, put: 1 | 1×8, 16×12, 11, 3 |
 | GET /projects/{pid}/sessions | cold | deferred | 0 | 0 | 0 | — | — |
 | GET /projects/{pid}/sessions | warm | response | 5 | 3 | 75 | get: 4, list: 1 | 1×2, 3 |
 | GET /projects/{pid}/sessions | warm | deferred | 0 | 0 | 0 | — | — |
@@ -64,15 +64,15 @@ Cold uses fresh services; warm repeats on the same services. Each scenario start
 | GET /search?q=revenue | cold | deferred | 0 | 0 | 0 | — | — |
 | GET /search?q=revenue | warm | response | 109 | 10 | 250 | get: 40, get304: 9, head: 60 | 1, 5, 2, 28×2, 14, 1, 12×2, 6 |
 | GET /search?q=revenue | warm | deferred | 0 | 0 | 0 | — | — |
-| GET /search?q=&project_id= | cold | response | 58 | 14 | 350 | get: 25, get304: 1, head: 31, put: 1 | 1×8, 16×2, 8, 4×2, 2 |
-| GET /search?q=&project_id= | cold | deferred | 0 | 0 | 0 | — | — |
-| GET /search?q=&project_id= | warm | response | 52 | 8 | 200 | get: 20, get304: 2, head: 30 | 1×2, 16×2, 8, 4×2, 2 |
-| GET /search?q=&project_id= | warm | deferred | 0 | 0 | 0 | — | — |
-| POST …/sessions (edit; cold=create, warm=reuse) | cold | response | 2443 | 178 | 4450 | get: 2023, get304: 403, head: 1, list: 7, put: 9 | 1×6, 4, 1×2, 16×25, 3, 2, 1×6, 16×100, 3, 16×25, 3, 1×4, 3, 2, 1×2, 3 |
+| GET /search?q=revenue&project_id= | cold | response | 58 | 14 | 350 | get: 25, get304: 1, head: 31, put: 1 | 1×8, 16×2, 8, 4×2, 2 |
+| GET /search?q=revenue&project_id= | cold | deferred | 0 | 0 | 0 | — | — |
+| GET /search?q=revenue&project_id= | warm | response | 52 | 8 | 200 | get: 20, get304: 2, head: 30 | 1×2, 16×2, 8, 4×2, 2 |
+| GET /search?q=revenue&project_id= | warm | deferred | 0 | 0 | 0 | — | — |
+| POST …/sessions (edit; cold=create, warm=reuse) | cold | response | 2443 | 177 | 4425 | get: 2023, get304: 403, head: 1, list: 7, put: 9 | 1×6, 4, 1×2, 16×12, 11, 2, 1×6, 16×112, 11, 16×25, 3, 1×4, 3, 2, 1×2, 3 |
 | POST …/sessions (edit; cold=create, warm=reuse) | cold | deferred | 0 | 0 | 0 | — | — |
 | POST …/sessions (edit; cold=create, warm=reuse) | warm | response | 7 | 4 | 100 | get: 6, get304: 1 | 4, 1×3 |
 | POST …/sessions (edit; cold=create, warm=reuse) | warm | deferred | 0 | 0 | 0 | — | — |
-| POST …/sessions (edit; new notebook each call) | cold | response | 2443 | 178 | 4450 | get: 2023, get304: 403, head: 1, list: 7, put: 9 | 1×6, 4, 1×2, 16×25, 3, 2, 1×6, 16×100, 3, 16×25, 3, 1×4, 3, 2, 1×2, 3 |
+| POST …/sessions (edit; new notebook each call) | cold | response | 2443 | 177 | 4425 | get: 2023, get304: 403, head: 1, list: 7, put: 9 | 1×6, 4, 1×2, 16×12, 11, 2, 1×6, 16×112, 11, 16×25, 3, 1×4, 3, 2, 1×2, 3 |
 | POST …/sessions (edit; new notebook each call) | cold | deferred | 0 | 0 | 0 | — | — |
 | POST …/sessions (edit; new notebook each call) | warm | response | 26 | 17 | 425 | get: 14, get304: 1, list: 4, put: 7 | 4, 1×3, 2, 1×6, 3, 2, 1×3, 3 |
 | POST …/sessions (edit; new notebook each call) | warm | deferred | 0 | 0 | 0 | — | — |
@@ -84,7 +84,7 @@ Cold uses fresh services; warm repeats on the same services. Each scenario start
 | POST …/sessions/{sid}/heartbeat (edit) | cold | deferred | 0 | 0 | 0 | — | — |
 | POST …/sessions/{sid}/heartbeat (edit) | warm | response | 3 | 2 | 50 | get: 1, get304: 2 | 2, 1 |
 | POST …/sessions/{sid}/heartbeat (edit) | warm | deferred | 0 | 0 | 0 | — | — |
-| PATCH …/notebooks/{nid} {code} (no live editor) | cold | response | 435 | 51 | 1275 | get: 417, head: 1, list: 2, put: 15 | 1×10, 3, 1, 16×25, 3, 1×5, 6, 1×7 |
+| PATCH …/notebooks/{nid} {code} (no live editor) | cold | response | 235 | 38 | 950 | get: 217, head: 1, list: 2, put: 15 | 1×10, 3, 1, 16×12, 11, 1×5, 6, 1×7 |
 | PATCH …/notebooks/{nid} {code} (no live editor) | cold | deferred | 0 | 0 | 0 | — | — |
 | PATCH …/notebooks/{nid} {code} (no live editor) | warm | response | 26 | 19 | 475 | get: 10, list: 2, put: 14 | 1×4, 3, 1×6, 6, 1×7 |
 | PATCH …/notebooks/{nid} {code} (no live editor) | warm | deferred | 0 | 0 | 0 | — | — |
@@ -92,7 +92,7 @@ Cold uses fresh services; warm repeats on the same services. Each scenario start
 | periodic save: notebooks.commitSession (live editor) | cold | deferred | 0 | 0 | 0 | — | — |
 | periodic save: notebooks.commitSession (live editor) | warm | response | 20 | 12 | 300 | get: 9, list: 1, put: 10 | 3, 1, 2, 6, 1×8 |
 | periodic save: notebooks.commitSession (live editor) | warm | deferred | 0 | 0 | 0 | — | — |
-| POST …/sessions (app; cold=admit, warm=re-admit) | cold | response | 2445 | 182 | 4550 | get: 2026, get304: 401, head: 3, list: 8, put: 7 | 1×6, 4, 1×2, 16×25, 3, 1×3, 2, 1×5, 16×100, 3, 16×25, 1×4, 2×4, 1, 2, 1×2 |
+| POST …/sessions (app; cold=admit, warm=re-admit) | cold | response | 2445 | 181 | 4525 | get: 2026, get304: 401, head: 3, list: 8, put: 7 | 1×6, 4, 1×2, 16×12, 11, 1×3, 2, 1×5, 16×112, 11, 16×25, 1×4, 2×4, 1, 2, 1×2 |
 | POST …/sessions (app; cold=admit, warm=re-admit) | cold | deferred | 1 | 1 | 25 | put: 1 | 1 |
 | POST …/sessions (app; cold=admit, warm=re-admit) | warm | response | 8 | 5 | 125 | get: 7, get304: 1 | 4, 1×4 |
 | POST …/sessions (app; cold=admit, warm=re-admit) | warm | deferred | 0 | 0 | 0 | — | — |

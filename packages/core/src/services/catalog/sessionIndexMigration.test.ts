@@ -54,6 +54,7 @@ it('runs after project access, backfills once, and activates cold replicas witho
 
 it('bounds history traversal, keeps partial indexes untrusted, and resumes after restart', async () => {
 	const { bucket, services, index } = await fixture(105);
+	await index.update(ACTOR, async () => []);
 	await services.migrations.tick();
 	const list = vi.spyOn(bucket, 'list');
 	expect(await services.migrations.tick()).toBe(false);
@@ -215,3 +216,148 @@ it('cancels during a session read without publishing an index or completion', as
 	spy.mockRestore();
 	expect(await createServices(bucket).migrations.tick()).toBe(true);
 });
+
+it('coalesces initial recovery for same-user visitors without trusting a partial index', async () => {
+	const { bucket, services, index } = await fixture(105);
+	await services.migrations.tick();
+	const list = vi.spyOn(bucket, 'list');
+	expect(await services.migrations.tick()).toBe(false);
+	expect(list).toHaveBeenCalledTimes(2);
+	expect(list).toHaveBeenCalledWith({ prefix: paths.sessionsPrefix, cursor: undefined });
+	expect((await index.read(ACTOR))?.entries).toHaveLength(105);
+	expect(services.migrations.isComplete(SESSION_INDEX_MIGRATION)).toBe(false);
+	await finish(services);
+});
+
+it('recovers entries behind the checkpoint when an index disappears between pages and a replica restarts', async () => {
+	const { bucket, services, index } = await fixture(105);
+	await index.update(ACTOR, async () => []);
+	await services.migrations.tick();
+	expect(await services.migrations.tick()).toBe(false);
+	expect((await index.read(ACTOR))?.entries).toHaveLength(100);
+	await bucket.delete(paths.sessionIndexForUser(ACTOR));
+	const cold = createServices(bucket);
+	await finish(cold);
+	expect((await index.read(ACTOR))?.entries).toHaveLength(105);
+	expect(await cold.sessions.countActiveForUser(ACTOR)).toBe(105);
+});
+
+it('rescans after losing an existing index during a CAS attempt', async () => {
+	const { bucket, services, index } = await fixture(105);
+	await index.update(ACTOR, async () => []);
+	await services.migrations.tick();
+	await services.migrations.tick();
+	const put = bucket.put.bind(bucket);
+	let deleted = false;
+	vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+		if (key === paths.sessionIndexForUser(ACTOR) && !deleted) {
+			deleted = true;
+			await bucket.delete(key);
+		}
+		return put(key, value, options);
+	});
+	await finish(services);
+	expect(deleted).toBe(true);
+	expect((await index.read(ACTOR))?.entries).toHaveLength(105);
+	expect(await services.sessions.countActiveForUser(ACTOR)).toBe(105);
+});
+
+it.each(['list', 'read', 'corrupt', 'wrong-source', 'write'] as const)(
+	'keeps a lost index missing and its checkpoint retryable when recovery fails at %s',
+	async (failure) => {
+		const { bucket, services, records, index } = await fixture(105);
+		await index.update(ACTOR, async () => []);
+		await services.migrations.tick();
+		await services.migrations.tick();
+		const checkpoint = await (await bucket.get(receipt))!.json();
+		const indexKey = paths.sessionIndexForUser(ACTOR);
+		await bucket.delete(indexKey);
+		const first = [...records].sort((a, b) => a.session_id.localeCompare(b.session_id))[0];
+		const firstKey = paths.session(first.project_id, first.session_id);
+		if (failure === 'corrupt') await bucket.put(firstKey, '{');
+		if (failure === 'wrong-source')
+			await bucket.put(firstKey, JSON.stringify({ ...first, project_id: createProjectId() }));
+		const list = bucket.list.bind(bucket);
+		vi.spyOn(bucket, 'list').mockImplementation((options) => {
+			if (failure === 'list' && options?.limit === undefined)
+				throw new Error('recovery unavailable');
+			return list(options);
+		});
+		const get = bucket.get.bind(bucket);
+		vi.spyOn(bucket, 'get').mockImplementation((key, ...args) => {
+			if (failure === 'read' && key === firstKey) throw new Error('recovery unavailable');
+			return get(key, ...args);
+		});
+		const put = bucket.put.bind(bucket);
+		vi.spyOn(bucket, 'put').mockImplementation((key, ...args) => {
+			if (failure === 'write' && key === indexKey) throw new Error('recovery unavailable');
+			return put(key, ...args);
+		});
+		const cold = createServices(bucket);
+		await expect(cold.migrations.tick()).rejects.toThrow();
+		expect(cold.migrations.isComplete(SESSION_INDEX_MIGRATION)).toBe(false);
+		expect(await index.read(ACTOR)).toBeNull();
+		expect(await (await bucket.get(receipt))!.json()).toEqual(checkpoint);
+		vi.restoreAllMocks();
+		await bucket.put(firstKey, JSON.stringify(first));
+		await finish(cold);
+		expect(await cold.sessions.countActiveForUser(ACTOR)).toBe(105);
+	},
+);
+
+it('preserves a concurrent registration while recovering an index lost between pages', async () => {
+	const { bucket, services, input, index } = await fixture(105);
+	await index.update(ACTOR, async () => []);
+	await services.migrations.tick();
+	await services.migrations.tick();
+	await bucket.delete(paths.sessionIndexForUser(ACTOR));
+	const put = bucket.put.bind(bucket);
+	let registered = false;
+	vi.spyOn(bucket, 'put').mockImplementation(async (key, ...args) => {
+		if (key === paths.sessionIndexForUser(ACTOR) && !registered) {
+			registered = true;
+			await services.sessions.createSession(input);
+		}
+		return put(key, ...args);
+	});
+	await finish(services);
+	expect(registered).toBe(true);
+	expect((await index.read(ACTOR))?.entries).toHaveLength(106);
+	expect(await services.sessions.countActiveForUser(ACTOR)).toBe(106);
+});
+
+it.each(['list', 'read'] as const)(
+	'cancels missing-index recovery during %s and retries queued visitors on a later tick',
+	async (phase) => {
+		const { bucket, services, index } = await fixture(3);
+		await services.migrations.tick();
+		const controller = new AbortController();
+		let recovering = false;
+		const list = bucket.list.bind(bucket);
+		const listSpy = vi.spyOn(bucket, 'list').mockImplementation(async (options) => {
+			const page = await list(options);
+			if (options?.limit === undefined) {
+				recovering = true;
+				if (phase === 'list') controller.abort(new Error('shutdown'));
+			}
+			return page;
+		});
+		const get = bucket.get.bind(bucket);
+		const getSpy = vi.spyOn(bucket, 'get').mockImplementation(async (key, ...args) => {
+			const object = await get(key, ...args);
+			if (recovering && phase === 'read' && key.startsWith(paths.sessionsPrefix))
+				controller.abort(new Error('shutdown'));
+			return object;
+		});
+		await expect(services.migrations.tick(controller.signal)).rejects.toThrow('shutdown');
+		expect(listSpy).toHaveBeenCalledTimes(2);
+		expect(
+			getSpy.mock.calls.filter(([key]) => key === paths.sessionIndexForUser(ACTOR)),
+		).toHaveLength(1);
+		expect(await index.read(ACTOR)).toBeNull();
+		expect(await (await bucket.get(receipt))!.json()).toEqual({ version: 1, status: 'pending' });
+		vi.restoreAllMocks();
+		await finish(services);
+		expect((await index.read(ACTOR))?.entries).toHaveLength(3);
+	},
+);

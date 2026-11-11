@@ -7,7 +7,18 @@ import type {
 	BucketObjectBody,
 } from '@marimo-hub/core/ports/bucket';
 
-type Operation = 'get' | 'get304' | 'head' | 'list' | 'put' | 'delete';
+type Operation =
+	| 'get'
+	| 'get304'
+	| 'head'
+	| 'list'
+	| 'put'
+	| 'delete'
+	| 'putStream'
+	| 'multipartCreate'
+	| 'multipartPutPart'
+	| 'multipartComplete'
+	| 'multipartAbort';
 
 export interface StorageCost {
 	requests: number;
@@ -21,10 +32,29 @@ export interface StorageCost {
 export class RoundTripBucket implements Bucket {
 	private recording = false;
 	private pending: (() => void)[] = [];
+	private active = new Set<Promise<unknown>>();
 	private rounds = 0;
 	private operations: { kind: Operation; round: number }[] = [];
 
-	constructor(private readonly inner: Bucket) {}
+	readonly putStream?: Bucket['putStream'];
+	readonly multipart?: Bucket['multipart'];
+
+	constructor(private readonly inner: Bucket) {
+		if (inner.putStream) {
+			const putStream = inner.putStream.bind(inner);
+			this.putStream = (...args) => this.request('putStream', () => putStream(...args));
+		}
+		if (inner.multipart) {
+			const multipart = inner.multipart;
+			this.multipart = {
+				isolatedSessions: multipart.isolatedSessions,
+				create: (...args) => this.request('multipartCreate', () => multipart.create(...args)),
+				putPart: (...args) => this.request('multipartPutPart', () => multipart.putPart(...args)),
+				complete: (...args) => this.request('multipartComplete', () => multipart.complete(...args)),
+				abort: (...args) => this.request('multipartAbort', () => multipart.abort(...args)),
+			};
+		}
+	}
 
 	async measure<T>(action: () => Promise<T>): Promise<{ value: T; cost: StorageCost }> {
 		if (this.recording) throw new Error('Storage measurements cannot overlap');
@@ -33,9 +63,20 @@ export class RoundTripBucket implements Bucket {
 		this.operations = [];
 		try {
 			const value = await action();
-			if (this.pending.length > 0)
-				throw new Error('Unawaited storage operations at measurement end');
-			const byOperation = { get: 0, get304: 0, head: 0, list: 0, put: 0, delete: 0 };
+			if (this.active.size > 0) throw new Error('Unawaited storage operations at measurement end');
+			const byOperation: StorageCost['byOperation'] = {
+				get: 0,
+				get304: 0,
+				head: 0,
+				list: 0,
+				put: 0,
+				delete: 0,
+				putStream: 0,
+				multipartCreate: 0,
+				multipartPutPart: 0,
+				multipartComplete: 0,
+				multipartAbort: 0,
+			};
 			const requestsPerRound = Array.from({ length: this.rounds }, () => 0);
 			for (const op of this.operations) {
 				byOperation[op.kind]++;
@@ -51,13 +92,30 @@ export class RoundTripBucket implements Bucket {
 					requestsPerRound,
 				},
 			};
+		} catch (error) {
+			// A rejected branch can leave siblings and their continuations in flight.
+			do {
+				await Promise.allSettled([...this.active]);
+				await new Promise<void>((resolve) => setImmediate(resolve));
+			} while (this.active.size > 0);
+			throw error;
 		} finally {
 			this.recording = false;
 		}
 	}
 
-	private async request<T>(kind: Operation, action: () => Promise<T>): Promise<T> {
+	private request<T>(kind: Operation, action: () => Promise<T>): Promise<T> {
 		if (!this.recording) return action();
+		const task = this.recordRequest(kind, action);
+		this.active.add(task);
+		void task.then(
+			() => this.active.delete(task),
+			() => this.active.delete(task),
+		);
+		return task;
+	}
+
+	private async recordRequest<T>(kind: Operation, action: () => Promise<T>): Promise<T> {
 		const op = { kind, round: this.rounds + 1 };
 		this.operations.push(op);
 		await new Promise<void>((resolve) => {

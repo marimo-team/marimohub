@@ -15,6 +15,61 @@ async function setup() {
 const subject = { id: uid('member'), email: 'member@example.com' };
 
 describe('project access summary rebuild', () => {
+	it.each([false, true])('retains unknown legacy access fields (force: %s)', async (force) => {
+		const { bucket, catalog, project, reader } = await setup();
+		const extension = { policies: ['future'], flags: { enabled: false } };
+		await catalog.updateProjectEntry('test.legacy', ACTOR, project.id, (entry) => ({
+			access: { ...entry.access!, version: undefined, extension },
+		}));
+		await bucket.put(
+			paths.project(project.id).meta,
+			JSON.stringify({
+				...project,
+				members: [{ user_id: subject.id, role: 'viewer' }],
+				default_role: 'none',
+			}),
+		);
+		expect(await reader.migrateAccessSummaries({ force })).toEqual({ done: true });
+		expect((await catalog.getCurrentSnapshot()).projects[0].access).toEqual({
+			members: [{ user_id: subject.id, role: 'viewer' }],
+			default_role: 'none',
+			version: 1,
+			extension,
+		});
+	});
+
+	it.each([false, true])('leaves newer access summaries intact (force: %s)', async (force) => {
+		const { bucket, catalog, project, reader } = await setup();
+		await catalog.updateProjectEntry('test.future', ACTOR, project.id, (entry) => ({
+			access: { ...entry.access!, version: 2, extension: { policy: 'future' } },
+		}));
+		const before = (await catalog.getCurrentSnapshot()).projects[0].access;
+		await bucket.put(
+			paths.project(project.id).meta,
+			JSON.stringify({ ...project, members: [{ user_id: subject.id, role: 'viewer' }] }),
+		);
+		expect(await reader.migrateAccessSummaries({ force })).toEqual({ done: true });
+		expect((await catalog.getCurrentSnapshot()).projects[0].access).toEqual(before);
+		expect((await reader.listProjects({ subject })).map((entry) => entry.id)).toEqual([project.id]);
+	});
+
+	it('retains unknown current access fields during a forced rebuild', async () => {
+		const { bucket, catalog, project, reader } = await setup();
+		await catalog.updateProjectEntry('test.extension', ACTOR, project.id, (entry) => ({
+			access: { ...entry.access!, extension: [null, false, { nested: 'value' }] },
+		}));
+		await bucket.put(
+			paths.project(project.id).meta,
+			JSON.stringify({ ...project, default_role: 'viewer' }),
+		);
+		await reader.rebuildAccessSummaries();
+		expect((await catalog.getCurrentSnapshot()).projects[0].access).toMatchObject({
+			default_role: 'viewer',
+			version: 1,
+			extension: [null, false, { nested: 'value' }],
+		});
+	});
+
 	it('rebuilds from metadata without changing project timestamps and is idempotent', async () => {
 		const { bucket, catalog, project, reader } = await setup();
 		const key = paths.project(project.id).meta;

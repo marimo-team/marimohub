@@ -8,10 +8,13 @@ import { readStored } from '../../schema';
 export async function* iterateBucketPages(
 	bucket: Bucket,
 	options: BucketListOptions = {},
+	signal?: AbortSignal,
 ): AsyncIterable<BucketListResult> {
 	let cursor = options.cursor;
 	do {
+		signal?.throwIfAborted();
 		const page = await bucket.list({ ...options, cursor });
+		signal?.throwIfAborted();
 		yield page;
 		// A missing continuation token is terminal, even on a truncated page.
 		cursor = page.truncated ? page.cursor : undefined;
@@ -24,9 +27,13 @@ export async function* iterateBucketPages(
  * prefix with more than that (e.g. `_system/sessions/`) spans multiple pages;
  * callers that must see the whole set use this rather than a single `bucket.list`.
  */
-export async function listAllObjects(bucket: Bucket, prefix: string): Promise<BucketObject[]> {
+export async function listAllObjects(
+	bucket: Bucket,
+	prefix: string,
+	signal?: AbortSignal,
+): Promise<BucketObject[]> {
 	const objects: BucketObject[] = [];
-	for await (const res of iterateBucketPages(bucket, { prefix })) {
+	for await (const res of iterateBucketPages(bucket, { prefix }, signal)) {
 		objects.push(...res.objects);
 	}
 	return objects;

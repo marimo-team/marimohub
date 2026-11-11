@@ -50,7 +50,7 @@ Session index: on and backfilled. Access summaries: refreshed with matching gene
 | GET /apps?limit=20 (unscoped) | cold | deferred | 0 | 0 | 0 | — | — |
 | GET /apps?limit=20 (unscoped) | warm | response | 27 | 5 | 125 | get: 4, get304: 23 | 1×2, 4, 16, 5 |
 | GET /apps?limit=20 (unscoped) | warm | deferred | 0 | 0 | 0 | — | — |
-| GET /projects/{pid}/sessions | cold | response | 414 | 35 | 875 | get: 411, head: 1, list: 1, put: 1 | 1×8, 16×25, 3×2 |
+| GET /projects/{pid}/sessions | cold | response | 214 | 22 | 550 | get: 211, head: 1, list: 1, put: 1 | 1×8, 16×12, 11, 3 |
 | GET /projects/{pid}/sessions | cold | deferred | 0 | 0 | 0 | — | — |
 | GET /projects/{pid}/sessions | warm | response | 5 | 3 | 75 | get: 4, list: 1 | 1×2, 3 |
 | GET /projects/{pid}/sessions | warm | deferred | 0 | 0 | 0 | — | — |
@@ -66,15 +66,15 @@ Session index: on and backfilled. Access summaries: refreshed with matching gene
 | GET /search?q=revenue | cold | deferred | 0 | 0 | 0 | — | — |
 | GET /search?q=revenue | warm | response | 109 | 10 | 250 | get: 40, get304: 9, head: 60 | 1, 5, 2, 28×2, 14, 1, 12×2, 6 |
 | GET /search?q=revenue | warm | deferred | 0 | 0 | 0 | — | — |
-| GET /search?q=&project_id= | cold | response | 58 | 14 | 350 | get: 25, get304: 1, head: 31, put: 1 | 1×8, 16×2, 8, 4×2, 2 |
-| GET /search?q=&project_id= | cold | deferred | 0 | 0 | 0 | — | — |
-| GET /search?q=&project_id= | warm | response | 52 | 8 | 200 | get: 20, get304: 2, head: 30 | 1×2, 16×2, 8, 4×2, 2 |
-| GET /search?q=&project_id= | warm | deferred | 0 | 0 | 0 | — | — |
-| POST …/sessions (edit; cold=create, warm=reuse) | cold | response | 434 | 46 | 1150 | get: 424, head: 1, list: 1, put: 8 | 1×6, 4, 1×2, 16×25, 3, 2, 1×6, 3, 4, 1, 3 |
+| GET /search?q=revenue&project_id= | cold | response | 58 | 14 | 350 | get: 25, get304: 1, head: 31, put: 1 | 1×8, 16×2, 8, 4×2, 2 |
+| GET /search?q=revenue&project_id= | cold | deferred | 0 | 0 | 0 | — | — |
+| GET /search?q=revenue&project_id= | warm | response | 52 | 8 | 200 | get: 20, get304: 2, head: 30 | 1×2, 16×2, 8, 4×2, 2 |
+| GET /search?q=revenue&project_id= | warm | deferred | 0 | 0 | 0 | — | — |
+| POST …/sessions (edit; cold=create, warm=reuse) | cold | response | 234 | 33 | 825 | get: 224, head: 1, list: 1, put: 8 | 1×6, 4, 1×2, 16×12, 11, 2, 1×6, 3, 4, 1, 3 |
 | POST …/sessions (edit; cold=create, warm=reuse) | cold | deferred | 0 | 0 | 0 | — | — |
 | POST …/sessions (edit; cold=create, warm=reuse) | warm | response | 7 | 4 | 100 | get: 6, get304: 1 | 4, 1×3 |
 | POST …/sessions (edit; cold=create, warm=reuse) | warm | deferred | 0 | 0 | 0 | — | — |
-| POST …/sessions (edit; new notebook each call) | cold | response | 434 | 46 | 1150 | get: 424, head: 1, list: 1, put: 8 | 1×6, 4, 1×2, 16×25, 3, 2, 1×6, 3, 4, 1, 3 |
+| POST …/sessions (edit; new notebook each call) | cold | response | 234 | 33 | 825 | get: 224, head: 1, list: 1, put: 8 | 1×6, 4, 1×2, 16×12, 11, 2, 1×6, 3, 4, 1, 3 |
 | POST …/sessions (edit; new notebook each call) | cold | deferred | 0 | 0 | 0 | — | — |
 | POST …/sessions (edit; new notebook each call) | warm | response | 27 | 15 | 375 | get: 15, get304: 4, list: 1, put: 7 | 4, 1×3, 2, 1×6, 3, 5, 1, 3 |
 | POST …/sessions (edit; new notebook each call) | warm | deferred | 0 | 0 | 0 | — | — |
@@ -86,7 +86,7 @@ Session index: on and backfilled. Access summaries: refreshed with matching gene
 | POST …/sessions/{sid}/heartbeat (edit) | cold | deferred | 0 | 0 | 0 | — | — |
 | POST …/sessions/{sid}/heartbeat (edit) | warm | response | 3 | 2 | 50 | get: 1, get304: 2 | 2, 1 |
 | POST …/sessions/{sid}/heartbeat (edit) | warm | deferred | 0 | 0 | 0 | — | — |
-| PATCH …/notebooks/{nid} {code} (no live editor) | cold | response | 433 | 49 | 1225 | get: 417, head: 1, list: 1, put: 14 | 1×10, 3, 1, 16×25, 3, 1×5, 6, 1×5 |
+| PATCH …/notebooks/{nid} {code} (no live editor) | cold | response | 233 | 36 | 900 | get: 217, head: 1, list: 1, put: 14 | 1×10, 3, 1, 16×12, 11, 1×5, 6, 1×5 |
 | PATCH …/notebooks/{nid} {code} (no live editor) | cold | deferred | 2 | 2 | 50 | list: 1, put: 1 | 1×2 |
 | PATCH …/notebooks/{nid} {code} (no live editor) | warm | response | 24 | 17 | 425 | get: 10, list: 1, put: 13 | 1×4, 3, 1×6, 6, 1×5 |
 | PATCH …/notebooks/{nid} {code} (no live editor) | warm | deferred | 2 | 2 | 50 | list: 1, put: 1 | 1×2 |
@@ -94,7 +94,7 @@ Session index: on and backfilled. Access summaries: refreshed with matching gene
 | periodic save: notebooks.commitSession (live editor) | cold | deferred | 2 | 2 | 50 | list: 1, put: 1 | 1×2 |
 | periodic save: notebooks.commitSession (live editor) | warm | response | 18 | 10 | 250 | get: 9, put: 9 | 3, 1, 2, 6, 1×6 |
 | periodic save: notebooks.commitSession (live editor) | warm | deferred | 2 | 2 | 50 | list: 1, put: 1 | 1×2 |
-| POST …/sessions (app; cold=admit, warm=re-admit) | cold | response | 436 | 51 | 1275 | get: 425, head: 3, list: 2, put: 6 | 1×6, 4, 1×2, 16×25, 3, 1×3, 2, 1×4, 2×2, 1, 2, 1, 2, 1×2 |
+| POST …/sessions (app; cold=admit, warm=re-admit) | cold | response | 236 | 38 | 950 | get: 225, head: 3, list: 2, put: 6 | 1×6, 4, 1×2, 16×12, 11, 1×3, 2, 1×4, 2×2, 1, 2, 1, 2, 1×2 |
 | POST …/sessions (app; cold=admit, warm=re-admit) | cold | deferred | 1 | 1 | 25 | put: 1 | 1 |
 | POST …/sessions (app; cold=admit, warm=re-admit) | warm | response | 8 | 5 | 125 | get: 7, get304: 1 | 4, 1×4 |
 | POST …/sessions (app; cold=admit, warm=re-admit) | warm | deferred | 0 | 0 | 0 | — | — |

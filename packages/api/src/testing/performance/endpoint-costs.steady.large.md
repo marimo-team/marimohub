@@ -66,10 +66,10 @@ Session index: on and backfilled. Access summaries: refreshed with matching gene
 | GET /search?q=revenue | cold | deferred | 0 | 0 | 0 | — | — |
 | GET /search?q=revenue | warm | response | 157 | 38 | 950 | get: 40, get304: 57, head: 60 | 1, 8×5, 2, 8×2, 4, 2, 8×2, 4, 2, 4×2, 2×2, 4×2, 2×2, 4×2, 2×2, 4×2, 2×2, 4×2, 2×2, 4×2, 2 |
 | GET /search?q=revenue | warm | deferred | 0 | 0 | 0 | — | — |
-| GET /search?q=&project_id= | cold | response | 108 | 17 | 425 | get: 45, get304: 1, head: 61, put: 1 | 1×8, 16×2, 8, 16×2, 8×3, 4 |
-| GET /search?q=&project_id= | cold | deferred | 0 | 0 | 0 | — | — |
-| GET /search?q=&project_id= | warm | response | 102 | 11 | 275 | get: 40, get304: 2, head: 60 | 1×2, 16×2, 8, 16×2, 8×3, 4 |
-| GET /search?q=&project_id= | warm | deferred | 0 | 0 | 0 | — | — |
+| GET /search?q=revenue&project_id= | cold | response | 108 | 17 | 425 | get: 45, get304: 1, head: 61, put: 1 | 1×8, 16×2, 8, 16×2, 8×3, 4 |
+| GET /search?q=revenue&project_id= | cold | deferred | 0 | 0 | 0 | — | — |
+| GET /search?q=revenue&project_id= | warm | response | 102 | 11 | 275 | get: 40, get304: 2, head: 60 | 1×2, 16×2, 8, 16×2, 8×3, 4 |
+| GET /search?q=revenue&project_id= | warm | deferred | 0 | 0 | 0 | — | — |
 | POST …/sessions (edit; cold=create, warm=reuse) | cold | response | 234 | 33 | 825 | get: 224, head: 1, list: 1, put: 8 | 1×6, 4, 1×2, 16×12, 11, 2, 1×6, 3, 4, 1, 3 |
 | POST …/sessions (edit; cold=create, warm=reuse) | cold | deferred | 0 | 0 | 0 | — | — |
 | POST …/sessions (edit; cold=create, warm=reuse) | warm | response | 7 | 4 | 100 | get: 6, get304: 1 | 4, 1×3 |

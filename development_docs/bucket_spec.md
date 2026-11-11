@@ -597,7 +597,8 @@ Read failures and missing candidate membership also reject admission.
 Index write failures increment `sessions.index.write_failed`.
 Cleanup and sweep repair continue after index errors. Explicit repair reports errors, including corrupt records and mismatched owners.
 
-Automatic migration merges each session reference through CAS without scanning history for every user.
+Automatic migration merges each session reference through CAS.
+If an index is missing during migration, recovery scans authoritative sessions before recreating it, including references from earlier pages.
 The optional repair command also removes orphan references. Missing indexes during repair require a fresh session scan.
 
 A no-op heartbeat returns the request's session read. Concurrent termination appears on the next request.

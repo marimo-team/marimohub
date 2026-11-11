@@ -71,7 +71,10 @@ export async function loadProjectCatalogPatch(
 
 export function projectCatalogPatch(
 	project: Project,
-	entry: Pick<SnapshotProjectEntry, 'updated_at' | 'security_labels_pending' | 'access_pending'>,
+	entry: Pick<
+		SnapshotProjectEntry,
+		'updated_at' | 'security_labels_pending' | 'access_pending' | 'access'
+	>,
 	options?: ProjectProjectionOptions,
 ) {
 	const pending = entry.access_pending?.filter((id) => id !== options?.finalizeAccess);
@@ -80,11 +83,14 @@ export function projectCatalogPatch(
 		access_pending: pending?.length ? pending : undefined,
 		access: pending?.length
 			? undefined
-			: {
-					members: project.members,
-					default_role: defaultRole,
-					version: PROJECT_ACCESS_VERSION,
-				},
+			: (entry.access?.version ?? 0) > PROJECT_ACCESS_VERSION
+				? entry.access
+				: {
+						...entry.access,
+						members: project.members,
+						default_role: defaultRole,
+						version: PROJECT_ACCESS_VERSION,
+					},
 		name: project.name,
 		description: project.description,
 		status: project.status,

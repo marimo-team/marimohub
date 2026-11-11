@@ -126,8 +126,9 @@ describe('per-user session index', () => {
 	});
 
 	it('requires registration even before migration completes', async () => {
-		const { bucket, input, metrics } = fixture();
+		const { bucket, input, metrics, index } = fixture();
 		const sessions = new SessionService(bucket, metrics);
+		await index.update(ACTOR, async () => []);
 		failIndexWrites(bucket);
 		const session_id = createSessionId();
 		await expect(sessions.createSession({ ...input, session_id })).rejects.toThrow(

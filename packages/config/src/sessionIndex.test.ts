@@ -24,7 +24,10 @@ it('automatically switches from scans to the session index after migration', asy
 	const list = vi.spyOn(bucket, 'list');
 	expect(await services.sessions.countActiveForUser(ACTOR)).toBe(1);
 	expect(list).toHaveBeenCalledWith(expect.objectContaining({ prefix: paths.sessionsPrefix }));
-	while (!(await services.migrations.tick())) {}
+	let complete = false;
+	for (let attempt = 0; attempt < 10 && !complete; attempt++)
+		complete = await services.migrations.tick();
+	if (!complete) throw new Error('Migration did not finish after 10 attempts');
 	list.mockClear();
 	expect(await services.sessions.countActiveForUser(ACTOR)).toBe(1);
 	expect(list).not.toHaveBeenCalled();

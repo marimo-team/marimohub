@@ -15,6 +15,49 @@ async function setup() {
 }
 
 describe('project access version compatibility', () => {
+	it.each(['rename', 'security labels'] as const)(
+		'preserves future summaries during %s and still reads authoritative permissions',
+		async (operation) => {
+			const { bucket, catalog, project, writer, service } = await setup();
+			await writer.addMember(project.id, { user_id: subject.id }, 'viewer', ACTOR);
+			await catalog.updateProjectEntry('test.future', ACTOR, project.id, (entry) => ({
+				access: { ...entry.access!, version: 2, future_policy: { deny: [subject.id] } },
+			}));
+			const before = (await catalog.getCurrentSnapshot()).projects[0].access;
+			const current = await writer.getProject(project.id);
+			await bucket.put(
+				paths.project(project.id).meta,
+				JSON.stringify({ ...current, members: [{ user_id: subject.id, role: 'app-user' }] }),
+			);
+			if (operation === 'rename') {
+				await writer.updateProject(project.id, { name: 'Renamed' }, ACTOR);
+			} else {
+				await writer.setSecurityLabels(project.id, undefined, ACTOR);
+			}
+			expect((await catalog.getCurrentSnapshot()).projects[0].access).toEqual(before);
+			for (const reader of [writer, service()]) {
+				const get = vi.spyOn(bucket, 'get');
+				expect(await reader.listProjects({ subject })).toEqual([]);
+				expect(await reader.isAppOnly(subject)).toBe(true);
+				expect(get.mock.calls.some(([key]) => key === paths.project(project.id).meta)).toBe(true);
+				get.mockRestore();
+			}
+		},
+	);
+
+	it('preserves unknown access fields during ordinary projections', async () => {
+		const { catalog, project, writer } = await setup();
+		const extension = { denied_groups: ['external'], nested: { enabled: false } };
+		await catalog.updateProjectEntry('test.extension', ACTOR, project.id, (entry) => ({
+			access: { ...entry.access!, extension },
+		}));
+		await writer.updateProject(project.id, { name: 'Renamed' }, ACTOR);
+		expect((await catalog.getCurrentSnapshot()).projects[0].access).toMatchObject({
+			version: 1,
+			extension,
+		});
+	});
+
 	it.each(['membership', 'default'] as const)(
 		'ignores stale %s grants before and after a legacy writer projects a revocation',
 		async (kind) => {
@@ -76,13 +119,17 @@ describe('project access version compatibility', () => {
 		}
 	});
 
-	it.each(['missing', 'invalid', 'unavailable'] as const)(
-		'never falls back to an old grant when authoritative metadata is %s',
-		async (failure) => {
+	it.each(
+		(['missing', 'invalid', 'unavailable'] as const).flatMap((failure) =>
+			[undefined, 2].map((version) => ({ failure, version })),
+		),
+	)(
+		'never falls back to a version $version grant when authoritative metadata is $failure',
+		async ({ failure, version }) => {
 			const { bucket, catalog, project, writer, service } = await setup();
 			await writer.addMember(project.id, { user_id: subject.id }, 'viewer', ACTOR);
 			await catalog.updateProjectEntry('test.legacy', ACTOR, project.id, (entry) => ({
-				access: { ...entry.access!, version: undefined, generation: 'project-access-v1' },
+				access: { ...entry.access!, version, generation: 'project-access-v1' },
 			}));
 			const key = paths.project(project.id).meta;
 			if (failure === 'missing') await bucket.delete(key);

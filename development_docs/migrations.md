@@ -58,7 +58,8 @@ metadata on every catalog CAS attempt and leaves project metadata unchanged.
 
 Current summaries carry `access.version: 1`. Old deployment generations do not
 establish trust. Readers fall back to metadata for missing or unknown versions,
-and for pending permission mutations. Automatic migration preserves newer versions.
+and for pending permission mutations. Routine projections, migration, and forced access rebuilds preserve newer summaries unchanged.
+Updates to supported or legacy summaries preserve unknown fields while replacing known permission fields.
 
 Pending permission and security markers remain intact. Migration can complete
 while these projects still use metadata reads. The owning mutation finalizes its
@@ -102,6 +103,9 @@ New writers must maintain the migrated format, including objects inserted behind
 `SessionService` merges each live reference through the user index CAS.
 Each CAS attempt rereads the session. Missing records are skipped, terminal editors
 are excluded, and unreclaimed app sandboxes retain their references.
+If a user index is missing, the visitor first rebuilds it from a fresh authoritative session scan.
+This recovery can read beyond the current page, including during initial migration.
+It prevents index loss between pages from producing an incomplete index.
 Corrupt sessions, mismatched IDs, and storage failures prevent completion.
 
 Every session creation requires successful index registration, including before migration completes.
