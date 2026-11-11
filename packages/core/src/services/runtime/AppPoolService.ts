@@ -347,7 +347,14 @@ export class AppPoolService {
 		const result = update(structuredClone(original));
 		if (JSON.stringify(result.pool) === JSON.stringify(original)) return result.value;
 		try {
-			return await this.store.mutateBatched(projectId, notebookId, update, known, 1000, true);
+			return await this.store.mutateBatched(
+				projectId,
+				notebookId,
+				update,
+				known,
+				this.policy.heartbeatBatchMs ?? 1_000,
+				true,
+			);
 		} catch (error) {
 			if (error instanceof ConflictError && error.cause instanceof PreconditionFailedError)
 				throw new UnavailableError('App presence is busy. Retry shortly.', { cause: error });

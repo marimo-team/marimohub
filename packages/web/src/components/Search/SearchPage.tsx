@@ -15,6 +15,7 @@ import { SearchField } from '@/components/ui/SearchField';
 import { Button } from '@/components/ui/Button';
 import { SearchResult } from './SearchResult';
 import { searchPath, SEARCH_RESULT_LIMIT } from '@/lib/workspaceSearch';
+import { SEARCH_SUBMIT_DELAY_MS } from '@/lib/timing';
 import { SearchFilters } from './SearchFilters';
 
 export default function SearchPage() {
@@ -71,7 +72,7 @@ function SearchContent({
 	const typing = composing || pendingInput;
 	useEffect(() => {
 		if (!pendingInput || composing) return;
-		const timer = setTimeout(() => setPendingInput(false), 500);
+		const timer = setTimeout(() => setPendingInput(false), SEARCH_SUBMIT_DELAY_MS);
 		return () => clearTimeout(timer);
 	}, [query, pendingInput, composing]);
 	const kind = params.get('kind') || null;

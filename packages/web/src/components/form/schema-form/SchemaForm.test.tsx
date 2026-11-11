@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { deferred } from '@/test/deferred';
 import { SchemaForm } from './SchemaForm';
 import { TextFileImport } from './TextFileImport';
@@ -89,7 +89,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('SchemaForm', () => {
 	it('updates the input value as you type into a string field', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<Harness />);
 		const input = screen.getByLabelText('Name');
 		await user.type(input, 'acme');
@@ -97,7 +97,7 @@ describe('SchemaForm', () => {
 	});
 
 	it('renders the union as a segmented control and swaps fields when the branch changes', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<Harness />);
 		expect(screen.queryByLabelText('User')).not.toBeInTheDocument();
 
@@ -106,7 +106,7 @@ describe('SchemaForm', () => {
 	});
 
 	it('resets stale fields from the previous branch on switch', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<Harness />);
 
 		await user.click(screen.getByRole('button', { name: 'Basic' }));
@@ -121,7 +121,7 @@ describe('SchemaForm', () => {
 	});
 
 	it('shows a keep-marker secret as "(set)" with a Replace button, swapping to a password input', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			<Harness
 				editing
@@ -141,7 +141,7 @@ describe('SchemaForm', () => {
 	});
 
 	it('switches between encrypted and external secret inputs', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			<Harness
 				secretSources={{
@@ -204,7 +204,7 @@ describe('SchemaForm', () => {
 	});
 
 	it('preserves inline and reference drafts while switching sources', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<Harness secretSources={{ inline: true, references: [awsSecretSource] }} />);
 		await user.type(screen.getByLabelText('Api key'), 'inline-draft');
 		await user.click(screen.getByRole('button', { name: 'External secret' }));
@@ -216,7 +216,7 @@ describe('SchemaForm', () => {
 	});
 
 	it('does not offer a managed restore after switching an existing reference to inline', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			<Harness
 				editing
@@ -234,7 +234,7 @@ describe('SchemaForm', () => {
 	});
 
 	it('restores an existing managed value after switching away and back', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			<Harness
 				editing
@@ -251,7 +251,7 @@ describe('SchemaForm', () => {
 	});
 
 	it('flips aria-checked on the boolean toggle', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<Harness />);
 		const toggle = screen.getByRole('switch', { name: 'Debug' });
 		expect(toggle).toHaveAttribute('aria-checked', 'true');
@@ -336,7 +336,7 @@ describe('optional object sections', () => {
 	it.each(cases)(
 		'enables, validates, and removes an optional object in a $name',
 		async (testCase) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			render(<OptionalHarness {...testCase} />);
 			const toggle = screen.getByRole('switch', { name: 'Enable Settings' });
 			expect(toggle).toHaveAttribute('aria-checked', 'false');
@@ -357,7 +357,7 @@ describe('optional object sections', () => {
 	);
 
 	it('opens an existing optional object and allows removing it', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			<OptionalHarness
 				name="existing"
@@ -405,7 +405,7 @@ describe('textarea widget', () => {
 	}
 
 	it('renders a hinted string as a textarea that keeps newlines, leaving others single-line', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<TlsHarness />);
 		const bundle = screen.getByLabelText('Ca bundle');
 		expect(bundle.tagName).toBe('TEXTAREA');
@@ -440,7 +440,7 @@ describe('advanced union fields', () => {
 	};
 
 	it('renders advanced hints in a nested disclosure', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const value = buildDefaults(storageSchema) as Record<string, unknown>;
 		render(
 			<SchemaForm
@@ -478,7 +478,7 @@ describe('kv-pairs editor', () => {
 	}
 
 	it('warns about duplicate and blank names before they silently collapse', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<KvHarness />);
 		const add = screen.getByRole('button', { name: /Add/ });
 		await user.click(add);
@@ -530,7 +530,7 @@ describe('agent skill editor', () => {
 		);
 	}
 	it('adds, edits, and removes skills while preserving Markdown newlines', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<AgentHarness />);
 		await user.type(screen.getByLabelText('Instructions'), '# Team{enter}Use polars.');
 		await user.click(screen.getByRole('button', { name: 'Add' }));
@@ -564,7 +564,7 @@ describe('text file import', () => {
 		);
 	}
 	function setupImport(node: JsonSchemaNode = { type: 'string', 'x-max-utf8-bytes': 100 }) {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { container } = render(<Harness node={node} />);
 		return {
 			user,
@@ -657,7 +657,7 @@ describe('text file import', () => {
 		expect(screen.getByLabelText('Script')).toHaveValue('existing');
 	});
 	it('does not update the form when an import finishes after unmounting', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onChange = vi.fn();
 		const pending = deferred<ArrayBuffer>();
 		const { container, unmount } = render(

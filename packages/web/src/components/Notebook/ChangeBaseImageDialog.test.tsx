@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { ChangeBaseImageDialog } from './ChangeBaseImageDialog';
@@ -78,7 +78,7 @@ describe('ChangeBaseImageDialog', () => {
 	});
 
 	it('PATCHes a chosen image and closes on success', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = makeFetch(undefined);
 		const { onClose } = renderDialog(fetchImpl);
 
@@ -117,7 +117,7 @@ describe('ChangeBaseImageDialog', () => {
 	});
 
 	it('PATCHes base_image: null when reset to Default', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = makeFetch('img-b');
 		const { onClose } = renderDialog(fetchImpl);
 

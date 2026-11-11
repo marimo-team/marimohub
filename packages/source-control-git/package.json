@@ -20,7 +20,7 @@
 	},
 	"scripts": {
 		"build": "vp pack",
-		"test": "vp test",
+		"test": "vp run test:vitest",
 		"check": "vp check",
 		"typecheck": "tsc --noEmit"
 	},

@@ -2,6 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { testTasks } from '@marimo-hub/vite-config';
 import { defineConfig, lazyPlugins } from 'vite-plus';
 import { precompress } from './precompress';
 import { devApiTarget, envPort, waitForDevApi } from './devProxy';
@@ -98,6 +99,7 @@ export default defineConfig({
 	// Cached build task: `output` archives/restores dist/ on a hit (a script can't).
 	run: {
 		tasks: {
+			...testTasks,
 			dev: {
 				command: 'vp dev',
 				cache: { untrackedEnv: ['DEV_HOST', 'PORT', 'WEB_PORT'] },

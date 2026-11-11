@@ -1,10 +1,9 @@
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createTestQueryClient, jsonOk } from '@/test/render';
+import { createTestQueryClient, jsonOk, setupUser } from '@/test/render';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ShareMenu } from './ShareMenu';
 
@@ -52,7 +51,7 @@ afterEach(() => {
 
 describe('ShareMenu', () => {
 	it('passes the current query to the App links dialog', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async () => jsonOk([{ slug: 'sales', registration_id: 'registration-1' }])),
@@ -66,7 +65,7 @@ describe('ShareMenu', () => {
 	it.each(['denied', 'unavailable'])(
 		'reports clipboard %s without a success message or navigation',
 		async (failure) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const success = vi.spyOn(toast, 'success');
 			const error = vi.spyOn(toast, 'error');
 			const writeText = vi.fn().mockRejectedValue(new Error('Permission denied'));
@@ -90,7 +89,7 @@ describe('ShareMenu', () => {
 	);
 
 	it('copies the canonical notebook URL', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const writeText = vi.fn(() => Promise.resolve());
 		Object.defineProperty(navigator, 'clipboard', {
 			value: { writeText },
@@ -107,7 +106,7 @@ describe('ShareMenu', () => {
 	});
 
 	it.each(['', '/app'])('copies the current route and filtered parameters (%s)', async (suffix) => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const writeText = vi.fn(() => Promise.resolve());
 		Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
 		const base = document.createElement('base');

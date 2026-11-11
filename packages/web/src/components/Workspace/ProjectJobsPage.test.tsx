@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
 import { stubApi } from '@/test/apiStub';
-import { jsonError, renderWithClient } from '@/test/render';
+import { jsonError, renderWithClient, setupUser } from '@/test/render';
 import type { ProjectRole } from '@/types';
 import { ProjectJobsPage } from './ProjectJobsPage';
 import { ProjectSourceGate } from './ProjectSourceGate';
@@ -41,7 +40,7 @@ function setup({
 		},
 		{ capabilities: { jobs: { available } } },
 	);
-	const user = userEvent.setup();
+	const user = setupUser();
 	renderWithClient(
 		<Routes>
 			<Route path="/projects/:pid" element={<ProjectSourceGate />}>

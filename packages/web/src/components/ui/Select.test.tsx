@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { Select } from './Select';
 
 function Harness() {
@@ -22,7 +22,7 @@ function Harness() {
 
 describe('Select', () => {
 	it('supports keyboard selection, announces the chosen option, and restores trigger focus', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<Harness />);
 		const trigger = screen.getByRole('button', { name: 'All projects Scope' });
 		trigger.focus();
@@ -37,7 +37,7 @@ describe('Select', () => {
 		);
 	});
 	it('supports typeahead and Escape without committing a different choice', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<Harness />);
 		const trigger = screen.getByRole('button', { name: 'All projects Scope' });
 		await user.click(trigger);

@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { Popover } from './Popover';
 
 describe('Popover', () => {
 	it('renders plain children when opened', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			<Popover label="Info" trigger={<span>i</span>}>
 				<p>Plain body</p>
@@ -18,7 +18,7 @@ describe('Popover', () => {
 	});
 
 	it('invokes function children with a working close handler', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			<Popover label="Info" trigger={<span>i</span>}>
 				{({ close }) => (

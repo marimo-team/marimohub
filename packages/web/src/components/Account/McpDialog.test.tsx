@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { installMatchMedia, jsonOk, renderWithClient } from '@/test/render';
+import { installMatchMedia, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import { deferred } from '@/test/deferred';
 import { McpDialog } from './McpDialog';
 
@@ -50,7 +49,7 @@ function setup(
 	const rendered = renderWithClient(<McpDialog isOpen onClose={onClose} />, { route: '/' });
 	return { calls, onClose, ...rendered };
 }
-async function fillTokenForm(user: ReturnType<typeof userEvent.setup>, name = 'my-client') {
+async function fillTokenForm(user: ReturnType<typeof setupUser>, name = 'my-client') {
 	await user.click(await screen.findByRole('tab', { name: 'Token' }));
 	await user.type(screen.getByLabelText('Name'), name);
 	await user.click(screen.getByRole('radio', { name: /^Read/ }));
@@ -71,7 +70,7 @@ describe('McpDialog manual tokens', () => {
 	);
 
 	it('creates a scoped token and clears the secret when closed', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls, rerender, onClose } = setup(true);
 		await user.click(await screen.findByRole('tab', { name: 'Token' }));
 		const create = screen.getByRole('button', { name: 'Create MCP token' });
@@ -100,7 +99,7 @@ describe('McpDialog manual tokens', () => {
 	});
 
 	it('preserves the secret across tab changes until the dialog closes', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls, rerender, onClose } = setup(true);
 		await fillTokenForm(user);
 		await user.click(screen.getByRole('button', { name: 'Create MCP token' }));
@@ -121,7 +120,7 @@ describe('McpDialog manual tokens', () => {
 	});
 
 	it('preserves the draft and a creation that completes on another tab', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const pending = deferred<Response>();
 		const { calls } = setup(true, false, { createResponse: () => pending.promise });
 		await fillTokenForm(user);
@@ -142,7 +141,7 @@ describe('McpDialog manual tokens', () => {
 	});
 
 	it('validates expiry and surfaces a disabled-feature error without displaying a secret', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup(true, true);
 		await fillTokenForm(user);
 		await user.clear(screen.getByLabelText('Expires in days'));
@@ -176,7 +175,7 @@ describe('McpDialog manual tokens', () => {
 	it.each(['', '-1', '1.5', '91', 'soon'])(
 		'does not submit an invalid expiry: %j',
 		async (days) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const { calls } = setup(true);
 			await fillTokenForm(user);
 			await user.clear(screen.getByLabelText('Expires in days'));
@@ -190,7 +189,7 @@ describe('McpDialog manual tokens', () => {
 	);
 
 	it('requires a nonblank name before submission', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup(true);
 		await user.click(await screen.findByRole('tab', { name: 'Token' }));
 		await user.click(screen.getByRole('radio', { name: /^Read/ }));
@@ -202,7 +201,7 @@ describe('McpDialog manual tokens', () => {
 	});
 
 	it('preserves the form after a network failure and permits a deliberate retry', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const createResponse = vi
 			.fn<() => Promise<Response>>()
 			.mockRejectedValueOnce(new TypeError('Network unavailable'))
@@ -232,7 +231,8 @@ describe('McpDialog manual tokens', () => {
 	});
 
 	it('disables submission while pending and does not reveal a late token after reopening', async () => {
-		const user = userEvent.setup();
+		// A real double click commits the pending state between its two clicks.
+		const user = setupUser({ delay: 0 });
 		const pending = deferred<Response>();
 		const { calls, rerender, onClose } = setup(true, false, {
 			createResponse: () => pending.promise,

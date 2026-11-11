@@ -13,7 +13,7 @@
 	},
 	"scripts": {
 		"build": "vp pack",
-		"test": "vp test",
+		"test": "vp run test:vitest",
 		"test:coverage": "vp test --coverage",
 		"check": "vp check",
 		"typecheck": "tsc --noEmit"

@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { Bot, Code2, FileCode2 } from 'lucide-react';
 import { describe, expect, it, vi } from 'vitest';
 import { ApplicationTabs } from './ApplicationTabs';
@@ -58,7 +58,7 @@ describe('ApplicationTabs', () => {
 	});
 
 	it('keeps every panel mounted while the selection changes', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			<ApplicationTabs
 				ariaLabel="Workspace applications"
@@ -101,7 +101,7 @@ describe('ApplicationTabs', () => {
 	});
 
 	it('shows at most one secondary panel and never remounts an iframe', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onSplitKeyChange = vi.fn();
 		render(
 			<ApplicationTabs
@@ -145,7 +145,7 @@ describe('ApplicationTabs', () => {
 	});
 
 	it('swaps the primary and secondary panels without moving their nodes', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			<ApplicationTabs
 				ariaLabel="Workspace applications"
@@ -270,7 +270,7 @@ describe('ApplicationTabs', () => {
 	});
 
 	it('opens a panel URL directly in a new browser tab', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const open = vi.spyOn(window, 'open').mockReturnValue(null);
 		render(<ApplicationTabs ariaLabel="Workspace applications" tabs={applicationTabs()} />);
 
@@ -280,7 +280,7 @@ describe('ApplicationTabs', () => {
 	});
 
 	it('keeps the close dialog open and allows retrying after a failure', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const error = new Error('Close failed');
 		const onClose = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(undefined);
 		const onCloseError = vi.fn();
@@ -307,7 +307,7 @@ describe('ApplicationTabs', () => {
 	});
 
 	it('confirms and awaits a close before dismissing the dialog', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		let finishClose!: () => void;
 		const onClose = vi.fn(
 			() =>

@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { useProjectQuery } from '@/api/hooks';
 import { makeCapabilities, stubApi } from '@/test/apiStub';
 import type { CapabilityOverrides } from '@/test/apiStub';
-import { jsonError, renderWithClient } from '@/test/render';
+import { jsonError, renderWithClient, setupUser } from '@/test/render';
 import { PID, project } from '@/components/Project/Project.testWorld';
 import type { ProjectDetail } from '@/types';
 import { ProjectCloudAccessButton } from './ProjectCloudAccessButton';
@@ -40,7 +39,7 @@ describe('Project — cloud access', () => {
 	] as const)(
 		'saves %s as the project federation override',
 		async (choice, federation, message) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const toastSuccess = vi.spyOn(toast, 'success');
 			const { calls } = stubProject(
 				{
@@ -67,7 +66,7 @@ describe('environment and access', () => {
 	it('opens cloud access directly', async () => {
 		stubProject();
 		await renderSettings();
-		const user = userEvent.setup();
+		const user = setupUser();
 		await user.click(screen.getByRole('button', { name: 'Cloud access' }));
 		expect(screen.getByRole('heading', { name: 'Cloud access' })).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: 'Back' })).not.toBeInTheDocument();

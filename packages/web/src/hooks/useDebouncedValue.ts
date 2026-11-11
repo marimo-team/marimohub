@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
+import { DEBOUNCE_MS } from '@/lib/timing';
 
 /**
  * The given value, updated only after it has stopped changing for `delayMs`.
  * Used to throttle per-keystroke work (e.g. the member-picker search query).
  */
-export function useDebouncedValue<T>(value: T, delayMs = 200): T {
+export function useDebouncedValue<T>(value: T, delayMs = DEBOUNCE_MS): T {
 	const [debounced, setDebounced] = useState(value);
 
 	useEffect(() => {

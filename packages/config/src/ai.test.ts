@@ -73,13 +73,21 @@ describe('makeAi', () => {
 	it('exposes a chat model with default budgets and honours MARIMOHUB_AI_CHAT=off', () => {
 		const on = makeAi(aiEnv).ai!;
 		expect(on.languageModel).toBeDefined();
-		expect(on.chat).toEqual({ taskTimeoutSeconds: 300, permissionTimeoutSeconds: 300 });
+		expect(on.chat).toEqual({
+			taskTimeoutSeconds: 300,
+			permissionTimeoutSeconds: 300,
+			saveThrottleMs: 1500,
+		});
 		const tuned = makeAi({
 			...aiEnv,
 			MARIMOHUB_AI_CHAT_TASK_TIMEOUT_SECONDS: '600',
 			MARIMOHUB_AI_CHAT_PERMISSION_TIMEOUT_SECONDS: '45',
 		}).ai!;
-		expect(tuned.chat).toEqual({ taskTimeoutSeconds: 600, permissionTimeoutSeconds: 45 });
+		expect(tuned.chat).toEqual({
+			taskTimeoutSeconds: 600,
+			permissionTimeoutSeconds: 45,
+			saveThrottleMs: 1500,
+		});
 		const off = makeAi({ ...aiEnv, MARIMOHUB_AI_CHAT: 'off' }).ai!;
 		expect(off.chat).toBeUndefined();
 		expect(off.languageModel).toBeDefined();

@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { useSelector } from '@tanstack/react-store';
 import { z } from 'zod';
-import { renderWithClient } from '@/test/render';
+import { renderWithClient, setupUser } from '@/test/render';
 import { useAppForm } from './useAppForm';
 import { schemaValidators } from './validators';
 import { useSeedOnOpen } from './useSeedOnOpen';
@@ -49,7 +48,7 @@ function renderSeeded(isOpen: boolean, values: Values) {
 
 describe('useSeedOnOpen', () => {
 	it('leaves the form alone while the dialog is closed', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { input, setProps } = renderSeeded(false, { name: 'Alpha' });
 
 		await user.clear(input());
@@ -61,7 +60,7 @@ describe('useSeedOnOpen', () => {
 	});
 
 	it('seeds the form on the closed → open transition', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { input, setProps } = renderSeeded(false, { name: 'Alpha' });
 
 		await user.clear(input());
@@ -73,7 +72,7 @@ describe('useSeedOnOpen', () => {
 	});
 
 	it('re-seeds on reopen, discarding edits from a cancelled session', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const values: Values = { name: 'Alpha' };
 		const { input, setProps } = renderSeeded(false, values);
 
@@ -93,7 +92,7 @@ describe('useSeedOnOpen', () => {
 	});
 
 	it('does not clobber in-progress edits when values change while the dialog stays open', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { input, setProps } = renderSeeded(true, { name: 'Alpha' });
 
 		await waitFor(() => expect(input()).toHaveValue('Alpha'));
@@ -110,7 +109,7 @@ describe('useSeedOnOpen', () => {
 	});
 
 	it('re-runs validation after the reset so canSubmit reflects the seeded values', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const values: Values = { name: '' };
 		const { canSubmit, input, setProps } = renderSeeded(false, values);
 
@@ -130,7 +129,7 @@ describe('useSeedOnOpen', () => {
 	});
 
 	it('marks a valid seed as submittable without the user touching a field', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const values: Values = { name: 'Alpha' };
 		const { canSubmit, setProps, input } = renderSeeded(false, values);
 

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { installMatchMedia, renderWithClient } from '@/test/render';
+import { installMatchMedia, renderWithClient, setupUser } from '@/test/render';
 import { THEME_STORAGE_KEY as STORAGE_KEY } from '@/lib/theme';
 import { ThemeProvider, useTheme } from './ThemeContext';
 import type { Theme } from './ThemeContext';
@@ -64,7 +63,7 @@ describe('ThemeProvider', () => {
 	it.each<Theme>(['light', 'dark'])(
 		'enforces %s and restores the saved preference when removed',
 		async (forced) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const preferred = forced === 'light' ? 'dark' : 'light';
 			localStorage.setItem(STORAGE_KEY, preferred);
 			installMatchMedia(preferred === 'dark');
@@ -164,7 +163,7 @@ describe('ThemeProvider', () => {
 	});
 
 	it('adds the dark class for dark and removes it for light', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		localStorage.setItem(STORAGE_KEY, 'dark');
 
 		renderTheme();
@@ -187,7 +186,7 @@ describe('ThemeProvider', () => {
 	});
 
 	it('persists the theme to localStorage on mount and on every change', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 
 		renderTheme();
 		expect(localStorage.getItem(STORAGE_KEY)).toBe('light');
@@ -197,7 +196,7 @@ describe('ThemeProvider', () => {
 	});
 
 	it('toggleTheme flips between light and dark', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 
 		renderTheme();
 		expect(screen.getByTestId('theme')).toHaveTextContent('light');
@@ -210,7 +209,7 @@ describe('ThemeProvider', () => {
 	});
 
 	it('setTheme sets the theme directly', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 
 		renderTheme();
 
@@ -222,7 +221,7 @@ describe('ThemeProvider', () => {
 		expect(screen.getByTestId('theme')).toHaveTextContent('dark');
 	});
 	it('keeps mode switching usable when browser storage rejects writes', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const store = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
 			throw new DOMException('Quota exceeded', 'QuotaExceededError');
 		});

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { ChangeRequestActions } from './ChangeRequestActions';
 
 const usePublisher = vi.hoisted(() => vi.fn());
@@ -83,7 +83,7 @@ describe('ChangeRequestActions', () => {
 	});
 
 	it('closes an old publish popup when its request finishes after notebook navigation', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const mutate = vi.fn();
 		usePublisher.mockReturnValue({
 			activeChangeRequest: undefined,
@@ -122,7 +122,7 @@ describe('ChangeRequestActions', () => {
 	});
 
 	it('uses the current tab when a view popup is blocked', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		usePublisher.mockReturnValue({
 			activeChangeRequest: {
 				proposal_id: 'prop-1',

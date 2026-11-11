@@ -18,7 +18,7 @@
 	},
 	"scripts": {
 		"build": "vp pack",
-		"test": "vp test",
+		"test": "vp run test:vitest",
 		"check": "vp check",
 		"docs:generate": "UPDATE_CONFIG_DOCS=1 vp test configDocs",
 		"typecheck": "tsc --noEmit"

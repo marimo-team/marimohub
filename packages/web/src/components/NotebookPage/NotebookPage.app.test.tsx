@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import type { Session } from '@/types';
 import { makeFetch, renderPage, runningSession, sessionPosts } from './NotebookPage.testWorld';
 
@@ -181,7 +182,7 @@ describe('NotebookPage app variant', () => {
 	});
 
 	it('Restart confirms before disconnecting everyone (with the connection hint)', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const impl = makeFetch({
 			role: 'editor',
 			session: appSession({ active_connections: 3 }),
@@ -205,7 +206,7 @@ describe('NotebookPage app variant', () => {
 	});
 
 	it('Stop confirms too; cancel leaves the app untouched', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const impl = makeFetch({ role: 'editor', session: appSession() });
 		const { container } = renderPage('app');
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
@@ -294,7 +295,7 @@ describe('NotebookPage app variant', () => {
 	);
 
 	it('offers a one-shot Retry with Default without replacing the stored profile', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const impl = makeFetch({
 			role: 'editor',
 			computeProfile: 'large',

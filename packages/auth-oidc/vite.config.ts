@@ -1,7 +1,3 @@
-import { defineConfig } from 'vite-plus';
+import { libraryConfig } from '@marimo-hub/vite-config';
 
-export default defineConfig({
-	pack: {
-		dts: true,
-	},
-});
+export default libraryConfig();

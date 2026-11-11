@@ -2,6 +2,7 @@ import { vi } from 'vitest';
 import {
 	APP_PRESENCE_PERSIST_INTERVAL_MS,
 	CatalogService,
+	DEFAULT_APP_POOL_POLICY,
 	ProxyExposure,
 	createServices,
 	paths,
@@ -39,6 +40,8 @@ export async function createAppSessionFixture<T extends MemoryBucket>(bucket: T,
 			compute: makeFakeCompute(),
 			deps: {
 				resourceSecurity,
+				// Heartbeat renewals flush without the production batching window.
+				policy: { appPool: { ...DEFAULT_APP_POOL_POLICY, heartbeatBatchMs: 0 } },
 				sandbox: {
 					bucket: { name: 'test', endpoint: '' },
 					hostname: 'localhost',

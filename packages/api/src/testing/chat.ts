@@ -80,7 +80,7 @@ export function chatAi(
 			model: 'configured-model',
 			signingSecret: 'signing-secret',
 			languageModel: model,
-			chat: DEFAULT_CHAT_CONFIG,
+			chat: { ...DEFAULT_CHAT_CONFIG, saveThrottleMs: 20 },
 			...overrides,
 		},
 	};

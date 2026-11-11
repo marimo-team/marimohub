@@ -5,6 +5,8 @@ import type { RenderHookOptions, RenderOptions } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import userEvent from '@testing-library/user-event';
+import type { Options as UserEventOptions } from '@testing-library/user-event';
 import { Toaster } from 'sonner';
 import { vi } from 'vitest';
 import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
@@ -124,6 +126,15 @@ export function renderHookWithClient<Result, Props>(
 			}),
 		}),
 	};
+}
+
+/**
+ * user-event without the default per-step `setTimeout(0)`: a typed sentence costs
+ * one act() flush instead of one macrotask per keystroke. Pass `{ delay: 0 }` back
+ * for a test that must observe intermediate renders while typing.
+ */
+export function setupUser(options: UserEventOptions = {}) {
+	return userEvent.setup({ delay: null, ...options });
 }
 
 export function installMatchMedia(matches = false): void {

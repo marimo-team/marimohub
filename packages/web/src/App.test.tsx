@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { installMatchMedia, jsonError, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import App from './App';
 
 const loadedChunks = vi.hoisted((): string[] => []);
@@ -138,7 +137,7 @@ describe('App routes', () => {
 
 	it('withholds Colors on account lookup failure and opens it after a successful retry', async () => {
 		installMatchMedia(false);
-		const user = userEvent.setup();
+		const user = setupUser();
 		let unavailable = true;
 		vi.stubGlobal(
 			'fetch',

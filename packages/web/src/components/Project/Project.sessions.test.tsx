@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { toast } from 'sonner';
 import type { Session } from '@/types';
 import {
@@ -16,7 +16,7 @@ import {
 
 describe('Project — Notebook Actions: files and sessions', () => {
 	it('downloads the notebook source file', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch();
 		const { createObjectURL, revokeObjectURL } = installDownloadMocks();
 		await renderProject();
@@ -33,7 +33,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('downloads the outputs snapshot as HTML', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch();
 		const { createObjectURL } = installDownloadMocks();
 		await renderProject();
@@ -49,7 +49,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('downloads the notebook workspace archive', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch();
 		const { createObjectURL } = installDownloadMocks();
 		const toastLoading = vi.spyOn(toast, 'loading');
@@ -67,7 +67,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('offers one unified sync settings action for a git-backed notebook', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({ notebooks: [{ ...notebook(), source_type: 'git' }] });
 		await renderProject();
 
@@ -87,7 +87,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('keeps source settings and token rotation restricted for editors', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({ role: 'editor', notebooks: [{ ...notebook(), source_type: 'git' }] });
 		await renderProject();
 
@@ -100,7 +100,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('offers git notebook creation only to managers', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({ role: 'manager' });
 		await renderProject();
 
@@ -109,7 +109,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('does not offer git notebook creation to editors', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({ role: 'editor' });
 		await renderProject();
 
@@ -128,7 +128,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it("a git row's source tile opens a popover with GitHub links", async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({ notebooks: [{ ...notebook(), source_type: 'git' }] });
 		await renderProject();
 
@@ -149,7 +149,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('rotates a sync token and shows the write-once token', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch({ notebooks: [{ ...notebook(), source_type: 'git' }] });
 		await renderProject();
 
@@ -168,7 +168,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('viewer + applications: may open the running app but not stop it', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({
 			role: 'viewer',
 			sessions: [
@@ -193,7 +193,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('viewer + applications: may start the app when none is running', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({
 			role: 'viewer',
 			capabilities: {
@@ -209,7 +209,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('viewer + static: no app actions in the menu', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({
 			role: 'viewer',
 			sessions: [
@@ -236,7 +236,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('editor keeps Open app + Stop app on a running app', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({
 			role: 'editor',
 			sessions: [
@@ -256,7 +256,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('stops a running session from the row action', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch({ sessions: [stoppableSession()] });
 		await renderProject();
 
@@ -273,7 +273,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('stops a running session from the notebook menu', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch({ sessions: [stoppableSession()] });
 		await renderProject();
 
@@ -290,7 +290,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('hides kernel shutdown actions without the session stop grant', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({ sessions: [runningSession()] });
 		await renderProject();
 

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { QueryExecutionResults } from './SqlWorkspace';
 import type { QueryExecution } from './SqlWorkspace';
 
@@ -64,7 +64,7 @@ describe('QueryExecutionResults', () => {
 	});
 
 	it('preserves every statement result and switches the displayed table', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<ResultsHarness />);
 
 		const firstTab = screen.getByRole('tab', { name: 'Statement 1, 1 row' });
@@ -81,7 +81,7 @@ describe('QueryExecutionResults', () => {
 	});
 
 	it('supports keyboard navigation between statement results', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<ResultsHarness />);
 
 		const firstTab = screen.getByRole('tab', { name: 'Statement 1, 1 row' });

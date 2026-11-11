@@ -45,16 +45,19 @@ jobs:
 
       # Keep the package graph sequential so child processes cannot exhaust the
       # runner's process limit under a cold cache.
-      # Vitest's mutable caches prevent Vite Task from caching test results.
+      # Each package's `test` script runs the `test:vitest` task from
+      # @marimo-hub/vite-config, which excludes Vitest's own on-disk caches from
+      # Vite Task tracking so unchanged packages replay from the restored cache.
+      # Vitest's module cache is not persisted between runs, so skip writing it.
       - name: Test backend
         if: matrix.suite == 'backend'
         run: |
-          vp run --verbose test:root --configLoader=runner --pool=threads --no-cache --no-fsModuleCache
-          vp run --filter '@marimo-hub/*' --filter '!@marimo-hub/web' --concurrency-limit 1 --verbose test --configLoader=runner --pool=threads --no-cache --no-fsModuleCache
+          vp run --verbose test:root --configLoader=runner --pool=threads --no-fsModuleCache
+          vp run --filter '@marimo-hub/*' --filter '!@marimo-hub/web' --concurrency-limit 1 --verbose test --configLoader=runner --pool=threads --no-fsModuleCache
 
       - name: Test web
         if: matrix.suite == 'web'
-        run: vp run --filter @marimo-hub/web --verbose test --configLoader=runner --pool=threads --no-cache --no-fsModuleCache
+        run: vp run --filter @marimo-hub/web --verbose test --configLoader=runner --pool=threads --no-fsModuleCache
 
       - name: Test Fargate Python agent
         if: matrix.suite == 'backend'

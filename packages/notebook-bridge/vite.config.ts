@@ -1,5 +1,6 @@
-import { defineConfig } from 'vite-plus';
-export default defineConfig({
+import { libraryConfig } from '@marimo-hub/vite-config';
+
+export default libraryConfig({
 	pack: {
 		entry: [
 			'src/host.ts',
@@ -10,7 +11,5 @@ export default defineConfig({
 			'src/navigation.ts',
 			'src/runtime.ts',
 		],
-		dts: true,
 	},
-	test: { include: ['src/**/*.test.ts'] },
 });

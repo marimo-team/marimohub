@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { ComboBox } from './ComboBox';
 import type { ComboBoxOption } from './ComboBox';
 
@@ -45,7 +45,7 @@ function Harness({
 
 describe('ComboBox', () => {
 	it('opens on input, filters options, and fires onSelect with the option id', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onSelect = vi.fn();
 		render(<Harness onSelect={onSelect} />);
 
@@ -57,7 +57,7 @@ describe('ComboBox', () => {
 	});
 
 	it('retains a selected option when its key differs from its text', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onSelect = vi.fn();
 		render(<Harness onSelect={onSelect} retainSelection />);
 		await user.type(screen.getByRole('combobox'), 'gra');
@@ -74,7 +74,7 @@ describe('ComboBox', () => {
 	});
 
 	it('shows the empty state when nothing matches (custom text allowed)', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<Harness onSelect={() => {}} />);
 
 		await user.type(screen.getByRole('combobox', { name: 'People' }), 'zzz');

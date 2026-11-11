@@ -130,7 +130,7 @@ export async function decidePermission(
 		);
 		if (outcome !== 'missing') break;
 		input.signal?.throwIfAborted();
-		await sleep(DECISION_RETRY.delayMs);
+		await (input.deps.sleep ?? sleep)(DECISION_RETRY.delayMs);
 	}
 	const accepted = outcome === 'accepted';
 	if (accepted)

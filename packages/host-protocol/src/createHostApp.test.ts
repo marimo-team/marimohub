@@ -26,6 +26,7 @@ interface Snapshot extends HostCatalogSnapshot {
 }
 
 const PREFIX = '/hub/host';
+const POLL_INTERVAL_MS = 10;
 const DECISION_PREFIX = 'fake:';
 
 /** A minimal in-memory platform: two users, one project, no sandboxes. */
@@ -167,7 +168,10 @@ function fakePlatform() {
 	const runtimes = vi.spyOn(platform, 'runtimes');
 	const resolveNotebook = vi.spyOn(platform, 'resolveNotebook');
 	const onError = vi.fn();
-	const app = new Hono().route(PREFIX, createHostApp(platform, { realm: 'fake', onError }));
+	const app = new Hono().route(
+		PREFIX,
+		createHostApp(platform, { realm: 'fake', onError, pollIntervalMs: POLL_INTERVAL_MS }),
+	);
 	const request = (
 		method: string,
 		path: string,
@@ -516,7 +520,7 @@ describe('generic host app', () => {
 		const stream = streamText(await request('GET', '/events?types=runtime'));
 		try {
 			await stream.until('event: ready\n');
-			await new Promise((resolve) => setTimeout(resolve, 1_300));
+			await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 5));
 			expect(runtimes).toHaveBeenCalledTimes(1);
 			// A catalog move recomputes the snapshot and its runtime discovery.
 			await request('PATCH', '/notebooks/p1%2Fn1', { body: { name: 'Moved' }, key: 'rename' });

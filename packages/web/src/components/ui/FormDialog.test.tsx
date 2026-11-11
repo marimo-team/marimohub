@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { FormDialog } from './FormDialog';
 import { TextField } from './TextField';
 
@@ -38,21 +38,21 @@ describe('FormDialog', () => {
 	});
 
 	it('fires onSubmit when the submit button is pressed', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onSubmit } = setup();
 		await user.click(screen.getByRole('button', { name: 'Create' }));
 		expect(onSubmit).toHaveBeenCalledTimes(1);
 	});
 
 	it('submits on Enter from within a field (native form submit)', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onSubmit } = setup();
 		await user.type(screen.getByLabelText('Project Name'), 'Hello{Enter}');
 		expect(onSubmit).toHaveBeenCalledTimes(1);
 	});
 
 	it('fires onClose when Cancel is pressed', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onClose } = setup();
 		await user.click(screen.getByRole('button', { name: 'Cancel' }));
 		expect(onClose).toHaveBeenCalledTimes(1);
@@ -64,7 +64,7 @@ describe('FormDialog', () => {
 	});
 
 	it('blocks Escape and the close button while pending', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onClose } = setup({ isPending: true });
 		await user.keyboard('{Escape}');
 		expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
@@ -74,7 +74,7 @@ describe('FormDialog', () => {
 	});
 
 	it('closes on Escape when idle', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onClose } = setup();
 		await user.keyboard('{Escape}');
 		expect(onClose).toHaveBeenCalledTimes(1);

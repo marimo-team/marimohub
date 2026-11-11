@@ -22,6 +22,7 @@ import type {
 	TurnContext,
 } from '@marimo-hub/core/chat';
 import { UnavailableError } from '@marimo-hub/core/errors';
+import { DEFAULT_CHAT_CONFIG } from '../context';
 import type { ApiDeps } from '../context';
 import { logEvent } from '../log';
 import { toolErrorSummary, toolPreview } from './toolPreview';
@@ -31,7 +32,6 @@ const MAX_PROVIDER_STEPS = CHAT_LIMITS.toolCallsPerTurn + 6;
 const MAX_TURN_CHARACTERS = 576_000;
 const HISTORY_MESSAGES = 80;
 const HISTORY_CHARACTERS = 48_000;
-const SAVE_THROTTLE_MS = 1500;
 const LIMIT_MESSAGE =
 	'This turn reached its execution limit before a final answer. Review the recorded tool activity and continue the task in another message.';
 const TRUNCATED_MARKER = '[Model response truncated. Task paused; continue to resume.]';
@@ -180,17 +180,18 @@ class PartsPersister {
 	constructor(
 		private readonly save: (parts: readonly ConversationMessagePart[]) => Promise<void>,
 		private readonly onFailure: (error: unknown) => void,
+		private readonly throttleMs: number,
 	) {}
 	update(parts: ConversationMessagePart[]): void {
 		this.latest = parts;
 		this.dirty = true;
 		const key = structureKey(parts);
-		if (key !== this.savedKey || Date.now() - this.savedAt >= SAVE_THROTTLE_MS) {
+		if (key !== this.savedKey || Date.now() - this.savedAt >= this.throttleMs) {
 			this.saveNow();
 			return;
 		}
 		if (this.timer === undefined)
-			this.timer = setTimeout(() => this.saveNow(), SAVE_THROTTLE_MS - (Date.now() - this.savedAt));
+			this.timer = setTimeout(() => this.saveNow(), this.throttleMs - (Date.now() - this.savedAt));
 	}
 	private saveNow(): void {
 		if (this.timer !== undefined) clearTimeout(this.timer);
@@ -312,7 +313,11 @@ export async function runTurn(input: RunTurnInput): Promise<ConversationMessageP
 		await writer.close().catch(() => {});
 	};
 	const abort = new AbortController();
-	const persister = new PartsPersister(turn.saveParts, (error) => abort.abort(error));
+	const persister = new PartsPersister(
+		turn.saveParts,
+		(error) => abort.abort(error),
+		input.deps.ai?.chat?.saveThrottleMs ?? DEFAULT_CHAT_CONFIG.saveThrottleMs,
+	);
 	const initial: ChatUIMessage = {
 		id: turn.assistantMessageId,
 		role: 'assistant',

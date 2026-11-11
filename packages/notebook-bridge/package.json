@@ -17,7 +17,7 @@
 		"build": "vp pack",
 		"generate": "node scripts/generate.mjs",
 		"generate:check": "node scripts/generate.mjs --check",
-		"test": "vp test",
+		"test": "vp run test:vitest",
 		"typecheck": "tsc --noEmit",
 		"test:browser": "playwright test"
 	},

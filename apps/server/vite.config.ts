@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { testTasks } from '@marimo-hub/vite-config';
 import { defineConfig } from 'vite-plus';
 import { DUCKDB_EXTENSION_MANIFEST } from '../../packages/duckdb-wasm-runtime/src/extensionManifest';
 
@@ -9,6 +10,7 @@ export default defineConfig({
 	// Cached build task: `output` archives/restores dist/ on a hit (a script can't).
 	run: {
 		tasks: {
+			...testTasks,
 			dev: {
 				command: 'tsx watch --env-file-if-exists=.env src/dev.ts',
 				cache: { untrackedEnv: ['PORT', 'MARIMOHUB_*', 'OTEL_*'] },

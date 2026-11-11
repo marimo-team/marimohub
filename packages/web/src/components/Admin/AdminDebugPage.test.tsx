@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { jsonOk, renderWithClient } from '@/test/render';
+import { jsonOk, renderWithClient, setupUser } from '@/test/render';
 import type { SandboxStartupReport } from '@/types';
 import AdminDebugPage from './AdminDebugPage';
 
@@ -103,7 +102,7 @@ describe('AdminDebugPage', () => {
 				throw new Error(`unexpected fetch: ${url}`);
 			}),
 		);
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWithClient(<AdminDebugPage />);
 
 		expect(
@@ -155,7 +154,7 @@ describe('AdminDebugPage', () => {
 				throw new Error(`unexpected fetch: ${url}`);
 			}),
 		);
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWithClient(<AdminDebugPage />);
 
 		expect(await screen.findByRole('radio', { name: 'Adapter default' })).toBeChecked();
@@ -181,7 +180,7 @@ describe('AdminDebugPage', () => {
 				throw new Error(`unexpected fetch: ${url}`);
 			}),
 		);
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWithClient(<AdminDebugPage />);
 
 		await user.click(await screen.findByRole('radio', { name: 'default' }));
@@ -204,7 +203,7 @@ describe('AdminDebugPage', () => {
 				throw new Error(`unexpected fetch: ${url}`);
 			}),
 		);
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWithClient(<AdminDebugPage />);
 
 		const runButton = await screen.findByRole('button', { name: 'Run startup test' });
@@ -248,7 +247,7 @@ describe('AdminDebugPage', () => {
 				throw new Error(`unexpected fetch: ${url}`);
 			}),
 		);
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWithClient(<AdminDebugPage />);
 
 		const runButton = await screen.findByRole('button', { name: 'Run startup test' });

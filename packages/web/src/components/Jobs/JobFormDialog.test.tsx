@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { JobFormDialog } from './JobFormDialog';
 import { formatJobParameters, parseJobParameters } from '@/lib/jobs';
 import type { Job } from '@/types';
-import { jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { jsonError, jsonOk, renderWithClient, setupUser } from '@/test/render';
 
 const PID = 'proj-x';
 const NID = 'nb-1';
@@ -128,7 +127,7 @@ describe('JobFormDialog', () => {
 
 	it('blocks submit until the name is set and shows field errors once touched', async () => {
 		makeFetch();
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		const dialog = await screen.findByRole('dialog');
 		const submit = within(dialog).getByRole('button', { name: 'Create job' });
@@ -152,7 +151,7 @@ describe('JobFormDialog', () => {
 
 	it('requires a cron and time zone once a schedule is enabled', async () => {
 		makeFetch();
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		const dialog = await screen.findByRole('dialog');
 		await user.type(within(dialog).getByLabelText('Name'), 'Report');
@@ -169,7 +168,7 @@ describe('JobFormDialog', () => {
 
 	it('rejects a timeout above the deployment capability limit', async () => {
 		makeFetch({ maxTimeout: 120 });
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		const dialog = await screen.findByRole('dialog');
 		await user.type(within(dialog).getByLabelText('Name'), 'Report');
@@ -191,7 +190,7 @@ describe('JobFormDialog', () => {
 
 	it('preserves existing notifications when project alerts are unavailable', async () => {
 		const calls = makeFetch({ alerts: false });
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog(job({ notifications: { on: ['failure', 'success'] } }));
 		const dialog = await screen.findByRole('dialog');
 		expect(within(dialog).queryByText(/Notify when a run fails/)).not.toBeInTheDocument();
@@ -207,7 +206,7 @@ describe('JobFormDialog', () => {
 
 	it('allows an empty retry backoff when retries are disabled', async () => {
 		makeFetch();
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		const dialog = await screen.findByRole('dialog');
 		await user.type(within(dialog).getByLabelText('Name'), 'Report');
@@ -221,7 +220,7 @@ describe('JobFormDialog', () => {
 
 	it('requires a retry backoff when retries are enabled', async () => {
 		makeFetch();
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		const dialog = await screen.findByRole('dialog');
 		const retries = within(dialog).getByLabelText('Retries on failure');
@@ -239,7 +238,7 @@ describe('JobFormDialog', () => {
 		makeFetch({
 			createResponse: jsonError('VALIDATION_ERROR', 'schedule.timezone: Unknown time zone', 422),
 		});
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onClose } = renderDialog();
 		const dialog = await screen.findByRole('dialog');
 		await user.type(within(dialog).getByLabelText('Name'), 'Report');
@@ -250,7 +249,7 @@ describe('JobFormDialog', () => {
 
 	it('seeds an edit from the job and sends notifications and retries', async () => {
 		const calls = makeFetch();
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onSaved } = renderDialog(job());
 		const dialog = await screen.findByRole('dialog');
 		expect(within(dialog).getByLabelText('Name')).toHaveValue('Existing');
@@ -280,7 +279,7 @@ describe('JobFormDialog', () => {
 
 	it('requires an explicit supported policy before saving an unknown policy', async () => {
 		const calls = makeFetch();
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog(job({ concurrency_policy: 'unknown' }));
 		const dialog = await screen.findByRole('dialog');
 

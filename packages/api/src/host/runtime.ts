@@ -162,7 +162,7 @@ export async function ensureHostSession(
 	}
 	const deadline = Date.now() + 60_000;
 	while (session.status === 'starting' && Date.now() < deadline) {
-		await sleep(500, request.signal);
+		await (deps.sleep ?? sleep)(500, request.signal);
 		session = await deps.services.sessions.getSession(project.id, session.session_id);
 	}
 	if (session.status !== 'running' || !session.sandbox_id)

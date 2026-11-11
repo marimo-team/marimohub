@@ -8,7 +8,7 @@ async function python(assertions: string) {
 	await run('python3', ['-c', `__name__ = "test"\n${KERNEL_BOOTSTRAP_CLIENT}\n${assertions}`]);
 }
 
-describe('sandbox bootstrap protocol', () => {
+describe.concurrent('sandbox bootstrap protocol', () => {
 	it('omits bearer authentication for tokenless servers without reading a token file', async () => {
 		await python(String.raw`
 from tempfile import TemporaryDirectory

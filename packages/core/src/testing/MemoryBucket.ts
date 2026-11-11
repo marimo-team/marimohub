@@ -27,6 +27,18 @@ export class MemoryBucket implements Bucket {
 		return `etag-${this.etagCounter}`;
 	}
 
+	/**
+	 * A detached copy that keeps every ETag, so CAS tokens and ETag fingerprints
+	 * taken from one copy stay valid on another. Stored objects are never mutated
+	 * in place, so sharing them is safe.
+	 */
+	clone(): MemoryBucket {
+		const copy = new MemoryBucket();
+		copy.store = new Map(this.store);
+		copy.etagCounter = this.etagCounter;
+		return copy;
+	}
+
 	get(key: string): Promise<BucketObjectBody | null>;
 	get(key: string, options?: BucketGetOptions): Promise<BucketGetResult>;
 	async get(key: string, options?: BucketGetOptions): Promise<BucketGetResult> {

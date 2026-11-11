@@ -1,9 +1,14 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { focusManager } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { jsonError, jsonOk, renderHookWithClient, renderWithClient } from '@/test/render';
+import {
+	jsonError,
+	jsonOk,
+	renderHookWithClient,
+	renderWithClient,
+	setupUser,
+} from '@/test/render';
 import { useAdminRuntimeQuery } from '@/api/hooks';
 import type { RuntimeDashboard } from '@/types';
 import AdminRuntimePage from './AdminRuntimePage';
@@ -107,7 +112,7 @@ function setup(data = structuredClone(fixture)) {
 	});
 	vi.stubGlobal('fetch', fetcher);
 	const rendered = renderWithClient(<AdminRuntimePage />, { route: '/admin/runtime' });
-	return { ...rendered, fetcher, user: userEvent.setup() };
+	return { ...rendered, fetcher, user: setupUser() };
 }
 
 afterEach(() => {

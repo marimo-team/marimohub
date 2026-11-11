@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import type { ChatUIMessage, ConversationPermission } from '@/api/conversations';
-import { renderWithClient } from '@/test/render';
+import { renderWithClient, setupUser } from '@/test/render';
 import { ChatMessages } from './ChatMessages';
 
 const onDecide = vi.fn(async () => ({ accepted: true }));
@@ -32,7 +31,7 @@ function renderMessages(messages = [reply]) {
 
 describe('ChatMessages', () => {
 	it('folds intermediate text and tools while keeping the final answer visible', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderMessages();
 		expect(screen.getByText('Here are your notebooks.')).toBeVisible();
 		expect(screen.getByText('I will look through the project.')).not.toBeVisible();
@@ -46,7 +45,7 @@ describe('ChatMessages', () => {
 	});
 
 	it('keeps running work open, collapses on completion, and reopens for a later tool', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const running: ChatUIMessage = {
 			...reply,
 			parts: [{ ...tool, state: 'input-available', output: undefined }],
@@ -74,7 +73,7 @@ describe('ChatMessages', () => {
 	});
 
 	it('surfaces failures in the collapsed summary and lets users inspect the error', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderMessages([
 			{
 				...reply,
@@ -101,7 +100,7 @@ describe('ChatMessages', () => {
 			kind: 'tool',
 			expires_at: '2026-11-03T12:05:00Z',
 		};
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderMessages([{ ...reply, parts: [{ type: 'data-permission', data: permission }] }]);
 		expect(screen.getByRole('button', { name: 'Waiting for permission · 1 step' })).toHaveAttribute(
 			'aria-expanded',
@@ -112,7 +111,7 @@ describe('ChatMessages', () => {
 	});
 
 	it('copies message text and reuses a user message without changing history', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const copy = vi.spyOn(navigator.clipboard, 'writeText');
 		const onReuse = vi.fn();
 		const message: ChatUIMessage = {

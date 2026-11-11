@@ -343,10 +343,21 @@ describe('app operation budgets', () => {
 		);
 		const sessions = f.client.deps.services.sessions;
 		const create = sessions.createSessionWithEtag.bind(sessions);
+		// Hold the reservation until every admission has routed, so all of them see it.
+		const routed = Promise.withResolvers<void>();
+		let outcomes = 0;
+		const admit = AppPoolService.prototype.admit;
+		vi.spyOn(AppPoolService.prototype, 'admit').mockImplementation(
+			async function (this: AppPoolService, input) {
+				const decision = await admit.call(this, input);
+				if (++outcomes === 100) routed.resolve();
+				return decision;
+			},
+		);
 		const createSession = vi
 			.spyOn(sessions, 'createSessionWithEtag')
 			.mockImplementation(async (...args) => {
-				await pause(1500);
+				await routed.promise;
 				return create(...args);
 			});
 		const admissions = await Promise.all(

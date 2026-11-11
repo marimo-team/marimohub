@@ -8,6 +8,8 @@ export interface AppPoolPolicy {
 	userLeaseMs: number;
 	reconnectGraceMs: number;
 	idleMs: number;
+	/** Window for coalescing durable heartbeat renewals into one pool write. Default: one second. */
+	heartbeatBatchMs?: number;
 }
 
 export const DEFAULT_APP_POOL_POLICY: AppPoolPolicy = {

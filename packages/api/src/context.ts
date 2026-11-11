@@ -288,11 +288,14 @@ export interface ChatConfig {
 	taskTimeoutSeconds: number;
 	/** How long a consent card waits for an answer before the tool call is skipped, in seconds (30–900). */
 	permissionTimeoutSeconds: number;
+	/** Minimum gap between durable saves of a streaming assistant message, in milliseconds. */
+	saveThrottleMs: number;
 }
 
 export const DEFAULT_CHAT_CONFIG: ChatConfig = {
 	taskTimeoutSeconds: 300,
 	permissionTimeoutSeconds: 300,
+	saveThrottleMs: 1500,
 };
 
 /** Deployment-wide authorization / abuse-guard knobs. */
@@ -451,6 +454,11 @@ export interface ApiDeps {
 	services: Services;
 	/** Operational signals shared by domain services and API-owned resource guards. */
 	metrics?: Metrics;
+	/**
+	 * Pacing for in-request polls and retry backoff. `createApi` defaults it to a real
+	 * timer; tests inject an immediate one to keep attempt counts without the wall-clock wait.
+	 */
+	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 	/** Raw bucket handle (used by ensureInitialized + the sandbox copy fallback). */
 	bucket: Bucket;
 	compute: SandboxProvider;
@@ -499,6 +507,11 @@ export interface ApiDeps {
 	jobs?: JobsConfig;
 	/** MCP and its OAuth server; absent = all MCP, OAuth, and consent routes return 404. */
 	mcp?: McpConfig;
+	/** Marimo host protocol tuning; absent = the protocol library's defaults. */
+	host?: {
+		/** How often a catalog event stream polls for a moved catalog pointer. */
+		pollIntervalMs?: number;
+	};
 	/**
 	 * Resource-security collaborators (constraint adapter + subject-context
 	 * provider) — live ports, kept out of the data-only `policy`. Labeled

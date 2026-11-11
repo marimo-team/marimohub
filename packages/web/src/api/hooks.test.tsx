@@ -299,14 +299,14 @@ describe('useNotebookQuery', () => {
 		const { result } = renderHookWithClient(
 			() =>
 				useNotebookQuery(PID, NID, {
-					refetchIntervalMs: (n) => (n?.source.type === 'git' ? 20 : undefined),
+					refetchIntervalMs: (n) => (n?.source.type === 'git' ? 5 : undefined),
 				}),
 			{ toaster: false },
 		);
 
 		await waitFor(() => expect(result.current.data).toBeDefined());
-		// Long enough for several 20ms ticks to have fired if polling were armed.
-		await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+		// Long enough for several 5ms ticks to have fired if polling were armed.
+		await act(() => new Promise((resolve) => setTimeout(resolve, 30)));
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 });

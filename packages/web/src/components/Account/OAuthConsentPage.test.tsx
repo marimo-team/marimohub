@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { AuthProvider } from '@/context/AuthContext';
-import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { installMatchMedia, jsonError, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import { OAuthConsentPage } from './OAuthConsentPage';
 
 const ID = '01HXY0S6GWMBASVAG3PZ7Y2K5T';
@@ -81,7 +80,7 @@ describe('OAuthConsentPage', () => {
 	});
 
 	it('approves with the selected grant and returns to the client', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls, navigate } = setup();
 		await screen.findByText(/authorize Cursor/i);
 		await user.click(screen.getByRole('radio', { name: /^Read/ }));
@@ -98,7 +97,7 @@ describe('OAuthConsentPage', () => {
 	});
 
 	it('denies and returns to the client', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { navigate } = setup();
 		await screen.findByText(/authorize Cursor/i);
 		await user.click(screen.getByRole('button', { name: 'Deny' }));
@@ -108,7 +107,7 @@ describe('OAuthConsentPage', () => {
 	it.each(['', '0', '91', '1.5', 'not-a-number'])(
 		'does not submit an invalid token lifetime: %s',
 		async (lifetime) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const { calls, navigate } = setup();
 			await screen.findByText(/authorize Cursor/i);
 			const input = screen.getByLabelText('Token lifetime (days)');
@@ -125,7 +124,7 @@ describe('OAuthConsentPage', () => {
 	);
 
 	it.each(['Approve', 'Deny'])('shows a failed %s request and permits retry', async (action) => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { navigate } = setup({
 			approveError: action === 'Approve',
 			denyError: action === 'Deny',
@@ -154,7 +153,7 @@ describe('OAuthConsentPage', () => {
 	it.each(['Approve', 'Deny'])(
 		'prevents conflicting submissions while %s is pending',
 		async (action) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			let complete!: (response: Response) => void;
 			const mutationResponse = new Promise<Response>((resolve) => {
 				complete = resolve;

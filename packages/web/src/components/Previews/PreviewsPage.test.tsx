@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import userEvent from '@testing-library/user-event';
 import { screen, within } from '@testing-library/react';
 import { Route, Routes } from 'react-router-dom';
-import { renderWithClient } from '@/test/render';
+import { renderWithClient, setupUser } from '@/test/render';
 import type * as PreviewsApi from '@/api/previews';
 import { CreatePreviewForm, PreviewsPage } from './PreviewsPage';
 
@@ -99,7 +98,7 @@ describe('preview creation eligibility', () => {
 	});
 	it('reuses a creation key on retry and rotates it when the request changes', async () => {
 		state.sourceType = 'git';
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWithClient(<CreatePreviewForm pid="p" nid="n" onCreated={() => {}} />);
 		await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Review');
 		await user.type(screen.getByRole('textbox', { name: 'Source ref' }), 'feature/chart');
@@ -126,7 +125,7 @@ describe('preview deletion', () => {
 			} as PreviewsApi.NotebookPreview,
 		];
 		state.remove.mockImplementation((_id, { onSuccess }) => onSuccess());
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup();
 		await user.click(screen.getByRole('button', { name: 'Delete' }));
 		expect(state.remove).not.toHaveBeenCalled();

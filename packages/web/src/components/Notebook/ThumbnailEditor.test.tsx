@@ -1,8 +1,7 @@
 import { pngFile } from '@/test/imageFixtures';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { jsonError, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import ThumbnailEditor from './ThumbnailEditor';
 
 const png = new Blob(['cropped PNG'], { type: 'image/png' });
@@ -82,7 +81,7 @@ function pasteImage() {
 
 describe('thumbnail editor', () => {
 	it('decodes an upload locally and uploads only the 960×540 crop', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onClose } = renderEditor();
 		const file = original();
 		await user.upload(document.querySelector('input[type=file]')!, file);
@@ -104,7 +103,7 @@ describe('thumbnail editor', () => {
 		);
 	});
 	it('accepts native paste from a dialog control, and cancellation never uploads', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onClose } = renderEditor();
 		fireEvent.paste(screen.getByRole('button', { name: 'Close' }), {
 			clipboardData: { files: [original()] },
@@ -131,7 +130,7 @@ describe('thumbnail editor', () => {
 	});
 	it('keeps the dialog and current thumbnail when an upload fails', async () => {
 		rejectUpload = true;
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onClose } = renderEditor();
 		fireEvent.paste(screen.getByRole('button', { name: 'Cancel' }), {
 			clipboardData: { files: [original()] },
@@ -157,7 +156,7 @@ describe('thumbnail editor', () => {
 	});
 
 	it('disables Save while decoding a replacement and resets the crop for the same image', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderEditor();
 		pasteImage();
 		await loadCrop();
@@ -204,7 +203,7 @@ describe('thumbnail editor', () => {
 		},
 	);
 	it('discards a decode completed after cancellation and releases its bitmap', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onClose } = renderEditor();
 		const pending = pendingBitmap();
 		vi.mocked(createImageBitmap).mockReturnValueOnce(pending.promise);
@@ -220,7 +219,7 @@ describe('thumbnail editor', () => {
 	});
 
 	it('keeps the custom override available when removal fails', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onClose } = renderEditor();
 		const remove = await screen.findByRole('button', { name: 'Remove custom thumbnail' });
 		vi.mocked(fetch).mockResolvedValueOnce(
@@ -233,7 +232,7 @@ describe('thumbnail editor', () => {
 	});
 
 	it('cannot remove the saved thumbnail while an unsaved crop is staged', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onClose } = renderEditor();
 		pasteImage();
 		await loadCrop();
@@ -245,7 +244,7 @@ describe('thumbnail editor', () => {
 	});
 
 	it('removes the custom override', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onClose } = renderEditor();
 		await user.click(await screen.findByRole('button', { name: 'Remove custom thumbnail' }));
 		await waitFor(() => expect(onClose).toHaveBeenCalledOnce());

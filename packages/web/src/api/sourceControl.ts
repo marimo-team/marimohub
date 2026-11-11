@@ -13,7 +13,7 @@ function useSourceRefsQuery(
 	{ pid, nid, query, enabled = true }: SourceQuery,
 	type: 'branch' | 'commit',
 ) {
-	const debounced = useDebouncedValue(query, 200);
+	const debounced = useDebouncedValue(query);
 	const result = useQuery({
 		queryKey: previewKeys.sourceRefs(pid, nid, type, debounced),
 		queryFn: ({ signal }) =>

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { ConfirmDialog } from './ConfirmDialog';
 
 function setup(overrides: Partial<React.ComponentProps<typeof ConfirmDialog>> = {}) {
@@ -33,21 +33,21 @@ describe('ConfirmDialog', () => {
 	});
 
 	it('fires onConfirm when the confirm button is pressed', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onConfirm } = setup();
 		await user.click(screen.getByRole('button', { name: 'Delete' }));
 		expect(onConfirm).toHaveBeenCalledTimes(1);
 	});
 
 	it('fires onClose when Cancel is pressed', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onClose } = setup();
 		await user.click(screen.getByRole('button', { name: 'Cancel' }));
 		expect(onClose).toHaveBeenCalledTimes(1);
 	});
 
 	it('confirms when Enter is pressed (the dialog is a real form)', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onConfirm } = setup();
 		// No type-to-confirm field → the confirm button is focused on open, so Enter
 		// activates it.
@@ -56,7 +56,7 @@ describe('ConfirmDialog', () => {
 	});
 
 	it('does not confirm on Enter while the confirm guard is active', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onConfirm } = setup({
 			confirmDisabled: true,
 			children: <input aria-label="confirm-name" />,
@@ -74,7 +74,7 @@ describe('ConfirmDialog', () => {
 	});
 
 	it('does not close from the modal dismiss path while pending', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onClose } = setup({ isPending: true });
 
 		await user.keyboard('{Escape}');

@@ -1,5 +1,4 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Route, Routes } from 'react-router-dom';
 import { apiClient } from '@/api/client';
@@ -7,7 +6,7 @@ import { SESSION_LIFECYCLE_TIMEOUT_MS } from '@/api/hooks';
 import { previewKeys, userKeys } from '@/api/queryKeys';
 import { AuthProvider } from '@/context/AuthContext';
 import { ThemeProvider } from '@/context/ThemeContext';
-import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { installMatchMedia, jsonError, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import { PreviewPage } from './PreviewPage';
 
 const route = '/projects/project/notebooks/notebook/previews/preview';
@@ -228,7 +227,7 @@ describe('PreviewPage', () => {
 	it.each([true, false])(
 		'offers preparation retry after a background failure: lazy=%s',
 		async (lazy) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const { calls, failPreparation } = setup({ lazy, pending: true, queueOnPrepare: true });
 			await screen.findByText('Preparation queued');
 			await failPreparation();
@@ -259,7 +258,7 @@ describe('PreviewPage', () => {
 	});
 
 	it('retries a failed preparation request without starting compute', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls, setPrepareStatus } = setup({ lazy: true, pending: true, prepareStatus: 503 });
 		expect(await screen.findByRole('alert')).toHaveTextContent(
 			'Unable to request preparation. Try again.',
@@ -290,7 +289,7 @@ describe('PreviewPage', () => {
 		const { calls } = setup();
 		const post = vi.spyOn(apiClient, 'POST');
 		const remove = vi.spyOn(apiClient, 'DELETE');
-		const user = userEvent.setup();
+		const user = setupUser();
 		expect(await screen.findByTitle('Review preview')).toHaveAttribute(
 			'src',
 			expect.stringContaining('/alice'),
@@ -326,7 +325,7 @@ describe('PreviewPage', () => {
 		async (deleteStatus) => {
 			sessionStorage.setItem(storageKey('alice'), JSON.stringify(savedEditor));
 			const { calls } = setup({ deleteStatus });
-			const user = userEvent.setup();
+			const user = setupUser();
 			await screen.findByTitle('Review preview');
 			await user.click(screen.getByRole('button', { name: 'Discard edits and open app' }));
 			await waitFor(() =>
@@ -339,7 +338,7 @@ describe('PreviewPage', () => {
 	it('preserves the editor and reports nonterminal cleanup failures', async () => {
 		sessionStorage.setItem(storageKey('alice'), JSON.stringify(savedEditor));
 		const { calls } = setup({ deleteStatus: 503 });
-		const user = userEvent.setup();
+		const user = setupUser();
 		await screen.findByTitle('Review preview');
 		await user.click(screen.getByRole('button', { name: 'Discard edits and open app' }));
 		expect(await screen.findByText('Could not stop editor')).toBeInTheDocument();
@@ -501,7 +500,7 @@ describe('PreviewPage', () => {
 		async (logout) => {
 			sessionStorage.setItem(storageKey('alice'), JSON.stringify(savedEditor));
 			const { calls, signIn } = setup();
-			const user = userEvent.setup();
+			const user = setupUser();
 			await screen.findByTitle('Review preview');
 			if (logout) {
 				await signIn(null);
@@ -527,7 +526,7 @@ describe('PreviewPage', () => {
 			const value = { ...savedEditor, userId: kind === 'missing-owner' ? undefined : 'bob' };
 			sessionStorage.setItem(key, JSON.stringify(value));
 			const { calls } = setup();
-			const user = userEvent.setup();
+			const user = setupUser();
 			await user.click(await screen.findByRole('button', { name: 'Open temporary editor' }));
 			await waitFor(() =>
 				expect(calls).toContainEqual({ url: `${endpoint}/sessions`, method: 'POST' }),
@@ -538,7 +537,7 @@ describe('PreviewPage', () => {
 
 	it('shows an updated revision to app-users while keeping their existing app open', async () => {
 		const { advanceBranch, calls } = setup({ appUser: true });
-		const user = userEvent.setup();
+		const user = setupUser();
 		await user.click(await screen.findByRole('button', { name: 'Open app' }));
 		const frame = await screen.findByTitle('Review preview');
 		expect(screen.queryByText(/A newer revision is available/)).not.toBeInTheDocument();
@@ -569,7 +568,7 @@ describe('PreviewPage', () => {
 	});
 	it('releases app visits on pagehide and unmount, but retains them in the back-forward cache', async () => {
 		const { unmount, calls } = setup({ appUser: true });
-		const user = userEvent.setup();
+		const user = setupUser();
 		await user.click(await screen.findByRole('button', { name: 'Open app' }));
 		await screen.findByTitle('Review preview');
 		await act(async () =>
@@ -600,7 +599,7 @@ describe('PreviewPage', () => {
 
 	it('watches editor status every 30 seconds and renews it every two minutes', async () => {
 		const { calls, refetchHeartbeat } = setup();
-		const user = userEvent.setup();
+		const user = setupUser();
 		await user.click(await screen.findByRole('button', { name: 'Open temporary editor' }));
 		await screen.findByTitle('Review preview');
 		vi.useFakeTimers();
@@ -625,7 +624,7 @@ describe('PreviewPage', () => {
 
 	it('stops editor status checks after a running session loses its URL', async () => {
 		const { calls, refetchHeartbeat, setHeartbeatResponse } = setup();
-		const user = userEvent.setup();
+		const user = setupUser();
 		await user.click(await screen.findByRole('button', { name: 'Open temporary editor' }));
 		await screen.findByTitle('Review preview');
 		vi.useFakeTimers();
@@ -646,7 +645,7 @@ describe('PreviewPage', () => {
 
 	it('renews app visits at the advertised interval', async () => {
 		const { calls, refetchHeartbeat } = setup({ appUser: true, heartbeatIntervalSeconds: 2 });
-		const user = userEvent.setup();
+		const user = setupUser();
 		await user.click(await screen.findByRole('button', { name: 'Open app' }));
 		await screen.findByTitle('Review preview');
 		vi.useFakeTimers();
@@ -669,7 +668,7 @@ describe('PreviewPage', () => {
 				appUser: true,
 				heartbeatIntervalSeconds: 2,
 			});
-			const user = userEvent.setup();
+			const user = setupUser();
 			await user.click(await screen.findByRole('button', { name: 'Open app' }));
 			const frame = await screen.findByTitle('Review preview');
 			vi.useFakeTimers();
@@ -703,7 +702,7 @@ describe('PreviewPage', () => {
 		'running-without-url',
 	] as const)('ends a preview after a confirmed %s heartbeat response', async (status) => {
 		const { refetchHeartbeat, calls } = setup({ appUser: true });
-		const user = userEvent.setup();
+		const user = setupUser();
 		await user.click(await screen.findByRole('button', { name: 'Open app' }));
 		await screen.findByTitle('Review preview');
 		await refetchHeartbeat(status);
@@ -719,7 +718,7 @@ describe('PreviewPage', () => {
 
 	it('starts a fresh heartbeat after readmission to the same sandbox with a new visit', async () => {
 		const { refetchHeartbeat, setHeartbeatResponse } = setup({ appUser: true });
-		const user = userEvent.setup();
+		const user = setupUser();
 		await user.click(await screen.findByRole('button', { name: 'Open app' }));
 		await screen.findByTitle('Review preview');
 		await refetchHeartbeat(409);
@@ -732,7 +731,7 @@ describe('PreviewPage', () => {
 
 	it('keeps checking an admitted preview when its first heartbeat fails transiently', async () => {
 		const { refetchHeartbeat } = setup({ appUser: true, heartbeat: 503 });
-		const user = userEvent.setup();
+		const user = setupUser();
 		await user.click(await screen.findByRole('button', { name: 'Open app' }));
 		expect(await screen.findByText('Unable to check the session. Retrying…')).toBeInTheDocument();
 		expect(screen.getByText('Starting preview…')).toBeInTheDocument();
@@ -743,7 +742,7 @@ describe('PreviewPage', () => {
 
 	it('shows provisioning while an admitted app is still starting', async () => {
 		const { refetchHeartbeat, client } = setup({ appUser: true, heartbeat: 'starting' });
-		const user = userEvent.setup();
+		const user = setupUser();
 		await user.click(await screen.findByRole('button', { name: 'Open app' }));
 		await waitFor(() =>
 			expect(client.getQueriesData({ queryKey: previewKeys.sessions() })[0]?.[1]).toMatchObject({

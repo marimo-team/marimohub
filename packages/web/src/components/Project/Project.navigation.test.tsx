@@ -1,10 +1,9 @@
-import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import { makeFetch, notebook, PID, renderProject } from './Project.testWorld';
 import type { ProjectDetail } from '@/types';
 import { projectKeys, systemKeys } from '@/api/queryKeys';
-import { jsonError, jsonOk } from '@/test/render';
+import { jsonError, jsonOk, setupUser } from '@/test/render';
 
 afterEach(() => localStorage.removeItem('notebook-view'));
 
@@ -124,7 +123,7 @@ describe.each(['list', 'gallery'])('project notebook navigation in %s view', (vi
 			await client.refetchQueries({ queryKey: systemKeys.capabilities() });
 		});
 		await waitFor(expectNavigation);
-		const user = userEvent.setup();
+		const user = setupUser();
 		await user.click(screen.getByRole('button', { name: 'Notebook actions for Forecast' }));
 		expect(screen.queryByRole('menuitem', { name: 'Run as app' })).not.toBeInTheDocument();
 	});
@@ -160,7 +159,7 @@ describe.each(['list', 'gallery'])('project notebook navigation in %s view', (vi
 	it('keeps app actions available in the notebook menu', async () => {
 		makeFetch({ capabilities: { project_notebook_target: 'app' } });
 		await renderProject();
-		const user = userEvent.setup();
+		const user = setupUser();
 		await user.click(screen.getByRole('button', { name: 'Notebook actions for Forecast' }));
 		expect(await screen.findByRole('menuitem', { name: 'Run as app' })).toBeVisible();
 	});

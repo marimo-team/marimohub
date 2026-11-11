@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { AuthProvider } from '@/context/AuthContext';
-import { jsonOk, renderWithClient } from '@/test/render';
+import { jsonOk, renderWithClient, setupUser } from '@/test/render';
 import { HelpMenu } from './HelpMenu';
 
 const USER = { id: 'usr-123', email: 'ada@example.com' };
@@ -21,7 +20,7 @@ function setup({
 			throw new Error(`unexpected fetch: ${init?.method ?? 'GET'} ${url}`);
 		}),
 	);
-	const user = userEvent.setup();
+	const user = setupUser();
 	renderWithClient(
 		<AuthProvider>
 			<HelpMenu />
@@ -31,7 +30,7 @@ function setup({
 	return { user };
 }
 
-async function openAbout(user: ReturnType<typeof userEvent.setup>) {
+async function openAbout(user: ReturnType<typeof setupUser>) {
 	await user.click(screen.getByRole('button', { name: 'Help' }));
 	await user.click(screen.getByRole('menuitem', { name: 'About marimohub' }));
 	await waitFor(() => expect(screen.getByText('marimohub')).toBeInTheDocument());

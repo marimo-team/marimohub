@@ -8,7 +8,7 @@ import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 
 const run = promisify(execFile);
 
-describe('runtime host bridge', () => {
+describe.concurrent('runtime host bridge', () => {
 	it.each(['initial', 'reset'])(
 		'requires a complete %s snapshot on EOF or timeout',
 		async (kind) => {

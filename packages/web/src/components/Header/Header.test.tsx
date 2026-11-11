@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { useLocation } from 'react-router-dom';
 import { AuthProvider } from '@/context/AuthContext';
 import type { ColorMode } from '@marimo-hub/core/theme';
 import { ThemeProvider } from '@/context/ThemeContext';
-import { installMatchMedia, jsonOk, renderWithClient } from '@/test/render';
+import { installMatchMedia, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import { Header } from './Header';
 
 const MCP_URL = 'https://hub.example.com/team/mcp';
@@ -17,7 +16,7 @@ function LocationProbe() {
 }
 
 /**
- * `userEvent.setup()` installs its own `navigator.clipboard`, so the app's must
+ * `setupUser()` installs its own `navigator.clipboard`, so the app's must
  * be stubbed afterwards or the copy silently succeeds against user-event's stub.
  */
 function setup(
@@ -58,7 +57,7 @@ function setup(
 			throw new Error(`unexpected fetch: ${init?.method ?? 'GET'} ${url}`);
 		}),
 	);
-	const user = userEvent.setup();
+	const user = setupUser();
 	const clipboard = vi.fn(writeText);
 	Object.defineProperty(navigator, 'clipboard', {
 		value: { writeText: clipboard },
@@ -78,7 +77,7 @@ function setup(
 	return { user, clipboard, ...rendered };
 }
 
-async function openUserMenu(user: ReturnType<typeof userEvent.setup>) {
+async function openUserMenu(user: ReturnType<typeof setupUser>) {
 	await waitFor(() =>
 		expect(screen.getByRole('button', { name: 'User menu' })).toBeInTheDocument(),
 	);

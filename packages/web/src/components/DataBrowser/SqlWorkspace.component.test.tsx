@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@/context/ThemeContext';
-import { installMatchMedia, renderWithClient } from '@/test/render';
+import { installMatchMedia, renderWithClient, setupUser } from '@/test/render';
 import SqlWorkspace from './SqlWorkspace';
 
 const hookMocks = vi.hoisted(() => ({
@@ -121,7 +120,7 @@ describe('SqlWorkspace', () => {
 		hookMocks.loadEditorRuntime
 			.mockRejectedValueOnce(new Error('chunk unavailable'))
 			.mockResolvedValue(undefined);
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { container } = renderWithClient(workspaceElement(true), { toaster: false });
 
 		expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t load the SQL editor:');
@@ -141,7 +140,7 @@ describe('SqlWorkspace', () => {
 	it('runs the current statement and renders its result', async () => {
 		storeDraft('SELECT 1 AS value;');
 		hookMocks.executeQuery.mockResolvedValue(RESULT);
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWorkspace();
 
 		await user.click(await readyEditorAction('Run'));
@@ -160,7 +159,7 @@ describe('SqlWorkspace', () => {
 		hookMocks.executeQuery
 			.mockResolvedValueOnce(RESULT)
 			.mockRejectedValueOnce(new Error('The second statement failed'));
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWorkspace();
 
 		await user.click(await readyEditorAction('Run all'));
@@ -178,7 +177,7 @@ describe('SqlWorkspace', () => {
 		storeDraft('SELECT 1 AS value;');
 		const pending = deferred<typeof RESULT>();
 		hookMocks.executeQuery.mockReturnValue(pending.promise);
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWorkspace();
 
 		await user.click(await readyEditorAction('Run'));
@@ -258,7 +257,7 @@ describe('SqlWorkspace', () => {
 	});
 
 	it('toggles fullscreen and exits on Escape', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWorkspace();
 
 		await user.click(await screen.findByRole('button', { name: 'Fullscreen' }));
@@ -332,7 +331,7 @@ describe('SqlWorkspace', () => {
 				counts: { tables: 5, discovered_tables: 12, columns: 40, discovery_complete: false },
 			},
 		});
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWorkspace();
 
 		expect(
@@ -348,7 +347,7 @@ describe('SqlWorkspace', () => {
 	it('falls back to the default draft when persisted state is malformed', async () => {
 		localStorage.setItem(STORAGE_KEY, '{not-json');
 		hookMocks.executeQuery.mockResolvedValue(RESULT);
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { container } = renderWorkspace();
 
 		await waitFor(() =>

@@ -98,7 +98,7 @@ export function stopSurfaceProcessCommand(
 	options: StopSurfaceProcessOptions = {},
 ): string {
 	const dir = pidFile.slice(0, pidFile.lastIndexOf('/'));
-	const kill = `if ${RECORDED_PROCESS_ALIVE}; then kill -TERM "$pid" 2>/dev/null || true; i=0; while kill -0 "$pid" 2>/dev/null && test "$i" -lt 10; do sleep 0.5; i=$((i+1)); done; kill -KILL "$pid" 2>/dev/null || true; sleep 0.1; kill -0 "$pid" 2>/dev/null && exit 1; fi`;
+	const kill = `if ${RECORDED_PROCESS_ALIVE}; then kill -TERM "$pid" 2>/dev/null || true; i=0; while kill -0 "$pid" 2>/dev/null && test "$i" -lt 50; do sleep 0.1; i=$((i+1)); done; kill -KILL "$pid" 2>/dev/null || true; sleep 0.1; kill -0 "$pid" 2>/dev/null && exit 1; fi`;
 	const sweep = options.cancelFile
 		? `for f in ${shellQuote(dir)}/cancel-*; do test "$f" = ${shellQuote(options.cancelFile)} || rm -f "$f"; done`
 		: `rm -f ${shellQuote(dir)}/cancel-*`;

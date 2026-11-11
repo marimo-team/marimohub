@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { ErrorBoundary } from './ErrorBoundary';
 
 function Bomb({ shouldThrow = true }: { shouldThrow?: boolean }) {
@@ -55,7 +55,7 @@ describe('ErrorBoundary', () => {
 	});
 
 	it('resets the boundary when the retry button is pressed', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		vi.spyOn(console, 'error').mockImplementation(() => {});
 		let shouldThrow = true;
 

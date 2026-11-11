@@ -1,6 +1,6 @@
 import { createElement } from 'react';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { describe, expect, it } from 'vitest';
 import { SqlReadinessChecklist } from './SqlReadinessChecklist';
 
@@ -14,7 +14,7 @@ const check = (label: string, field: string, ready = false) => ({
 
 describe('SqlReadinessChecklist', () => {
 	it('collapses the server-provided checks behind their readiness summary', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			createElement(SqlReadinessChecklist, {
 				checks: [
@@ -44,7 +44,7 @@ describe('SqlReadinessChecklist', () => {
 	});
 
 	it('maps header and extra-property blockers to separate fields', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			createElement(SqlReadinessChecklist, {
 				checks: [

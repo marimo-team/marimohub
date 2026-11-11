@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { ListFilters } from './ListFilters';
 import type { ListFilterValues } from '@/lib/listFilters';
 
@@ -33,8 +33,8 @@ describe('ListFilters', () => {
 			'aria-expanded',
 			'false',
 		);
-		await userEvent.setup().click(screen.getByRole('button', { name: 'Filters' }));
-		await userEvent.setup().click(screen.getByRole('button', { name: 'Apply' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Filters' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Apply' }));
 		expect(onChange).toHaveBeenLastCalledWith(
 			expect.objectContaining({ tag_namespace: 'research/vision' }),
 		);
@@ -52,7 +52,7 @@ describe('ListFilters', () => {
 	});
 
 	it('describes the blank status as current statuses', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(filters());
 
 		await user.click(screen.getByRole('button', { name: 'Filters' }));

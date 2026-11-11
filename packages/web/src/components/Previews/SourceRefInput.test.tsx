@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { SourceRefInput } from './SourceRefInput';
 
 const queries = vi.hoisted(() => ({
@@ -37,7 +37,7 @@ describe('SourceRefInput', () => {
 			isError: false,
 		};
 		const submit = vi.fn();
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<Harness submit={submit} />);
 		await user.type(screen.getByRole('combobox'), 'chart');
 		await user.click(screen.getByRole('option'));
@@ -52,7 +52,7 @@ describe('SourceRefInput', () => {
 			isFetching: false,
 			isError: false,
 		};
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<Harness type="commit" submit={() => {}} />);
 		await user.type(screen.getByRole('combobox'), 'legend');
 		await user.click(screen.getByRole('option', { name: /Fix chart legend/ }));
@@ -61,7 +61,7 @@ describe('SourceRefInput', () => {
 	});
 	it('guides commit inputs to enter a full SHA when there are no suggestions', async () => {
 		queries.branches = { data: [], isFetching: false, isError: false };
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<SourceRefInput pid="p" nid="n" type="commit" value="abc" onChange={() => {}} />);
 		await user.click(screen.getByRole('combobox'));
 		await user.keyboard('{ArrowDown}');
@@ -69,7 +69,7 @@ describe('SourceRefInput', () => {
 	});
 	it('retains a manual ref through pending, error, empty, and late suggestions', async () => {
 		queries.branches = { data: [], isFetching: true, isError: false };
-		const user = userEvent.setup();
+		const user = setupUser();
 		const submit = vi.fn();
 		const view = render(<Harness submit={submit} />);
 		await user.type(screen.getByRole('combobox'), 'manual/new-branch');

@@ -8,7 +8,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { OrgIntegrationsDialog, ProjectIntegrationsPanel } from './ProjectIntegrationsDialog';
 import type { IntegrationDetail, IntegrationEntry, IntegrationKind, ProjectDetail } from '@/types';
-import { createTestQueryClient } from '@/test/render';
+import { createTestQueryClient, setupUser } from '@/test/render';
 
 const PID = 'p_1';
 
@@ -419,7 +419,7 @@ describe('integration validation findings', () => {
 	it.each([false, true])(
 		'keeps the advisory accurate after disabling a connection (failure=%s)',
 		async (patchError) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const { calls } = setup(
 				{},
 				{
@@ -451,7 +451,7 @@ describe('integration validation findings', () => {
 	);
 
 	it('clears an unavailable-kind error after the integration is disabled', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup({}, { kinds: [], entries: [entry({ kind: 'removed', name: 'legacy' })] });
 		expect(await screen.findByRole('alert')).toHaveTextContent('legacy (removed)');
 		await user.click(screen.getByRole('button', { name: 'Disable' }));
@@ -481,7 +481,7 @@ describe('integration validation findings', () => {
 	});
 
 	it('includes inherited connections and stays visible when the list is filtered', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(
 			{},
 			{
@@ -525,7 +525,7 @@ describe('integration validation findings', () => {
 
 describe('Project integrations page editor', () => {
 	it('creates in a modal and returns focus to the page action', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({ modalEditor: true }, { kinds: [postgresKind], entries: [] });
 		const trigger = await screen.findByRole('button', { name: 'Add integration' });
 		await user.click(trigger);
@@ -568,7 +568,7 @@ describe('ambient env editor hint', () => {
 	] as const)(
 		'for %s (ambient_env default %s) shows the hint: %s',
 		async (kind, ambient, shown) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			setup(
 				{},
 				{
@@ -619,7 +619,7 @@ describe('ProjectIntegrationsPanel — kind catalog', () => {
 	});
 
 	it('searches a catalog of 30 kinds by title', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const kinds = Array.from({ length: 30 }, (_, index) => ({
 			...postgresKind,
 			kind: `warehouse_${index}`,
@@ -636,7 +636,7 @@ describe('ProjectIntegrationsPanel — kind catalog', () => {
 	});
 
 	it('filters the catalog by category and clears empty results', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup({}, { kinds: [postgresKind, customEnvKind], entries: [] });
 
 		await user.click(await screen.findByRole('button', { name: /Add integration/i }));
@@ -690,7 +690,7 @@ describe('ProjectIntegrationsPanel — list view', () => {
 	});
 
 	it('searches configured integrations by name and kind metadata', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const entries = Array.from({ length: 30 }, (_, index) =>
 			entry({
 				id: `i_${index}`,
@@ -714,7 +714,7 @@ describe('ProjectIntegrationsPanel — list view', () => {
 
 describe('ProjectIntegrationsPanel — create flow', () => {
 	it('shows the SQL-ready preflight for Iceberg REST', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup({}, { kinds: [icebergRestKind], entries: [] });
 
 		await user.click(await screen.findByRole('button', { name: /add integration/i }));
@@ -727,7 +727,7 @@ describe('ProjectIntegrationsPanel — create flow', () => {
 	});
 
 	it('picks a kind from the catalog, fills the form, and POSTs the pruned config', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({}, { kinds: [postgresKind, customEnvKind], entries: [] });
 
 		await user.click(await screen.findByRole('button', { name: /add integration/i }));
@@ -754,7 +754,7 @@ describe('ProjectIntegrationsPanel — create flow', () => {
 	});
 
 	it('shows a validation error and does not POST when the name is empty', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({}, { kinds: [postgresKind], entries: [] });
 
 		await user.click(await screen.findByRole('button', { name: /add integration/i }));
@@ -770,7 +770,7 @@ describe('ProjectIntegrationsPanel — create flow', () => {
 	// error into the input's native validity, which blocked every later form
 	// submit — so submit-time validation could never re-run and clear the error.
 	it('lets a corrected field submit after a failed validation', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({}, { kinds: [postgresKind], entries: [] });
 
 		await user.click(await screen.findByRole('button', { name: /add integration/i }));
@@ -789,7 +789,7 @@ describe('ProjectIntegrationsPanel — create flow', () => {
 	});
 
 	it('creates a passwordless ClickHouse integration without a configured secret source', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({}, { kinds: [clickhouseKind], entries: [] });
 
 		await user.click(await screen.findByRole('button', { name: /add integration/i }));
@@ -827,7 +827,7 @@ describe('ProjectIntegrationsPanel — edit flow', () => {
 	};
 
 	it('preserves an untouched secret when editing a non-secret field', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup(
 			{},
 			{ kinds: [secretKind], entries: [entry()], details: { i_1: detail } },
@@ -852,7 +852,7 @@ describe('ProjectIntegrationsPanel — edit flow', () => {
 	});
 
 	it('omits absent vended S3 settings from R2 readiness, connection tests, and saves', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const registry = new IntegrationRegistry();
 		registry.register(icebergRest);
 		const kind = {
@@ -879,7 +879,7 @@ describe('ProjectIntegrationsPanel — edit flow', () => {
 		);
 
 		await user.click(await screen.findByRole('button', { name: 'Edit lake' }));
-		await user.click(screen.getByRole('button', { name: 'Test connection' }));
+		await user.click(await screen.findByRole('button', { name: 'Test connection' }));
 		await waitFor(() => expect(calls.some((call) => call.url.endsWith('/test'))).toBe(true));
 		await user.click(screen.getByRole('button', { name: 'Save changes' }));
 		await waitFor(() => expect(calls.some((call) => call.method === 'PATCH')).toBe(true));
@@ -893,7 +893,7 @@ describe('ProjectIntegrationsPanel — edit flow', () => {
 	});
 
 	it('redacts arbitrary record values from automatic readiness requests', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const icebergEntry = entry({ id: 'i_iceberg', kind: 'iceberg_rest', name: 'lake' });
 		const { calls } = setup(
 			{},
@@ -927,7 +927,7 @@ describe('ProjectIntegrationsPanel — edit flow', () => {
 	});
 
 	it('does not PATCH after Replace is selected but the required secret is left blank', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup(
 			{},
 			{ kinds: [secretKind], entries: [entry()], details: { i_1: detail } },
@@ -941,7 +941,7 @@ describe('ProjectIntegrationsPanel — edit flow', () => {
 	});
 
 	it('carries the detail ETag into PATCH as If-Match', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup(
 			{},
 			{ kinds: [secretKind], entries: [entry()], details: { i_1: detail } },
@@ -956,7 +956,7 @@ describe('ProjectIntegrationsPanel — edit flow', () => {
 	});
 
 	it('tests unsaved edits while identifying the stored integration for keep-markers', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup(
 			{},
 			{
@@ -986,7 +986,7 @@ describe('ProjectIntegrationsPanel — edit flow', () => {
 	});
 
 	it('keeps the editor and its values open when PATCH fails', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(
 			{},
 			{
@@ -1010,7 +1010,7 @@ describe('ProjectIntegrationsPanel — edit flow', () => {
 
 describe('ProjectIntegrationsPanel — delete flow', () => {
 	it('confirms via ConfirmDialog before deleting', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({}, { kinds: [postgresKind], entries: [entry()] });
 
 		await user.click(await screen.findByRole('button', { name: 'Delete prod-db' }));
@@ -1027,7 +1027,7 @@ describe('ProjectIntegrationsPanel — delete flow', () => {
 
 describe('ProjectIntegrationsPanel — enable/disable', () => {
 	it('PATCHes {enabled: false} when disabling an enabled integration', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({}, { kinds: [postgresKind], entries: [entry({ enabled: true })] });
 
 		await user.click(await screen.findByRole('button', { name: 'Disable' }));
@@ -1094,7 +1094,7 @@ describe('OrgIntegrationsDialog', () => {
 	});
 
 	it('creates through /org/integrations', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setupOrg({ kinds: [postgresKind], entries: [], orgEntries: [] });
 
 		await user.click(await screen.findByRole('button', { name: /Add integration/ }));
@@ -1121,7 +1121,7 @@ describe('ProjectIntegrationsPanel — copy from another project', () => {
 		entries: [entry({ id: 'i_src', name: 'prod-db' })],
 	};
 
-	async function openCopy(user: ReturnType<typeof userEvent.setup>) {
+	async function openCopy(user: ReturnType<typeof setupUser>) {
 		await user.click(await screen.findByRole('button', { name: /Add integration/ }));
 		await user.click(await screen.findByRole('button', { name: /Copy from another project/ }));
 		await user.type(screen.getByRole('combobox', { name: 'Source project' }), 'Analytics');
@@ -1129,7 +1129,7 @@ describe('ProjectIntegrationsPanel — copy from another project', () => {
 	}
 
 	it('POSTs to …/integrations/copy with the picked source and name', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({}, { kinds: [postgresKind], entries: [], sourceProject: SOURCE });
 		await openCopy(user);
 
@@ -1152,14 +1152,14 @@ describe('ProjectIntegrationsPanel — copy from another project', () => {
 	});
 
 	it('offers projects from every /projects page, not just the first', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup({}, { kinds: [postgresKind], entries: [], sourceProject: SOURCE, pagedProjects: true });
 		await openCopy(user);
 		expect(await screen.findByTestId('copy-source-row')).toBeInTheDocument();
 	});
 
 	it('a cursor that never advances fails the picker loudly, not with a partial roster', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup({}, { kinds: [postgresKind], entries: [], sourceProject: SOURCE, loopingProjects: true });
 		await user.click(await screen.findByRole('button', { name: /Add integration/ }));
 		await user.click(await screen.findByRole('button', { name: /Copy from another project/ }));
@@ -1168,7 +1168,7 @@ describe('ProjectIntegrationsPanel — copy from another project', () => {
 	});
 
 	it('never shows the pick/submit form before the source role resolves', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(
 			{},
 			{
@@ -1187,7 +1187,7 @@ describe('ProjectIntegrationsPanel — copy from another project', () => {
 	});
 
 	it('explains that manager is required on the source project', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(
 			{},
 			{
@@ -1202,7 +1202,7 @@ describe('ProjectIntegrationsPanel — copy from another project', () => {
 	});
 
 	it('does not offer the copy entry point in the org dialog', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({ kinds: [postgresKind], entries: [], orgEntries: [] });
 		const client = createTestQueryClient();
 		render(<OrgIntegrationsDialog isOpen onClose={vi.fn()} />, {

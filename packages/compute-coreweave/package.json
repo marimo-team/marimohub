@@ -15,7 +15,7 @@
 	"scripts": {
 		"build": "vp pack",
 		"check": "vp check",
-		"test": "vp test",
+		"test": "vp run test:vitest",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {

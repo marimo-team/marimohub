@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import {
 	IID,
 	PID,
@@ -34,7 +34,7 @@ describe('DataBrowserPage object navigation', () => {
 	});
 
 	it('opens the detail sheet and closes it from the header button or Escape', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -56,7 +56,7 @@ describe('DataBrowserPage object navigation', () => {
 	});
 
 	it('copies and downloads through row quick actions without opening the object', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -75,7 +75,7 @@ describe('DataBrowserPage object navigation', () => {
 	});
 
 	it('navigates upward with the breadcrumb trail from a nested prefix', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&prefix=daily%2Freports%2F`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -93,7 +93,7 @@ describe('DataBrowserPage object navigation', () => {
 	});
 
 	it('selects among discovered buckets and reports empty or failed discovery', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = setup(`/projects/${PID}/data/${IID}?surface=objects`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -115,7 +115,7 @@ describe('DataBrowserPage object navigation', () => {
 	});
 
 	it('pages bucket discovery before choosing a bucket', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = setup(`/projects/${PID}/data/${IID}?surface=objects`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -137,7 +137,7 @@ describe('DataBrowserPage object navigation', () => {
 	});
 
 	it('keeps loaded buckets visible and retries a failed next page', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -183,7 +183,7 @@ describe('DataBrowserPage object navigation', () => {
 	});
 
 	it('handles unknown object capability vocabulary without fabricating a URI', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -198,7 +198,7 @@ describe('DataBrowserPage object navigation', () => {
 	});
 
 	it('shows a refetch failure instead of a cached empty bucket state', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const objectFailures: Partial<Record<ObjectFailure, string>> = {};
 		setup(`/projects/${PID}/data/${IID}?surface=objects`, {
 			kind: objectKind,
@@ -238,7 +238,7 @@ describe('DataBrowserPage object navigation', () => {
 	});
 
 	it('keeps parent-prefix navigation available when the initial listing fails', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&prefix=daily%2F`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -255,7 +255,7 @@ describe('DataBrowserPage object navigation', () => {
 	});
 
 	it('round-trips object selection in the URL and loads previews only on request', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = setup(
 			`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`,
 			{ kind: objectKind, entry: { ...lakeEntry, kind: 's3' } },

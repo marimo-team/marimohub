@@ -20,6 +20,12 @@ The toolchain is **vite-plus** (`vp`). `pnpm check` runs `vp check`
 runs each package's `test` script (vitest); `pnpm build` builds every package.
 Use these as the done-criteria for any change.
 
+Every package's `vite.config.ts` comes from `@marimo-hub/vite-config`
+(`packages/vite-config`): `libraryConfig()` for libraries, or `testTasks` spread
+into a bespoke config. Its `test` script is `vp run test:vitest`, a task whose
+cache config excludes Vitest's on-disk caches; a plain `vp test` script is never
+cached by Vite Task. A new package copies one of its neighbours.
+
 ## Architecture
 
 - **Ports and adapters.** Every external dependency — storage, compute, identity

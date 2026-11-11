@@ -9,13 +9,13 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { zipSync } from 'fflate';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { ByteBudget } from './byteBudget';
 import { createPackedWorkspaceArchive } from '../../integrations/packedWorkspace';
 import type { BucketObjectBody } from '../../ports/bucket';
 import { makeFakeSandbox, MemoryBucket } from '../../testing';
+import { runPythonCases } from '../../testing/pythonCases';
 import { EXTRACT_PACKED_WORKSPACE, restorePackedWorkspace } from './packedWorkspaceRestore';
 
 const encode = (value: string) => new TextEncoder().encode(value);
@@ -86,50 +86,85 @@ function bucketObject(bytes: Uint8Array, size = bytes.byteLength): BucketObjectB
 	};
 }
 
-function runExtractor(
+interface ExtractionCase {
+	archive: Uint8Array;
+	requireGit?: boolean;
+	readOnlyParent?: boolean;
+	subdirectory?: string;
+	/** Files present in the destination before extraction, relative to it. */
+	existing?: Record<string, string>;
+}
+
+interface ExtractionResult {
+	root: string;
+	destination: string;
+	status: number;
+	stderr: string;
+}
+
+// One interpreter runs every case: on macOS a fresh python3 per case dominates the test time.
+async function runExtractors(cases: ExtractionCase[]): Promise<ExtractionResult[]> {
+	const prepared = cases.map((extraction) => {
+		const root = mkdtempSync(join(tmpdir(), 'marimohub-packed-'));
+		temporaryDirectories.push(root);
+		const destination = join(root, 'workspace');
+		const temporaryRoot = join(destination, '.marimohub-packed-restore');
+		const archivePath = join(temporaryRoot, 'workspace.zip');
+		mkdirSync(temporaryRoot, { recursive: true });
+		for (const [name, content] of Object.entries(extraction.existing ?? {})) {
+			writeFileSync(join(destination, name), content);
+		}
+		writeFileSync(archivePath, extraction.archive);
+		if (extraction.readOnlyParent) chmodSync(root, 0o555);
+		return {
+			root,
+			destination,
+			argv: [
+				archivePath,
+				temporaryRoot,
+				destination,
+				extraction.requireGit ? '1' : '0',
+				extraction.subdirectory ?? '',
+			],
+		};
+	});
+	try {
+		const results = await runPythonCases(
+			EXTRACT_PACKED_WORKSPACE,
+			prepared.map(({ argv }) => ({ argv })),
+			'extract.py',
+		);
+		return prepared.map(({ root, destination }, index) => ({
+			root,
+			destination,
+			status: results[index].status,
+			stderr: results[index].stderr,
+		}));
+	} finally {
+		cases.forEach((extraction, index) => {
+			if (extraction.readOnlyParent) chmodSync(prepared[index].root, 0o755);
+		});
+	}
+}
+
+async function runExtractor(
 	archive: Uint8Array,
 	requireGit: boolean,
 	readOnlyParent = false,
-	workspaceSubdirectory = '',
-) {
-	const root = mkdtempSync(join(tmpdir(), 'marimohub-packed-'));
-	temporaryDirectories.push(root);
-	const destination = join(root, 'workspace');
-	const temporaryRoot = join(destination, '.marimohub-packed-restore');
-	const script = join(temporaryRoot, 'extract.py');
-	const archivePath = join(temporaryRoot, 'workspace.zip');
-	mkdirSync(temporaryRoot, { recursive: true });
-	writeFileSync(script, EXTRACT_PACKED_WORKSPACE);
-	writeFileSync(archivePath, archive);
-	if (readOnlyParent) chmodSync(root, 0o555);
-	let result: ReturnType<typeof spawnSync>;
-	try {
-		result = spawnSync('python3', [
-			script,
-			archivePath,
-			temporaryRoot,
-			destination,
-			requireGit ? '1' : '0',
-			workspaceSubdirectory,
-		]);
-	} finally {
-		if (readOnlyParent) chmodSync(root, 0o755);
-	}
-	return {
-		root,
-		destination,
-		result,
-	};
+	subdirectory = '',
+): Promise<ExtractionResult> {
+	const [result] = await runExtractors([{ archive, requireGit, readOnlyParent, subdirectory }]);
+	return result;
 }
 
-afterEach(() => {
+afterAll(() => {
 	for (const directory of temporaryDirectories.splice(0)) {
 		rmSync(directory, { recursive: true, force: true });
 	}
 });
 
-describe('packed workspace extractor', () => {
-	it('restores binary workspace files and required Git metadata', () => {
+describe.concurrent('packed workspace extractor', () => {
+	it('restores binary workspace files and required Git metadata', async () => {
 		const archive = createPackedWorkspaceArchive({
 			workspace: new Map([
 				['app.py', encode('print(1)')],
@@ -138,16 +173,16 @@ describe('packed workspace extractor', () => {
 			]),
 			git: new Map([['HEAD', encode('ref: refs/heads/main\n')]]),
 		});
-		const { destination, result } = runExtractor(archive, true, true);
+		const { destination, status, stderr } = await runExtractor(archive, true, true);
 
-		expect(result.status, result.stderr.toString()).toBe(0);
+		expect(status, stderr).toBe(0);
 		expect(readFileSync(join(destination, 'app.py'), 'utf8')).toBe('print(1)');
 		expect(readFileSync(join(destination, 'data/blob.bin'))).toEqual(Buffer.from([0, 255, 1]));
 		expect(readFileSync(join(destination, '分析/empty.txt'))).toHaveLength(0);
 		expect(readFileSync(join(destination, '.git/HEAD'), 'utf8')).toBe('ref: refs/heads/main\n');
 	});
 
-	it('places workspace entries under a subdirectory while Git metadata stays at the root', () => {
+	it('places workspace entries under a subdirectory while Git metadata stays at the root', async () => {
 		const archive = createPackedWorkspaceArchive({
 			workspace: new Map([
 				['app.py', encode('print(1)')],
@@ -155,21 +190,21 @@ describe('packed workspace extractor', () => {
 			]),
 			git: new Map([['HEAD', encode('ref: refs/heads/main\n')]]),
 		});
-		const { destination, result } = runExtractor(archive, true, false, 'python/apps');
+		const { destination, status, stderr } = await runExtractor(archive, true, false, 'python/apps');
 
-		expect(result.status, result.stderr.toString()).toBe(0);
+		expect(status, stderr).toBe(0);
 		expect(readFileSync(join(destination, 'python/apps/app.py'), 'utf8')).toBe('print(1)');
 		expect(readFileSync(join(destination, 'python/apps/lib/util.py'), 'utf8')).toBe('x = 1');
 		expect(readFileSync(join(destination, '.git/HEAD'), 'utf8')).toBe('ref: refs/heads/main\n');
 		expect(existsSync(join(destination, 'app.py'))).toBe(false);
 	});
 
-	it('rejects unsafe workspace subdirectories', { timeout: 30_000 }, () => {
+	it('rejects unsafe workspace subdirectories', async () => {
 		const archive = createPackedWorkspaceArchive({
 			workspace: new Map([['app.py', encode('print(1)')]]),
 			git: new Map([['HEAD', encode('ref: refs/heads/main\n')]]),
 		});
-		for (const subdirectory of [
+		const subdirectories = [
 			'../escape',
 			'a/../b',
 			'a//b',
@@ -184,106 +219,97 @@ describe('packed workspace extractor', () => {
 			'a\\b',
 			'a\tb',
 			'a\u007fb',
-		]) {
-			const { destination, result } = runExtractor(archive, true, false, subdirectory);
-			expect(result.status, subdirectory).toBe(1);
-			expect(result.stderr.toString()).toContain('unsafe workspace subdirectory');
-			expect(existsSync(join(destination, 'app.py'))).toBe(false);
-		}
-	});
-
-	it.each(['données', 'my dir'])('places workspace entries under the subdirectory %j', (dir) => {
-		const archive = createPackedWorkspaceArchive({
-			workspace: new Map([['app.py', encode('print(1)')]]),
-			git: new Map([['HEAD', encode('ref: refs/heads/main\n')]]),
+		];
+		const results = await runExtractors(
+			subdirectories.map((subdirectory) => ({ archive, requireGit: true, subdirectory })),
+		);
+		results.forEach(({ destination, status, stderr }, index) => {
+			const subdirectory = subdirectories[index];
+			expect(status, subdirectory).toBe(1);
+			expect(stderr, subdirectory).toContain('unsafe workspace subdirectory');
+			expect(existsSync(join(destination, 'app.py')), subdirectory).toBe(false);
 		});
-		const { destination, result } = runExtractor(archive, true, false, dir);
-
-		expect(result.status, result.stderr.toString()).toBe(0);
-		expect(readFileSync(join(destination, dir, 'app.py'), 'utf8')).toBe('print(1)');
 	});
 
-	it('rejects traversal paths before replacing an existing destination', () => {
-		const root = mkdtempSync(join(tmpdir(), 'marimohub-packed-'));
-		temporaryDirectories.push(root);
-		const destination = join(root, 'workspace');
-		const temporaryRoot = join(destination, '.marimohub-packed-restore');
-		const archivePath = join(temporaryRoot, 'workspace.zip');
-		const scriptPath = join(temporaryRoot, 'extract.py');
-		mkdirSync(temporaryRoot, { recursive: true });
-		writeFileSync(join(destination, 'keep.txt'), 'keep');
-		writeFileSync(scriptPath, EXTRACT_PACKED_WORKSPACE);
-		writeFileSync(archivePath, zipSync({ '../escape.txt': encode('bad') }));
+	it.each(['données', 'my dir'])(
+		'places workspace entries under the subdirectory %j',
+		async (dir) => {
+			const archive = createPackedWorkspaceArchive({
+				workspace: new Map([['app.py', encode('print(1)')]]),
+				git: new Map([['HEAD', encode('ref: refs/heads/main\n')]]),
+			});
+			const { destination, status, stderr } = await runExtractor(archive, true, false, dir);
 
-		const result = spawnSync('python3', [
-			scriptPath,
-			archivePath,
-			temporaryRoot,
-			destination,
-			'0',
-			'',
+			expect(status, stderr).toBe(0);
+			expect(readFileSync(join(destination, dir, 'app.py'), 'utf8')).toBe('print(1)');
+		},
+	);
+
+	it('rejects traversal paths before replacing an existing destination', async () => {
+		const [{ destination, status, stderr }] = await runExtractors([
+			{ archive: zipSync({ '../escape.txt': encode('bad') }), existing: { 'keep.txt': 'keep' } },
 		]);
 
-		expect(result.status).toBe(1);
-		expect(result.stderr.toString()).toContain('unsafe or duplicate archive path');
+		expect(status).toBe(1);
+		expect(stderr).toContain('unsafe or duplicate archive path');
 		expect(readFileSync(join(destination, 'keep.txt'), 'utf8')).toBe('keep');
 	});
 
-	it('refuses to merge into a non-empty workspace', () => {
+	it('refuses to merge into a non-empty workspace', async () => {
 		const archive = createPackedWorkspaceArchive({
 			workspace: new Map([['app.py', encode('print(1)')]]),
 		});
-		const root = mkdtempSync(join(tmpdir(), 'marimohub-packed-'));
-		temporaryDirectories.push(root);
-		const destination = join(root, 'workspace');
-		const temporaryRoot = join(destination, '.marimohub-packed-restore');
-		const script = join(temporaryRoot, 'extract.py');
-		const archivePath = join(temporaryRoot, 'workspace.zip');
-		mkdirSync(temporaryRoot, { recursive: true });
-		writeFileSync(join(destination, 'keep.txt'), 'keep');
-		writeFileSync(script, EXTRACT_PACKED_WORKSPACE);
-		writeFileSync(archivePath, archive);
+		const [{ destination, status, stderr }] = await runExtractors([
+			{ archive, existing: { 'keep.txt': 'keep' } },
+		]);
 
-		const result = spawnSync('python3', [script, archivePath, temporaryRoot, destination, '0', '']);
-
-		expect(result.status).toBe(1);
-		expect(result.stderr.toString()).toContain('workspace is not empty');
+		expect(status).toBe(1);
+		expect(stderr).toContain('workspace is not empty');
 		expect(readFileSync(join(destination, 'keep.txt'), 'utf8')).toBe('keep');
 		expect(() => readFileSync(join(destination, 'app.py'))).toThrow();
 	});
 
-	it('rejects symlinks, FIFOs, and incomplete pull-mode Git metadata', () => {
-		for (const attrs of [0o120777 * 65536, 0o010644 * 65536]) {
-			const special = zipSync({ link: [encode('target'), { os: 3, attrs }] });
-			expect(runExtractor(special, false).result.status).toBe(1);
-		}
-
+	it('rejects symlinks, FIFOs, and incomplete pull-mode Git metadata', async () => {
+		const special = [0o120777 * 65536, 0o010644 * 65536].map((attrs) =>
+			zipSync({ link: [encode('target'), { os: 3, attrs }] }),
+		);
 		const withoutHead = createPackedWorkspaceArchive({
 			workspace: new Map([['app.py', encode('print(1)')]]),
 			git: new Map([['config', encode('config')]]),
 		});
-		expect(runExtractor(withoutHead, true).result.status).toBe(1);
+		const [symlink, fifo, incompleteGit] = await runExtractors([
+			{ archive: special[0] },
+			{ archive: special[1] },
+			{ archive: withoutHead, requireGit: true },
+		]);
+
+		expect(symlink.status, symlink.stderr).toBe(1);
+		expect(fifo.status, fifo.stderr).toBe(1);
+		expect(incompleteGit.status).toBe(1);
+		expect(incompleteGit.stderr).toContain('Git metadata is incomplete');
 	});
 
 	it.each([
 		{ label: 'S_IFREG with 0o644 permissions', mode: 0o100644 },
 		{ label: 'permission-only 0o644', mode: 0o000644 },
-	])('restores a regular file encoded as $label', ({ mode }) => {
+	])('restores a regular file encoded as $label', async ({ mode }) => {
 		const archive = zipSync({ 'app.py': [encode('print(1)'), { os: 3, attrs: mode * 65536 }] });
-		const { destination, result } = runExtractor(archive, false);
+		const { destination, status, stderr } = await runExtractor(archive, false);
 
-		expect(result.status, result.stderr.toString()).toBe(0);
+		expect(status, stderr).toBe(0);
 		expect(readFileSync(join(destination, 'app.py'), 'utf8')).toBe('print(1)');
 	});
 
-	it('rejects a truncated archive', () => {
+	it('rejects a truncated archive', async () => {
 		const archive = createPackedWorkspaceArchive({
 			workspace: new Map([['app.py', encode('print(1)')]]),
 		});
-		expect(runExtractor(archive.subarray(0, archive.byteLength - 10), false).result.status).toBe(1);
+		expect((await runExtractor(archive.subarray(0, archive.byteLength - 10), false)).status).toBe(
+			1,
+		);
 	});
 
-	it('rejects empty, directory-bearing, encrypted, duplicate, and CRC-invalid archives', () => {
+	it('rejects empty, directory-bearing, encrypted, duplicate, and CRC-invalid archives', async () => {
 		const empty = zipSync({});
 		const directory = zipSync({ 'data/': new Uint8Array() });
 		const encrypted = setZipFlags(zipSync({ 'app.py': encode('print(1)') }), 1);
@@ -297,7 +323,7 @@ describe('packed workspace extractor', () => {
 		const backslash = zipSync({ 'dir\\app.py': encode('bad') });
 		const emptySegment = zipSync({ 'dir//app.py': encode('bad') });
 
-		for (const archive of [
+		const archives = {
 			empty,
 			directory,
 			encrypted,
@@ -306,12 +332,14 @@ describe('packed workspace extractor', () => {
 			absolute,
 			backslash,
 			emptySegment,
-		]) {
-			expect(runExtractor(archive, false).result.status).toBe(1);
-		}
+		};
+		const results = await runExtractors(Object.values(archives).map((archive) => ({ archive })));
+		Object.keys(archives).forEach((label, index) => {
+			expect(results[index].status, label).toBe(1);
+		});
 	});
 
-	it('rejects declared per-file and aggregate workspace limits before extraction', () => {
+	it('rejects declared per-file and aggregate workspace limits before extraction', async () => {
 		const perFile = setCentralSizes(zipSync({ 'large.bin': new Uint8Array() }), [
 			MAX_FILE_BYTES + 1,
 		]);
@@ -324,11 +352,15 @@ describe('packed workspace extractor', () => {
 			[MAX_FILE_BYTES, MAX_FILE_BYTES, MAX_FILE_BYTES, MAX_FILE_BYTES, 1],
 		);
 
-		expect(runExtractor(perFile, false).result.status).toBe(1);
-		expect(runExtractor(aggregate, false).result.status).toBe(1);
+		const [perFileResult, aggregateResult] = await runExtractors([
+			{ archive: perFile },
+			{ archive: aggregate },
+		]);
+		expect(perFileResult.status).toBe(1);
+		expect(aggregateResult.status).toBe(1);
 	});
 
-	it('enforces Git aggregate and file-count limits separately from workspace limits', () => {
+	it('enforces Git aggregate and file-count limits separately from workspace limits', async () => {
 		const aggregate = setCentralSizes(
 			zipSync({
 				'.git/HEAD': new Uint8Array(),
@@ -346,25 +378,29 @@ describe('packed workspace extractor', () => {
 			),
 		});
 
-		expect(runExtractor(aggregate, true).result.status).toBe(1);
-		expect(runExtractor(tooMany, true).result.status).toBe(1);
+		const [aggregateResult, tooManyResult] = await runExtractors([
+			{ archive: aggregate, requireGit: true },
+			{ archive: tooMany, requireGit: true },
+		]);
+		expect(aggregateResult.status).toBe(1);
+		expect(tooManyResult.status).toBe(1);
 	});
 
-	it('rejects more than 1000 workspace files', () => {
+	it('rejects more than 1000 workspace files', async () => {
 		const archive = zipSync(
 			Object.fromEntries(
 				Array.from({ length: 1001 }, (_, index) => [`${index}.txt`, new Uint8Array()]),
 			),
 		);
 
-		expect(runExtractor(archive, false).result.status).toBe(1);
+		expect((await runExtractor(archive, false)).status).toBe(1);
 	});
 
-	it('rejects an archive path reserved for restore files', () => {
+	it('rejects an archive path reserved for restore files', async () => {
 		const archive = zipSync({
 			'.marimohub-packed-restore/payload': encode('conflict'),
 		});
-		expect(runExtractor(archive, false).result.status).toBe(1);
+		expect((await runExtractor(archive, false)).status).toBe(1);
 	});
 });
 

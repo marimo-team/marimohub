@@ -10,8 +10,11 @@ import type { Theme } from '@/context/ThemeContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { projectKeys, userKeys } from '@/api/queryKeys';
 import { projectQueryOptions, userQueryOptions } from '@/api/hooks';
+
+// These tests pin the production delays with fake timers.
+vi.unmock('@/lib/timing');
 import { deferred } from '@/test/deferred';
-import { createTestQueryClient, renderWithClient } from '@/test/render';
+import { createTestQueryClient, renderWithClient, setupUser } from '@/test/render';
 import { AppsPage } from './AppsPage';
 import { Project } from '@/components/Project/Project';
 import { ProjectSourceGate } from '@/components/Workspace/ProjectSourceGate';
@@ -173,7 +176,7 @@ describe('stakeholder apps', () => {
 	);
 
 	it('shares the app URL without exposing notebook actions', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const writeText = vi.spyOn(navigator.clipboard, 'writeText');
 		const success = vi.spyOn(toast, 'success');
 		setup(`${app.url}?id=123&access_token=evil&session_id=evil`);

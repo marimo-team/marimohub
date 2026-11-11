@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import type { Session } from '@/types';
 import {
 	changeRequestBody,
@@ -38,7 +38,7 @@ describe('NotebookPage git-synced editor', () => {
 	});
 
 	it.each(['badge', 'menu'])('opens Git source details from the %s', async (entry) => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({ role: 'editor', sourceType: 'git', session: gitEditSession() });
 		renderPage();
 
@@ -64,7 +64,7 @@ describe('NotebookPage git-synced editor', () => {
 	});
 
 	it('the app view hides Git details from the badge and notebook menu', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({
 			role: 'editor',
 			sourceType: 'git',
@@ -110,7 +110,7 @@ describe('NotebookPage git-synced editor', () => {
 	});
 
 	it('Restart to update confirms (cancel is a no-op), then tears down and starts fresh', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const impl = makeFetch({
 			role: 'editor',
 			sourceType: 'git',
@@ -139,7 +139,7 @@ describe('NotebookPage git-synced editor', () => {
 	});
 
 	it('lets a manager open a pull request from a persistent running session', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'manager',
 			sourceType: 'git',
@@ -166,7 +166,7 @@ describe('NotebookPage git-synced editor', () => {
 	});
 
 	it('views the published PR without creating another proposal', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'manager',
 			sourceType: 'git',
@@ -198,7 +198,7 @@ describe('NotebookPage git-synced editor', () => {
 	});
 
 	it('updates the current PR and replaces it only when creating a new PR', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'manager',
 			sourceType: 'git',
@@ -244,7 +244,7 @@ describe('NotebookPage git-synced editor', () => {
 	});
 
 	it('targets each subsequent update at the latest published proposal', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'manager',
 			sourceType: 'git',
@@ -292,7 +292,7 @@ describe('NotebookPage git-synced editor', () => {
 	});
 
 	it('keeps the current PR and idempotency key when an update transiently fails', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'manager',
 			sourceType: 'git',
@@ -338,7 +338,7 @@ describe('NotebookPage git-synced editor', () => {
 	});
 
 	it('keeps the old PR selected when creating a replacement PR fails', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'manager',
 			sourceType: 'git',
@@ -372,7 +372,7 @@ describe('NotebookPage git-synced editor', () => {
 	});
 
 	it('rotates only the failed update key when its proposal must be recaptured', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'manager',
 			sourceType: 'git',
@@ -428,7 +428,7 @@ describe('NotebookPage git-synced editor', () => {
 	});
 
 	it('navigates the current tab when the pull-request popup is blocked', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({
 			role: 'manager',
 			sourceType: 'git',
@@ -447,7 +447,7 @@ describe('NotebookPage git-synced editor', () => {
 	});
 
 	it('reuses the idempotency key when a manager retries a failed publication', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'manager',
 			sourceType: 'git',
@@ -479,7 +479,7 @@ describe('NotebookPage git-synced editor', () => {
 	});
 
 	it('rotates the idempotency key when the proposal must be recaptured', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'manager',
 			sourceType: 'git',

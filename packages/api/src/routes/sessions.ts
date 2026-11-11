@@ -1448,7 +1448,7 @@ export async function startNotebookSession(input: {
 		const deadline = waitStarted + EDITOR_STOP_WAIT_MS;
 		try {
 			while (Date.now() < deadline) {
-				await sleep(Math.min(500, deadline - Date.now()), request.signal);
+				await (input.deps.sleep ?? sleep)(Math.min(500, deadline - Date.now()), request.signal);
 				const current = await sessions.getEditorClaim(pid, nid);
 				if (
 					current?.transfer ||
@@ -1747,6 +1747,7 @@ async function startNotebookSessionOnce(
 		body?.replace_app_session_id
 			? appPool.replace({ ...admissionInput, replacesSessionId: body.replace_app_session_id })
 			: appPool.admit({ ...admissionInput, visitId: body?.app_visit_id });
+	const pace = deps.sleep ?? sleep;
 	const admitWithRetry = async () => {
 		for (let attempt = 0; ; attempt++) {
 			try {
@@ -1756,7 +1757,7 @@ async function startNotebookSessionOnce(
 					throw error;
 				if (attempt === 3)
 					throw new UnavailableError('The app is busy. Retry shortly.', { cause: error });
-				await sleep(jitteredBackoff(attempt, { baseMs: 250, capMs: 2000, jitter: 1 }));
+				await pace(jitteredBackoff(attempt, { baseMs: 250, capMs: 2000, jitter: 1 }));
 			}
 		}
 	};
@@ -1780,7 +1781,7 @@ async function startNotebookSessionOnce(
 			} catch (error) {
 				if (!(error instanceof NotFoundError)) throw error;
 			}
-			await sleep(jitteredBackoff(attempt, { baseMs: 50, capMs: 200, jitter: 0.5 }));
+			await pace(jitteredBackoff(attempt, { baseMs: 50, capMs: 200, jitter: 0.5 }));
 		}
 		throw new UnavailableError('The app is starting. Retry shortly.');
 	};

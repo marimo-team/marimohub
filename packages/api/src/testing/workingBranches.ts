@@ -1,9 +1,7 @@
-import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { onTestFinished, vi } from 'vitest';
-import { ConflictError, NotFoundError, createSandboxId, execResult } from '@marimo-hub/core';
+import { afterAll, onTestFinished, vi } from 'vitest';
+import { ConflictError, NotFoundError, createSandboxId } from '@marimo-hub/core';
 import type {
 	WorkingBranchInspection,
 	SourceControlReader,
@@ -11,18 +9,19 @@ import type {
 } from '@marimo-hub/core/ports/source-control';
 import type { NotebookId } from '@marimo-hub/core';
 import { ACTOR, fakeComputeFrom, makeFsSandbox } from '@marimo-hub/core/testing';
+import { createGitRepoTemplate, execInLocalShell } from '@marimo-hub/core/testing/git-repo';
 import { createInitializedBucket, createTestApi, stubSourceControl } from './index';
+
+const template = createGitRepoTemplate((repo, git) => {
+	writeFileSync(join(repo, 'app.py'), 'base');
+	git('add', 'app.py');
+}, 'working-branch-api-');
+afterAll(() => template.dispose());
 
 export async function workingBranchFixture() {
 	const bucket = await createInitializedBucket();
-	const workdir = mkdtempSync(join(tmpdir(), 'working-branch-api-'));
+	const workdir = template.instantiate();
 	onTestFinished(() => rmSync(workdir, { recursive: true, force: true }));
-	const git = (...args: string[]) =>
-		execFileSync('git', ['-c', 'core.fsmonitor=false', '-C', workdir, ...args]);
-	git('init', '-q');
-	git('config', 'core.fsmonitor', 'false');
-	writeFileSync(join(workdir, 'app.py'), 'base');
-	git('add', 'app.py');
 	const heads = new Map([['main', 'base']]);
 	let lastCreatedBranch: string | undefined;
 	let revision = 0;
@@ -97,14 +96,7 @@ export async function workingBranchFixture() {
 		workingBranchProviders: () => ['github'],
 	};
 	const instance = makeFsSandbox().instance;
-	instance.exec = async (command) => {
-		const result = spawnSync('/bin/sh', ['-c', command], {
-			encoding: 'utf8',
-			timeout: 5000,
-			maxBuffer: 20 * 1024 * 1024,
-		});
-		return execResult(result.status === 0, result.stdout ?? '', result.stderr ?? '');
-	};
+	instance.exec = (command) => execInLocalShell(command, { timeout: 5000 });
 	const api = createTestApi({
 		bucket,
 		compute: fakeComputeFrom(instance),

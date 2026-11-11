@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { MoreHorizontal } from 'lucide-react';
 import { DropdownMenu } from './DropdownMenu';
 
@@ -28,7 +28,7 @@ describe('DropdownMenu', () => {
 	});
 
 	it('opens the menu and fires onAction with the chosen item id', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onAction } = setup();
 
 		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
@@ -39,7 +39,7 @@ describe('DropdownMenu', () => {
 	});
 
 	it('renders separators before grouped options', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup();
 
 		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
@@ -50,7 +50,7 @@ describe('DropdownMenu', () => {
 	});
 
 	it('does not fire actions for disabled items', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onAction } = setup();
 
 		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
@@ -64,7 +64,7 @@ describe('DropdownMenu', () => {
 
 describe('DropdownMenu presentation props', () => {
 	it('renders an href option as a link', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			<DropdownMenu
 				label="Notebook menu"
@@ -82,7 +82,7 @@ describe('DropdownMenu presentation props', () => {
 	});
 
 	it('renders the header above the items', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			<DropdownMenu
 				label="Notebook menu"

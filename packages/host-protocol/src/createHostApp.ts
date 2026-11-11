@@ -126,6 +126,7 @@ export function createHostApp<
 >(platform: HostPlatform<P, N, R, S>, options: HostAppOptions = {}): Hono<HostAppEnv> {
 	const app = new Hono<HostAppEnv>();
 	const challenge = `Bearer realm="${options.realm ?? 'marimo-host'}"`;
+	const pollIntervalMs = options.pollIntervalMs ?? 1_000;
 	const toResponse = (error: unknown) => errorResponse(error, platform.errorStatus?.bind(platform));
 	let retries: HostRetries | undefined;
 	const runtimeRefreshes = new RuntimeCatalogRefreshes();
@@ -355,7 +356,7 @@ export function createHostApp<
 							if (ids.has(change.notebookId)) await stream.change(change.event, send);
 						}
 						first = false;
-						await sleep(1_000, signal);
+						await sleep(pollIntervalMs, signal);
 						principal = await platform.authenticate(c.req.raw);
 						const next = await platform.catalogVersion(principal);
 						if (next !== version || Date.now() - refreshed >= CATALOG_REFRESH_MS) {

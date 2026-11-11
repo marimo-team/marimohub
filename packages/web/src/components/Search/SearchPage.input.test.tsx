@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { setup } from '@/test/search';
 
+// These tests pin the production delays with fake timers.
+vi.unmock('@/lib/timing');
+
 afterEach(() => {
 	vi.useRealTimers();
 	vi.unstubAllGlobals();

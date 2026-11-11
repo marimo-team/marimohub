@@ -1,12 +1,11 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { ApiTokensDialog } from './ApiTokensDialog';
 import type { ApiToken } from '@/types';
-import { createTestQueryClient } from '@/test/render';
+import { createTestQueryClient, setupUser } from '@/test/render';
 
 const TOKEN_ID = '01HXY0S6GWMBASVAG3PZ7Y2K5T';
 const PLAINTEXT = `mhub_pat_${TOKEN_ID}_${'a'.repeat(32)}`;
@@ -162,7 +161,7 @@ describe('ApiTokensDialog', () => {
 	});
 
 	it('creates a token and shows the plaintext once with a copy-now warning', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup([]);
 
 		await user.type(await screen.findByLabelText('Name'), 'ci-deploy');
@@ -187,7 +186,7 @@ describe('ApiTokensDialog', () => {
 	});
 
 	it('requires explicit action and project choices before submission', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup([]);
 		const create = await screen.findByRole('button', { name: /create token/i });
 
@@ -203,7 +202,7 @@ describe('ApiTokensDialog', () => {
 	});
 
 	it('shows project picker failures locally and retries the request', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup([], {
 			projectFailures: 1,
 			projects: [{ id: 'proj-0000000000000001', name: 'Analytics' }],
@@ -217,7 +216,7 @@ describe('ApiTokensDialog', () => {
 	});
 
 	it('can create an all-project token after the project picker fails', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup([], { projectFailures: 1 });
 
 		await user.click(await screen.findByRole('radio', { name: /^Read/ }));
@@ -240,7 +239,7 @@ describe('ApiTokensDialog', () => {
 	});
 
 	it('creates a custom action grant from the advanced editor', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup([]);
 
 		await user.type(await screen.findByLabelText('Name'), 'custom');
@@ -262,7 +261,7 @@ describe('ApiTokensDialog', () => {
 	});
 
 	it('rejects a blank name without calling the API', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup([]);
 
 		await screen.findByText('No tokens yet.');
@@ -275,7 +274,7 @@ describe('ApiTokensDialog', () => {
 	});
 
 	it('rejects a non-numeric expiry without calling the API', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup([]);
 
 		await user.type(await screen.findByLabelText('Name'), 'ci');
@@ -289,7 +288,7 @@ describe('ApiTokensDialog', () => {
 	});
 
 	it('surfaces a server error when creation fails', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -327,7 +326,7 @@ describe('ApiTokensDialog', () => {
 	});
 
 	it('revokes a token after confirmation', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup([tokenMeta()]);
 
 		await user.click(await screen.findByRole('button', { name: 'Revoke ci-deploy' }));

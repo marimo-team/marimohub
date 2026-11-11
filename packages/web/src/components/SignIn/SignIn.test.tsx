@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { renderWithClient } from '@/test/render';
+import { renderWithClient, setupUser } from '@/test/render';
 import { SignIn } from './SignIn';
 
 const signIn = vi.hoisted(() => vi.fn());
@@ -76,7 +75,7 @@ describe('SignIn OIDC errors', () => {
 	});
 
 	it('retries through the normal sign-in action', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWithClient(<SignIn />, { route: '/?auth_error=group_not_allowed' });
 
 		await user.click(screen.getByRole('button', { name: 'Try a different account' }));
