@@ -2,7 +2,6 @@ import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { Suspense } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import type { QueryClient } from '@tanstack/react-query';
 import { Route, Routes } from 'react-router-dom';
@@ -10,8 +9,11 @@ import type { Theme } from '@/context/ThemeContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { projectKeys, userKeys } from '@/api/queryKeys';
 import { projectQueryOptions, userQueryOptions } from '@/api/hooks';
+
+// These tests pin the production delays with fake timers.
+vi.unmock('@/lib/timing');
 import { deferred } from '@/test/deferred';
-import { createTestQueryClient, renderWithClient } from '@/test/render';
+import { createTestQueryClient, renderWithClient, setupUser } from '@/test/render';
 import { AppsPage } from './AppsPage';
 import { Project } from '@/components/Project/Project';
 import { ProjectSourceGate } from '@/components/Workspace/ProjectSourceGate';
@@ -153,7 +155,7 @@ describe('stakeholder apps', () => {
 			},
 		});
 		expect(await screen.findByText('New release')).toBeInTheDocument();
-		await userEvent.click(screen.getByRole('button', { name: 'Help' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Help' }));
 		expect(screen.getByRole('menuitem', { name: 'Get help' })).toHaveAttribute(
 			'href',
 			'https://help.example.com',
@@ -173,7 +175,7 @@ describe('stakeholder apps', () => {
 	);
 
 	it('shares the app URL without exposing notebook actions', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const writeText = vi.spyOn(navigator.clipboard, 'writeText');
 		const success = vi.spyOn(toast, 'success');
 		setup(`${app.url}?id=123&access_token=evil&session_id=evil`);

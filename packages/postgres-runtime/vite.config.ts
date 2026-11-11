@@ -1,6 +1,6 @@
-import { defineConfig } from 'vite-plus';
+import { libraryConfig } from '@marimo-hub/vite-config';
 
-export default defineConfig({
-	pack: { dts: true, entry: ['src/node.ts', 'src/worker.ts'] },
-	test: { include: ['src/**/*.test.ts'], maxConcurrency: 2 },
+export default libraryConfig({
+	pack: { entry: ['src/node.ts', 'src/worker.ts'] },
+	test: { maxConcurrency: 2 },
 });

@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
 import { useSourceBranchesQuery, useSourceCommitsQuery } from './sourceControl';
 
+// These tests pin the production delays with fake timers.
+vi.unmock('@/lib/timing');
+
 const branch = (value: string) => ({ value, label: value, commit: 'a'.repeat(40) });
 
 afterEach(() => {

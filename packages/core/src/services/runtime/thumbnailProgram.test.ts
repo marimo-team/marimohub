@@ -3,16 +3,17 @@ import { promisify } from 'node:util';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { it } from 'vitest';
 import { THUMBNAIL_PROGRAM } from './thumbnailProgram';
 
 const run = promisify(execFile);
-it.skipIf(process.platform !== 'linux' && process.platform !== 'darwin').each([
+it.skipIf(process.platform !== 'linux' && process.platform !== 'darwin').concurrent.for([
 	{ delay: 60, status: 'timeout' },
-	{ delay: 1, status: 'render_failed' },
+	{ delay: 0.2, status: 'render_failed' },
 ])(
 	'cleans up detached browsers when the worker ends with $status',
-	async ({ delay, status }) => {
+	{ timeout: 10_000 },
+	async ({ delay, status }, { expect }) => {
 		const dir = await mkdtemp(join(tmpdir(), 'thumbnail-watchdog-'));
 		try {
 			await mkdir(join(dir, 'playwright'));
@@ -48,20 +49,24 @@ def async_playwright(): return FakePlaywright()
 			expect(JSON.parse(stdout)).toEqual({ status });
 			expect(Date.now() - started).toBeLessThan(6000);
 			const pid = Number(await readFile(pidFile, 'utf8'));
+			// Each probe spawns `ps`, which is slow on a loaded machine; the ceiling only
+			// bounds the failure case.
 			await expect
-				.poll(async () => {
-					try {
-						const { stdout: state } = await run('ps', ['-p', String(pid), '-o', 'stat=']);
-						return !state.trim() || state.trim().startsWith('Z');
-					} catch {
-						return true;
-					}
-				})
+				.poll(
+					async () => {
+						try {
+							const { stdout: state } = await run('ps', ['-p', String(pid), '-o', 'stat=']);
+							return !state.trim() || state.trim().startsWith('Z');
+						} catch {
+							return true;
+						}
+					},
+					{ timeout: 5000, interval: 100 },
+				)
 				.toBe(true);
 			await expect(readFile(input)).rejects.toThrow();
 		} finally {
 			await rm(dir, { recursive: true, force: true });
 		}
 	},
-	10_000,
 );

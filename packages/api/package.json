@@ -14,7 +14,7 @@
 	},
 	"scripts": {
 		"build": "vp pack",
-		"test": "vp test",
+		"test": "vp run test:vitest",
 		"check": "vp check",
 		"cli:generate": "UPDATE_CLI_MANIFEST=1 vp test cliManifest.spec && pnpm --dir ../.. exec vp fmt apps/cli/generated/cli-manifest.json",
 		"openapi:generate": "UPDATE_OPENAPI=1 vp test openapi.spec && vp fmt openapi.yaml",
@@ -36,6 +36,7 @@
 	"devDependencies": {
 		"@ai-sdk/provider": "catalog:",
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@types/node": "catalog:",
 		"smol-toml": "catalog:",
 		"typescript": "catalog:",

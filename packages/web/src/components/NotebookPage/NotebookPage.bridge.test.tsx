@@ -1,6 +1,6 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type { HostBridgeOptions } from '@marimo-hub/notebook-bridge/host';
 import { makeFetch, renderPage, runningSession, sessionPosts } from './NotebookPage.testWorld';
@@ -90,7 +90,7 @@ describe('notebook URL mirroring', () => {
 	it.each(['app', 'edit'] as const)(
 		'updates sharing and router state without reconnecting the %s iframe',
 		async (variant) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
 			const impl = makeFetch({ role: 'editor', session: runningSession({ mode: variant }) });
 			renderPage(variant, { search: '?id=123#anchor', controls: <Controls /> });
@@ -315,7 +315,7 @@ describe('notebook URL mirroring', () => {
 it.each(['app', 'edit'] as const)(
 	'restores, mirrors, and shares paths without reloading the %s frame',
 	async (variant) => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
 		makeFetch({
 			role: 'editor',
@@ -356,7 +356,7 @@ it.each(['app', 'edit'] as const)(
 it.each(['app', 'edit'] as const)(
 	'keeps the %s frame mounted and strips invalid paths from shared links',
 	async (variant) => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
 		makeFetch({ role: 'editor', session: runningSession({ mode: variant }) });
 		renderPage(variant, { search: '?id=123', controls: <Controls /> });

@@ -7,6 +7,7 @@ import { DefaultChatTransport } from 'ai';
 import type { UIMessage } from 'ai';
 import type { paths } from '@marimo-hub/client';
 import { withBasePath } from '@/lib/basePath';
+import { CHAT_UI_THROTTLE_MS, CONVERSATION_POLL_MS } from '@/lib/timing';
 import { apiClient, apiData } from './client';
 import { projectKeys } from './queryKeys';
 
@@ -85,7 +86,7 @@ export function useConversation(
 		refetchInterval: (query) => {
 			if (options.suspendPolling) return false;
 			return options.pollWhileSending || isTurnPending(query.state.data?.conversation)
-				? 1500
+				? CONVERSATION_POLL_MS
 				: false;
 		},
 	});
@@ -382,7 +383,7 @@ export function useConversationChat(
 		[pid],
 	);
 	// Re-rendering Markdown for every token is wasteful; batch store updates.
-	const helpers = useChat({ chat: active?.chat ?? fallback, throttle: 80 });
+	const helpers = useChat({ chat: active?.chat ?? fallback, throttle: CHAT_UI_THROTTLE_MS });
 	const live = helpers.status === 'submitted' || helpers.status === 'streaming';
 	// The store is the truth while this tab streams, re-attaches, or waits for the
 	// finalized record; otherwise the record takes over so a stale snapshot never

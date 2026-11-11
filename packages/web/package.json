@@ -5,7 +5,7 @@
 	"license": "Apache-2.0",
 	"type": "module",
 	"scripts": {
-		"test": "vp test",
+		"test": "vp run test:vitest",
 		"preview": "vp preview",
 		"typecheck": "tsc --noEmit"
 	},
@@ -54,6 +54,7 @@
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@tanstack/react-query-devtools": "5.101.0",
 		"@testing-library/dom": "catalog:",
 		"@testing-library/jest-dom": "catalog:",

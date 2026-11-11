@@ -23,6 +23,7 @@ import type { HostDecision } from '@marimo-hub/host-protocol';
 import { HOST_PREFIX } from './createHostApp';
 
 vi.mock('@marimo-hub/core/host-bridge', () => ({ requestRuntimeHost: vi.fn() }));
+const POLL_INTERVAL_MS = 10;
 const user: AuthenticatedPrincipal = {
 	id: UserId.parse('host-user'),
 	email: 'host@example.com',
@@ -45,6 +46,7 @@ async function setup(policy: ApiDeps['policy'] = {}) {
 		authenticator: { authenticate: async () => principal },
 		compute: makeFakeCompute(),
 		policy,
+		host: { pollIntervalMs: POLL_INTERVAL_MS },
 	});
 	const project = await deps.services.projects.createProject(
 		{ name: 'Host project', description: '' },
@@ -1191,7 +1193,7 @@ describe('host protocol conformance', () => {
 		try {
 			await readUntil('event: ready');
 			const listed = list.mock.calls.length;
-			await new Promise((resolve) => setTimeout(resolve, 1_300));
+			await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 5));
 			expect(list.mock.calls.length).toBe(listed);
 			await deps.services.notebooks.updateNotebook(
 				project.id,

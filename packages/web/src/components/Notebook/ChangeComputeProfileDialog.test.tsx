@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { ChangeComputeProfileDialog } from './ChangeComputeProfileDialog';
@@ -130,7 +130,7 @@ describe('ChangeComputeProfileDialog', () => {
 	});
 
 	it('offers both restart actions when both selections change', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = makeFetch(undefined, true);
 		const onRestart = vi.fn();
 		const onAppRestart = vi.fn();
@@ -153,7 +153,7 @@ describe('ChangeComputeProfileDialog', () => {
 	});
 
 	it('shows different defaults and saves only the changed app choice', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = makeFetch(undefined, true);
 		renderDialog(fetchImpl);
 		await waitFor(() =>
@@ -170,7 +170,7 @@ describe('ChangeComputeProfileDialog', () => {
 	});
 
 	it('can override an inherited editing profile with the first shared profile', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = makeFetch('large');
 		renderDialog(fetchImpl);
 		await waitFor(() => expect(editing().getByRole('radio', { name: /^large/ })).toBeChecked());
@@ -196,7 +196,7 @@ describe('ChangeComputeProfileDialog', () => {
 	])(
 		'offers app restart only when editing changes its effective profile: %j',
 		async ({ modeDefaults, appOverride, shouldRestart }) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const onAppRestart = vi.fn();
 			const { onClose } = renderDialog(makeFetch(undefined, modeDefaults, appOverride), {
 				onAppRestart,
@@ -226,7 +226,7 @@ describe('ChangeComputeProfileDialog', () => {
 	});
 
 	it('keeps a removed stored profile visible but disabled', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog(makeFetch('gpu-big'));
 
 		await screen.findByRole('radiogroup', { name: 'Editing profile' });
@@ -241,7 +241,7 @@ describe('ChangeComputeProfileDialog', () => {
 	});
 
 	it('PATCHes null for Default and offers restart from the confirmation toast', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = makeFetch('large');
 		const onRestart = vi.fn();
 		const { onClose } = renderDialog(fetchImpl, { onRestart });

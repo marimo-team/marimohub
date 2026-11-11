@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient } from '@tanstack/react-query';
 import { userKeys } from '@/api/queryKeys';
 import type { User } from '@/types';
-import { jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { jsonError, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import { AuthProvider, useAuth } from './AuthContext';
 
 const ME: User = {
@@ -126,7 +125,7 @@ describe('AuthProvider', () => {
 	});
 
 	it('signIn navigates to the server OIDC entry point without redirect_url from the root', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async () => jsonOk(ME)),
@@ -147,7 +146,7 @@ describe('AuthProvider', () => {
 	it.each(['/projects/proj-1/notebooks/nb-1', '/projects/proj-1/notebooks/nb-1/app', '/app/sales'])(
 		'signIn preserves notebook query parameters through redirect_url (%s)',
 		async (pathname) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			vi.stubGlobal(
 				'fetch',
 				vi.fn(async () => jsonOk(ME)),
@@ -173,7 +172,7 @@ describe('AuthProvider', () => {
 	);
 
 	it('signIn strips a stale auth_error from the redirect_url', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async () => jsonOk(ME)),
@@ -197,7 +196,7 @@ describe('AuthProvider', () => {
 	});
 
 	it('signIn treats a root URL carrying only auth_error as having no destination', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async () => jsonOk(ME)),
@@ -216,7 +215,7 @@ describe('AuthProvider', () => {
 	});
 
 	it('signOut navigates to the IdP logout url when the user has one', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async () => jsonOk({ ...ME, logout_url: 'https://idp.example/logout' })),
@@ -236,7 +235,7 @@ describe('AuthProvider', () => {
 	});
 
 	it('signOut clears the cached user when there is no logout url', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async () => jsonOk(ME)),
@@ -259,7 +258,7 @@ describe('AuthProvider', () => {
 	});
 
 	it('refetchUser invalidates the me query and refetches it', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchMock = vi
 			.fn<() => Promise<Response>>()
 			.mockImplementationOnce(async () => jsonOk(ME))

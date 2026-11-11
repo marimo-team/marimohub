@@ -8,13 +8,14 @@
 		"dev": "vitepress dev",
 		"build": "vitepress build",
 		"preview": "vitepress preview",
-		"test": "vp test",
+		"test": "vp run test:vitest",
 		"typecheck": "tsc --noEmit",
 		"integrations:generate": "UPDATE_INTEGRATION_DOCS=1 vp test integrations-docs/generate"
 	},
 	"devDependencies": {
 		"@marimo-hub/config": "workspace:*",
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@types/markdown-it": "14.1.2",
 		"@types/markdown-it-container": "2.0.11",
 		"@types/node": "catalog:",

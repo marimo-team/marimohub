@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { tagsInNamespace } from '@marimo-hub/core/tag-paths';
 import { useLocation } from 'react-router-dom';
 import { AuthProvider } from '@/context/AuthContext';
 import { userKeys } from '@/api/queryKeys';
-import { createTestQueryClient, jsonOk, renderWithClient } from '@/test/render';
+import { createTestQueryClient, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import type { ProjectSummary, User } from '@/types';
 import { ProjectList } from './ProjectList';
 
@@ -137,7 +136,7 @@ describe('ProjectList', () => {
 	});
 
 	it('groups by default and remembers opting out without duplicating shared projects', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const projects = [project('Shared', '', { tags: ['ops', 'research'] })];
 		const { unmount } = renderList(projects);
 		await waitForLoaded();
@@ -205,7 +204,7 @@ describe('ProjectList', () => {
 		vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
 			throw new DOMException('Storage disabled', 'SecurityError');
 		});
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderList([project('Shared', '', { tags: ['ops', 'research'] })]);
 		await waitForLoaded();
 		const toggle = screen.getByRole('button', { name: 'Group by namespace' });
@@ -217,7 +216,7 @@ describe('ProjectList', () => {
 	});
 
 	it('can leave an empty namespace without clearing the other filters', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderList(
 			[
 				project('Sales', 'annual report', { tags: ['finance', 'shared'] }),
@@ -252,7 +251,7 @@ describe('ProjectList', () => {
 	it.each(['/', '/?tag_namespace=scale'])(
 		'drills down from a five-row preview at %s and shows all direct matches',
 		async (route) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const tag = route === '/' ? 'scale' : 'scale/team';
 			const { fetchMock } = renderList(scaleProjects(7, tag), route, true, 3);
 			await waitForLoaded();
@@ -272,7 +271,7 @@ describe('ProjectList', () => {
 	it.each(['', 'ops/'])(
 		'allows namespace links at the 256-character boundary under %j',
 		async (parent) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const tag = parent + 'a'.repeat(256 - parent.length);
 			renderList(scaleProjects(6, tag), parent ? '/?tag_namespace=ops' : '/');
 			await waitForLoaded();
@@ -286,7 +285,7 @@ describe('ProjectList', () => {
 	);
 
 	it('hides show-all when collapsed and shows every row when grouping is disabled', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderList(scaleProjects(7));
 		await waitForLoaded();
 		await user.click(screen.getByRole('button', { name: 'Toggle scale' }));
@@ -301,7 +300,7 @@ describe('ProjectList', () => {
 	});
 
 	it('collapses Ungrouped independently from a namespace named ungrouped', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderList([
 			project('Tagged', '', { tags: ['ungrouped'] }),
 			...Array.from({ length: 7 }, (_, i) => project(`Loose ${i}`)),
@@ -340,7 +339,7 @@ describe('ProjectList', () => {
 	});
 
 	it('renders groups and tags, collapses rows, and drills down with breadcrumbs', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { fetchMock } = renderList([
 			project('Vision', '', { tags: ['research/vision/seg'] }),
 			project('Language', '', { tags: ['research/nlp'] }),
@@ -447,7 +446,7 @@ describe('ProjectList', () => {
 	});
 
 	it('filters the list by name or description after submission', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderList([project('Sales', 'revenue'), project('Marketing', 'campaign analysis')]);
 		await waitForLoaded();
 
@@ -459,7 +458,7 @@ describe('ProjectList', () => {
 	});
 
 	it('shows a reset action when filters exclude everything', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderList([project('Sales')]);
 		await waitForLoaded();
 
@@ -473,7 +472,7 @@ describe('ProjectList', () => {
 	});
 
 	it('opens the filters and focuses search with the search shortcut', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderList([project('Sales')]);
 		await waitForLoaded();
 
@@ -483,7 +482,7 @@ describe('ProjectList', () => {
 	});
 
 	it('provides labeled controls and announces the result count', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderList([project('Sales')]);
 		await waitForLoaded();
 
@@ -548,7 +547,7 @@ describe('ProjectList', () => {
 	});
 
 	it('opens the create-project dialog from the header button', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderList([project('Sales')]);
 		await waitForLoaded();
 

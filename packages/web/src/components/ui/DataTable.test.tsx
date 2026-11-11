@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { DataTable } from './DataTable';
 import type { DataTableColumn } from './DataTable';
 
@@ -43,7 +43,7 @@ describe('DataTable', () => {
 	});
 
 	it('preserves cell controls when rows and columns are reordered', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { rerender } = render(
 			<DataTable label="Items" items={items} columns={columns} getRowKey={(item) => item.id} />,
 		);

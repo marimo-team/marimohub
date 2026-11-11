@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
-import { createTestQueryClient, renderWithClient, jsonOk, jsonError } from '@/test/render';
+import {
+	createTestQueryClient,
+	jsonError,
+	jsonOk,
+	renderWithClient,
+	setupUser,
+} from '@/test/render';
 import { notebookKeys } from '@/api/queryKeys';
 import { MoveNotebookDialog } from './MoveNotebookDialog';
 
@@ -40,7 +45,7 @@ afterEach(() => {
 
 describe('MoveNotebookDialog', () => {
 	it('moves to the chosen managed project with the notebook version as precondition', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onClose = vi.fn();
 		const requests: { headers: Headers; body: unknown }[] = [];
 		vi.stubGlobal(
@@ -73,7 +78,7 @@ describe('MoveNotebookDialog', () => {
 	});
 
 	it('shows the server error and lets the user retry the same destination', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		let calls = 0;
 		vi.stubGlobal(
 			'fetch',
@@ -125,7 +130,7 @@ describe('MoveNotebookDialog', () => {
 	});
 
 	it('locks the form and dismissal while the move is pending', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onClose = vi.fn();
 		let finish!: (response: Response) => void;
 		vi.stubGlobal(
@@ -151,7 +156,7 @@ describe('MoveNotebookDialog', () => {
 	});
 
 	it('navigates to the destination and confirms the move', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (input: RequestInfo | URL) =>
@@ -188,7 +193,7 @@ describe('MoveNotebookDialog', () => {
 		[409, 'CONFLICT', 'The destination already contains this notebook'],
 		[412, 'PRECONDITION_FAILED', 'Notebook changed. Start a new move.'],
 	])('shows a %s error once, without the resume hint or cancel', async (status, code, message) => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (input: RequestInfo | URL) =>
@@ -208,7 +213,7 @@ describe('MoveNotebookDialog', () => {
 	});
 
 	it('refreshes the notebook list after a failed move so a pending move shows up', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (input: RequestInfo | URL) =>
@@ -229,7 +234,7 @@ describe('MoveNotebookDialog', () => {
 	});
 
 	it('cancels the pending move it names and resets the dialog', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const moves: string[] = [];
 		vi.stubGlobal(
 			'fetch',
@@ -261,7 +266,7 @@ describe('MoveNotebookDialog', () => {
 	});
 
 	it('resumes a pending move to its stored destination', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const bodies: unknown[] = [];
 		vi.stubGlobal(
 			'fetch',

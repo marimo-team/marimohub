@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { installMatchMedia, renderWithClient } from '@/test/render';
+import { installMatchMedia, renderWithClient, setupUser } from '@/test/render';
 import type { Session } from '@/types';
 import { SessionControl } from './SessionControl';
 
@@ -68,7 +67,7 @@ describe('SessionControl status feedback', () => {
 	});
 
 	it('shows a start error as Failed with the message in the popover', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderControl({ isProvisioning: true, error: 'Quota exceeded' });
 		await user.click(screen.getByRole('button', { name: 'Session Failed — details' }));
 		expect(screen.getByText('Quota exceeded')).toHaveClass('text-destructive');
@@ -77,7 +76,7 @@ describe('SessionControl status feedback', () => {
 
 describe('SessionControl actions', () => {
 	it('offers Restart only when a restart handler is provided', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onRestart = vi.fn();
 		const { unmount } = renderControl({ status: 'running', onRestart });
 		await user.click(screen.getByRole('button', { name: 'Session Running — details' }));
@@ -92,7 +91,7 @@ describe('SessionControl actions', () => {
 	});
 
 	it('stops the session and closes the popover', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onStop = vi.fn();
 		renderControl({ status: 'running', onStop });
 		await user.click(screen.getByRole('button', { name: 'Session Running — details' }));

@@ -14,7 +14,7 @@
 	},
 	"scripts": {
 		"build": "vp pack",
-		"test": "vp test",
+		"test": "vp run test:vitest",
 		"check": "vp check",
 		"typecheck": "tsc --noEmit"
 	},
@@ -24,6 +24,7 @@
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@types/node": "catalog:",
 		"typescript": "catalog:",
 		"vite-plus": "catalog:",

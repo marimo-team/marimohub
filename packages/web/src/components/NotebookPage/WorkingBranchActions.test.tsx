@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { WorkingBranchActions } from './WorkingBranchActions';
+import { setupUser } from '@/test/render';
 
 const hooks = vi.hoisted(() => ({ status: vi.fn(), save: vi.fn(), open: vi.fn() }));
 vi.mock('@/api/workingBranches', () => ({
@@ -34,13 +34,13 @@ describe('WorkingBranchActions', () => {
 		hooks.status.mockReturnValue({ isError: true, error: new Error('Unavailable'), refetch });
 		render(<WorkingBranchActions {...props} />);
 		expect(screen.getByRole('button', { name: 'Save to branch' })).toBeDisabled();
-		await userEvent.click(screen.getByRole('button', { name: 'Retry status' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Retry status' }));
 		expect(refetch).toHaveBeenCalledTimes(1);
 		expect(mutate).not.toHaveBeenCalled();
 	});
 	it('saves from the active session', async () => {
 		render(<WorkingBranchActions {...props} />);
-		await userEvent.click(screen.getByRole('button', { name: 'Save to branch' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Save to branch' }));
 		expect(mutate).toHaveBeenCalledWith(
 			{ sessionId: 'sess-1', operationId: undefined },
 			expect.any(Object),
@@ -49,7 +49,7 @@ describe('WorkingBranchActions', () => {
 	it('retries a persisted operation after the session has ended', async () => {
 		hooks.status.mockReturnValue({ data: { active_save: 'save-id', remote_commit: 'base' } });
 		render(<WorkingBranchActions {...props} sessionId={undefined} />);
-		await userEvent.click(screen.getByRole('button', { name: 'Retry save' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Retry save' }));
 		expect(mutate).toHaveBeenCalledWith(
 			{ sessionId: undefined, operationId: 'save-id' },
 			expect.any(Object),

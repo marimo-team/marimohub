@@ -1,13 +1,12 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { VersionHistoryDialog } from './VersionHistoryDialog';
 import type { NotebookEntry, NotebookVersion } from '@/types';
-import { createTestQueryClient } from '@/test/render';
+import { createTestQueryClient, setupUser } from '@/test/render';
 
 // The real diff pane pulls in @pierre/diffs (shadow DOM + shiki), which cannot
 // run in jsdom. React.lazy's dynamic import resolves to this stub instead.
@@ -247,7 +246,7 @@ describe('VersionHistoryDialog', () => {
 	});
 
 	it('re-diffs when the base select changes', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch();
 		renderDialog();
 		await screen.findByTestId('diff-view');
@@ -261,7 +260,7 @@ describe('VersionHistoryDialog', () => {
 	});
 
 	it('clicking a row selects it as the base against Current', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch();
 		renderDialog();
 		await screen.findByTestId('diff-view');
@@ -308,7 +307,7 @@ describe('VersionHistoryDialog', () => {
 	});
 
 	it('restores through the confirm dialog and refetches the list', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch();
 		renderDialog();
 		const rows = await screen.findAllByTestId('version-row');
@@ -336,7 +335,7 @@ describe('VersionHistoryDialog', () => {
 	});
 
 	it('surfaces a restore failure and keeps the confirm dialog open', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({ restoreResponse: fail(400, 'Cannot restore a version of a non-local notebook') });
 		renderDialog();
 		const rows = await screen.findAllByTestId('version-row');
@@ -362,7 +361,7 @@ describe('VersionHistoryDialog', () => {
 	});
 
 	it('shows an error state with a working retry', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({ listResponse: fail(500, 'boom') });
 		renderDialog();
 

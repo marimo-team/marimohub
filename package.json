@@ -33,6 +33,7 @@
 		"prepare": "vp config"
 	},
 	"devDependencies": {
+		"@marimo-hub/vite-config": "workspace:*",
 		"@oxlint/plugins": "catalog:",
 		"@vitest/coverage-v8": "catalog:",
 		"oxlint": "catalog:",

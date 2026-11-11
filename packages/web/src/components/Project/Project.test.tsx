@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { makeCapabilities } from '@/test/apiStub';
-import { installMatchMedia, jsonError } from '@/test/render';
-import userEvent from '@testing-library/user-event';
+import { installMatchMedia, jsonError, setupUser } from '@/test/render';
 import { PID, makeFetch, notebook, renderProject, stoppableSession } from './Project.testWorld';
 
 afterEach(() => localStorage.removeItem('notebook-view'));
@@ -23,7 +22,7 @@ describe('notebook filters', () => {
 	it.each(['draft', 'archived', 'deleted'] as const)(
 		'keeps %s status and all tags available outside the notebook link',
 		async (status) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const title = 'Long notebook title for customer retention and regional growth';
 			makeFetch({
 				notebooks: [
@@ -66,7 +65,7 @@ describe('notebook filters', () => {
 	);
 
 	it('shows notebook metadata in a labeled table and preserves the gallery toggle', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({ notebooks: [{ ...notebook(), tags: ['finance'] }] });
 		await renderProject();
 		const table = within(screen.getByRole('table', { name: 'Notebooks' }));
@@ -110,7 +109,7 @@ describe('notebook filters', () => {
 	);
 
 	it('loads gallery metadata once per project and never in list mode', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch({
 			notebooks: [notebook(), { ...notebook(), id: 'nb-2', title: 'Second' }],
 		});
@@ -125,7 +124,7 @@ describe('notebook filters', () => {
 		expect(calls.filter((call) => call.url.includes('/thumbnail'))).toHaveLength(1);
 	});
 	it('provides labeled controls and announces the result count', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch();
 		await renderProject();
 
@@ -144,7 +143,7 @@ describe('notebook filters', () => {
 	});
 
 	it('ANDs text, exact-tag, and status filters through the API', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch({
 			notebooks: [
 				{ ...notebook(), title: 'Current forecast', tags: ['finance'] },
@@ -192,7 +191,7 @@ describe('notebook filters', () => {
 	});
 
 	it('loads draft notebooks through the status picker', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch({
 			notebooks: [
 				notebook(),
@@ -223,7 +222,7 @@ describe('notebook filters', () => {
 	});
 
 	it('offers a reset path when filters have no results', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch();
 		await renderProject(`/projects/${PID}?q=missing`);
 
@@ -243,7 +242,7 @@ describe('deleted notebook tombstones', () => {
 		'keeps full-width deleted rows and historical actions in %s mode',
 		async (view) => {
 			localStorage.setItem('notebook-view', view);
-			const user = userEvent.setup();
+			const user = setupUser();
 			makeFetch({
 				notebooks: [
 					{
@@ -303,7 +302,7 @@ describe('deleted notebook tombstones', () => {
 
 describe('Project — Delete Project (type-to-confirm)', () => {
 	it('enables Delete only once the exact project name is typed, then DELETEs', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch();
 		await renderProject();
 
@@ -349,7 +348,7 @@ function replaceTagInput(input: HTMLElement, text: string) {
 
 describe('Project — Edit Project', () => {
 	it('seeds the current values and PATCHes the edited name', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch();
 		await renderProject();
 
@@ -381,7 +380,7 @@ describe('Project — Edit Project', () => {
 	});
 
 	it('preserves existing free-form tags when only the project name changes', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const tags = ['Research, Inc.', 'Data Team', 'Team/Repo'];
 		const calls = makeFetch({ project: { tags } });
 		await renderProject();
@@ -399,7 +398,7 @@ describe('Project — Edit Project', () => {
 	});
 
 	it('sends an empty tag array when all tags are removed', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch({ project: { tags: ['research/vision', 'shared'] } });
 		await renderProject();
 		await user.click(screen.getByRole('button', { name: 'Edit project' }));
@@ -414,7 +413,7 @@ describe('Project — Edit Project', () => {
 	});
 
 	it('discards cancelled edits and restores saved tags on reopening', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch({ project: { tags: ['ops'] } });
 		await renderProject();
 		await user.click(screen.getByRole('button', { name: 'Edit project' }));
@@ -432,7 +431,7 @@ describe('Project — Edit Project', () => {
 	});
 
 	it('keeps edited tags after a failed save and permits retrying', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch({ project: { tags: ['ops'] } });
 		await renderProject();
 		await user.click(screen.getByRole('button', { name: 'Edit project' }));
@@ -456,7 +455,7 @@ describe('Project — Edit Project', () => {
 
 describe('Project — Create Notebook', () => {
 	it('POSTs a template notebook when no file is uploaded', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch();
 		await renderProject();
 
@@ -478,7 +477,7 @@ describe('Project — Create Notebook', () => {
 	});
 
 	it('quotes the notebook name safely in the generated Python', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch();
 		await renderProject();
 
@@ -496,7 +495,7 @@ describe('Project — Create Notebook', () => {
 	});
 
 	it('stores the selected compute profile when creating a notebook', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch({
 			role: 'editor',
 			capabilities: {
@@ -525,7 +524,7 @@ describe('Project — Create Notebook', () => {
 	});
 
 	it('uploads a .py file, auto-fills the name, and POSTs the file contents', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch();
 		await renderProject();
 
@@ -548,7 +547,7 @@ describe('Project — Create Notebook', () => {
 	});
 
 	it('rejects a file over the size limit and does not POST', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const calls = makeFetch();
 		await renderProject();
 

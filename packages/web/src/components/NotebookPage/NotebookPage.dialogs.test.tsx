@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { toast } from 'sonner';
 import { makeFetch, renderPage } from './NotebookPage.testWorld';
 
@@ -16,7 +16,7 @@ afterEach(() => vi.restoreAllMocks());
 it('keeps the kernel iframe mounted when a dialog chunk fails to load', async () => {
 	vi.spyOn(console, 'error').mockImplementation(() => {});
 	const errorToast = vi.spyOn(toast, 'error');
-	const user = userEvent.setup();
+	const user = setupUser();
 	makeFetch({ role: 'editor' });
 	renderPage();
 	const iframe = await screen.findByTitle('Forecast');

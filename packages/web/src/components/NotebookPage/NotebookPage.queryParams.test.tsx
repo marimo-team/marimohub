@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { useNavigate } from 'react-router-dom';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { toast } from 'sonner';
 import { useTheme } from '@/context/ThemeContext';
 import { makeFetch, renderPage, runningSession, sessionPosts } from './NotebookPage.testWorld';
@@ -177,7 +177,7 @@ describe('NotebookPage query parameters', () => {
 	});
 
 	it('offers Copy URL on the app page without offering Run as app again', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const success = vi.spyOn(toast, 'success');
 		const writeText = vi.fn(() => Promise.resolve());
 		vi.spyOn(navigator.clipboard, 'writeText').mockImplementation(writeText);

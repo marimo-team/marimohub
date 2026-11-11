@@ -14,7 +14,7 @@
 	},
 	"scripts": {
 		"build": "vp pack",
-		"test": "vp test",
+		"test": "vp run test:vitest",
 		"check": "vp check",
 		"generate": "openapi-typescript ../api/openapi.yaml -o ./src/schema.ts && vp fmt src/schema.ts",
 		"typecheck": "tsc --noEmit"
@@ -24,6 +24,7 @@
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@types/node": "catalog:",
 		"openapi-typescript": "7.13.0",
 		"typescript": "catalog:",

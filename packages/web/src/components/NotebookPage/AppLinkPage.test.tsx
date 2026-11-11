@@ -5,7 +5,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { ThemeProvider } from '@/context/ThemeContext';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { deepLinkKeys, prefetchAppLink } from '@/api/deepLinks';
 import { deferred } from '@/test/deferred';
 import { AppLinkPage } from './AppLinkPage';
@@ -176,7 +176,7 @@ describe('AppLinkPage', () => {
 	it.each(['sales', 'team/overview', 'team/overview/details'])(
 		'forwards parameters and copies %s under a deployment prefix',
 		async (slug) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const writeText = vi.spyOn(navigator.clipboard, 'writeText');
 			const { existing, fetch } = linkFetch();
 			const base = document.createElement('base');
@@ -323,7 +323,7 @@ describe('AppLinkPage', () => {
 	it.each([false, true])(
 		'recovers from a resolver outage without starting an app early (boot=%s)',
 		async (boot) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 			let unavailable = true;
 			const { existing, fetch } = linkFetch({

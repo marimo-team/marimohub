@@ -9,7 +9,7 @@
 		"project-access:rebuild": "tsx src/project-access-rebuild.ts",
 		"session-index:rebuild": "tsx src/session-index-rebuild.ts",
 		"catalog:recover": "tsx src/catalog-recovery.ts",
-		"test": "vp test",
+		"test": "vp run test:vitest",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
@@ -36,6 +36,7 @@
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@opentelemetry/core": "catalog:",
 		"@types/node": "catalog:",
 		"tsx": "catalog:",

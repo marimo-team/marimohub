@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { ListResults } from './ListResults';
 
 interface RenderOptions {
@@ -75,7 +75,7 @@ describe('ListResults', () => {
 	});
 
 	it('shows the filtered empty state and resets filters', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { onReset } = renderResults({ count: 0, isFiltered: true });
 
 		expect(screen.getByText('No notebooks match these filters')).toBeInTheDocument();

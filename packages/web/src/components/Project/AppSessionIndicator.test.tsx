@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Session } from '@/types';
 import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
 import { AppSessionIndicator } from './AppSessionIndicator';
+import { setupUser } from '@/test/render';
 
 function makeAppSession(overrides: Partial<Session> = {}): Session {
 	return {
@@ -119,7 +119,7 @@ afterEach(() => {
 describe('AppSessionIndicator', () => {
 	it('omits attribution and user lookup when the session starter is redacted', async () => {
 		renderIndicator(makeAppSession({ user_id: undefined }));
-		await userEvent.click(screen.getByRole('button'));
+		await setupUser().click(screen.getByRole('button'));
 		expect(await screen.findByText('Started')).toBeVisible();
 		expect(screen.queryByText('Started by')).toBeNull();
 		expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('/users'))).toBe(
@@ -139,7 +139,7 @@ describe('AppSessionIndicator', () => {
 				app_pool: { state: 'ready', users: 2, max_users: 4 },
 			}),
 		);
-		await userEvent.click(screen.getByRole('button'));
+		await setupUser().click(screen.getByRole('button'));
 
 		expect(await screen.findByText('App running')).toBeInTheDocument();
 		expect(screen.getByText('Started by')).toBeInTheDocument();
@@ -155,7 +155,7 @@ describe('AppSessionIndicator', () => {
 
 	it('describes control permissions without implying an unassigned viewer cannot open the app', async () => {
 		renderIndicator(makeAppSession({ can: { attach: false, stop: false } }), { canControl: false });
-		await userEvent.click(screen.getByRole('button'));
+		await setupUser().click(screen.getByRole('button'));
 		expect(await screen.findByText('App running')).toBeInTheDocument();
 		expect(screen.queryByText('Restart')).toBeNull();
 		expect(screen.queryByText('Stop')).toBeNull();
@@ -168,7 +168,7 @@ describe('AppSessionIndicator', () => {
 			headVersion: 'ver-2',
 			editActive: true,
 		});
-		await userEvent.click(screen.getByRole('button'));
+		await setupUser().click(screen.getByRole('button'));
 
 		expect(await screen.findByText('App running')).toBeInTheDocument();
 		expect(screen.queryByText(/New browser sessions receive the latest version/)).toBeNull();
@@ -178,7 +178,7 @@ describe('AppSessionIndicator', () => {
 		renderIndicator(makeAppSession({ source_version_id: 'ver-1' }), {
 			headVersion: 'ver-2',
 		});
-		await userEvent.click(screen.getByRole('button'));
+		await setupUser().click(screen.getByRole('button'));
 
 		expect(
 			await screen.findByText(/New browser sessions receive the latest version/),
@@ -191,7 +191,7 @@ describe('AppSessionIndicator', () => {
 			sourceType: 'git',
 			editActive: true,
 		});
-		await userEvent.click(screen.getByRole('button'));
+		await setupUser().click(screen.getByRole('button'));
 
 		expect(
 			await screen.findByText(/New browser sessions receive the latest version/),
@@ -213,7 +213,7 @@ describe('AppSessionIndicator', () => {
 				allowComputeOverride: true,
 			},
 		);
-		await userEvent.click(screen.getByRole('button'));
+		await setupUser().click(screen.getByRole('button'));
 
 		expect(await screen.findByText('small — 1 CPU')).toBeInTheDocument();
 		expect(screen.getByText('large — 8 CPU')).toBeInTheDocument();
@@ -236,7 +236,7 @@ describe('AppSessionIndicator', () => {
 				notebookError: true,
 			},
 		);
-		await userEvent.click(screen.getByRole('button'));
+		await setupUser().click(screen.getByRole('button'));
 
 		expect(await screen.findByText('large — 8 CPU')).toBeInTheDocument();
 		expect(screen.getByText('large on next restart')).toBeInTheDocument();
@@ -251,17 +251,17 @@ describe('AppSessionIndicator', () => {
 		});
 		const trigger = screen.getByRole('button');
 
-		await userEvent.click(trigger);
+		await setupUser().click(trigger);
 		expect(await screen.findByRole('button', { name: 'Restart' })).toBeInTheDocument();
 		expect(screen.queryByText(/New browser sessions receive the latest version/)).toBeNull();
 
-		await userEvent.keyboard('{Escape}');
+		await setupUser().keyboard('{Escape}');
 		await waitFor(() =>
 			expect(screen.queryByRole('button', { name: 'Restart' })).not.toBeInTheDocument(),
 		);
 
 		head = 'ver-3';
-		await userEvent.click(trigger);
+		await setupUser().click(trigger);
 
 		expect(
 			await screen.findByText(/New browser sessions receive the latest version/),

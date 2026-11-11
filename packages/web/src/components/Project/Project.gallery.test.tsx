@@ -1,4 +1,4 @@
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, screen } from '@testing-library/react';
 import { makeFetch, renderProject } from './Project.testWorld';
@@ -7,7 +7,7 @@ afterEach(() => localStorage.removeItem('notebook-view'));
 describe('notebook gallery', () => {
 	it('defaults to a list and remembers the gallery selection', async () => {
 		makeFetch();
-		const user = userEvent.setup();
+		const user = setupUser();
 		await renderProject();
 		expect(await screen.findByRole('button', { name: 'List' })).toHaveAttribute(
 			'aria-pressed',

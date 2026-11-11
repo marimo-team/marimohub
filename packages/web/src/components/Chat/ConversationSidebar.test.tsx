@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { installMatchMedia, renderWithClient } from '@/test/render';
+import { installMatchMedia, renderWithClient, setupUser } from '@/test/render';
 import { ConversationSidebar } from './ConversationSidebar';
 
 function setup({
@@ -42,7 +41,7 @@ function setup({
 			}
 		/>,
 	);
-	return { user: userEvent.setup(), onClose, onSelect, onRetry };
+	return { user: setupUser(), onClose, onSelect, onRetry };
 }
 
 describe('ConversationSidebar', () => {

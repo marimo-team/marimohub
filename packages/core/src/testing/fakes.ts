@@ -1,5 +1,4 @@
 import { vi } from 'vitest';
-import { MAX_REQUEST_BYTES } from '../constants';
 import { NotFoundError } from '../errors';
 import type { SandboxId } from '../ids';
 import type {
@@ -22,7 +21,8 @@ import type {
 	WaitForPortOptions,
 } from '../ports/sandbox';
 import { execResult, listFilesFailure, readFileFailure } from '../ports/sandbox';
-import { shellQuote } from '../services/runtime/shell';
+import { isRegenerableArtifactPath } from '../integrations/workspaceIgnore';
+import { proposalSha256 } from '../services/content/proposalUtils';
 
 function validReadBudget({ maxBytes, timeoutMs }: BoundedReadOptions): boolean {
 	return (
@@ -202,8 +202,11 @@ function fsUnquote(s: string): string {
 export interface FsSandboxOptions {
 	/** Absolute mount root the in-memory filesystem is anchored at. */
 	root?: string;
-	/** Initial files, keyed by path relative to `root` (string or raw bytes). */
-	files?: Record<string, string | Uint8Array>;
+	/**
+	 * Initial files, keyed by path relative to `root` (string or raw bytes). A
+	 * `Map` is used as the live filesystem itself, so a test can edit it between calls.
+	 */
+	files?: Record<string, string | Uint8Array> | Map<string, Uint8Array>;
 	/** Initial directories, keyed by path relative to `root`. */
 	directories?: readonly string[];
 	/** Overrides the size `listFiles` reports for a relative path. */
@@ -230,9 +233,15 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 } {
 	const root = opts.root ?? DEFAULT_FS_ROOT;
 	const enc = (s: string) => new TextEncoder().encode(s);
-	const fs = new Map<string, Uint8Array>(
-		Object.entries(opts.files ?? {}).map(([rel, v]) => [rel, typeof v === 'string' ? enc(v) : v]),
-	);
+	const fs =
+		opts.files instanceof Map
+			? opts.files
+			: new Map<string, Uint8Array>(
+					Object.entries(opts.files ?? {}).map(([rel, v]) => [
+						rel,
+						typeof v === 'string' ? enc(v) : v,
+					]),
+				);
 	const calls: SandboxCalls = {
 		exec: [],
 		execOptions: [],
@@ -338,7 +347,7 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 }
 
 export interface GitWorkingTreeSandboxOptions extends FsSandboxOptions {
-	files: Record<string, string | Uint8Array>;
+	files: NonNullable<FsSandboxOptions['files']>;
 	diff?: readonly (readonly [status: string, path: string])[];
 	untracked?: readonly string[];
 	/** Raw `git diff -z` stdout; overrides `diff`. */
@@ -353,15 +362,30 @@ export interface GitWorkingTreeSandboxOptions extends FsSandboxOptions {
 	secureReadFailures?: readonly string[];
 }
 
+const QUOTED_ARG = String.raw`'(?:[^']|'\\'')*'`;
+const PYTHON_FILE_ARGS = new RegExp(`(${QUOTED_ARG}) (${QUOTED_ARG}) (\\d+)( allow-missing)?$`);
+const SHELL_CWD = new RegExp(`^cd (${QUOTED_ARG}) && git `);
+
 /**
  * `makeFsSandbox` plus canned answers for the Git commands proposal capture
- * runs, including the O_NOFOLLOW read script (served from the in-memory files
- * under `root`).
+ * and working-branch capture run: `diff`/`ls-files` listings, the O_NOFOLLOW
+ * read and hash scripts (served from the in-memory files under `root`, which
+ * stands in for the Git root). Nothing models `.gitignore`; only the capture
+ * pathspec's excluded directories are dropped from `ls-files --cached`.
  */
 export function makeGitWorkingTreeSandbox(options: GitWorkingTreeSandboxOptions) {
 	const root = options.root ?? DEFAULT_FS_ROOT;
 	const sandbox = makeFsSandbox(options);
-	const cannedAnswer = (command: string): ExecResult | undefined => {
+	/** `fs` key for `path` relative to `directory`, or undefined outside `root`. */
+	const keyOf = (directory: string, path: string): string | undefined => {
+		const absolute = path ? `${directory}/${path}` : directory;
+		if (absolute === root) return '';
+		return absolute.startsWith(`${root}/`) ? absolute.slice(root.length + 1) : undefined;
+	};
+	const excludedByPathspec = (key: string) =>
+		isRegenerableArtifactPath(key) ||
+		key.split('/').some((segment) => segment === '.git' || segment === '__marimo__');
+	const cannedAnswer = async (command: string): Promise<ExecResult | undefined> => {
 		if (command.includes('test -e .git')) {
 			return options.gitAvailable === false
 				? execResult(false, '', 'not a repository')
@@ -382,6 +406,17 @@ export function makeGitWorkingTreeSandbox(options: GitWorkingTreeSandboxOptions)
 					.join('');
 			return execResult(true, output, '');
 		}
+		if (command.includes('ls-files --cached --others --exclude-standard')) {
+			// Git lists paths relative to its cwd, which is the workdir, not the Git root.
+			const cwd = fsUnquote(SHELL_CWD.exec(command)![1]);
+			const output = [...sandbox.fs.keys()]
+				.filter((key) => !excludedByPathspec(key))
+				.map((key) => `${root}/${key}`)
+				.filter((absolute) => absolute.startsWith(`${cwd}/`))
+				.map((absolute) => `${absolute.slice(cwd.length + 1)}\0`)
+				.join('');
+			return execResult(true, output, '');
+		}
 		if (command.includes('ls-files --others')) {
 			return execResult(
 				true,
@@ -389,21 +424,45 @@ export function makeGitWorkingTreeSandbox(options: GitWorkingTreeSandboxOptions)
 				'',
 			);
 		}
+		if (command.includes('hashlib.sha256')) {
+			const [, gitRoot, batch, limit] = PYTHON_FILE_ARGS.exec(command)!;
+			const digests: Record<string, unknown>[] = [];
+			for (const path of JSON.parse(fsUnquote(batch)) as string[]) {
+				const key = keyOf(fsUnquote(gitRoot), path);
+				if (key !== undefined && options.secureReadFailures?.includes(key)) {
+					return execResult(false, '', 'not a regular file');
+				}
+				const bytes = key === undefined ? undefined : sandbox.fs.get(key);
+				if (key === undefined || bytes === undefined) {
+					digests.push({ path, missing: true });
+					continue;
+				}
+				const size = options.sizes?.[key] ?? bytes.length;
+				digests.push(
+					size > Number(limit)
+						? { path, error: 'too_large' }
+						: { path, size_bytes: size, sha256: await proposalSha256(bytes) },
+				);
+			}
+			return execResult(true, `${JSON.stringify(digests)}\n`, '');
+		}
 		if (command.includes('os.O_NOFOLLOW')) {
-			const path = Object.keys(options.files).find((candidate) =>
-				command.endsWith(` ${shellQuote(root)} ${shellQuote(candidate)} ${MAX_REQUEST_BYTES}`),
-			);
-			if (!path || options.secureReadFailures?.includes(path)) {
+			const match = PYTHON_FILE_ARGS.exec(command);
+			if (!match) return execResult(false, '', 'unsafe or missing file');
+			const key = keyOf(fsUnquote(match[1]), fsUnquote(match[2]));
+			if (key === undefined || options.secureReadFailures?.includes(key)) {
 				return execResult(false, '', 'unsafe or missing file');
 			}
-			const bytes = sandbox.fs.get(path);
-			if (bytes === undefined) return execResult(false, '', 'not found');
+			const bytes = sandbox.fs.get(key);
+			if (bytes === undefined) {
+				return match[4] ? execResult(true, '-', '') : execResult(false, '', 'not found');
+			}
 			return execResult(true, fsBase64Encode(bytes), '');
 		}
 		return undefined;
 	};
 	const exec = vi.fn<SandboxInstance['exec']>(async (command, execOptions) => {
-		const canned = cannedAnswer(command);
+		const canned = await cannedAnswer(command);
 		// Delegation records the call itself; canned answers must be recorded here.
 		if (canned === undefined) return sandbox.instance.exec(command, execOptions);
 		sandbox.calls.exec.push(command);

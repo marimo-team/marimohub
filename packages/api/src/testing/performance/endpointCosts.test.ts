@@ -4,7 +4,7 @@ import { AuthorizationService, createServices } from '@marimo-hub/core';
 import type { UserId } from '@marimo-hub/core';
 import { NotebookSource, SearchIndexer, SearchService } from '@marimo-hub/core/search';
 import { MemorySearchIndex } from '@marimo-hub/core/testing/search';
-import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
+import type { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { makeFakeCompute } from '@marimo-hub/core/testing';
 import { queuedBackgroundWork } from '@marimo-hub/core/testing/background-work';
 import { createTestApi, expectOk } from '../index';
@@ -254,18 +254,7 @@ test.each([
 			await expectOk(await api.request('GET', '/me'));
 			await api.background.runAll();
 		}
-		const objects: { key: string; body: Uint8Array }[] = [];
-		let cursor: string | undefined;
-		do {
-			const page = await seeded.bucket.list({ cursor });
-			for (const object of page.objects) {
-				objects.push({
-					key: object.key,
-					body: await (await seeded.bucket.get(object.key))!.bytes(),
-				});
-			}
-			cursor = page.cursor;
-		} while (cursor);
+		let searchFixture: { bucket: MemoryBucket; index: MemorySearchIndex } | undefined;
 		const lines = [
 			`# Endpoint storage costs: ${scale.name}`,
 			'',
@@ -320,12 +309,13 @@ test.each([
 				]
 			: ENDPOINTS;
 		for (const endpoint of endpoints) {
-			const bucket = new MemoryBucket();
-			for (const object of objects) await bucket.put(object.key, object.body);
-			const s = { ...seeded, bucket };
 			const isSearch = endpoint.name.startsWith('GET /search');
-			// Search fingerprints include ETags, which change when the fixture is copied.
-			const scenarioIndex = isSearch ? await buildSearch(s) : index;
+			if (isSearch && !searchFixture) {
+				const bucket = seeded.bucket.clone();
+				searchFixture = { bucket, index: await buildSearch({ ...seeded, bucket }) };
+			}
+			const s = { ...seeded, bucket: (isSearch ? searchFixture!.bucket : seeded.bucket).clone() };
+			const scenarioIndex = isSearch ? searchFixture!.index : index;
 			const setupApi = await makeApi(s, endpoint.user ?? ALICE, scenarioIndex, scale.ready);
 			await endpoint.setup?.(setupApi, s);
 			const api = await makeApi(s, endpoint.user ?? ALICE, scenarioIndex, scale.ready);

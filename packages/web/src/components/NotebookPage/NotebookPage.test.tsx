@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { sessionKeys } from '@/api/queryKeys';
 import {
 	NID,
@@ -12,7 +12,7 @@ import {
 } from './NotebookPage.testWorld';
 
 async function chooseSurfaceAction(
-	user: ReturnType<typeof userEvent.setup>,
+	user: ReturnType<typeof setupUser>,
 	name: string,
 ): Promise<void> {
 	await user.click(await screen.findByRole('button', { name: 'Open' }));
@@ -21,7 +21,7 @@ async function chooseSurfaceAction(
 
 describe('NotebookPage viewer modes', () => {
 	it('explains pending editor cleanup and waits for a manual retry', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const options: Parameters<typeof makeFetch>[0] = {
 			role: 'editor',
 			createError: {
@@ -81,7 +81,7 @@ describe('NotebookPage viewer modes', () => {
 	});
 
 	it('opens and stops VS Code without forwarding notebook query parameters', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({
 			role: 'editor',
 			vscode: { embed: 'iframe' },
@@ -116,7 +116,7 @@ describe('NotebookPage viewer modes', () => {
 	});
 
 	it('keeps surface iframes mounted while the most recent split replaces the previous one', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'editor',
 			vscode: { embed: 'iframe' },
@@ -170,7 +170,7 @@ describe('NotebookPage viewer modes', () => {
 		let resolveOpenCodeStart!: () => void;
 		let resolveVscodeStop!: () => void;
 		let resolveOpenCodeStop!: () => void;
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({
 			role: 'editor',
 			vscode: { embed: 'iframe' },
@@ -202,7 +202,7 @@ describe('NotebookPage viewer modes', () => {
 	});
 
 	it('opens a tab surface locally and only pops it out on request', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const open = vi.spyOn(window, 'open').mockReturnValue(null);
 		makeFetch({
 			role: 'editor',
@@ -226,7 +226,7 @@ describe('NotebookPage viewer modes', () => {
 	});
 
 	it('confirms before stopping a surface from its application tab', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'editor',
 			opencode: { embed: 'tab' },
@@ -262,7 +262,7 @@ describe('NotebookPage viewer modes', () => {
 	] as const)(
 		'opens the entry notebook for %s source %s in VS Code',
 		async (sourceType, entryNotebook, expectedPath) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const fetch = makeFetch({
 				role: 'editor',
 				sourceType,
@@ -289,7 +289,7 @@ describe('NotebookPage viewer modes', () => {
 		const notebookPromise = new Promise<void>((resolve) => {
 			releaseNotebook = resolve;
 		});
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'editor',
 			sourceType: 'git',
@@ -323,7 +323,7 @@ describe('NotebookPage viewer modes', () => {
 	});
 
 	it('keeps the editor usable when starting VS Code fails', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({
 			role: 'editor',
 			vscode: { embed: 'iframe' },
@@ -350,7 +350,7 @@ describe('NotebookPage viewer modes', () => {
 	});
 
 	it('keeps the VS Code frame open when stopping the surface fails', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({
 			role: 'editor',
 			vscode: { embed: 'iframe' },
@@ -388,7 +388,7 @@ describe('NotebookPage viewer modes', () => {
 	});
 
 	it('asks before starting compute when another editor owns an exclusive session', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'editor',
 			editorSharing: 'exclusive',
@@ -445,7 +445,7 @@ describe('NotebookPage viewer modes', () => {
 	});
 
 	it('does not classify an exclusive holder when the current-user request fails', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'editor',
 			editorSharing: 'exclusive',
@@ -480,7 +480,7 @@ describe('NotebookPage viewer modes', () => {
 	});
 
 	it('warns and completes an exclusive takeover before starting the replacement', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'editor',
 			editorSharing: 'exclusive',
@@ -502,7 +502,7 @@ describe('NotebookPage viewer modes', () => {
 	});
 
 	it('starts a persistent replacement after takeover from a temporary sandbox', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const temporary = runningSession({
 			session_id: 'sess-temporary',
 			ephemeral: true,
@@ -534,7 +534,7 @@ describe('NotebookPage viewer modes', () => {
 	});
 
 	it('shows an ownership-state error and retries before starting compute', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'editor',
 			editorSharing: 'exclusive',
@@ -551,7 +551,7 @@ describe('NotebookPage viewer modes', () => {
 	});
 
 	it('keeps a temporary editor visible when an ownership refresh fails', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'editor',
 			editorSharing: 'exclusive',
@@ -625,7 +625,7 @@ describe('NotebookPage viewer modes', () => {
 			});
 			const { container } = renderPage(testCase.variant);
 
-			await userEvent.click(
+			await setupUser().click(
 				await screen.findByRole('button', { name: 'Session Starting — details' }),
 			);
 			expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
@@ -635,7 +635,7 @@ describe('NotebookPage viewer modes', () => {
 	);
 
 	it('stops a viewer ephemeral session without a shared-sandbox warning', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'viewer',
 			viewerMode: 'ephemeral-sandbox',
@@ -656,7 +656,7 @@ describe('NotebookPage viewer modes', () => {
 	});
 
 	it('uses a private restart warning for a viewer ephemeral session', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({
 			role: 'viewer',
 			viewerMode: 'ephemeral-sandbox',
@@ -701,7 +701,7 @@ describe('NotebookPage viewer modes', () => {
 		});
 		renderPage();
 
-		await userEvent.click(await screen.findByRole('button', { name: /Session Running/ }));
+		await setupUser().click(await screen.findByRole('button', { name: /Session Running/ }));
 		expect(await screen.findByText('large — 8 CPU · 32 Gi')).toBeInTheDocument();
 	});
 
@@ -736,7 +736,7 @@ describe('NotebookPage viewer modes', () => {
 	])(
 		'viewer + applications %s: offers an app without starting an edit session',
 		async (_, html) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const impl = makeFetch({
 				role: 'viewer',
 				viewerMode: 'applications',

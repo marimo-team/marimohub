@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { jsonError, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import { AuthProvider } from '@/context/AuthContext';
 import { ErrorBoundary } from '@/components/ui';
 import type { AdminUser } from '@/types';
@@ -65,7 +64,7 @@ function setup(items: AdminUser[] = USERS, currentUserId = 'user-self') {
 			<AdminUsersPage />
 		</AuthProvider>,
 	);
-	return userEvent.setup();
+	return setupUser();
 }
 
 afterEach(() => {

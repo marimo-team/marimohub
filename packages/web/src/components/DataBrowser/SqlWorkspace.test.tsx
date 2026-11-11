@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { QueryExecutionResults } from './SqlWorkspace';
 import type { QueryExecution } from './SqlWorkspace';
 
@@ -138,7 +138,7 @@ describe('QueryResultTable column sorting', () => {
 			})),
 		),
 	])('sorts $name by value', async ({ values, expected }) => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			<QueryExecutionResults
 				executions={queryExecution(values)}

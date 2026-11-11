@@ -1,9 +1,8 @@
 import { vi } from 'vitest';
 import { screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AuthProvider } from '@/context/AuthContext';
-import { jsonError, jsonOk, renderWithClient } from './render';
+import { jsonError, jsonOk, renderWithClient, setupUser } from './render';
 import type { SearchHit } from '@/api/search';
 import SearchPage from '@/components/Search/SearchPage';
 import { useWorkspaceSearchShortcut } from '@/hooks/useWorkspaceSearchShortcut';
@@ -101,11 +100,11 @@ export function setup({
 		</AuthProvider>,
 		{ route, toaster: false },
 	);
-	return { ...rendered, searches, user: userEvent.setup() };
+	return { ...rendered, searches, user: setupUser() };
 }
 
 export async function selectSearchFilter(
-	user: ReturnType<typeof userEvent.setup>,
+	user: ReturnType<typeof setupUser>,
 	label: 'Scope' | 'Type',
 	option: string,
 ) {

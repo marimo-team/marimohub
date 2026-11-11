@@ -9,11 +9,11 @@ import {
 } from './DataBrowserPage.testWorld';
 import { describe, expect, it } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 
 describe('DataBrowserPage catalog', () => {
 	it('shows PySpark connection info and opens its session snippet in a notebook', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = setup(`/projects/${PID}/data/${sparkEntry.id}`, {
 			kind: pysparkKind,
 			entry: sparkEntry,
@@ -86,7 +86,7 @@ describe('DataBrowserPage catalog', () => {
 	});
 
 	it('expands the ancestry when a deep link arrives while already mounted', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}`);
 
 		const namespace = await screen.findByTestId('browse-namespace');
@@ -101,7 +101,7 @@ describe('DataBrowserPage catalog', () => {
 	});
 
 	it('writes the selection into the URL when a table is clicked', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}`);
 
 		await user.click(await screen.findByTestId('browse-namespace'));
@@ -116,7 +116,7 @@ describe('DataBrowserPage catalog', () => {
 	});
 
 	it('pages tables with Load more', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}`, { pagedTables: true });
 
 		await user.click(await screen.findByTestId('browse-namespace'));
@@ -128,7 +128,7 @@ describe('DataBrowserPage catalog', () => {
 	});
 
 	it('finds a table under a collapsed namespace while a filter is active', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?q=orders`);
 
 		// The namespace stays visible (its tables are not loaded yet), so the
@@ -140,7 +140,7 @@ describe('DataBrowserPage catalog', () => {
 	});
 
 	it('highlights the matched part of a filtered table name', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?q=ord`);
 
 		await user.click(await screen.findByTestId('browse-namespace'));
@@ -150,7 +150,7 @@ describe('DataBrowserPage catalog', () => {
 	});
 
 	it('skips highlighting when case folding shifts offsets, instead of marking wrong characters', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		// 'İSTANBUL'.toLowerCase() is 'i̇stanbul' (one char longer), so lowered
 		// offsets do not map back to the original name.
 		setup(`/projects/${PID}/data/${IID}?q=stanbul`, { tables: ['İSTANBUL'] });
@@ -162,7 +162,7 @@ describe('DataBrowserPage catalog', () => {
 	});
 
 	it('keeps the tree filter available and populated on the Query surface', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?q=ord`, {
 			role: 'manager',
 			querySurface: { available: true },
@@ -175,7 +175,7 @@ describe('DataBrowserPage catalog', () => {
 	});
 
 	it('filters loaded tables and says so when nothing matches', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?q=zzz`);
 
 		await user.click(await screen.findByTestId('browse-namespace'));
@@ -184,7 +184,7 @@ describe('DataBrowserPage catalog', () => {
 	});
 
 	it('resets the column filter when another table is selected', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`, {
 			tables: ['orders', 'refunds'],
 		});
@@ -193,14 +193,14 @@ describe('DataBrowserPage catalog', () => {
 		await user.type(filter, 'zzz');
 		expect(await screen.findByText('No columns match "zzz".')).toBeInTheDocument();
 
-		await user.click(screen.getByText('refunds'));
+		await user.click(await screen.findByText('refunds'));
 
 		expect(await screen.findByPlaceholderText('Filter columns...')).toHaveValue('');
 		expect(screen.queryByText('No columns match "zzz".')).not.toBeInTheDocument();
 	});
 
 	it('creates a notebook seeded with the load snippet and navigates to it', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`);
 
 		await user.click(await screen.findByRole('button', { name: /Open in Notebook/ }));
@@ -218,7 +218,7 @@ describe('DataBrowserPage catalog', () => {
 	});
 
 	it('loads a row preview only after the explicit button is pressed', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`, {
 			capability: { metadata: true, preview: true },
 		});
@@ -235,7 +235,7 @@ describe('DataBrowserPage catalog', () => {
 	});
 
 	it('supports keyboard navigation and associates tabs with their panels', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`, {
 			capability: { metadata: true, preview: true },
 		});
@@ -257,7 +257,7 @@ describe('DataBrowserPage catalog', () => {
 	});
 
 	it('returns to schema when refreshed capabilities disable previews', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const capability = { metadata: true, preview: true };
 		const fetchImpl = setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`, {
 			capability,

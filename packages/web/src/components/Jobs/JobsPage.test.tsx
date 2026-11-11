@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { Route, Routes, useLocation } from 'react-router-dom';
 import { JobsPage } from './JobsPage';
 import type { Job, JobRun } from '@/types';
-import { jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { jsonError, jsonOk, renderWithClient, setupUser } from '@/test/render';
 
 const PID = 'proj-x';
 const NID = 'nb-1';
@@ -249,7 +248,7 @@ describe('JobsPage', () => {
 
 	it('loads additional run-history pages', async () => {
 		makeFetch({ olderRuns: [run({ run_id: 'run_old' })] });
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPage();
 		expect(await screen.findAllByTestId('run-row')).toHaveLength(1);
 		await user.click(screen.getByRole('button', { name: 'Load more runs' }));
@@ -285,7 +284,7 @@ describe('JobsPage', () => {
 
 	it('opens a run’s rendered output in an opaque-origin iframe', async () => {
 		makeFetch();
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { container } = renderPage();
 
 		const row = (await screen.findAllByTestId('run-row'))[0];
@@ -299,7 +298,7 @@ describe('JobsPage', () => {
 
 	it('opens a run from the keyboard', async () => {
 		makeFetch();
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPage();
 		const row = (await screen.findAllByTestId('run-row'))[0];
 		const button = within(row).getByRole('button');
@@ -311,7 +310,7 @@ describe('JobsPage', () => {
 
 	it('persists the selected job when linking to a run', async () => {
 		makeFetch();
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPage();
 		const row = (await screen.findAllByTestId('run-row'))[0];
 
@@ -324,7 +323,7 @@ describe('JobsPage', () => {
 
 	it('shows logs to editors on the Logs tab', async () => {
 		makeFetch({ logs: 'Traceback: boom' });
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPage('?job=job-1&run=run_01');
 
 		await user.click(await screen.findByRole('tab', { name: 'Logs' }));
@@ -333,7 +332,7 @@ describe('JobsPage', () => {
 
 	it('shows an empty state when a run has no logs', async () => {
 		makeFetch({ logs: ' \n' });
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPage('?job=job-1&run=run_01');
 
 		await user.click(await screen.findByRole('tab', { name: 'Logs' }));
@@ -342,7 +341,7 @@ describe('JobsPage', () => {
 
 	it('associates artifact tabs with their panel and supports arrow-key navigation', async () => {
 		makeFetch();
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPage('?job=job-1&run=run_01');
 
 		const outputTab = await screen.findByRole('tab', { name: 'Output' });
@@ -361,7 +360,7 @@ describe('JobsPage', () => {
 
 	it('shows an output request error and retries it', async () => {
 		makeFetch({ htmlFailures: 1 });
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { container } = renderPage('?job=job-1&run=run_01');
 
 		expect(await screen.findByText('Failed to load run output.')).toBeInTheDocument();
@@ -371,7 +370,7 @@ describe('JobsPage', () => {
 
 	it('shows a logs request error and retries it', async () => {
 		makeFetch({ logsFailures: 1, logs: 'retried logs' });
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPage('?job=job-1&run=run_01');
 
 		await user.click(await screen.findByRole('tab', { name: 'Logs' }));
@@ -392,7 +391,7 @@ describe('JobsPage', () => {
 
 	it('runs a job now and selects the queued run', async () => {
 		const world = makeFetch();
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPage();
 
 		await user.click(await screen.findByRole('button', { name: /Run now/ }));
@@ -418,7 +417,7 @@ describe('JobsPage', () => {
 				}),
 			],
 		});
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPage('?job=job-1&run=run_09');
 
 		await user.click(await screen.findByRole('button', { name: /Cancel run/ }));
@@ -436,7 +435,7 @@ describe('JobsPage', () => {
 
 	it('creates a job from the dialog with a parsed schedule and parameters', async () => {
 		const world = makeFetch({ jobs: [] });
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPage();
 
 		expect(await screen.findByText('No jobs yet')).toBeInTheDocument();
@@ -470,7 +469,7 @@ describe('JobsPage', () => {
 		const world = makeFetch({
 			jobs: [job({ parameters: { a: '1' }, retry: { max_retries: 2, backoff_seconds: 30 } })],
 		});
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPage();
 
 		await user.click(await screen.findByRole('button', { name: /Edit/ }));
@@ -493,7 +492,7 @@ describe('JobsPage', () => {
 
 	it('deletes a job after confirmation', async () => {
 		const world = makeFetch();
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPage();
 
 		await user.click(await screen.findByRole('button', { name: /Delete/ }));
@@ -591,7 +590,7 @@ describe('JobsPage', () => {
 		makeFetch({
 			triggerError: jsonError('RESOURCE_EXHAUSTED', 'Too many queued runs for this job', 429),
 		});
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPage();
 		await user.click(await screen.findByRole('button', { name: /Run now/ }));
 		expect((await screen.findAllByText(/Too many queued runs/)).length).toBeGreaterThan(0);
@@ -605,7 +604,7 @@ describe('JobsPage', () => {
 
 	it('marks a disabled job in the list and offers to enable it', async () => {
 		const world = makeFetch({ jobs: [job({ enabled: false })] });
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPage();
 		expect(await screen.findByText('Disabled')).toBeInTheDocument();
 		await user.click(screen.getByRole('button', { name: 'Enable' }));
@@ -626,7 +625,7 @@ describe('JobsPage', () => {
 
 it('keeps loaded runs visible when older history fails and allows a retry', async () => {
 	const world = makeFetch({ olderRuns: [run({ run_id: 'older' })], olderRunFailures: 1 });
-	const user = userEvent.setup();
+	const user = setupUser();
 	renderPage();
 	await screen.findByTestId('run-row');
 	await user.click(screen.getByRole('button', { name: 'Load more runs' }));

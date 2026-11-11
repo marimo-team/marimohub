@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { IID, PID, lakeEntry, objectKind, setup } from './DataBrowserPage.testWorld';
 
 describe('DataBrowserPage object actions', () => {
 	it('pages object listings through the reachable fallback button', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -20,7 +20,7 @@ describe('DataBrowserPage object actions', () => {
 	it('multi-selects object URIs and clears selection while navigating prefixes', async ({
 		onTestFinished,
 	}) => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -55,7 +55,7 @@ describe('DataBrowserPage object actions', () => {
 	});
 
 	it('applies loaded type, size, date, and sort controls without searching', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -97,7 +97,7 @@ describe('DataBrowserPage object actions', () => {
 	});
 
 	it('creates a notebook from the object-specific load snippet', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = setup(
 			`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`,
 			{ kind: objectKind, entry: { ...lakeEntry, kind: 's3' } },
@@ -117,7 +117,7 @@ describe('DataBrowserPage object actions', () => {
 	});
 
 	it('disables object notebook creation while the request is pending', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		let releaseNotebook!: () => void;
 		const notebookGate = new Promise<void>((resolve) => {
 			releaseNotebook = resolve;
@@ -147,7 +147,7 @@ describe('DataBrowserPage object actions', () => {
 	});
 
 	it('preserves object selection when shared notebook creation fails', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -162,7 +162,7 @@ describe('DataBrowserPage object actions', () => {
 	});
 
 	it('keeps an explicit preview failure inline with a retry action', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -195,7 +195,7 @@ describe('DataBrowserPage object actions', () => {
 	});
 
 	it('keeps an object version failure inside the versions panel', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -206,7 +206,7 @@ describe('DataBrowserPage object actions', () => {
 	});
 
 	it('filters and keyboard-navigates loaded object rows without a server request', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },

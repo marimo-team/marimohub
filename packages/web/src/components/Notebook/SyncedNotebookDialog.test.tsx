@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { SyncedNotebookDialog } from './SyncedNotebookDialog';
@@ -72,7 +72,7 @@ afterEach(() => {
 
 describe('SyncedNotebookDialog', () => {
 	it('disables Create until the required fields are filled', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 
 		// Branch is pre-seeded with `main`; title/repo/file are still empty.
@@ -86,7 +86,7 @@ describe('SyncedNotebookDialog', () => {
 	});
 
 	it('marks a required field invalid once it is touched and left empty', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 
 		const repo = screen.getByLabelText('Repository');
@@ -101,7 +101,7 @@ describe('SyncedNotebookDialog', () => {
 	});
 
 	it('rejects a repository that is neither owner/repo nor a repository URL', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 
 		await user.type(screen.getByLabelText('Repository'), 'just-a-name');
@@ -111,7 +111,7 @@ describe('SyncedNotebookDialog', () => {
 	});
 
 	it('POSTs to the git endpoint and hands the write-once token to onCreated', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = vi.fn(
 			async (_url: RequestInfo | URL, _init?: RequestInit) =>
 				new Response(
@@ -157,7 +157,7 @@ describe('SyncedNotebookDialog', () => {
 	});
 
 	it('stores selected container and compute options', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = vi.fn(
 			async (_url: RequestInfo | URL, _init?: RequestInit) =>
 				new Response(
@@ -204,7 +204,7 @@ describe('SyncedNotebookDialog', () => {
 	});
 
 	it('offers GitHub pull mode and creates without CI credentials', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = vi.fn(
 			async (_url: RequestInfo | URL, _init?: RequestInit) =>
 				new Response(
@@ -246,7 +246,7 @@ describe('SyncedNotebookDialog', () => {
 	});
 
 	it('selects pull mode when capabilities load after the dialog opens', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		let resolveCapabilities: (available: boolean) => void = () => {};
 		const pullAvailable = new Promise<boolean>((resolve) => {
 			resolveCapabilities = resolve;
@@ -265,7 +265,7 @@ describe('SyncedNotebookDialog', () => {
 	});
 
 	it('accepts a GitHub Enterprise URL in pull mode for server validation', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog(vi.fn(), true);
 		await user.type(screen.getByLabelText('Notebook name'), 'Dash');
 		await user.type(screen.getByLabelText('Repository'), 'https://git.acme.corp/acme/analytics');
@@ -275,7 +275,7 @@ describe('SyncedNotebookDialog', () => {
 	});
 
 	it('rejects an unsafe folder before submitting', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = vi.fn();
 		renderDialog(fetchImpl, true);
 
@@ -291,7 +291,7 @@ describe('SyncedNotebookDialog', () => {
 	});
 
 	it('revalidates the repository when switching between pull and push modes', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog(vi.fn(), true);
 
 		await user.type(screen.getByLabelText('Notebook name'), 'Dash');
@@ -318,7 +318,7 @@ describe('SyncedNotebookDialog', () => {
 });
 
 it('offers Azure pull mode without GitHub configuration', async () => {
-	const user = userEvent.setup();
+	const user = setupUser();
 	renderDialog(vi.fn(), true, { pullProviders: ['azure-devops'] });
 	expect(await screen.findByText('Connect to Azure DevOps')).toBeInTheDocument();
 	await user.type(screen.getByLabelText('Notebook name'), 'Azure notebook');
@@ -342,7 +342,7 @@ it('lets editors create a working notebook without offering existing-branch trac
 			),
 	);
 	renderDialog(fetchImpl, true, { workingBranchProviders: ['github'], canManage: false });
-	const user = userEvent.setup();
+	const user = setupUser();
 	await user.type(screen.getByLabelText('Notebook name'), 'Working');
 	await user.type(screen.getByLabelText('Repository'), 'owner/repo');
 	await user.type(screen.getByLabelText('Notebook file'), 'app.py');

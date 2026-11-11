@@ -8,7 +8,7 @@ async function python(assertions: string) {
 	await run('python3', ['-c', `${KERNEL_BOOTSTRAP_LAUNCHER}\n${assertions}`]);
 }
 
-describe('sandbox bootstrap launcher', () => {
+describe.concurrent('sandbox bootstrap launcher', () => {
 	it('reconstructs only the expected bridge argument in flattened ps output', async () => {
 		await python(String.raw`
 from types import SimpleNamespace

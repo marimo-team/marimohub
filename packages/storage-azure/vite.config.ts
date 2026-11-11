@@ -1,10 +1,3 @@
-import { defineConfig } from 'vite-plus';
+import { libraryConfig } from '@marimo-hub/vite-config';
 
-export default defineConfig({
-	pack: {
-		dts: true,
-	},
-	test: {
-		include: ['src/**/*.test.ts'],
-	},
-});
+export default libraryConfig();

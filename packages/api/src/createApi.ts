@@ -20,6 +20,7 @@ import {
 	noopNotifier,
 	probeKernelLiveness,
 	ProjectId,
+	sleep,
 	SubdomainExposure,
 	UnavailableError,
 } from '@marimo-hub/core';
@@ -184,6 +185,7 @@ export function createApi(rawDeps: ApiDeps) {
 		workspaceLimits:
 			rawDeps.workspaceLimits ?? rawDeps.services?.notebooks.workspace.limits ?? WORKSPACE_LIMITS,
 		notifier: rawDeps.notifier ?? noopNotifier,
+		sleep: rawDeps.sleep ?? sleep,
 		kernelProbe: rawDeps.kernelProbe ?? ((url) => probeKernelLiveness(url, { timeoutMs: 2000 })),
 		sandbox: {
 			...rawDeps.sandbox,

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { installMatchMedia, jsonOk, renderWithClient } from '@/test/render';
+import { installMatchMedia, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import { CreateTokenForm } from './CreateTokenForm';
 
 const PROJECT_ID = 'proj-0000000000000001';
@@ -24,7 +23,7 @@ function setup(kind: 'api' | 'mcp') {
 		}),
 	);
 	renderWithClient(<CreateTokenForm kind={kind} onCreated={vi.fn()} />);
-	return { requests, user: userEvent.setup() };
+	return { requests, user: setupUser() };
 }
 
 afterEach(() => vi.unstubAllGlobals());

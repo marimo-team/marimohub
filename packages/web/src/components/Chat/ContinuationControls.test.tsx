@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import type { ConversationContinuation } from '@/api/conversations';
-import { renderWithClient } from '@/test/render';
+import { renderWithClient, setupUser } from '@/test/render';
 import { ContinuationControls } from './ContinuationControls';
 
 function renderControls(continuation: ConversationContinuation) {
@@ -16,7 +15,7 @@ function renderControls(continuation: ConversationContinuation) {
 			onDismiss={onDismiss}
 		/>,
 	);
-	return { onResume, onDismiss, user: userEvent.setup() };
+	return { onResume, onDismiss, user: setupUser() };
 }
 
 describe('ContinuationControls', () => {

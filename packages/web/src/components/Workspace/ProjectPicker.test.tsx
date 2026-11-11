@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { useLocation } from 'react-router-dom';
-import { jsonOk, renderWithClient } from '@/test/render';
+import { jsonOk, renderWithClient, setupUser } from '@/test/render';
 import { ProjectPicker } from './ProjectPicker';
 
 function Destination() {
@@ -37,14 +36,14 @@ function setup(canCreate = true) {
 		</>,
 		{ route: '/projects/alpha', toaster: false },
 	);
-	return { user: userEvent.setup(), onNavigate, requests };
+	return { user: setupUser(), onNavigate, requests };
 }
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Project picker', () => {
 	it('reports programmatic closure when opening project creation', async () => {
 		const onOpenChange = vi.fn();
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWithClient(
 			<ProjectPicker projects={[]} isPending={false} canCreate onOpenChange={onOpenChange} />,
 			{ route: '/projects', toaster: false },
@@ -79,7 +78,7 @@ describe('Project picker', () => {
 		expect(onNavigate).toHaveBeenCalled();
 	});
 	it('allows creation when there are no projects', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWithClient(<ProjectPicker projects={[]} isPending={false} canCreate />, {
 			route: '/projects',
 			toaster: false,

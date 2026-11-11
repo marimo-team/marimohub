@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { z } from 'zod';
 import { useAppForm } from './useAppForm';
 import { useSeedOnOpen } from './useSeedOnOpen';
@@ -69,7 +69,7 @@ function DeleteForm({ expected, onConfirm }: { expected: string; onConfirm: () =
 
 describe('form meta-framework', () => {
 	it('binds value and shows the validation error after blur', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<NameForm onSubmit={vi.fn()} />);
 
 		const input = screen.getByLabelText('Name');
@@ -82,7 +82,7 @@ describe('form meta-framework', () => {
 	});
 
 	it('disables submit until the form is valid, then submits the value', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onSubmit = vi.fn();
 		render(<NameForm onSubmit={onSubmit} />);
 
@@ -101,7 +101,7 @@ describe('form meta-framework', () => {
 	});
 
 	it('requireDirty keeps submit disabled until a value changes', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<NameForm onSubmit={vi.fn()} requireDirty defaultName="Acme" />);
 
 		// Valid (seeded) but not yet dirty.
@@ -112,7 +112,7 @@ describe('form meta-framework', () => {
 	});
 
 	it('type-to-confirm blocks the confirm button until the name matches', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onConfirm = vi.fn();
 		render(<DeleteForm expected="my-project" onConfirm={onConfirm} />);
 

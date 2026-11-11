@@ -1,12 +1,11 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ProjectAlertsPanel } from './ProjectAlertsPanel';
 import { projectKeys } from '@/api/queryKeys';
-import { createTestQueryClient } from '@/test/render';
+import { createTestQueryClient, setupUser } from '@/test/render';
 import type { ProjectAlertDestination, ProjectAlertKind } from '@/types';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -121,7 +120,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('ProjectAlertsPanel', () => {
 	it('opens destination creation in a modal and restores focus when dismissed', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPanel();
 		await screen.findByText('No alert destinations');
 		expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -137,7 +136,7 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('closes the creation modal and refreshes the destination list after saving', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const destination = slackDestination('alert-create-000001', { name: 'Engineering' });
 		let created = false;
 		renderPanel([], async (input, init) => {
@@ -162,7 +161,7 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('shows a retry action when destinations cannot be loaded', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		let unavailable = true;
 		renderPanel([], async () =>
 			unavailable
@@ -184,7 +183,7 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('selects every actionable event for a new destination', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPanel();
 		await waitFor(() => expect(screen.getByText('No alert destinations')).toBeInTheDocument());
 		await user.click(screen.getByRole('button', { name: 'Add destination' }));
@@ -193,7 +192,7 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('never places stored endpoint or secret material in edit fields', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPanel([
 			{
 				id: 'alert-0123456789abcdef',
@@ -242,9 +241,10 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('does not allow a destination with no selected events to be saved', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPanel();
-		await user.click(await screen.findByRole('button', { name: 'Add destination' }));
+		await screen.findByText('No alert destinations');
+		await user.click(screen.getByRole('button', { name: 'Add destination' }));
 		await user.type(screen.getByLabelText('Name'), 'No events');
 		await user.type(
 			screen.getByLabelText('Slack incoming webhook URL'),
@@ -255,9 +255,10 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('requires endpoint and signing-secret fields before creating a destination', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPanel();
-		await user.click(await screen.findByRole('button', { name: 'Add destination' }));
+		await screen.findByText('No alert destinations');
+		await user.click(screen.getByRole('button', { name: 'Add destination' }));
 		await user.type(screen.getByLabelText('Name'), 'Webhook');
 		await user.selectOptions(screen.getByLabelText('Destination type'), 'webhook');
 		const save = screen.getByRole('button', { name: 'Save' });
@@ -269,7 +270,7 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('shows API failures while saving and keeps the editor open', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderPanel([], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
 			if (method === 'POST') {
@@ -283,7 +284,8 @@ describe('ProjectAlertsPanel', () => {
 			}
 			return ok(destinationPage([]));
 		});
-		await user.click(await screen.findByRole('button', { name: 'Add destination' }));
+		await screen.findByText('No alert destinations');
+		await user.click(screen.getByRole('button', { name: 'Add destination' }));
 		await user.type(screen.getByLabelText('Name'), 'Broken');
 		await user.type(
 			screen.getByLabelText('Slack incoming webhook URL'),
@@ -296,7 +298,7 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('confirms deletion before removing a destination', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const destination = slackDestination('alert-delete-000001', { name: 'Production Slack' });
 		const { fetchMock } = renderPanel([destination], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
@@ -314,7 +316,7 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('shows delete conflicts and leaves the confirmation open', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const destination = slackDestination('alert-delete-000002', { name: 'Production Slack' });
 		renderPanel([destination], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
@@ -341,7 +343,7 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('reuses the idempotency key when a test delivery is retried', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const destination = slackDestination('alert-test-00000001', { name: 'Production Slack' });
 		let attempts = 0;
 		const { fetchMock } = renderPanel([destination], async (input, init) => {
@@ -374,7 +376,7 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('starts a new test operation when the destination version changes', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const destination = slackDestination('alert-test-00000002', { name: 'Production Slack' });
 		let attempts = 0;
 		const { client, fetchMock } = renderPanel([destination], async (input, init) => {
@@ -413,7 +415,7 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('omits kinds from an edit when the selection is untouched', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const destination = slackDestination('alert-edit-00000002', {
 			name: 'Production Slack',
 			kinds: ['app.unavailable', 'unknown'],
@@ -433,7 +435,7 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('sends kinds on an edit once the selection changes', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const destination = slackDestination('alert-edit-00000003', { name: 'Production Slack' });
 		const { fetchMock } = renderPanel([destination], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
@@ -448,7 +450,7 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('preserves unknown kinds when a visible selection changes', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const destination = slackDestination('alert-edit-00000004', {
 			name: 'Production Slack',
 			kinds: ['app.unavailable', 'unknown'],
@@ -466,7 +468,7 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('allows removing the last visible kind while preserving an unknown kind', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const destination = slackDestination('alert-edit-00000005', {
 			name: 'Production Slack',
 			kinds: ['app.unavailable', 'unknown'],
@@ -486,7 +488,7 @@ describe('ProjectAlertsPanel', () => {
 	});
 
 	it('sends only replacement material entered during an edit', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const destination = slackDestination('alert-edit-00000001', {
 			name: 'Production Slack',
 			verified_at: '2026-08-12T12:05:00.000Z',

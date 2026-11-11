@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { renderWorkspace, stubApi } from '@/test/apiStub';
-import { jsonError } from '@/test/render';
+import { jsonError, setupUser } from '@/test/render';
 import type { Capabilities, ProjectDefaultRole, ProjectMember, ProjectRole } from '@/types';
 import { lastProjectKey } from './lastProject';
 import { WorkspaceLayout } from './WorkspaceLayout';
@@ -92,7 +91,7 @@ function setup({
 			},
 		},
 	);
-	const user = userEvent.setup();
+	const user = setupUser();
 	const rendered = renderWorkspace(
 		<WorkspaceLayout>
 			<Page />

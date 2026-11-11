@@ -1,8 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { unzipSync } from 'fflate';
-import { renderWithClient, installMatchMedia } from '@/test/render';
+import { installMatchMedia, renderWithClient, setupUser } from '@/test/render';
 import { notebookImports } from '@/api/notebookImports';
 import { ApiRequestError } from '@/api/client';
 import { formatAbsolute } from '@/lib/time';
@@ -72,7 +71,7 @@ const dismissButton = () =>
 const footerCloseButton = () =>
 	screen.getAllByRole('button', { name: 'Close' }).find((button) => button !== dismissButton())!;
 
-async function startImportWithOneUnknown(user: ReturnType<typeof userEvent.setup>) {
+async function startImportWithOneUnknown(user: ReturnType<typeof setupUser>) {
 	vi.mocked(notebookImports.publish).mockRejectedValueOnce(
 		new ApiRequestError('NETWORK_ERROR', 'Connection lost'),
 	);
@@ -109,7 +108,7 @@ describe('folder import review', () => {
 		vi.mocked(notebookImports.publish).mockRejectedValueOnce(
 			new ApiRequestError('IMPORT_RESTART_REQUIRED', message, { status: 409 }),
 		);
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose();
 		await user.click(screen.getByRole('button', { name: 'Import 2 notebooks' }));
@@ -125,7 +124,7 @@ describe('folder import review', () => {
 		vi.mocked(notebookImports.publish).mockRejectedValueOnce(
 			new ApiRequestError('CONFLICT', 'Notebook import is still in progress', { status: 409 }),
 		);
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose();
 		await user.click(screen.getByRole('button', { name: 'Import 2 notebooks' }));
@@ -144,7 +143,7 @@ describe('folder import review', () => {
 	});
 
 	it('names result links with distinct notebook paths', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose();
 		await user.click(screen.getByRole('button', { name: 'Import 2 notebooks' }));
@@ -158,7 +157,7 @@ describe('folder import review', () => {
 	});
 
 	it('resets file review filters when choosing another folder with the same name', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose();
 		await user.click(screen.getByText(/Included files:/));
@@ -180,7 +179,7 @@ describe('folder import review', () => {
 	});
 
 	it('distinguishes duplicate names, preserves unselected notebook files, and excludes credentials visibly', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose();
 		expect(screen.getByRole('textbox', { name: 'Name for a/revenue.py' })).toHaveValue('revenue');
@@ -205,7 +204,7 @@ describe('folder import review', () => {
 	});
 
 	it('keeps successes and reconciles unknown outcomes before retrying only remaining identities', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		await startImportWithOneUnknown(user);
 		expect(screen.getByText('Outcome unknown')).toBeInTheDocument();
 		vi.mocked(notebookImports.get).mockResolvedValueOnce(
@@ -223,7 +222,7 @@ describe('folder import review', () => {
 	});
 
 	it('publishes an entry that is absent from the import outcome', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		await startImportWithOneUnknown(user);
 		vi.mocked(notebookImports.get).mockResolvedValueOnce(
 			outcomes({ entry_notebook: 'b/revenue.py', state: 'complete' }),
@@ -242,7 +241,7 @@ describe('folder import review', () => {
 					finish = resolve;
 				}),
 		);
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onClose = vi.fn();
 		renderDialog(onClose);
 		await choose();
@@ -274,7 +273,7 @@ describe('folder import review', () => {
 					finish = resolve;
 				}),
 		);
-		const user = userEvent.setup();
+		const user = setupUser();
 		const view = renderDialog();
 		await choose();
 		await user.click(screen.getByRole('button', { name: 'Import 2 notebooks' }));
@@ -294,7 +293,7 @@ describe('folder import review', () => {
 					expires_at: '',
 					files: [],
 				});
-			const user = userEvent.setup();
+			const user = setupUser();
 			renderDialog();
 			await choose();
 			const title = screen.getByRole('textbox', { name: 'Name for a/revenue.py' });
@@ -312,7 +311,7 @@ describe('folder import review', () => {
 	);
 
 	it('keeps successful links and does not retry expired entries', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		await startImportWithOneUnknown(user);
 		vi.mocked(notebookImports.get).mockResolvedValueOnce(
 			outcomes({ entry_notebook: 'a/revenue.py', state: 'expired' }),
@@ -328,7 +327,7 @@ describe('folder import review', () => {
 	});
 
 	it('does not publish after stop while a status check is pending', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		await startImportWithOneUnknown(user);
 		let finish!: (value: ReturnType<typeof outcomes>) => void;
 		vi.mocked(notebookImports.get).mockImplementationOnce(
@@ -347,7 +346,7 @@ describe('folder import review', () => {
 	});
 
 	it('waits for a pending server import and never publishes when status lookup fails', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		await startImportWithOneUnknown(user);
 		vi.mocked(notebookImports.get).mockResolvedValueOnce(
 			outcomes({ entry_notebook: 'a/revenue.py', state: 'preparing' }),
@@ -362,7 +361,7 @@ describe('folder import review', () => {
 	});
 
 	it('marks the import expired when the server has purged it', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		await startImportWithOneUnknown(user);
 		vi.mocked(notebookImports.get).mockRejectedValueOnce(
 			new ApiRequestError('NOT_FOUND', 'Import not found', { status: 404 }),
@@ -374,7 +373,7 @@ describe('folder import review', () => {
 	});
 
 	it('selects search matches without excluding supporting files when selection is cleared', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose();
 		await user.click(screen.getByRole('button', { name: 'Clear selection' }));
@@ -393,7 +392,7 @@ describe('folder import review', () => {
 		vi.mocked(notebookImports.publish).mockRejectedValueOnce(
 			new ApiRequestError('BAD_REQUEST', 'Temporary import rejection', { status: 400 }),
 		);
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose();
 		await user.click(screen.getByRole('button', { name: 'Import 2 notebooks' }));
@@ -409,7 +408,7 @@ describe('folder import review', () => {
 	});
 
 	it('shows the generated file allowance and blocks an over-capacity upload', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose([
 			folderFile('a/revenue.py'),
@@ -434,7 +433,7 @@ describe('folder import review', () => {
 	}
 
 	it('bounds notebook rows while preserving edits across pages', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose(paginatedNotebookFiles());
 		expect(screen.getAllByRole('textbox', { name: /^Name for / })).toHaveLength(100);
@@ -456,7 +455,7 @@ describe('folder import review', () => {
 	});
 
 	it('resets notebook pagination when filtering and selects matches across pages', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose(paginatedNotebookFiles());
 		await user.click(screen.getByRole('button', { name: 'Next notebooks' }));
@@ -472,7 +471,7 @@ describe('folder import review', () => {
 	});
 
 	it('imports notebooks from every page and bounds result rows', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose(paginatedNotebookFiles());
 		await user.click(screen.getByRole('button', { name: 'Next notebooks' }));
@@ -490,7 +489,7 @@ describe('folder import review', () => {
 			vi.mocked(notebookImports.publish).mockRejectedValueOnce(
 				new ApiRequestError('NETWORK_ERROR', 'Connection lost'),
 			);
-			const user = userEvent.setup();
+			const user = setupUser();
 			const onClose = vi.fn();
 			renderDialog(onClose);
 			await choose();
@@ -517,7 +516,7 @@ describe('folder import review', () => {
 	);
 
 	it('closes a completed import without an abandonment confirmation', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onClose = vi.fn();
 		renderDialog(onClose);
 		await choose();
@@ -531,7 +530,7 @@ describe('folder import review', () => {
 	});
 
 	it('bounds file rows and resets pagination when filtering', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose([
 			...selectedFiles(),
@@ -569,7 +568,7 @@ describe('folder import edge cases', () => {
 
 	it('aborts the upload when stopped and returns to review without an error', async () => {
 		const signal = pendingPrepare();
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose();
 		await user.click(screen.getByRole('button', { name: 'Import 2 notebooks' }));
@@ -583,7 +582,7 @@ describe('folder import edge cases', () => {
 
 	it('aborts the upload when the dialog unmounts', async () => {
 		const signal = pendingPrepare();
-		const user = userEvent.setup();
+		const user = setupUser();
 		const view = renderDialog();
 		await choose();
 		await user.click(screen.getByRole('button', { name: 'Import 2 notebooks' }));
@@ -623,7 +622,7 @@ describe('folder import edge cases', () => {
 
 	it('passes the chosen base image and compute profile to every publish', async () => {
 		mocks.capabilities = { ...defaultCapabilities, compute_profile_override: 'editors' };
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose();
 		await user.click(screen.getByText('Import settings'));
@@ -637,7 +636,7 @@ describe('folder import edge cases', () => {
 	});
 
 	it('excludes every unselected file matching the filter', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose();
 		await user.click(screen.getByText(/Included files:/));
@@ -662,7 +661,7 @@ describe('folder import edge cases', () => {
 	});
 
 	it('does not select credential-like notebooks in bulk', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 		await choose([...selectedFiles(), folderFile('.env.py')]);
 		const sensitive = screen.getByRole('checkbox', { name: 'Import .env.py' });
@@ -684,7 +683,7 @@ describe('folder import edge cases', () => {
 	});
 
 	it('shows when the upload expires from the server response', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		await startImportWithOneUnknown(user);
 		expect(
 			screen.getByText(

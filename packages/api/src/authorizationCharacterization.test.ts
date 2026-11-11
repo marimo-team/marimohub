@@ -1087,7 +1087,7 @@ describe('authorization characterization: start-gate ordering', () => {
 
 describe('request-scoped subject contexts', () => {
 	it('resolves once per labeled session poll and rechecks the provider on the next request', async () => {
-		const f = await createAppSessionFixture(new MemoryBucket(), true);
+		const f = await createAppSessionFixture(new MemoryBucket(), { labeled: true });
 		await f.services.notebooks.setSecurityLabels(
 			f.project.id,
 			f.notebook.id,

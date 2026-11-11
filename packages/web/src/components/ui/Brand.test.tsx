@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
 import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { BrandingContext } from '@/context/BrandingContext';
 import { ThemeProvider, useTheme } from '@/context/ThemeContext';
-import { installMatchMedia } from '@/test/render';
+import { installMatchMedia, setupUser } from '@/test/render';
 import { Brand } from './Brand';
 import { PageTitle } from './PageTitle';
 
@@ -59,7 +58,7 @@ describe('deployment branding', () => {
 		renderBrand({ name: 'Research Hub', logo: '/logo.svg', logo_dark: '/logo-dark.png' });
 		expect(screen.getByRole('img', { name: 'Research Hub' })).toHaveAttribute('src', '/logo.svg');
 		expect(screen.queryByText('MARIMOHUB')).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Toggle' }));
 		expect(screen.getByRole('img')).toHaveAttribute('src', '/logo-dark.png');
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
@@ -81,7 +80,7 @@ describe('deployment branding', () => {
 		fireEvent.error(screen.getByRole('img'));
 		expect(screen.queryByRole('img')).not.toBeInTheDocument();
 		expect(screen.getByText('Research Hub')).toBeInTheDocument();
-		await userEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Toggle' }));
 		expect(screen.queryByRole('img')).not.toBeInTheDocument();
 	});
 
@@ -94,11 +93,11 @@ describe('deployment branding', () => {
 		renderBrand({ name: 'Research Hub', logo_dark: '/dark.svg' });
 		expect(screen.queryByRole('img')).not.toBeInTheDocument();
 		expect(screen.getByText('Research Hub')).toBeInTheDocument();
-		await userEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Toggle' }));
 		expect(screen.getByRole('img')).toHaveAttribute('src', '/dark.svg');
-		await userEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Toggle' }));
 		expect(screen.queryByRole('img')).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Toggle' }));
 		expect(screen.getByRole('img')).toHaveAttribute('src', '/dark.svg');
 	});
 
@@ -106,7 +105,7 @@ describe('deployment branding', () => {
 		renderBrand({ name: 'Research Hub', logo: '/shared.svg', logo_dark: '/shared.svg' });
 		fireEvent.error(screen.getByRole('img'));
 		for (let index = 0; index < 3; index++) {
-			await userEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+			await setupUser().click(screen.getByRole('button', { name: 'Toggle' }));
 			expect(screen.queryByRole('img')).not.toBeInTheDocument();
 			expect(screen.getByText('Research Hub')).toBeInTheDocument();
 		}
@@ -116,9 +115,9 @@ describe('deployment branding', () => {
 		renderBrand({ name: 'Research Hub', logo: '/broken.svg', logo_dark: '/dark.svg' });
 		fireEvent.error(screen.getByRole('img'));
 		expect(screen.queryByRole('img')).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Toggle' }));
 		expect(screen.getByRole('img')).toHaveAttribute('src', '/dark.svg');
-		await userEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Toggle' }));
 		expect(screen.queryByRole('img')).not.toBeInTheDocument();
 	});
 

@@ -68,6 +68,7 @@
 		"./testing/browse-contract": "./src/testing/browseContract.ts",
 		"./testing/compute-contract": "./src/testing/computeContract.ts",
 		"./testing/contract": "./src/testing/bucketContract.ts",
+		"./testing/git-repo": "./src/testing/gitRepoTemplate.ts",
 		"./testing/memory-bucket": "./src/testing/MemoryBucket.ts",
 		"./testing/notification-fixtures": "./src/testing/notificationFixtures.ts",
 		"./testing/notifier-contract": "./src/testing/notifierContract.ts",
@@ -98,7 +99,7 @@
 	},
 	"scripts": {
 		"build": "vp pack",
-		"test": "vp test",
+		"test": "vp run test:vitest",
 		"check": "vp check",
 		"schemas:generate": "UPDATE_SCHEMAS=1 vp test internal-schemas.spec",
 		"typecheck": "tsc --noEmit"
@@ -120,6 +121,7 @@
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@opentelemetry/context-async-hooks": "catalog:",
 		"@opentelemetry/sdk-logs": "catalog:",
 		"@opentelemetry/sdk-trace-base": "catalog:",

@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { SUPPORT_DIAGNOSTICS_FIXTURE } from '@marimo-hub/core/testing/notification-fixtures';
 import { queryClient } from '@/api/queryClient';
-import { jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { jsonError, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import { deferred } from '@/test/deferred';
 import { ReportProblemAction } from './ReportProblemDialog';
 import { HelpMenu } from '@/components/Header/HelpMenu';
@@ -43,7 +42,7 @@ afterEach(() => {
 describe('Report a problem', () => {
 	it('previews diagnostics and sends the message with context, not server fields', async () => {
 		const api = stubApi();
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<ReportProblemAction error="Render failed" />);
 		await user.click(screen.getByRole('button', { name: 'Report a problem' }));
 		await screen.findByRole('button', { name: 'Send report' });
@@ -64,7 +63,7 @@ describe('Report a problem', () => {
 	});
 
 	it('keeps copy available without application providers or a working API', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
 		const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
 		render(<ReportProblemAction error="Render failed" />);
@@ -77,7 +76,7 @@ describe('Report a problem', () => {
 
 	it('offers copy and a plain support portal link when reports are off', async () => {
 		stubApi(false);
-		const user = userEvent.setup();
+		const user = setupUser();
 		const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
 		const supportUrl = 'https://support.example/new?category=hub';
 		renderWithClient(<ReportProblemAction />, { branding: { support_url: supportUrl } });
@@ -94,7 +93,7 @@ describe('Report a problem', () => {
 
 	it('opens reports from the Help menu', async () => {
 		stubApi(false);
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWithClient(<HelpMenu />, { route: '/' });
 		await user.click(screen.getByRole('button', { name: 'Help' }));
 		await user.click(screen.getByRole('menuitem', { name: 'Report a problem' }));
@@ -109,7 +108,7 @@ describe('Report a problem', () => {
 		{ status: 503, code: 'UNAVAILABLE', message: 'Support delivery failed.' },
 	])('preserves the draft after a $status response and allows manual retry', async (failure) => {
 		const api = stubApi();
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<ReportProblemAction />);
 		await user.click(screen.getByRole('button', { name: 'Report a problem' }));
 		await screen.findByRole('button', { name: 'Send report' });
@@ -128,7 +127,7 @@ describe('Report a problem', () => {
 
 	it('prevents duplicate submissions while pending and after partial delivery', async () => {
 		const api = stubApi();
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<ReportProblemAction />);
 		await user.click(screen.getByRole('button', { name: 'Report a problem' }));
 		await screen.findByRole('button', { name: 'Send report' });
@@ -152,7 +151,7 @@ describe('Report a problem', () => {
 		'keeps the dialog open until a pending report settles as %s',
 		async (outcome) => {
 			const api = stubApi();
-			const user = userEvent.setup();
+			const user = setupUser();
 			render(<ReportProblemAction />);
 			await user.click(screen.getByRole('button', { name: 'Report a problem' }));
 			await screen.findByRole('button', { name: 'Send report' });
@@ -193,7 +192,7 @@ describe('Report a problem', () => {
 		const api = stubApi();
 		const pending = deferred<Response>();
 		api.once('/api/v1/support/diagnostics', () => pending.promise);
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<ReportProblemAction />);
 		await user.click(screen.getByRole('button', { name: 'Report a problem' }));
 		await screen.findByText('Loading diagnostics…');
@@ -211,7 +210,7 @@ describe('Report a problem', () => {
 	it('preserves server diagnostics when capabilities fail and disables sending', async () => {
 		const api = stubApi();
 		api.handlers['/api/v1/capabilities'] = () => jsonError('SERVICE_UNAVAILABLE', 'offline', 503);
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<ReportProblemAction />);
 		await user.click(screen.getByRole('button', { name: 'Report a problem' }));
 		await screen.findByRole('alert');

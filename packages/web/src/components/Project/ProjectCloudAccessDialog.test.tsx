@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { ProjectCloudAccessDialog } from './ProjectCloudAccessDialog';
 import type { ProjectDetail } from '@/types';
 
@@ -56,7 +56,7 @@ describe('ProjectCloudAccessDialog', () => {
 	);
 
 	it('saves federated cloud access without closing the dialog', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onSave = vi.fn(() => Promise.resolve());
 		const onClose = vi.fn();
 		render(
@@ -98,7 +98,7 @@ describe('ProjectCloudAccessDialog', () => {
 	});
 
 	it('keeps a failed cloud-access change dirty for retry', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onSave = vi
 			.fn<() => Promise<void>>()
 			.mockRejectedValueOnce(new Error('save failed'))
@@ -125,7 +125,7 @@ describe('ProjectCloudAccessDialog', () => {
 	});
 
 	it('shows inherited access and lets a manager opt out', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onSave = vi.fn(async () => {});
 		render(
 			<ProjectCloudAccessDialog
@@ -145,7 +145,7 @@ describe('ProjectCloudAccessDialog', () => {
 	});
 
 	it('clears an explicit override to restore inheritance', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onSave = vi.fn(async () => {});
 		render(
 			<ProjectCloudAccessDialog

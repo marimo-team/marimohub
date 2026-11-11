@@ -76,7 +76,7 @@ async function waitForSession(
 		try {
 			current = await withDeadline(
 				async (pollSignal) => {
-					await withAbortSignal(sleep(Math.min(2_000, remaining)), pollSignal);
+					await withAbortSignal((deps.sleep ?? sleep)(Math.min(2_000, remaining)), pollSignal);
 					pollSignal.throwIfAborted();
 					sessionAuthorizationDeadline(current, principal);
 					if (Date.now() >= deadline) return current;

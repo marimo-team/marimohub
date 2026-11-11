@@ -11,6 +11,7 @@ import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { ACTOR } from '@marimo-hub/core/testing';
 import { expectOk } from './testing';
 import { createAppSessionFixture, makeHeartbeatDue } from './testing/appSession';
+import type { AppSessionFixtureOptions } from './testing/appSession';
 
 const pause = async (ms: number) => {
 	if (ms) await new Promise((resolve) => setTimeout(resolve, ms));
@@ -71,8 +72,8 @@ class MeasuredBucket extends MemoryBucket {
 	}
 }
 
-async function fixture(labeled = false) {
-	const f = await createAppSessionFixture(new MeasuredBucket(), labeled);
+async function fixture(options: AppSessionFixtureOptions = {}) {
+	const f = await createAppSessionFixture(new MeasuredBucket(), options);
 	const base = `/projects/${f.project.id}/notebooks/${f.notebook.id}/sessions`;
 	return {
 		...f,
@@ -343,10 +344,21 @@ describe('app operation budgets', () => {
 		);
 		const sessions = f.client.deps.services.sessions;
 		const create = sessions.createSessionWithEtag.bind(sessions);
+		// Hold the reservation until every admission has routed, so all of them see it.
+		const routed = Promise.withResolvers<void>();
+		let outcomes = 0;
+		const admit = AppPoolService.prototype.admit;
+		vi.spyOn(AppPoolService.prototype, 'admit').mockImplementation(
+			async function (this: AppPoolService, input) {
+				const decision = await admit.call(this, input);
+				if (++outcomes === 100) routed.resolve();
+				return decision;
+			},
+		);
 		const createSession = vi
 			.spyOn(sessions, 'createSessionWithEtag')
 			.mockImplementation(async (...args) => {
-				await pause(1500);
+				await routed.promise;
 				return create(...args);
 			});
 		const admissions = await Promise.all(
@@ -525,7 +537,8 @@ describe('app operation budgets', () => {
 	});
 
 	it('admits 200 visits through contention and batches their durable heartbeat renewals', async () => {
-		const f = await fixture();
+		// The production policy: the one-second coalescing window is what is under test.
+		const f = await fixture({ appPool: {} });
 		const base = `/projects/${f.project.id}/notebooks/${f.notebook.id}/sessions`;
 		f.bucket.forcedConflicts.set(f.poolKey, 3);
 		f.bucket.operations = [];
@@ -742,7 +755,7 @@ it.skipIf(!reportPath)(
 			] as const) {
 				const samples = [];
 				for (let i = -2; i < 20; i++) {
-					const f = await fixture(profile.labeled);
+					const f = await fixture({ labeled: profile.labeled });
 					const clients = Array.from({ length: 4 }, () => f.newClient());
 					const authenticators = [f.client, ...clients].map((client) =>
 						vi.spyOn(client.deps.authenticator, 'authenticate'),

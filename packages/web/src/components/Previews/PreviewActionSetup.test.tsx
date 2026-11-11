@@ -1,8 +1,7 @@
 import { toast } from 'sonner';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { installMatchMedia, renderWithClient } from '@/test/render';
+import { installMatchMedia, renderWithClient, setupUser } from '@/test/render';
 import { PreviewActionSetup } from './PreviewActionSetup';
 
 beforeEach(() => installMatchMedia());
@@ -10,7 +9,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('GitHub Action setup', () => {
 	it('copies a configured workflow without including a token', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
 		renderWithClient(<PreviewActionSetup pid="proj" nid="nb" />);
 		await user.click(screen.getByRole('button', { name: 'Set up GitHub Action' }));
@@ -33,7 +32,7 @@ describe('GitHub Action setup', () => {
 		base.href = '/nested/hub/';
 		document.head.append(base);
 		try {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
 			renderWithClient(<PreviewActionSetup pid="proj" nid="nb" />);
 			await user.click(screen.getByRole('button', { name: 'Set up GitHub Action' }));
@@ -47,7 +46,7 @@ describe('GitHub Action setup', () => {
 	});
 
 	it('validates retention only in commit mode', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWithClient(<PreviewActionSetup pid="proj" nid="nb" />);
 		await user.click(screen.getByRole('button', { name: 'Set up GitHub Action' }));
 		await user.selectOptions(screen.getByRole('combobox', { name: 'Preview mode' }), 'commits');
@@ -60,7 +59,7 @@ describe('GitHub Action setup', () => {
 		expect(screen.getByLabelText('GitHub Actions workflow')).toHaveTextContent("keep: '5'");
 	});
 	it('reports clipboard failures without claiming the workflow was copied', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('Clipboard denied'));
 		const error = vi.spyOn(toast, 'error');
 		const success = vi.spyOn(toast, 'success');
@@ -74,7 +73,7 @@ describe('GitHub Action setup', () => {
 	it.each(['0', '31', '1.5'])(
 		'prevents copying an invalid inactivity timeout: %s',
 		async (value) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			renderWithClient(<PreviewActionSetup pid="proj" nid="nb" />);
 			await user.click(screen.getByRole('button', { name: 'Set up GitHub Action' }));
 			await user.type(screen.getByLabelText('Expire after inactive days (optional)'), value);

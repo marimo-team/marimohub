@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { CopyField } from './CopyField';
 
 /**
- * `userEvent.setup()` installs its own `navigator.clipboard`, so the component's
+ * `setupUser()` installs its own `navigator.clipboard`, so the component's
  * clipboard must be stubbed after it — otherwise the copy silently succeeds
  * against user-event's stub and the refusal case can't be exercised.
  */
 function setupWithClipboard(writeText: () => Promise<void>) {
-	const user = userEvent.setup();
+	const user = setupUser();
 	const spy = vi.fn(writeText);
 	Object.defineProperty(navigator, 'clipboard', { value: { writeText: spy }, configurable: true });
 	return { user, writeText: spy };
@@ -67,7 +67,7 @@ describe('CopyField', () => {
 	});
 
 	it('is read-only — the value cannot be edited in place', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(<CopyField label="Sync URL" value="https://hub.example/sync" />);
 		const input = screen.getByLabelText('Sync URL');
 

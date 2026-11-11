@@ -1,9 +1,8 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { installMatchMedia } from '@/test/render';
+import { installMatchMedia, setupUser } from '@/test/render';
 import type { Session } from '@/types';
 import { SessionStatusDot } from './SessionStatusDot';
 import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
@@ -80,13 +79,13 @@ describe('SessionStatusDot', () => {
 				{ headers: { 'content-type': 'application/json' } },
 			),
 		);
-		await userEvent.click(screen.getByRole('button'));
+		await setupUser().click(screen.getByRole('button'));
 		expect(await screen.findByText('Session Owner')).toBeVisible();
 	});
 
 	it('omits attribution and user lookup when the session starter is redacted', async () => {
 		renderDot({ ...makeSession('running'), user_id: undefined });
-		await userEvent.click(screen.getByRole('button'));
+		await setupUser().click(screen.getByRole('button'));
 		expect(await screen.findByText('Started')).toBeVisible();
 		expect(screen.queryByText('Started by')).toBeNull();
 		expect(fetch).not.toHaveBeenCalled();
@@ -111,7 +110,7 @@ describe('SessionStatusDot', () => {
 	});
 
 	it('shows the status in a tooltip on focus', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDot(makeSession('running'));
 
 		await user.tab();
@@ -120,7 +119,7 @@ describe('SessionStatusDot', () => {
 	});
 
 	it('opens the session details popover on press', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDot(makeSession('running'));
 
 		await user.click(screen.getByRole('button'));
@@ -128,7 +127,7 @@ describe('SessionStatusDot', () => {
 	});
 
 	it('shows the session compute profile in details', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDot(
 			{ ...makeSession('running'), compute_profile: 'large', compute_resources: {} },
 			[{ name: 'large' }],
@@ -141,7 +140,7 @@ describe('SessionStatusDot', () => {
 	});
 
 	it('shows current and next compute when the selected profile changed', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDot(
 			{
 				...makeSession('running'),
@@ -162,7 +161,7 @@ describe('SessionStatusDot', () => {
 	});
 
 	it('detects edited resources under the same profile name', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDot(
 			{
 				...makeSession('running'),
@@ -180,7 +179,7 @@ describe('SessionStatusDot', () => {
 	});
 
 	it('uses snapshot-specific pending copy for restored sessions', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDot(
 			{
 				...makeSession('running'),
@@ -197,7 +196,7 @@ describe('SessionStatusDot', () => {
 	});
 
 	it('identifies restored compute even when the selected resources are unchanged', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDot(
 			{
 				...makeSession('running'),
@@ -214,7 +213,7 @@ describe('SessionStatusDot', () => {
 	});
 
 	it('does not silently treat a legacy session with unknown resources as current', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDot(makeSession('running'), [{ name: 'small', cpu: 1 }], 'small');
 
 		await user.click(screen.getByRole('button'));

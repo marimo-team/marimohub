@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { IID, PID, lakeEntry, objectKind, setup } from './DataBrowserPage.testWorld';
 
 describe('DataBrowserPage object detail', () => {
 	it('resets selection to the URL object after back and forward navigation', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=first.csv`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -29,7 +29,7 @@ describe('DataBrowserPage object detail', () => {
 	});
 
 	it('resets a multi-selection when revisiting its URL through history', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=first.csv`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -86,7 +86,7 @@ describe('DataBrowserPage object detail', () => {
 	});
 
 	it('does not carry a loaded preview into another object detail', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=first.csv`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -106,7 +106,7 @@ describe('DataBrowserPage object detail', () => {
 	});
 
 	it('reports rejected key and snippet clipboard writes', async ({ onTestFinished }) => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -136,7 +136,7 @@ describe('DataBrowserPage object detail', () => {
 	});
 
 	it('renders checksums and tags and selects only concrete object versions', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
@@ -213,7 +213,7 @@ describe('DataBrowserPage object detail', () => {
 	] as const)(
 		'renders an explicit %s preview and offers reload',
 		async (_kind, preview, expected) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
 				kind: objectKind,
 				entry: { ...lakeEntry, kind: 's3' },
@@ -240,7 +240,7 @@ describe('DataBrowserPage object detail', () => {
 	});
 
 	it('submits bounded object search explicitly and reports partial progress', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },

@@ -1,9 +1,8 @@
-import { defineConfig } from 'vite-plus';
+import { libraryConfig } from '@marimo-hub/vite-config';
 import { DUCKDB_EXTENSION_MANIFEST } from './src/extensionManifest';
 
-export default defineConfig({
+export default libraryConfig({
 	pack: {
-		dts: true,
 		entry: ['src/node.ts', 'src/worker.ts'],
 		copy: [
 			{
@@ -17,7 +16,6 @@ export default defineConfig({
 		],
 	},
 	test: {
-		include: ['src/**/*.test.ts'],
 		// Global clearing can erase mocks owned by another concurrent test.
 		clearMocks: false,
 		// Each concurrent node test owns a WASM worker, so bound peak memory.

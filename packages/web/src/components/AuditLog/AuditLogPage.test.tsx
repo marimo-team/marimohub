@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { jsonError, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import type { AuditLogEntry } from '@/types';
 import AuditLogPage from './AuditLogPage';
 
@@ -38,7 +37,7 @@ function setup(fetchImpl: (url: string) => Promise<Response>) {
 			return fetchImpl(url);
 		}),
 	);
-	const user = userEvent.setup();
+	const user = setupUser();
 	const clipboard = vi.fn((_text: string) => Promise.resolve());
 	Object.defineProperty(navigator, 'clipboard', {
 		value: { writeText: clipboard },

@@ -14,7 +14,7 @@
 	"scripts": {
 		"build": "vp pack",
 		"check": "vp check",
-		"test": "vp test",
+		"test": "vp run test:vitest",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
@@ -25,6 +25,7 @@
 	"devDependencies": {
 		"@cloudflare/workers-types": "catalog:",
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@types/node": "catalog:",
 		"typescript": "catalog:",
 		"vite-plus": "catalog:",

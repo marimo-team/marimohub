@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
 import { toast } from 'sonner';
 import { SnapshotPage } from './SnapshotPage';
-import { jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { jsonError, jsonOk, renderWithClient, setupUser } from '@/test/render';
 
 const PID = 'proj-x';
 const NID = 'nb-1';
@@ -86,7 +85,7 @@ describe('SnapshotPage', () => {
 	});
 
 	it('copies the snapshot URL with its pinned version and without reserved parameters', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const writeText = vi.fn().mockResolvedValue(undefined);
 		Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
 		const success = vi.spyOn(toast, 'success');

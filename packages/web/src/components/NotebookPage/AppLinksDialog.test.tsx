@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { onlineManager } from '@tanstack/react-query';
 import { deepLinkKeys } from '@/api/deepLinks';
-import { createTestQueryClient, jsonError, renderWithClient } from '@/test/render';
+import { createTestQueryClient, jsonError, renderWithClient, setupUser } from '@/test/render';
 import { AppLinksDialog } from './AppLinksDialog';
 
 const saved = { slug: 'sales', registration_id: '01ARZ3NDEKTSV4RRFFQ69G5FAV' };
@@ -88,7 +87,7 @@ afterEach(() => {
 
 describe('AppLinksDialog', () => {
 	it('creates, copies, and removes a nested alias with encoded API requests', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const writeText = vi.spyOn(navigator.clipboard, 'writeText');
 		const fetch = setup();
 		await user.type(screen.getByRole('textbox', { name: 'App slug' }), 'Team/Overview');
@@ -141,7 +140,7 @@ describe('AppLinksDialog', () => {
 	});
 
 	it('uses filtered parameters for alias navigation, copying, and previews without storing them', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const writeText = vi.spyOn(navigator.clipboard, 'writeText');
 		const base = document.createElement('base');
 		base.href = `${window.location.origin}/hub/`;
@@ -182,7 +181,7 @@ describe('AppLinksDialog', () => {
 	});
 
 	it('normalizes input and shows a newly registered alias', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = setup();
 		await user.type(screen.getByRole('textbox', { name: 'App slug' }), '  New-App  ');
 		await user.click(screen.getByRole('button', { name: 'Create app link' }));
@@ -193,7 +192,7 @@ describe('AppLinksDialog', () => {
 	});
 
 	it('shows global conflicts inline without also showing a toast', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const errorToast = vi.spyOn(toast, 'error');
 		setup(true, true);
 		await user.type(screen.getByRole('textbox', { name: 'App slug' }), 'taken');
@@ -206,7 +205,7 @@ describe('AppLinksDialog', () => {
 	});
 
 	it('includes the registration ID when removing a link and explains immediate reuse', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = setup();
 		expect(screen.getByText(/Old shared URLs may then open another app/)).toBeInTheDocument();
 		await user.click(await screen.findByRole('button', { name: 'Remove sales' }));
@@ -217,7 +216,7 @@ describe('AppLinksDialog', () => {
 		expect(String(url)).toContain(`/deep-links/sales?registration_id=${saved.registration_id}`);
 	});
 	it('shows a list failure and reloads aliases when retried', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(true, false, { list: true });
 		expect(await screen.findByRole('alert')).toHaveTextContent('Cannot load app links');
 		expect(screen.queryByText('No app links yet.')).not.toBeInTheDocument();
@@ -226,7 +225,7 @@ describe('AppLinksDialog', () => {
 	});
 
 	it('keeps the alias after a failed removal and permits retry', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = setup(true, false, { release: true });
 		await user.click(await screen.findByRole('button', { name: 'Remove sales' }));
 		expect(await screen.findByText('Removal unavailable')).toBeInTheDocument();
@@ -238,7 +237,7 @@ describe('AppLinksDialog', () => {
 		expect(fetch.mock.calls.filter(([, init]) => init?.method === 'DELETE')).toHaveLength(2);
 	});
 	it('clears a failed create message when the slug changes', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup(true, true);
 		await user.type(screen.getByRole('textbox', { name: 'App slug' }), 'taken');
 		await user.click(screen.getByRole('button', { name: 'Create app link' }));
@@ -251,7 +250,7 @@ describe('AppLinksDialog', () => {
 	});
 
 	it('removes only the requested alias when a notebook has multiple links', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup();
 		await user.type(screen.getByRole('textbox', { name: 'App slug' }), 'revenue');
 		await user.click(screen.getByRole('button', { name: 'Create app link' }));

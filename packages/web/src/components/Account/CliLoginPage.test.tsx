@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { AuthProvider } from '@/context/AuthContext';
-import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { installMatchMedia, jsonError, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import { CliLoginPage } from './CliLoginPage';
 import { parseCliLoginRequest } from './cliLoginRequest';
 
@@ -89,7 +88,7 @@ describe('CliLoginPage', () => {
 	});
 
 	it('approves with the configurable lifetime and returns to the loopback callback', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls, navigate } = setup();
 		await screen.findByText(/dev@example.com/);
 
@@ -113,7 +112,7 @@ describe('CliLoginPage', () => {
 	it('starts at the requested grant and uses scoped approval', async () => {
 		const grant = { actions: '*', projects: '*' };
 		window.history.replaceState({}, '', loginPath(CALLBACK, grant));
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup();
 		await screen.findByText(/dev@example.com/);
 		expect(await screen.findByRole('radio', { name: /^Full/ })).toBeChecked();
@@ -138,7 +137,7 @@ describe('CliLoginPage', () => {
 	it('can narrow a full request before scoped approval', async () => {
 		const requested = { actions: '*', projects: '*' };
 		window.history.replaceState({}, '', loginPath(CALLBACK, requested));
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup();
 		await screen.findByText(/dev@example.com/);
 
@@ -182,7 +181,7 @@ describe('CliLoginPage', () => {
 	});
 
 	it('offers quick lifetime presets', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup();
 		await screen.findByText(/dev@example.com/);
 
@@ -193,7 +192,7 @@ describe('CliLoginPage', () => {
 	it.each(['', '0', '3651', '1.5', 'abc'])(
 		'rejects an invalid token lifetime: %s',
 		async (value) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const { calls, navigate } = setup();
 			await screen.findByText(/dev@example.com/);
 
@@ -208,7 +207,7 @@ describe('CliLoginPage', () => {
 	);
 
 	it('stays on the approval page when authorization fails', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { navigate } = setup({ approvalFails: true });
 		await screen.findByText(/dev@example.com/);
 
@@ -220,7 +219,7 @@ describe('CliLoginPage', () => {
 	});
 
 	it('returns an access-denied callback when cancelled', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { navigate } = setup();
 		await screen.findByText(/dev@example.com/);
 

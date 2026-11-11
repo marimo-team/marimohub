@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { jsonOk, renderWithClient } from '@/test/render';
+import { jsonOk, renderWithClient, setupUser } from '@/test/render';
 import { AuthProvider } from '@/context/AuthContext';
 import AdminPolicyAnalyzerPage from './AdminPolicyAnalyzerPage';
 
@@ -119,7 +118,7 @@ describe('AdminPolicyAnalyzerPage', () => {
 			throw new Error(`unexpected fetch: ${url}`);
 		});
 		vi.stubGlobal('fetch', fetchMock);
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWithClient(
 			<AuthProvider>
 				<AdminPolicyAnalyzerPage />
@@ -255,7 +254,7 @@ describe('AdminPolicyAnalyzerPage', () => {
 			throw new Error(`unexpected fetch: ${url}`);
 		});
 		vi.stubGlobal('fetch', fetchMock);
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderWithClient(
 			<AuthProvider>
 				<AdminPolicyAnalyzerPage />

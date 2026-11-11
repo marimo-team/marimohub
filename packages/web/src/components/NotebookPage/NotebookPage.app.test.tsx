@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import type { Session } from '@/types';
 import { makeFetch, renderPage, runningSession, sessionPosts } from './NotebookPage.testWorld';
 
@@ -29,7 +29,7 @@ describe('NotebookPage app variant', () => {
 		const [, init] = sessionPosts(impl)[0];
 		expect(String(init?.body)).toContain('"mode":"app"');
 		expect(screen.getByText('App')).toBeInTheDocument();
-		await userEvent.click(screen.getByRole('button', { name: 'Session Running — details' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Session Running — details' }));
 		expect(screen.getByText('Restart')).toBeInTheDocument();
 		expect(screen.getByText('Stop')).toBeInTheDocument();
 		expect(screen.queryByLabelText('Rename notebook')).toBeNull();
@@ -60,7 +60,7 @@ describe('NotebookPage app variant', () => {
 						}),
 			});
 			renderPage('app');
-			await userEvent.click(
+			await setupUser().click(
 				await screen.findByRole('button', {
 					name: running ? 'Session Running — details' : 'Session Failed — details',
 				}),
@@ -162,7 +162,7 @@ describe('NotebookPage app variant', () => {
 		);
 		expect(sessionPosts(impl)).toHaveLength(1);
 		expect(screen.getByText('App')).toBeInTheDocument();
-		await userEvent.click(screen.getByRole('button', { name: 'Session Running — details' }));
+		await setupUser().click(screen.getByRole('button', { name: 'Session Running — details' }));
 		expect(screen.queryByText('Restart')).toBeNull();
 		expect(screen.queryByText('Stop')).toBeNull();
 	});
@@ -181,7 +181,7 @@ describe('NotebookPage app variant', () => {
 	});
 
 	it('Restart confirms before disconnecting everyone (with the connection hint)', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const impl = makeFetch({
 			role: 'editor',
 			session: appSession({ active_connections: 3 }),
@@ -205,7 +205,7 @@ describe('NotebookPage app variant', () => {
 	});
 
 	it('Stop confirms too; cancel leaves the app untouched', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const impl = makeFetch({ role: 'editor', session: appSession() });
 		const { container } = renderPage('app');
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
@@ -294,7 +294,7 @@ describe('NotebookPage app variant', () => {
 	);
 
 	it('offers a one-shot Retry with Default without replacing the stored profile', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const impl = makeFetch({
 			role: 'editor',
 			computeProfile: 'large',

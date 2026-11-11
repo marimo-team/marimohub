@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { jsonError, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import { SyncSettingsDialog } from './SyncSettingsDialog';
 
 const PID = 'proj-x';
@@ -181,7 +180,7 @@ describe('SyncSettingsDialog', () => {
 	});
 
 	it('PATCHes all four edited source fields', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls, onClose } = setup({});
 
 		await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue('acme/analytics'));
@@ -211,7 +210,7 @@ describe('SyncSettingsDialog', () => {
 	});
 
 	it('PATCHes a normalised subtree for a pull source', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({ syncMode: 'pull', syncProviders: ['github'] });
 
 		await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue('acme/analytics'));
@@ -231,7 +230,7 @@ describe('SyncSettingsDialog', () => {
 	});
 
 	it('rejects an unsafe folder without PATCHing', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({ syncMode: 'pull', syncProviders: ['github'] });
 
 		await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue('acme/analytics'));
@@ -266,7 +265,7 @@ describe('SyncSettingsDialog', () => {
 	});
 
 	it('allows editors to sync without managing settings or rotating credentials', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({ canManage: false, canOperate: true, syncProviders: ['github'] });
 
 		await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue('acme/analytics'));
@@ -285,7 +284,7 @@ describe('SyncSettingsDialog', () => {
 	});
 
 	it('rotates the token after confirmation and displays it once', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({});
 		await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue('acme/analytics'));
 
@@ -303,7 +302,7 @@ describe('SyncSettingsDialog', () => {
 	});
 
 	it('shows drift and syncs on demand when the provider supports server sync', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({ syncProviders: ['github'], remoteCommit: 'fedcba9876543210' });
 
 		expect(await screen.findByText(/behind/i)).toBeInTheDocument();
@@ -384,7 +383,7 @@ describe('SyncSettingsDialog', () => {
 	});
 
 	it('re-enables Sync now after a failed sync', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup({ syncProviders: ['github'], remoteCommit: 'fedcba9876543210', syncError: true });
 
 		await user.click(await screen.findByRole('button', { name: 'Sync now' }));

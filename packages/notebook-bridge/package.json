@@ -17,7 +17,7 @@
 		"build": "vp pack",
 		"generate": "node scripts/generate.mjs",
 		"generate:check": "node scripts/generate.mjs --check",
-		"test": "vp test",
+		"test": "vp run test:vitest",
 		"typecheck": "tsc --noEmit",
 		"test:browser": "playwright test"
 	},
@@ -27,6 +27,7 @@
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
 		"@playwright/test": "^1.50.0",
 		"@types/node": "catalog:",
 		"fflate": "catalog:",

@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { AuthProvider } from '@/context/AuthContext';
 import type { TokenGrant } from '@/types';
-import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { installMatchMedia, jsonError, jsonOk, renderWithClient, setupUser } from '@/test/render';
 import { CliDeviceLoginPage } from './CliDeviceLoginPage';
 
 const USER_CODE = 'WDJB-MJHT';
@@ -100,7 +99,7 @@ describe('CliDeviceLoginPage', () => {
 	});
 
 	it('approves the normalized code and shows a terminal handoff', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup();
 		await screen.findByText(/dev@example.com/);
 
@@ -124,7 +123,7 @@ describe('CliDeviceLoginPage', () => {
 	});
 
 	it('starts from the requested grant and uses scoped approval', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({ scoped: true });
 		await screen.findByText(/dev@example.com/);
 		expect(await screen.findByRole('radio', { name: /^Full/ })).toBeChecked();
@@ -163,7 +162,7 @@ describe('CliDeviceLoginPage', () => {
 	});
 
 	it('does not infer legacy approval when preview fails and allows retry', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({ scoped: true, previewFailures: 1 });
 
 		expect(await screen.findByText('Preview unavailable')).toBeVisible();
@@ -186,7 +185,7 @@ describe('CliDeviceLoginPage', () => {
 	});
 
 	it('can narrow the requested device grant before approval', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup({ scoped: true });
 		await screen.findByText(/dev@example.com/);
 		await screen.findByRole('radio', { name: /^Full/ });
@@ -209,7 +208,7 @@ describe('CliDeviceLoginPage', () => {
 	});
 
 	it('keeps a scoped approval editable after the server rejects it', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup({ scoped: true, scopedApprovalFails: true, toaster: false });
 		await screen.findByText(/dev@example.com/);
 		await screen.findByRole('radio', { name: /^Full/ });
@@ -239,7 +238,7 @@ describe('CliDeviceLoginPage', () => {
 	});
 
 	it('rejects invalid code characters without calling the API', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup();
 		await screen.findByText(/dev@example.com/);
 
@@ -254,7 +253,7 @@ describe('CliDeviceLoginPage', () => {
 	});
 
 	it.each(['0', '3651', '1.5', 'abc', ''])('rejects invalid token lifetime %j', async (value) => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { calls } = setup();
 		await screen.findByText(/dev@example.com/);
 
@@ -269,7 +268,7 @@ describe('CliDeviceLoginPage', () => {
 	});
 
 	it('keeps the approval form open when the code is invalid or expired', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup({ approvalFails: true });
 		await screen.findByText(/dev@example.com/);
 
@@ -280,7 +279,7 @@ describe('CliDeviceLoginPage', () => {
 	});
 
 	it('keeps the approval form open after a network failure', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		setup({ approvalThrows: true });
 		await screen.findByText(/dev@example.com/);
 
@@ -291,7 +290,7 @@ describe('CliDeviceLoginPage', () => {
 	});
 
 	it('returns home without approving when cancelled', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const { navigate, calls } = setup();
 		await screen.findByText(/dev@example.com/);
 
@@ -308,7 +307,7 @@ describe('CliDeviceLoginPage', () => {
 		base.href = '/marimohub/';
 		document.head.append(base);
 		try {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const { navigate } = setup();
 			await screen.findByText(/dev@example.com/);
 

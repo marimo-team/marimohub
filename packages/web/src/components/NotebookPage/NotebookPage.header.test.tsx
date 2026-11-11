@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { NotebookMenu } from './NotebookMenu';
 import { makeFetch, renderPage, runningSession } from './NotebookPage.testWorld';
@@ -12,7 +12,7 @@ function LocationState() {
 
 describe('Notebook header', () => {
 	it('lets app viewers discover previews through the notebook menu', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({
 			role: 'viewer',
 			previewProviders: ['github'],
@@ -66,7 +66,7 @@ describe('Notebook header', () => {
 	);
 
 	it('preserves the notebook title when following the Jobs link', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			<MemoryRouter>
 				<NotebookMenu
@@ -90,7 +90,7 @@ describe('Notebook header', () => {
 	});
 
 	it('prefixes the Jobs link with the router basename', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		render(
 			<MemoryRouter basename="/hub" initialEntries={['/hub/projects/proj-x/notebooks/nb-1']}>
 				<NotebookMenu
@@ -113,7 +113,7 @@ describe('Notebook header', () => {
 	});
 
 	it('groups notebook actions with attribution and opens the rename dialog', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({ role: 'editor' });
 		renderPage();
 		await screen.findByRole('button', { name: /Session Running/ });
@@ -134,7 +134,7 @@ describe('Notebook header', () => {
 	});
 
 	it('keeps sharing visible and confirms a shared stop from the session popover', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetch = makeFetch({
 			role: 'editor',
 			session: runningSession({ mode: 'edit', editor_sandbox_sharing: 'shared' }),
@@ -157,7 +157,7 @@ describe('Notebook header', () => {
 	});
 
 	it('does not expose session mutations without a server grant', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({ role: 'editor', session: runningSession({ can: { attach: true, stop: false } }) });
 		renderPage();
 		await user.click(await screen.findByRole('button', { name: /Session Running/ }));
@@ -165,7 +165,7 @@ describe('Notebook header', () => {
 	});
 
 	it('keeps unsaved-work warnings visible and hides notebook mutations from viewers', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({
 			role: 'viewer',
 			viewerMode: 'ephemeral-sandbox',
@@ -180,7 +180,7 @@ describe('Notebook header', () => {
 	});
 
 	it('keeps navigation out of Share and available under Open without extra tools', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		makeFetch({ role: 'editor' });
 		renderPage();
 		await screen.findByRole('button', { name: /Session Running/ });

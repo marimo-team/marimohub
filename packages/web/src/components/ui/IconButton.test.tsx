@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { Pencil } from 'lucide-react';
 import { IconButton } from './IconButton';
 
@@ -15,7 +15,7 @@ describe('IconButton', () => {
 	});
 
 	it('fires onPress when activated', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const onPress = vi.fn();
 		render(
 			<IconButton label="Edit" onPress={onPress}>

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { setupUser } from '@/test/render';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { RenameNotebookDialog } from './RenameNotebookDialog';
@@ -39,7 +39,7 @@ describe('RenameNotebookDialog', () => {
 	});
 
 	it('PATCHes the new title and closes on success', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const fetchImpl = vi.fn(
 			async (_input: RequestInfo | URL, _init: RequestInit) =>
 				new Response(JSON.stringify({ success: true, data: { title: 'New Name' } }), {
@@ -62,7 +62,7 @@ describe('RenameNotebookDialog', () => {
 	});
 
 	it('disables Save when the title is blank', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		renderDialog();
 
 		await user.clear(screen.getByLabelText('Notebook Name'));

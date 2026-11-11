@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { act, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { createTestQueryClient, jsonError, jsonOk } from '@/test/render';
+import { createTestQueryClient, jsonError, jsonOk, setupUser } from '@/test/render';
 import { IID, PID, setup } from './DataBrowserPage.testWorld';
 
 const route = `/projects/${PID}/data/${IID}?ns=sales&table=orders`;
@@ -10,7 +9,7 @@ describe('catalog recovery', () => {
 	it.each(['namespaces', 'tables'])(
 		'retries an initial %s failure without losing the deep link',
 		async (resource) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			let failing = true;
 			setup(route, {
 				catalogResponse: (url) =>
@@ -27,7 +26,7 @@ describe('catalog recovery', () => {
 	);
 
 	it('retries a failed table page and preserves loaded rows and selection', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		let failing = true;
 		setup(route, {
 			pagedTables: true,
@@ -49,7 +48,7 @@ describe('catalog recovery', () => {
 	});
 
 	it('retries a failed namespace page without collapsing loaded branches', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		let failing = true;
 		setup(route, {
 			catalogResponse: (url) => {
@@ -75,7 +74,7 @@ describe('catalog recovery', () => {
 	it.each(['namespaces', 'tables'])(
 		'shows a %s refresh failure while retaining cached data',
 		async (resource) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			const client = createTestQueryClient();
 			let failing = false;
 			setup(
@@ -107,7 +106,7 @@ describe('catalog recovery', () => {
 	);
 
 	it('shows a capability refresh failure and retries without losing the tree or selection', async () => {
-		const user = userEvent.setup();
+		const user = setupUser();
 		const client = createTestQueryClient();
 		const failures: { capability?: string } = {};
 		setup(route, { objectFailures: failures }, client);
@@ -148,7 +147,7 @@ describe('catalog pagination edge cases', () => {
 	it.each(['namespaces', 'tables'])(
 		'keeps %s loaded through empty pages and repeated retry failures',
 		async (resource) => {
-			const user = userEvent.setup();
+			const user = setupUser();
 			let attempts = 0;
 			const cursors: (string | null)[] = [];
 			setup(route, {

@@ -20,6 +20,7 @@ import {
 } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
+import type { ApiDeps } from '../context';
 import { authorizeProxyRequest } from '../sandboxProxy';
 import { sweepAppPools } from '../appPools';
 import { makeFakeSnapshotCompute } from '../testing/snapshotCompute';
@@ -42,13 +43,15 @@ describe('app pool HTTP integration', () => {
 		).id;
 	});
 	afterEach(() => vi.restoreAllMocks());
-	const api = (user = 'alice', maxAppsPerProject?: number) =>
+	const api = (user = 'alice', maxAppsPerProject?: number, deps?: Partial<ApiDeps>) =>
 		createTestApi({
 			bucket,
 			userId: uid(user),
 			compute: makeFakeCompute(),
-			deps: { policy: { defaultRole: 'editor', appPool: policy, maxAppsPerProject } },
+			deps: { policy: { defaultRole: 'editor', appPool: policy, maxAppsPerProject }, ...deps },
 		});
+	// Keeps the retry attempt counts the assertions depend on without the backoff wait.
+	const immediate = async (_ms: number, signal?: AbortSignal) => signal?.throwIfAborted();
 	const path = (suffix = '') => `/projects/${pid}/notebooks/${nid}/sessions${suffix}`;
 	const start = async (user = 'alice', visitId = 'tab') =>
 		expectOk<any>(await api(user).request('POST', path(), { mode: 'app', app_visit_id: visitId }));
@@ -95,7 +98,10 @@ describe('app pool HTTP integration', () => {
 				return put(...args);
 			});
 			await expectError(
-				await api('bob').request('POST', path(), { mode: 'app', app_visit_id: 'tab' }),
+				await api('bob', undefined, { sleep: immediate }).request('POST', path(), {
+					mode: 'app',
+					app_visit_id: 'tab',
+				}),
 				state === 'missing' ? 503 : 409,
 				state === 'missing' ? 'SERVICE_UNAVAILABLE' : 'CONFLICT',
 			);
@@ -183,7 +189,7 @@ describe('app pool HTTP integration', () => {
 				}
 				return get(key);
 			});
-			const response = await api('bob').request('POST', path(), {
+			const response = await api('bob', undefined, { sleep: immediate }).request('POST', path(), {
 				mode: 'app',
 				app_visit_id: 'tab',
 			});
@@ -886,7 +892,9 @@ describe('app pool HTTP integration', () => {
 			await creating;
 			try {
 				await expectError(
-					await api('bob').request('POST', path(), { mode: 'app' }),
+					await api('bob', undefined, { sleep: immediate }).request('POST', path(), {
+						mode: 'app',
+					}),
 					503,
 					'SERVICE_UNAVAILABLE',
 				);
