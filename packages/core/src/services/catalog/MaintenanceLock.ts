@@ -22,7 +22,7 @@ type LockRecord = z.infer<typeof LockRecordSchema>;
  * Expiry permits takeover but does not cancel or fence work already in progress.
  */
 export class MaintenanceLock {
-	private held: { holder: string; etag: string } | undefined;
+	private held: { holder: string; etag: string; expiresAt: number } | undefined;
 	constructor(
 		private bucket: Bucket,
 		private key: string = paths.maintenanceLock,
@@ -36,13 +36,28 @@ export class MaintenanceLock {
 		return acquired;
 	}
 
+	/** Reuse local ownership only while enough lease time remains for the next attempt. */
+	async hold(holder: string, ttlMs: number, minimumRemainingMs: number): Promise<boolean> {
+		const held = this.held;
+		const now = Date.now();
+		if (held?.holder === holder && held.expiresAt > now) {
+			if (held.expiresAt - now >= minimumRemainingMs) {
+				trace.getActiveSpan()?.setAttribute('marimohub.lock.acquired', true);
+				return true;
+			}
+			const record: LockRecord = { holder, expires_at: new Date(now + ttlMs).toISOString() };
+			const acquired = await this.writeLease(record, { onlyIfEtagMatches: held.etag });
+			trace.getActiveSpan()?.setAttribute('marimohub.lock.acquired', acquired);
+			return acquired;
+		}
+		return this.acquire(holder, ttlMs);
+	}
+
 	private async tryAcquire(holder: string, ttlMs: number): Promise<boolean> {
 		const now = Date.now();
 		const record: LockRecord = { holder, expires_at: new Date(now + ttlMs).toISOString() };
-		const body = JSON.stringify(record);
-
 		const existing = await this.bucket.get(this.key);
-		if (!existing) return this.writeLease(holder, body, { onlyIfNotExists: true });
+		if (!existing) return this.writeLease(record, { onlyIfNotExists: true });
 
 		const current = this.parse(await existing.text(), 'maintenance_lock.acquire');
 		const heldByOther = current && current.holder !== holder;
@@ -51,20 +66,26 @@ export class MaintenanceLock {
 			return false;
 		}
 
-		return this.writeLease(holder, body, { onlyIfEtagMatches: existing.etag });
+		return this.writeLease(record, { onlyIfEtagMatches: existing.etag });
 	}
 
 	private async writeLease(
-		holder: string,
-		body: string,
+		record: LockRecord,
 		condition: { onlyIfNotExists: true } | { onlyIfEtagMatches: string },
 	): Promise<boolean> {
 		try {
-			const written = await this.bucket.put(this.key, body, condition);
-			this.held = { holder, etag: written.etag };
+			const written = await this.bucket.put(this.key, JSON.stringify(record), condition);
+			this.held = {
+				holder: record.holder,
+				etag: written.etag,
+				expiresAt: Date.parse(record.expires_at),
+			};
 			return true;
 		} catch (error) {
-			if (error instanceof PreconditionFailedError) return false;
+			if (error instanceof PreconditionFailedError) {
+				this.held = undefined;
+				return false;
+			}
 			throw error;
 		}
 	}

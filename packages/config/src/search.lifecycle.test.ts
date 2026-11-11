@@ -255,6 +255,7 @@ describe('bounded remote page assembly', () => {
 			expect(Date.now() - start).toBe((count / 8) * 100);
 			expect(peak).toBe(8);
 			expect(reads).toBe(count);
+			vi.useRealTimers();
 			expect((await f.index.read(f.scope, signal())).snapshot?.documents.map((d) => d.id)).toEqual(
 				Array.from({ length: count }, (_, i) =>
 					Array.from({ length: 20 }, (_, j) => `page-${i}-${j}`),

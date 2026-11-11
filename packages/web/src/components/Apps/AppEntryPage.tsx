@@ -194,6 +194,7 @@ function StakeholderApp({
 		enabled: canRun,
 		mode: 'app',
 		startupTimeoutSeconds: capabilities?.sandbox_startup_timeout_seconds,
+		marimoAssetUrl: capabilities?.marimo_asset_url,
 		appHeartbeatIntervalSeconds: capabilities?.app_pool?.heartbeat_interval_seconds,
 	});
 	const { theme } = useTheme();

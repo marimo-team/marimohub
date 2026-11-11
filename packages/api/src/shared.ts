@@ -1801,6 +1801,10 @@ export const CapabilitiesResponseSchema = z
 		 * the deployment offers no image choice (single image or imageless backend).
 		 */
 		sandbox_images: z.array(z.string()),
+		marimo_asset_url: z
+			.string()
+			.optional()
+			.describe('Public HTTPS marimo asset base or version template, when configured.'),
 		/**
 		 * How long the server waits for a kernel to come up before failing a
 		 * session start (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS). Clients bound

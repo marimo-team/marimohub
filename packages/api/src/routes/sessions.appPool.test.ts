@@ -237,7 +237,7 @@ describe('app pool HTTP integration', () => {
 				generation: admissions[1].app_assignment.generation,
 			}),
 			409,
-			'CONFLICT',
+			'APP_ASSIGNMENT_EXPIRED',
 		);
 	});
 
@@ -709,7 +709,7 @@ describe('app pool HTTP integration', () => {
 		await expectError(
 			await api().request('POST', path(`/${first.session_id}/heartbeat`), first.app_assignment),
 			409,
-			'CONFLICT',
+			'APP_ASSIGNMENT_EXPIRED',
 		);
 		const current = await expectOk<any>(await api().request('GET', path(`/${first.session_id}`)));
 		expect(current.app_pool.users).toBe(2);
@@ -729,7 +729,7 @@ describe('app pool HTTP integration', () => {
 			await expectError(
 				await api().request('POST', path(`/${first.session_id}/heartbeat`), phone.app_assignment),
 				409,
-				'CONFLICT',
+				'APP_ASSIGNMENT_EXPIRED',
 			);
 			expect((await pool.store.read(pid, nid))?.assignments).toEqual([]);
 			expect((await pool.inspect(pid, nid))[0].users).toBe(0);
@@ -743,7 +743,7 @@ describe('app pool HTTP integration', () => {
 		await expectError(
 			await api('bob').request('POST', path(`/${first.session_id}/heartbeat`)),
 			409,
-			'CONFLICT',
+			'APP_ASSIGNMENT_EXPIRED',
 		);
 		const unassigned = await expectOk<any>(
 			await api('bob').request('GET', path(`/${first.session_id}`)),

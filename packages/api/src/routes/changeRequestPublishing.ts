@@ -3,7 +3,7 @@ import {
 	NotFoundError,
 	pullSourceRootPath,
 	sandboxWorkspaceLayout,
-	sessionOwner,
+	sessionSandbox,
 	UnavailableError,
 } from '@marimo-hub/core';
 import type {
@@ -154,7 +154,7 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 			notebookId: input.notebookId,
 			proposalId: input.proposalId,
 			session,
-			sandbox: input.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) }),
+			sandbox: sessionSandbox(input.deps.compute, session),
 			workdir: layout.workdir,
 			gitRoot: layout.gitRoot,
 			author: input.author,

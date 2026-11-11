@@ -6,6 +6,7 @@ import {
 import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { withBasePath } from './basePath';
 import { generateThemePalette } from './themePalette';
+import { consumeInitialRequest } from './initialRequests';
 
 export type Theme = 'light' | 'dark';
 export const THEME_STORAGE_KEY = 'marimohub-theme';
@@ -40,10 +41,12 @@ export async function loadThemeConfig(): Promise<ThemeConfig> {
 	});
 	const request = async () => {
 		try {
-			const response = await fetch(withBasePath('/api/v1/theme'), {
-				signal: controller.signal,
-				credentials: 'include',
-			});
+			const response =
+				(await consumeInitialRequest(withBasePath('/api/v1/theme'), controller.signal)) ??
+				(await fetch(withBasePath('/api/v1/theme'), {
+					signal: controller.signal,
+					credentials: 'include',
+				}));
 			if (!response.ok) return DEFAULT_THEME_CONFIG;
 			const parsed = ThemeResponseSchema.safeParse(await response.json());
 			return parsed.success ? parsed.data.data : DEFAULT_THEME_CONFIG;

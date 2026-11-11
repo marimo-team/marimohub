@@ -17,6 +17,7 @@ The record contains reservations, visit assignments, leases, and a retained dele
 Member states are `starting`, `ready`, `draining`, and `retiring`.
 Retiring members remain recorded until sandbox reclamation succeeds.
 Deletion retains a tombstone so delayed requests cannot recreate the pool.
+Sweeps cache up to 10,000 empty tombstones by ETag. A changed or unavailable LIST ETag requires another record read.
 
 Source and pool heads cannot share a CAS. Each CAS retry checks the committed source head.
 New admissions and replacement retries check it again after CAS, before compute creation or admission completes.
@@ -53,7 +54,13 @@ Operation-count tests cover these budgets, not remote bucket latency.
 Project authorization and the initial session read overlap. Project failures take precedence without waiting for session storage.
 The session promise handles rejection immediately, including after a project denial.
 Notebook and preview checks precede attach authorization.
-Session renewal reuses the initial session and ETag. A write conflict rereads the session before retry.
+Session renewal reuses the initial session and ETag. Concurrent touches share one in-flight session mutation per service instance.
+A write conflict rereads the session before retry.
+The first due presence batch commits without the one-second delay. Later batches retain the one-second interval, including batches that arrive after the previous write finishes.
+Every renewal waits for the persisted batch before acknowledgment. Each process batches its local callers.
+The optional pool `last_presence_write_at` timestamp fences due renewal writes across replicas at one-second intervals.
+CAS retries and waits recheck visit expiry and deletion. After five seconds of contention, the batch returns retryable HTTP 503 with `Retry-After: 2`.
+Existing pool records need no migration. Rolling upgrades enforce the shared limit once all writers use this timestamp.
 A coalesced heartbeat rereads the session to detect a concurrent stop or deletion without writing.
 Response grants use the returned session.
 
@@ -89,3 +96,5 @@ Real browser/kernel refresh and reconnect remain unvalidated. Ordinary CI has no
 - [API integration](../packages/api/src/appPools.ts) and [session routes](../packages/api/src/routes/sessions.ts): admission, provisioning, and cleanup.
 
 Tests are colocated. [Storage ownership](./bucket_spec.md#app-pool-records) describes deletion and migration records.
+
+Publish-time prewarming remains deferred until an explicit publish action exists. Creating or editing a notebook does not prewarm it. App visits retain on-demand admission and do not trigger extra prewarming.

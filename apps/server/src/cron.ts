@@ -52,6 +52,7 @@ function maintenanceLock(deps: ApiDeps, key: string = paths.maintenanceLock): Ma
 	const attributes = () => ({ 'bucket.key': key });
 	return traced('MaintenanceLock', new MaintenanceLock(deps.bucket, key), {
 		acquire: attributes,
+		hold: attributes,
 		release: attributes,
 	});
 }
@@ -142,6 +143,7 @@ export function startMaintenance(
 		loops.start({
 			name: 'app_pools',
 			intervalMs: deps.sandbox.sessionLifetime?.sweepIntervalMs ?? Millis.minutes(1),
+			retainLease: true,
 			lock: maintenanceLock(deps, '_system/app-pool-maintenance-lock.json'),
 			run: () => maintenanceSteps.sweepAppPools(deps),
 		}).stop,
@@ -385,6 +387,7 @@ export function startJobScheduler(
 	const loop = loops.start({
 		name: 'job_scheduler',
 		intervalMs: tickMs,
+		retainLease: true,
 		lock,
 		run: async ({ holder, step }) => {
 			const r = await step(() => scheduler.tick());
@@ -419,6 +422,7 @@ export function startWarmPools(
 		failureEvent: 'warm_pool_sweep_failed',
 		// Late creates can publish cleanup records after an empty disabled sweep.
 		intervalMs: service.config.enabled ? 5_000 : FIVE_MINUTES_MS,
+		retainLease: true,
 		lock: maintenanceLock(deps, paths.warmPoolLock),
 		shouldRun: async () =>
 			service.config.enabled || (await service.store.ownedSandboxIds()).size > 0,
@@ -449,9 +453,11 @@ export function startSearchIndexing(
 		intervalMs: Millis.seconds(5),
 		deadlineMs: Millis.seconds(30),
 		abortOnStop: true,
+		retainLease: true,
 		lock: maintenanceLock(deps, searchPaths.lock),
 		overlapEvent: 'search_index_overlap_skipped',
 		notLeaderEvent: 'search_index_not_leader',
+		shouldRun: () => deps.search!.indexer.shouldRun(),
 		run: async ({ signal }) => {
 			await deps.search!.indexer.tick(signal);
 		},

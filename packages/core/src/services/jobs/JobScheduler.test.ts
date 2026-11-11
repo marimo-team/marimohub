@@ -123,6 +123,32 @@ describe('JobScheduler', () => {
 		await s.drain();
 	};
 
+	it('memoizes completed occurrences across the catch-up window without hiding the next occurrence', async () => {
+		await createJob({ schedule: { cron: '0 * * * *', timezone: 'UTC' } });
+		const clock = scheduler(fakeRunner(env));
+		expect((await clock.tick()).fired).toBe(1);
+		await settle(clock);
+		const claim = vi.spyOn(env.jobRuns, 'claimOccurrence');
+		const load = vi.spyOn(env.jobs, 'getJob');
+		for (let i = 0; i < 9; i++) {
+			now += MINUTE;
+			expect((await clock.tick()).fired).toBe(0);
+		}
+		expect(claim).not.toHaveBeenCalled();
+		expect(load).not.toHaveBeenCalled();
+		now = T0 + 60 * MINUTE;
+		expect((await clock.tick()).fired).toBe(1);
+		await settle(clock);
+	});
+
+	it('retries an occurrence after enqueue fails instead of memoizing its incomplete claim', async () => {
+		await createJob();
+		const clock = scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG });
+		vi.spyOn(env.jobRuns, 'enqueue').mockRejectedValueOnce(new Error('storage unavailable'));
+		expect(await clock.tick()).toMatchObject({ errors: 1, fired: 0 });
+		expect(await clock.tick()).toMatchObject({ errors: 0, repaired: 1 });
+	});
+
 	it('performs no per-job bucket operations when no indexed jobs are due', async () => {
 		for (let i = 0; i < 50; i++)
 			await createJob({ name: `idle-${i}`, schedule: { cron: '0 0 * * *', timezone: 'UTC' } });
@@ -968,6 +994,27 @@ describe('JobScheduler', () => {
 		expect(await s.tick()).toMatchObject({ fired: 3, errors: 0 });
 		expect(listActive).toHaveBeenCalledTimes(2);
 	});
+
+	it.each([false, true])(
+		'resumes bounded job retention and retries failures after wrapping (failure: %s)',
+		async (fails) => {
+			for (let i = 0; i < 129; i++) await createJob({ name: `job-${i}` });
+			const prune = vi.spyOn(env.jobRuns, 'pruneJob').mockImplementation(async () => {
+				if (fails) throw new Error('storage unavailable');
+				return 0;
+			});
+			await scheduler(fakeRunner(env)).prune(DAY);
+			expect(prune).toHaveBeenCalledTimes(128);
+			const first = new Set(prune.mock.calls.map(([job]) => job.id));
+			prune.mockClear();
+			await scheduler(fakeRunner(env)).prune(DAY);
+			expect(prune).toHaveBeenCalledOnce();
+			expect(first.has(prune.mock.calls[0][0].id)).toBe(false);
+			prune.mockClear();
+			await scheduler(fakeRunner(env)).prune(DAY);
+			expect(new Set(prune.mock.calls.map(([job]) => job.id))).toEqual(first);
+		},
+	);
 
 	it('prunes terminal runs past retention and stale markers', async () => {
 		const job = await createJob({ schedule: undefined });

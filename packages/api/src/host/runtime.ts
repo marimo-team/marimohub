@@ -4,6 +4,7 @@ import {
 	NotFoundError,
 	SandboxProvisioner,
 	SessionId,
+	recordSessionReconnect,
 	sessionConnectOptions,
 	sessionSandbox,
 	sessionPersistsEdits,
@@ -211,10 +212,12 @@ export async function callRuntime(
 	if (!session.sandbox_id) throw new UnavailableError('Notebook sandbox unavailable');
 	if (request.path === '/save' && session.ephemeral)
 		throw HostProblemError.forbidden('Temporary notebooks cannot be saved');
+	if (!keepAlive && deps.compute.connectExisting)
+		recordSessionReconnect(session, deps.metrics, 'host');
 	const sandbox =
 		!keepAlive && deps.compute.connectExisting
 			? deps.compute.connectExisting(session.sandbox_id, sessionConnectOptions(session))
-			: sessionSandbox(deps.compute, session);
+			: sessionSandbox(deps.compute, session, deps.metrics, 'host');
 	const workspaceDir = sessionWorkspaceDir(notebook.source, deps.sandbox.workdir);
 	const path = `${workspaceDir}/${workspaceSourcePolicy(notebook.source).entryNotebook}`;
 	const perform = async (activeSignal?: AbortSignal) => {

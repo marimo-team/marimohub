@@ -2826,6 +2826,7 @@ export interface components {
 					| 'PRECONDITION_FAILED'
 					| 'NOT_FOUND'
 					| 'CONFLICT'
+					| 'APP_ASSIGNMENT_EXPIRED'
 					| 'PREVIEW_NOT_READY'
 					| 'PROPOSAL_RETRY_REQUIRED'
 					| 'IMPORT_RESTART_REQUIRED'
@@ -3012,6 +3013,8 @@ export interface components {
 				max_page_size: number;
 			};
 			sandbox_images: string[];
+			/** @description Public HTTPS marimo asset base or version template, when configured. */
+			marimo_asset_url?: string;
 			sandbox_startup_timeout_seconds: number;
 			compute_profiles: (components['schemas']['ComputeResources'] & {
 				name: string;
@@ -18206,7 +18209,10 @@ export interface operations {
 	};
 	'sessions.get': {
 		parameters: {
-			query?: never;
+			query?: {
+				/** @description Wait up to this many seconds for a starting session to change status. */
+				wait?: number | null;
+			};
 			header?: never;
 			path: {
 				pid: string;

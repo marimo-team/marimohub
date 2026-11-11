@@ -8,6 +8,7 @@ export const DOMAIN_ERROR_CODES = [
 	'PRECONDITION_FAILED',
 	'NOT_FOUND',
 	'CONFLICT',
+	'APP_ASSIGNMENT_EXPIRED',
 	'PREVIEW_NOT_READY',
 	'PROPOSAL_RETRY_REQUIRED',
 	'IMPORT_RESTART_REQUIRED',
@@ -93,6 +94,15 @@ export class ConflictError extends DomainError {
 	constructor(message = 'Conflict', options?: ErrorOptions) {
 		super(message, options);
 		this.name = 'ConflictError';
+	}
+}
+
+export class AppAssignmentExpiredError extends DomainError {
+	readonly code = 'APP_ASSIGNMENT_EXPIRED';
+	readonly status = 409;
+	constructor() {
+		super('The app assignment expired. Open the app again.');
+		this.name = 'AppAssignmentExpiredError';
 	}
 }
 

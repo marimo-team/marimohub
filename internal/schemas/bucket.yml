@@ -3614,6 +3614,9 @@ components:
           type: string
           format: date-time
           pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z))$
+        catalog_fingerprint:
+          type: string
+          maxLength: 128
         partial:
           type: boolean
         documents:
@@ -3721,6 +3724,9 @@ components:
           type: string
           format: date-time
           pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z))$
+        catalog_fingerprint:
+          type: string
+          maxLength: 128
         partial:
           type: boolean
         documents:
@@ -3842,6 +3848,9 @@ components:
         ready:
           default: false
           type: boolean
+        catalog_fingerprint:
+          type: string
+          maxLength: 128
         schema_version:
           type: number
           const: 1
@@ -3884,6 +3893,15 @@ components:
     SearchCursor:
       type: object
       properties:
+        schedule:
+          type: string
+          maxLength: 64
+        next_run_at:
+          type: number
+          minimum: 0
+        round_started_at:
+          type: number
+          minimum: 0
         after:
           type: string
           maxLength: 1024
@@ -7350,6 +7368,8 @@ components:
           type: number
           const: 1
         deleted_at:
+          type: number
+        last_presence_write_at:
           type: number
         latest_version_id:
           type: string

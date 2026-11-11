@@ -15,6 +15,7 @@ import {
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core/ids';
+import { UnavailableError } from '@marimo-hub/core/errors';
 import type {
 	BoundedReadOptions,
 	ExecOptions,
@@ -364,6 +365,16 @@ export class CloudflareSandboxProvider implements SandboxProvider {
 			}),
 			this.useTunnel,
 		);
+	}
+
+	async destroyExisting(id: SandboxId): Promise<void> {
+		const sandbox = getSandbox(this.namespace, id);
+		// SDK destroy may run mount cleanup commands that wake a stopped container.
+		const signal = AbortSignal.timeout(10_000);
+		await waitWithSignal(sandbox.stop('SIGKILL'), signal);
+		const { status } = await waitWithSignal(sandbox.getState(), signal);
+		if (status !== 'stopped' && status !== 'stopped_with_code')
+			throw new UnavailableError('Sandbox shutdown is not yet confirmed');
 	}
 
 	async proxy(request: Request): Promise<Response | null> {

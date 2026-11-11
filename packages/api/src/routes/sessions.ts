@@ -32,6 +32,7 @@ import type {
 import {
 	previewAvailable,
 	AppPoolService,
+	AppAssignmentExpiredError,
 	sessionResourceNotebookId,
 	sessionResourcePath,
 	PREVIEW_IDLE_MS,
@@ -294,7 +295,18 @@ const getSession = createRoute({
 	operationId: 'sessions.get',
 	tags: ['Sessions'],
 	summary: 'Get a session (status + kernel URL)',
-	request: { params: SessionIdParam },
+	request: {
+		params: SessionIdParam,
+		query: z.object({
+			wait: z.coerce
+				.number()
+				.int()
+				.min(0)
+				.max(20)
+				.optional()
+				.describe('Wait up to this many seconds for a starting session to change status.'),
+		}),
+	},
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: SessionResponseSchema }),
@@ -702,7 +714,13 @@ const CAP_REACHED = {
 };
 
 /** App caps also apply per user so separate projects cannot bypass the cost limit. */
-function capsFor(deps: ApiDeps, mode: SessionMode, pid: ProjectId, userId: UserId) {
+function capsFor(
+	deps: ApiDeps,
+	mode: SessionMode,
+	pid: ProjectId,
+	userId: UserId,
+	onSource?: (source: 'scan' | 'index') => void,
+) {
 	const { sessions } = deps.services;
 	const maxSessions = deps.policy.maxConcurrentSessionsPerUser;
 	if (MODE_POLICY[mode].capScope === 'project') {
@@ -716,7 +734,7 @@ function capsFor(deps: ApiDeps, mode: SessionMode, pid: ProjectId, userId: UserI
 			{
 				max: maxSessions,
 				message: CAP_REACHED.appsPerUser,
-				queue: () => sessions.listActiveForUser(userId, 'project'),
+				queue: () => sessions.listActiveForUser(userId, 'project', onSource),
 				preflight: false,
 			},
 		];
@@ -725,7 +743,7 @@ function capsFor(deps: ApiDeps, mode: SessionMode, pid: ProjectId, userId: UserI
 		{
 			max: maxSessions,
 			message: CAP_REACHED.sessionsPerUser,
-			queue: () => sessions.listActiveForUser(userId),
+			queue: () => sessions.listActiveForUser(userId, 'user', onSource),
 			preflight: false,
 		},
 	];
@@ -782,8 +800,9 @@ async function assertCapAfterCreate(
 	userId: UserId,
 	sessionId: SessionId,
 	excludedSessionId?: SessionId,
+	onSource?: (source: 'scan' | 'index') => void,
 ): Promise<void> {
-	const caps = capsFor(deps, mode, pid, userId);
+	const caps = capsFor(deps, mode, pid, userId, onSource);
 	await checkCapQueues(caps, excludedSessionId, (cap) => {
 		const rank = cap.sessions.findIndex((session) => session.session_id === sessionId);
 		// Missing membership cannot prove admission: the index may have lost a live entry.
@@ -1027,11 +1046,12 @@ export async function loadAuthorizedSession(
 app.openapi(getSession, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
-	const { project, session, labels } = await loadAuthorizedSession(
-		deps,
-		user,
-		c.req.valid('param'),
-	);
+	let { project, session, labels } = await loadAuthorizedSession(deps, user, c.req.valid('param'));
+	const wait = c.req.valid('query').wait ?? 0;
+	if (wait > 0 && session.status === 'starting') {
+		await deps.services.sessions.waitForStartup(session, wait * 1000, c.req.raw.signal);
+		({ project, session, labels } = await loadAuthorizedSession(deps, user, c.req.valid('param')));
+	}
 	return c.json(
 		{
 			success: true,
@@ -1072,7 +1092,7 @@ async function inspectEditorActivity(deps: ApiDeps, session: Session) {
 	}
 	const basePath = localKernelBasePath(session);
 	const active = await kernelActiveConnections(
-		sessionSandbox(deps.compute, session),
+		sessionSandbox(deps.compute, session, deps.metrics, 'poll'),
 		basePath,
 	).catch((error: unknown) => {
 		if (error instanceof NotFoundError) return null;
@@ -1764,6 +1784,20 @@ async function startNotebookSessionOnce(
 	};
 	const reusableCandidate = mode === 'edit' ? editorReuse?.session : await reusableApp();
 	if (reusableCandidate) {
+		if (previewRecord) {
+			const current = await deps.services.previews.get(
+				pid,
+				previewRecord.notebook_id,
+				previewRecord.id,
+			);
+			if (
+				!previewAvailable(current) ||
+				!current.revisions.some(
+					(revision) => revision.notebook_id === nid && revision.state === 'ready',
+				)
+			)
+				throw new NotFoundError('Preview not found');
+		}
 		const [reusableTightened, reusableGrants] = await Promise.all([
 			tightenAuthorizationDeadline(reusableCandidate),
 			grants(reusableCandidate),
@@ -1870,6 +1904,10 @@ async function startNotebookSessionOnce(
 	let createdSession: KnownObject<Session> | undefined;
 	let sessionRecordAttempted = false;
 	let sandboxMayExist = false;
+	let workspaceStarted = false;
+	const deferBootForAdmission = capsFor(deps, mode, pid, user.id).some(
+		({ max }) => max !== undefined && max > 0,
+	);
 	const recordSandboxCleanup = async () => {
 		if (sessionRecordAttempted) {
 			await sessions.markSandboxReclaimed(pid, sessionId, new Date().toISOString(), sandboxId);
@@ -2140,11 +2178,7 @@ async function startNotebookSessionOnce(
 		await saga(observer)
 			.step('preview_admission', async () => {
 				if (!previewRecord) return;
-				const record = await deps.services.previews.get(
-					pid,
-					previewRecord.notebook_id,
-					previewRecord.id,
-				);
+				const record = previewRecord;
 				const reaped = await deps.services.previews.reapAdmissions(record, async (id) => {
 					try {
 						return !(await sessions.getSession(pid, id)).sandbox_reclaimed_at;
@@ -2184,7 +2218,7 @@ async function startNotebookSessionOnce(
 			})
 			.step('sandbox_boot', {
 				do: () => {
-					if (warmClaim) return;
+					if (warmClaim || deferBootForAdmission) return;
 					bootSandbox();
 				},
 				compensate: cleanupColdSandbox,
@@ -2271,6 +2305,7 @@ async function startNotebookSessionOnce(
 									user.id,
 									sessionId,
 									temporaryToRetire?.session_id,
+									(source) => observer.tag('cap_source', source),
 								),
 							),
 						preview: () =>
@@ -2297,8 +2332,18 @@ async function startNotebookSessionOnce(
 					if (session) await sessions.releaseEditorFor(session);
 				},
 			})
+			.step('admitted_sandbox_boot', {
+				do: () => {
+					if (!warmClaim && !bootedSandbox) {
+						bootSandbox();
+						prefetchWorkspace();
+					}
+				},
+				compensate: cleanupColdSandbox,
+			})
 			.step('sandbox_provision', {
 				do: async () => {
+					workspaceStarted = true;
 					try {
 						// `prepare` picks marimo's `--base-url`; `finalize` maps the adapter's
 						// exposed URL to the client URL + the origin to persist.
@@ -2497,7 +2542,20 @@ async function startNotebookSessionOnce(
 		await warmProbe?.catch(() => {});
 		await workspacePrefetch?.cancel();
 		if (warmClaim) {
-			await deps.warmPool!.abandon(warmClaim).catch(() => {});
+			let released = false;
+			if (
+				!workspaceStarted &&
+				(err instanceof ResourceExhaustedError || err instanceof EditorClaimLostError)
+			) {
+				try {
+					const relinquished =
+						!sessionRecordAttempted ||
+						(await sessions.relinquishStartingSandbox(pid, sessionId, sandboxId));
+					if (relinquished) released = await deps.warmPool!.releaseUnused(warmClaim);
+				} catch {}
+			}
+			if (released) sandboxMayExist = false;
+			else await deps.warmPool!.abandon(warmClaim).catch(() => {});
 		}
 		if (admission?.kind === 'reserve') {
 			// A failed session PUT may have committed; only release when it was never attempted.
@@ -2761,7 +2819,7 @@ app.openapi(heartbeatSession, async (c) => {
 				visit?.visit_id ? visit : undefined,
 			))
 		) {
-			throw new ConflictError('The app assignment expired. Open the app again.');
+			throw new AppAssignmentExpiredError();
 		}
 	}
 

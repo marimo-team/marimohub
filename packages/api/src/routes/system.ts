@@ -27,6 +27,7 @@ import {
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../pagination';
 import { surfaceCapabilities } from './sessionSurfaces';
 import { chatAvailable } from '../chat/access';
+import { publicMarimoAssetUrl } from '../marimoAssets';
 
 /**
  * System routes: current user (`/api/v1/me`), deployment metadata (`/api/v1/version`),
@@ -204,6 +205,7 @@ app.openapi(capabilitiesRoute, (c) => {
 			max_page_size: MAX_PAGE_SIZE,
 		},
 		sandbox_images: deps.sandbox.images ?? [],
+		marimo_asset_url: publicMarimoAssetUrl(deps.sandbox.assetUrl),
 		sandbox_startup_timeout_seconds: Millis.toSeconds(
 			deps.sandbox.startupTimeoutMs ?? DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
 		),

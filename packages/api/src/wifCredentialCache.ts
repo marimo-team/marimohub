@@ -10,6 +10,8 @@ type DatedCreds = TempS3Creds & { expiration: string };
 interface CacheEntry {
 	creds: Promise<TempS3Creds>;
 	reuseUntil: number;
+	expiresAt: number;
+	refresh?: Promise<TempS3Creds>;
 }
 
 export class WifCredentialCache {
@@ -31,20 +33,42 @@ export class WifCredentialCache {
 		return this.load(key, exchange) as Promise<DatedCreds>;
 	}
 
-	getShared(key: string, exchange: () => Promise<TempS3Creds>): Promise<TempS3Creds> {
-		return this.load(`shared\0${key}`, exchange, true);
+	getShared(
+		key: string,
+		exchange: () => Promise<TempS3Creds>,
+		minimumReuseLifetimeMs = 0,
+	): Promise<TempS3Creds> {
+		if (!Number.isFinite(minimumReuseLifetimeMs) || minimumReuseLifetimeMs < 0)
+			throw new RangeError('Minimum credential reuse lifetime must be finite and nonnegative');
+		return this.load(`shared\0${key}`, exchange, true, minimumReuseLifetimeMs);
 	}
 
 	private load(
 		key: string,
 		exchange: () => Promise<TempS3Creds>,
 		allowUndated = false,
+		minimumReuseLifetimeMs = 0,
+		refreshFrom?: CacheEntry,
 	): Promise<TempS3Creds> {
+		if (refreshFrom?.refresh)
+			return refreshFrom.refresh.then((creds) => {
+				if (creds.expiration !== undefined && Date.parse(creds.expiration) <= this.now())
+					throw new UnavailableError('WIF credentials require a valid future expiration');
+				return creds;
+			});
 		const hit = this.entries.get(key);
-		if (hit && hit.reuseUntil > this.now()) return hit.creds;
+		const now = this.now();
+		if (hit && hit.reuseUntil > now && hit.expiresAt - now >= minimumReuseLifetimeMs) {
+			if (minimumReuseLifetimeMs === 0) return hit.creds;
+			return hit.creds.then((creds) => {
+				if (hit.expiresAt - this.now() >= minimumReuseLifetimeMs) return creds;
+				return this.load(key, exchange, allowUndated, minimumReuseLifetimeMs, refreshFrom ?? hit);
+			});
+		}
 		const entry: CacheEntry = {
 			// Pending exchanges coalesce even if the broker is slow.
 			reuseUntil: Infinity,
+			expiresAt: Infinity,
 			creds: Promise.resolve()
 				.then(exchange)
 				.then((creds) => {
@@ -60,12 +84,15 @@ export class WifCredentialCache {
 					}
 					const margin = Math.min(REFRESH_MARGIN_MS, remaining / 2);
 					entry.reuseUntil = expiresAt - margin;
+					entry.expiresAt = expiresAt;
 					return { ...creds, expiration: new Date(expiresAt).toISOString() };
 				}),
 		};
 		entry.creds.catch(() => {
 			if (this.entries.peek(key) === entry) this.entries.delete(key);
 		});
+		// Concurrent waiters share one fresh attempt, even if its issued lifetime is shorter.
+		if (refreshFrom) refreshFrom.refresh = entry.creds;
 		this.entries.set(key, entry);
 		return entry.creds;
 	}

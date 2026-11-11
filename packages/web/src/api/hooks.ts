@@ -1,3 +1,4 @@
+import { retrySessionAdmission } from './sessionRetry';
 import type { MemberSelector } from '@marimo-hub/core/identity-match';
 import { MAX_RESOLVED_USERS } from '@marimo-hub/core/constants';
 import {
@@ -2251,6 +2252,7 @@ function startSessionRequest(
 	computeProfile?: 'default',
 	editIntent?: 'temporary',
 	appVisitId?: string,
+	signal?: AbortSignal,
 ) {
 	const params = { path: { pid: projectId, nid: notebookId } };
 	const body = {
@@ -2259,16 +2261,13 @@ function startSessionRequest(
 		...(editIntent ? { edit_intent: editIntent } : {}),
 	};
 	return apiData(
-		Object.keys(body).length > 0
-			? apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions', {
-					params,
-					body,
-					timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
-				})
-			: apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions', {
-					params,
-					timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
-				}),
+		apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions', {
+			params,
+			...(Object.keys(body).length > 0 ? { body } : {}),
+			// A late app response supplies the assignment needed to release an abandoned visit.
+			signal: mode === 'app' ? undefined : signal,
+			timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
+		}),
 	);
 }
 
@@ -2299,14 +2298,19 @@ function useStartSessionRequest(
 	editIntent?: 'temporary',
 ) {
 	return useApiMutation(
-		(visitId: string | void) =>
-			startSessionRequest(
-				projectId,
-				notebookId,
-				mode,
-				computeProfile,
-				editIntent,
-				visitId ?? undefined,
+		(options: { visitId?: string; signal?: AbortSignal } | void) =>
+			retrySessionAdmission(
+				() =>
+					startSessionRequest(
+						projectId,
+						notebookId,
+						mode,
+						computeProfile,
+						editIntent,
+						options?.visitId,
+						options?.signal,
+					),
+				options?.signal,
 			),
 		() => (mode === 'app' ? [] : [sessionKeys.listByProject(projectId)]),
 		{ suppressErrorToast: true },

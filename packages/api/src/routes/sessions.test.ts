@@ -862,7 +862,7 @@ describe('Session routes', () => {
 		]);
 	});
 
-	it('settles concurrent admission and preserves cap precedence before reclaiming a speculative boot', async () => {
+	it('settles concurrent admission and preserves cap precedence without booting a rejected sandbox', async () => {
 		const fake = makeFakeSandbox();
 		const ready = Promise.withResolvers<void>();
 		fake.instance.ready = () => ready.promise;
@@ -896,7 +896,7 @@ describe('Session routes', () => {
 		ready.resolve();
 		const error = await expectError(await request, 429, 'RESOURCE_EXHAUSTED');
 		expect(error.message).toBe('cap wins');
-		expect(fake.calls.destroy).toBe(1);
+		expect(fake.calls.destroy).toBe(0);
 		expect(fake.calls.writeFiles).toEqual([]);
 		expect(fake.calls.setEnvVars).toEqual([]);
 		expect(await sessions.listSessions(nid)).toMatchObject([
@@ -904,7 +904,7 @@ describe('Session routes', () => {
 		]);
 	});
 
-	it('returns a rejected start before its speculative boot is ready when cleanup can be deferred', async () => {
+	it('rejects capped admission without starting deferred sandbox cleanup', async () => {
 		const fake = makeFakeSandbox();
 		const ready = Promise.withResolvers<void>();
 		fake.instance.ready = () => ready.promise;
@@ -924,15 +924,15 @@ describe('Session routes', () => {
 		try {
 			await expectError(await api.request('POST', sessionsPath()), 429, 'RESOURCE_EXHAUSTED');
 			expect(fake.calls.destroy).toBe(0);
-			expect(background.labels).toContain('session.cold_boot_cleanup');
+			expect(background.labels).not.toContain('session.cold_boot_cleanup');
 			const [rejected] = await sessions.listSessions(nid);
 			expect(rejected.status).toBe('failed');
-			expect(rejected.sandbox_reclaimed_at).toBeUndefined();
+			expect(rejected.sandbox_reclaimed_at).toEqual(expect.any(String));
 		} finally {
 			ready.resolve();
 		}
 		await background.runAll();
-		expect(fake.calls.destroy).toBe(1);
+		expect(fake.calls.destroy).toBe(0);
 		expect(await sessions.listSessions(nid)).toMatchObject([
 			{ status: 'failed', sandbox_reclaimed_at: expect.any(String) },
 		]);
@@ -3995,7 +3995,7 @@ describe('Session routes', () => {
 	});
 
 	it.each(['admit', 'reject', 'scan-failed'] as const)(
-		'boots before a slow deployment-wide cap scan completes (%s)',
+		'waits for a slow cap scan before booting (%s)',
 		async (outcome) => {
 			const fake = makeFakeSandbox();
 			const ready = vi.fn(async () => {});
@@ -4011,7 +4011,7 @@ describe('Session routes', () => {
 			const scan = vi
 				.spyOn(sessions, 'listActiveForUser')
 				.mockImplementationOnce(async (...args) => {
-					expect(ready).toHaveBeenCalledOnce();
+					expect(ready).not.toHaveBeenCalled();
 					await scanned.promise;
 					if (outcome === 'reject') throw new ResourceExhaustedError('cap reached');
 					if (outcome === 'scan-failed') throw new Error('session scan unavailable');
@@ -4020,19 +4020,20 @@ describe('Session routes', () => {
 			const request = api.request('POST', sessionsPath());
 			try {
 				await vi.waitFor(() => expect(scan).toHaveBeenCalledOnce());
-				expect(ready).toHaveBeenCalledOnce();
+				expect(ready).not.toHaveBeenCalled();
 				expect(fake.calls.startProcess).toEqual([]);
 			} finally {
 				scanned.resolve();
 			}
 			if (outcome !== 'admit') {
 				await expectError(await request, outcome === 'reject' ? 429 : 500);
-				expect(fake.calls.destroy).toBe(1);
+				expect(fake.calls.destroy).toBe(0);
 				expect(await sessions.listSessions(nid)).toMatchObject([
 					{ status: 'failed', sandbox_reclaimed_at: expect.any(String) },
 				]);
 			} else {
 				await expectOk(await request);
+				expect(ready).toHaveBeenCalledOnce();
 				expect(fake.calls.destroy).toBe(0);
 			}
 			expect(scan).toHaveBeenCalledOnce();
@@ -4105,7 +4106,7 @@ describe('Session routes', () => {
 			// A 429 carries a backoff hint so the client doesn't have to guess.
 			expect(capRes.headers.get('Retry-After')).toBe('5');
 
-			expect(create).toHaveBeenCalledTimes(2);
+			expect(create).toHaveBeenCalledTimes(1);
 			expect(await createServices(bucket).sessions.listSessions(nid)).toHaveLength(1);
 			expect(
 				await createServices(bucket).sessions.listSessions(otherNb.id as NotebookId),
@@ -4256,7 +4257,7 @@ describe('Session routes', () => {
 			}
 
 			await expectError(await api.request('POST', sessionsPath(), { mode: 'app' }), 500);
-			expect(provision).toHaveBeenCalledOnce();
+			expect(provision).not.toHaveBeenCalled();
 			const rejected = await sessions.listSessions(nid);
 			expect(rejected).toHaveLength(1);
 			expect(rejected[0].status).toBe('failed');

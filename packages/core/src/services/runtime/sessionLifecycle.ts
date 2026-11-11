@@ -134,7 +134,7 @@ export class SessionLifecycleService {
 			try {
 				const sandbox =
 					s.status === 'running'
-						? sessionSandbox(this.compute, s)
+						? sessionSandbox(this.compute, s, this.cfg.metrics, 'poll')
 						: s.status === 'expired' && !isPastAuthorizationDeadline(s, now)
 							? this.compute.connectExisting?.(s.sandbox_id!, sessionConnectOptions(s))
 							: undefined;
@@ -268,7 +268,7 @@ export class SessionLifecycleService {
 							s.user_id,
 							this.cfg.persistWorkspace,
 							this.cfg.workdir,
-							{ includeWorkspace: false },
+							{ includeWorkspace: false, sandboxId: s.sandbox_id },
 						)
 						.catch(() => null); // failed save: retry next sweep
 					if (saved !== null) {

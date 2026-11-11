@@ -62,13 +62,21 @@ Ordinary workspaces use bounded file batches. Existing synced archives, snapshot
 | `reconnect_by_lookup`    | Lookup-based reconnect attempts, including process-cache lookups                |
 | `execs`                  | Blocking `exec` and `execInput` calls                                           |
 | `file_writes`            | SDK file writes, including retries                                              |
-| `file_write_waves`       | Unary waves or packed batches, including packed retries                         |
+| `file_write_waves`       | Unary dispatch waves or packed pipelines per call, plus packed retries          |
 | `env_writes`             | Private environment-file writes                                                 |
 | `stream_execs`           | All command streams, including environment writes, packed transfers, and launch |
 | `status_polls`           | Readiness status requests                                                       |
 
 `drainTimings()` reports the first data-plane call duration once per instance as `first_dataplane`.
 The session event uses `provision_first_dataplane_ms`.
+
+`file_write_waves` counts one initial packed pipeline per `writeFiles` call, even when that call sends multiple packed batches. Each retried packed stream adds one. Unary transfers count dispatch waves.
+This counter measures neither packed batch count nor serial startup phases.
+`file_writes` counts unary SDK calls and their retries; successful packed transfers leave it at zero.
+Interpret these counters with the transfer mode and startup phase durations. `stream_execs` also includes environment writes and launch commands.
+
+Readiness polling uses 250 ms intervals for the first five seconds, then 500 ms until 15 seconds, then one second.
+Transient failures retain their separate exponential backoff and overall timeout.
 Kubernetes reports applicable counters but omits `file_writes` because it uses exec for file transfers.
 
 When files share a transfer, `files`, `inject_files`, and `bridge_prepare` durations overlap.
@@ -86,7 +94,7 @@ hub cannot reach the runner direct endpoints, and `direct` once it can.
 
 ## Sandbox resolution
 
-A new sandbox is polled every 250 ms, for up to 60 s. The wait ends on the first poll that
+A new sandbox uses the phased readiness polling schedule above, for up to 60 s. The wait ends on the first poll that
 reports one of these statuses:
 
 - `running` or `paused`: the sandbox is ready.

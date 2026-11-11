@@ -1,3 +1,8 @@
+import {
+	readRetentionCursor,
+	writeRetentionCursor,
+	retentionBatch,
+} from '../catalog/retentionCursor';
 import { BoundedLruMap } from '../../cache';
 import type { PromiseMemo } from '../../cache';
 import { z } from 'zod';
@@ -114,7 +119,7 @@ const NotebookGcCursorSchema = z.object({
 	after: z.string(),
 	next_at: z.number(),
 });
-const GC_CYCLES_PER_DAY = 288;
+const GC_CYCLES_PER_DAY = 24;
 
 type SessionArtifact = {
 	key: string;
@@ -202,6 +207,22 @@ export class NotebookService {
 
 	private readonly metaCache: MetadataCache<NotebookMeta>;
 	private readonly sourceCache: MetadataCache<Source>;
+	private readonly versionContents = new BoundedLruMap<string, { code: string; deps: string }>(128);
+
+	private async readVersionContents(key: string, depsKey: string) {
+		const cached = this.versionContents.get(key);
+		if (cached) return { ...cached, complete: true };
+		const [codeObject, depsObject] = await Promise.all([
+			this.bucket.get(key),
+			this.bucket.get(depsKey),
+		]);
+		const code = codeObject ? decodeUtf8PreservingBom(await codeObject.bytes()) : undefined;
+		const deps = depsObject ? await depsObject.text() : '';
+		// Version payloads are immutable. Bound retained strings to 16 MiB per service.
+		if (code !== undefined && depsObject && (code.length + deps.length) * 2 <= 128 * 1024)
+			this.versionContents.set(key, { code, deps });
+		return { code, deps, complete: code !== undefined && !!depsObject };
+	}
 
 	readonly synced: SyncedNotebookService;
 	readonly thumbnails: ThumbnailService;
@@ -262,12 +283,19 @@ export class NotebookService {
 		workspaceLimits?: WorkspaceLimits,
 		private backgroundWork?: BackgroundWork,
 	) {
-		this.metaCache = new MetadataCache(bucket, NOTEBOOK_META_CACHE_MAX_ENTRIES, undefined, metrics);
+		this.metaCache = new MetadataCache(
+			bucket,
+			NOTEBOOK_META_CACHE_MAX_ENTRIES,
+			undefined,
+			metrics,
+			{ cache: 'notebook', service: 'NotebookService' },
+		);
 		this.sourceCache = new MetadataCache(
 			bucket,
 			NOTEBOOK_META_CACHE_MAX_ENTRIES,
 			undefined,
 			metrics,
+			{ cache: 'source', service: 'NotebookService' },
 		);
 		this.thumbnails = new ThumbnailService(bucket, this);
 		this.imports = new NotebookImportService(bucket, this);
@@ -953,6 +981,7 @@ export class NotebookService {
 		actor: UserId,
 		expectedVersion?: string,
 		assertWritable?: () => Promise<void>,
+		forceVersion = false,
 	): Promise<NotebookMeta> {
 		const { meta: existing, source } = detail;
 		// Preserve stale If-Match precedence for remote-source content updates; the CAS
@@ -965,6 +994,38 @@ export class NotebookService {
 			await this.assertSourceUpdateAllowed(projectId, notebookId);
 
 		const nb = paths.project(projectId).notebook(notebookId);
+		const [codeChanged, depsChanged, readmeChanged] = await Promise.all([
+			input.code !== undefined
+				? this.getContentForSource(projectId, notebookId, source).then(
+						(code) => forceVersion || input.code !== code,
+					)
+				: false,
+			input.deps !== undefined
+				? this.resolveDeps(nb.deps, undefined).then((deps) => input.deps !== deps)
+				: false,
+			input.readme !== undefined
+				? this.bucket
+						.get(nb.readme)
+						.then(async (object) => input.readme !== (object ? await object.text() : ''))
+				: false,
+		]);
+		let sourceChanged = codeChanged || depsChanged;
+		if (
+			source.type === 'local' &&
+			(input.code !== undefined || input.deps !== undefined) &&
+			!sourceChanged
+		) {
+			const version = nb.version(source.current_version_id);
+			const [stored, versionMeta, code, deps] = await Promise.all([
+				this.readVersionContents(version.code, version.deps),
+				this.bucket.head(version.meta),
+				input.code ?? this.getContentForSource(projectId, notebookId, source),
+				this.resolveDeps(nb.deps, input.deps),
+			]);
+			// Equal workspace files can survive a partially failed version publication.
+			sourceChanged =
+				!versionMeta || !stored.complete || stored.code !== code || stored.deps !== deps;
+		}
 		await assertWritable?.();
 		const updated = await mutateObject(
 			this.bucket,
@@ -976,7 +1037,7 @@ export class NotebookService {
 				if (current.status === 'deleted') {
 					throw new NotFoundError(`Notebook ${notebookId} not found`);
 				}
-				return {
+				const next = {
 					...current,
 					title: input.title ?? current.title,
 					description: input.description ?? current.description,
@@ -993,6 +1054,11 @@ export class NotebookService {
 						input.app_compute_profile === null
 							? undefined
 							: (input.app_compute_profile ?? current.app_compute_profile),
+				};
+				const metadataChanged = JSON.stringify(next) !== JSON.stringify(current);
+				if (!metadataChanged && !sourceChanged && !readmeChanged) return null;
+				return {
+					...next,
 					updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),
 				};
 			},
@@ -1000,16 +1066,12 @@ export class NotebookService {
 		);
 		const now = updated.updated_at;
 
-		if (input.readme !== undefined) {
+		if (input.readme !== undefined && readmeChanged) {
 			await assertWritable?.();
 			await this.bucket.put(nb.readme, input.readme);
 		}
 
-		const depsChanged =
-			input.code === undefined &&
-			input.deps !== undefined &&
-			input.deps !== (await this.resolveDeps(nb.deps, undefined));
-		if ((input.code !== undefined || depsChanged) && source.type === 'local') {
+		if (sourceChanged && source.type === 'local') {
 			const code = input.code ?? (await this.getContentForSource(projectId, notebookId, source));
 			const versionId = createVersionId();
 
@@ -1079,12 +1141,17 @@ export class NotebookService {
 
 		const code = codeObj ? decodeUtf8PreservingBom(await codeObj.bytes()) : '';
 		const deps = depsObj ? await depsObj.text() : undefined;
-		return this.updateNotebook(
-			projectId,
-			notebookId,
-			{ code, deps, message: `Restore version ${versionId}` },
-			actor,
-			detail.meta.updated_at,
+		return this.workspace.withMutation(projectId, notebookId, {}, (lease) =>
+			this.updateNotebookFrom(
+				detail,
+				projectId,
+				notebookId,
+				{ code, deps, message: `Restore version ${versionId}` },
+				actor,
+				detail.meta.updated_at,
+				lease.heartbeat,
+				true,
+			),
 		);
 	}
 
@@ -1132,12 +1199,10 @@ export class NotebookService {
 		// Compare against the CURRENT version's stored code+deps to decide whether the
 		// session actually changed anything. If not, reuse it (no spurious version).
 		const current = nb.version(source.current_version_id);
-		const [curCodeObj, curDepsObj] = await Promise.all([
-			this.bucket.get(current.code),
-			this.bucket.get(current.deps),
-		]);
-		const curCode = curCodeObj ? decodeUtf8PreservingBom(await curCodeObj.bytes()) : undefined;
-		const curDeps = curDepsObj ? await curDepsObj.text() : '';
+		const { code: curCode, deps: curDeps } = await this.readVersionContents(
+			current.code,
+			current.deps,
+		);
 		const changed = input.code !== curCode || deps !== curDeps;
 
 		const versionId = changed ? createVersionId() : source.current_version_id;
@@ -1219,6 +1284,10 @@ export class NotebookService {
 					)
 				).filter((update) => update !== undefined);
 				const uploads = updates.filter((update) => update.write).map((update) => update.artifact);
+				this.metrics.increment(
+					'notebook.artifact_uploads_skipped',
+					artifacts.length - uploads.length,
+				);
 				await Promise.all(uploads.map((artifact) => this.writeArtifact(artifact)));
 				const descriptors = artifactDescriptors(updates.map((update) => update.artifact));
 				// CAS the descriptor patch so two concurrent teardowns of the same
@@ -1647,8 +1716,7 @@ export class NotebookService {
 	 * needs for soft-deleted notebooks past their grace period.
 	 *
 	 * Refuses unless the notebook is soft-deleted (`status === 'deleted'`) so a
-	 * live notebook can never be hard-deleted by mistake. Not wired to any route
-	 * or cron here — callers (a future GC sweep) own the orchestration.
+	 * live notebook can never be hard-deleted by mistake.
 	 */
 	async hardDeleteNotebook(projectId: ProjectId, notebookId: NotebookId): Promise<void> {
 		const metaKey = paths.project(projectId).notebook(notebookId).meta;
@@ -1723,6 +1791,9 @@ export class NotebookService {
 			notebooks.findIndex((notebook) => notebook.key > (cursor?.after ?? '')),
 		);
 		const batch = notebooks.slice(start, start + batchSize);
+		this.metrics.gauge('notebook_gc.rotation.total', notebooks.length);
+		this.metrics.gauge('notebook_gc.rotation.position', start + batch.length);
+		this.metrics.increment('notebook_gc.visited', batch.length);
 		await mapWithConcurrency(batch, BUCKET_SCAN_CONCURRENCY, async ({ projectId, notebookId }) => {
 			await this.workspace.sweepUploads(projectId, notebookId).catch((error) => {
 				logOperationalError(
@@ -1745,8 +1816,8 @@ export class NotebookService {
 				JSON.stringify({
 					after: batch.at(-1)!.key,
 					next_at:
-						Math.max(cursor?.next_at ?? now, now - Millis.minutes(5)) +
-						(Millis.days(1) * batch.length) / notebooks.length,
+						Math.max(cursor?.next_at ?? now, now - Millis.hours(1)) +
+						Millis.days(1) / Math.ceil(notebooks.length / batchSize),
 				}),
 				cursorObject ? { onlyIfEtagMatches: cursorObject.etag } : { onlyIfNotExists: true },
 			);
@@ -1766,7 +1837,7 @@ export class NotebookService {
 	 * subtree wipe removes it.
 	 *
 	 * Notebooks under a soft-deleted project are skipped — `sweepDeletedProjects`
-	 * reclaims that whole subtree in one shot, so run it first. `notebook_count`
+	 * reclaims that whole subtree, so run it first. `notebook_count`
 	 * was already decremented at soft-delete time, so it is left untouched here.
 	 */
 	async sweepDeletedNotebooks(
@@ -1803,41 +1874,50 @@ export class NotebookService {
 		if (stale.length === 0) return { purged: 0, orphanedSnapshots: [] };
 
 		const orphanedSnapshots: FsSnapshot[] = [];
-		for (const { projectId, notebookId } of stale) {
-			// Read the snapshot pointer before the subtree wipe destroys the sidecar.
-			const fs = await this.getFsSnapshot(projectId, notebookId);
-			if (fs) orphanedSnapshots.push(fs);
-			await this.hardDeleteNotebook(projectId, notebookId);
+		const deadline = Date.now() + Millis.minutes(5);
+		const cursorKey = '_system/notebook-purge-cursor.json';
+		const cursor = await readRetentionCursor(this.bucket, cursorKey);
+		let after = cursor.after;
+		let purged = 0;
+		for (const { projectId, notebookId, key } of retentionBatch(
+			stale.map((item) => ({ ...item, key: `${item.projectId}/${item.notebookId}` })),
+			cursor.after,
+			25,
+		)) {
+			if (Date.now() >= deadline) break;
+			try {
+				const fs = await this.getFsSnapshot(projectId, notebookId);
+				await this.hardDeleteNotebook(projectId, notebookId);
+				if (fs) orphanedSnapshots.push(fs);
+				// Commit each deletion so a later failure cannot replay the whole backlog.
+				await this.catalog.mutateSnapshot(
+					'notebook.gc',
+					SYSTEM_ACTOR,
+					(snap: Snapshot) => ({
+						...snap,
+						projects: snap.projects.map((project) =>
+							project.id === projectId
+								? {
+										...project,
+										notebooks: project.notebooks.filter((notebook) => notebook.id !== notebookId),
+									}
+								: project,
+						),
+					}),
+					{ notebooks: [{ project_id: projectId, notebook_id: notebookId }] },
+				);
+				purged++;
+			} catch (error) {
+				logOperationalError(
+					'notebook.gc.failed',
+					{ project_id: projectId, notebook_id: notebookId },
+					error,
+				);
+			}
+			after = key;
 		}
-
-		// Drop the swept notebook entries from their projects. Group by project so a
-		// project with multiple purged notebooks is rewritten once.
-		const dropByProject = new Map<ProjectId, Set<NotebookId>>();
-		for (const { projectId, notebookId } of stale) {
-			const set = dropByProject.get(projectId) ?? new Set<NotebookId>();
-			set.add(notebookId);
-			dropByProject.set(projectId, set);
-		}
-		await this.catalog.mutateSnapshot(
-			'notebook.gc',
-			SYSTEM_ACTOR,
-			(snap: Snapshot) => ({
-				...snap,
-				projects: snap.projects.map((p) => {
-					const drop = dropByProject.get(p.id);
-					if (!drop) return p;
-					return { ...p, notebooks: p.notebooks.filter((n) => !drop.has(n.id)) };
-				}),
-			}),
-			{
-				notebooks: stale.map(({ projectId, notebookId }) => ({
-					project_id: projectId,
-					notebook_id: notebookId,
-				})),
-			},
-		);
-
-		return { purged: stale.length, orphanedSnapshots };
+		await writeRetentionCursor(this.bucket, cursorKey, after, cursor.etag);
+		return { purged, orphanedSnapshots };
 	}
 }
 

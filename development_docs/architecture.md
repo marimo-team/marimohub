@@ -186,7 +186,8 @@ teardown:  read notebook back → cut a new version (if code changed)
            into that version → destroy sandbox
 ```
 
-Boot or a warm probe overlaps session publication and admission.
+A warm probe overlaps session publication and admission. Cold boot waits for admission when a session cap applies.
+Uncapped starts can overlap cold boot with publication and admission.
 A single user cap scan runs after publication so it can rank concurrent starts.
 The scan, preview commit, and editor claim run concurrently. Cap errors take precedence.
 Workspace writes and credential injection wait for admission and [warm handoff](./warm_pools.md#ownership-and-lifecycle).
@@ -200,6 +201,12 @@ Object restores prefetch one batch during each write, within the shared byte bud
 Writes containing overlays stay sequential. If the budget is full, reads run sequentially.
 Packed archives and mounts do not use batch prefetch.
 Failed restores drain pending reads and writes. Cold cleanup cancels prefetch before sandbox destruction.
+
+Periodic saves use bounded sandbox commands to collect artifact sizes and SHA-256 hashes.
+Only changed artifacts require a file read. A successful save caches up to 128 sandbox captures within a 64 MiB budget.
+Reused artifacts are probed again before commit; a changed or failed probe falls back to bounded reads.
+Unchanged captures still commit cached contents to repair missing artifacts and descriptors.
+Failed probes use the bounded read path. Failed commits and mismatched probe hashes do not advance the cache.
 
 Persistent editors publish under the source lease and heartbeat it before they proceed.
 Heartbeat and release reuse the acquired ETag. On Node, session starts defer release to background work.

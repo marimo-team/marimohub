@@ -301,7 +301,7 @@ describe('Git sync routes', () => {
 
 		await expectOk(await syncRequest({ notebookId, headers: requiredHeaders(syncToken) }));
 		expect(projectLookup).not.toHaveBeenCalled();
-		expect(notebookLookup).toHaveBeenCalledOnce();
+		expect(notebookLookup).toHaveBeenCalledTimes(2);
 	});
 
 	it("rejects a valid sync token used against a DIFFERENT notebook's path (401 IDOR)", async () => {

@@ -64,3 +64,10 @@ export function requireHttpsUrl(value: string, label: string): string {
 	if (!parsed.ok) throw new Error(`Invalid ${label}`);
 	return value;
 }
+
+/** Asset bases sent to browsers must not expose credentials, query tokens, or fragments. */
+export function parseAssetBaseUrl(value: string | undefined): URL | undefined {
+	if (!value) return undefined;
+	const parsed = parseHttpUrl(value, { protocols: ['https:'] });
+	return parsed.ok && !parsed.url.search && !parsed.url.hash ? parsed.url : undefined;
+}

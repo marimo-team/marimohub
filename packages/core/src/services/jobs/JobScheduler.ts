@@ -1,3 +1,4 @@
+import { BoundedLruMap } from '../../cache';
 import { PromiseMemo } from '../../async';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
@@ -14,6 +15,7 @@ import { notificationRouter } from '../../notifications';
 import type { JobDefinition, JobRun, SnapshotJobEntry } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import type { EventService } from '../catalog/EventService';
+import { retentionBatch } from '../catalog/retentionCursor';
 import type { NotebookService } from '../content/NotebookService';
 import type { ProjectService } from '../content/ProjectService';
 import { occurrenceKey, parseCron, previousOccurrence } from './cron';
@@ -154,6 +156,7 @@ export function admit(
 export class JobScheduler {
 	private readonly inFlight = new InFlightWork();
 	private readonly executing = new Map<RunId, LocalExecution>();
+	private readonly completedOccurrences = new BoundedLruMap<string, number>(10_000);
 	private readonly metrics: Metrics;
 	private readonly now: () => number;
 
@@ -195,13 +198,13 @@ export class JobScheduler {
 			4,
 			async ({ projectId, notebookId, entry }) => {
 				try {
-					if (
-						this.dueOccurrence(
-							{ ...entry, project_id: projectId, notebook_id: notebookId },
-							now,
-						) === null
-					)
-						return;
+					const occurrence = this.dueOccurrence(
+						{ ...entry, project_id: projectId, notebook_id: notebookId },
+						now,
+					);
+					if (occurrence === null) return;
+					const occurrenceId = `${projectId}/${notebookId}/${entry.id}/${occurrence}`;
+					if (this.completedOccurrences.has(occurrenceId)) return;
 					const jobKey = `${projectId}:${entry.id}`;
 					const fired = await this.fire(
 						projectId,
@@ -211,6 +214,7 @@ export class JobScheduler {
 						activeJobs.has(jobKey),
 						fireReads,
 					);
+					if (fired !== 'none') this.completedOccurrences.set(occurrenceId, occurrence);
 					if (fired === 'fired') result.fired++;
 					else if (fired === 'repaired') result.repaired++;
 					else if (fired === 'skipped') result.skipped++;
@@ -350,7 +354,7 @@ export class JobScheduler {
 		now: number,
 		hasActive: boolean,
 		cache: PromiseMemo,
-	): Promise<'fired' | 'repaired' | 'skipped' | 'none'> {
+	): Promise<'fired' | 'repaired' | 'skipped' | 'existing' | 'none'> {
 		const jobId = entry.id;
 		const jobRef = { project_id: projectId, notebook_id: notebookId, id: jobId };
 		return this.deps.runs.withJobMutation(jobRef, async () => {
@@ -383,7 +387,7 @@ export class JobScheduler {
 				!claim.claimed &&
 				(await this.deps.runs.runExists(projectId, notebookId, jobId, claimedRunId))
 			) {
-				return 'none';
+				return 'existing';
 			}
 			const claimedOutcome = claim.claimed ? outcome : (claim.existing?.outcome ?? 'run');
 			if (claimedOutcome === 'skip') {
@@ -669,13 +673,22 @@ export class JobScheduler {
 		const now = this.now();
 		const snapshot = await this.deps.catalog.getCurrentSnapshot();
 		let runsPruned = 0;
-		for (const { projectId, notebookId, entry } of indexedJobs(snapshot)) {
+		const cursor = await this.deps.runs.readPruneCursor();
+		const jobs = [...indexedJobs(snapshot)].map((job) => ({
+			...job,
+			key: `${job.projectId}/${job.notebookId}/${job.entry.id}`,
+		}));
+		const deadline = Date.now() + Millis.minutes(5);
+		let after = cursor.after;
+		for (const { projectId, notebookId, entry, key } of retentionBatch(jobs, cursor.after, 128)) {
+			if (Date.now() >= deadline) break;
 			try {
 				runsPruned += await this.deps.runs.pruneJob(
 					{ project_id: projectId, notebook_id: notebookId, id: entry.id },
 					retentionMs,
 					now,
 					Math.max(retentionMs, Number(this.deps.config.catchupWindowMs)),
+					100,
 				);
 			} catch (err) {
 				logOperationalError(
@@ -689,7 +702,9 @@ export class JobScheduler {
 					err,
 				);
 			}
+			after = key;
 		}
+		await this.deps.runs.writePruneCursor(after, cursor.etag);
 		const markersPruned = await this.deps.runs.pruneStaleMarkers(now);
 		return { runsPruned, markersPruned };
 	}

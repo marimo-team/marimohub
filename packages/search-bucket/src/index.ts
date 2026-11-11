@@ -1,3 +1,6 @@
+import { sleep } from '@marimo-hub/core/duration';
+import type { Metrics } from '@marimo-hub/core/ports/metrics';
+import { noopMetrics } from '@marimo-hub/core/ports/metrics';
 import {
 	canClaimSearchBuild,
 	sameSearchBuild,
@@ -42,6 +45,7 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 	constructor(
 		private readonly bucket: Bucket,
 		maxCacheBytes = 64 * 1024 * 1024,
+		private readonly metrics: Metrics = noopMetrics,
 	) {
 		this.cache = new LRUCache({ maxSize: maxCacheBytes, sizeCalculation: (entry) => entry.bytes });
 	}
@@ -140,15 +144,22 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 		const body = await this.bucket.get(key);
 		if (!body || body.size > MAX_INDEX_BYTES)
 			throw new Error('Search snapshot unavailable or exceeds budget');
+		const started = performance.now();
 		const snapshot = SearchSnapshotSchema.parse(await body.json());
 		const postings = new Map<string, number[]>();
-		snapshot.documents.forEach((document, index) => {
+		let yieldedAt = performance.now();
+		for (const [index, document] of snapshot.documents.entries()) {
 			for (const term of terms(`${document.title} ${document.text}`)) {
 				const list = postings.get(term) ?? [];
 				list.push(index);
 				postings.set(term, list);
 			}
-		});
+			if (index % 128 === 127 && performance.now() - yieldedAt >= 8) {
+				await sleep(0);
+				yieldedAt = performance.now();
+			}
+		}
+		this.metrics.histogram?.('search.snapshot.parse_ms', performance.now() - started);
 		const cached = { snapshot, postings, bytes: body.size * 4 };
 		this.cache.set(key, cached);
 		return cached;

@@ -34,6 +34,24 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
+it('flushes a lone due renewal immediately and coalesces concurrent session writes', async () => {
+	const f = await fixture();
+	const now = Date.now();
+	vi.useFakeTimers();
+	vi.setSystemTime(now + 61_000);
+	const put = vi.spyOn(f.bucket, 'put');
+	let finished = false;
+	const pending = Promise.all(Array.from({ length: 20 }, () => f.heartbeat())).then((responses) => {
+		finished = true;
+		return responses;
+	});
+	await vi.advanceTimersByTimeAsync(0);
+	expect(finished).toBe(true);
+	for (const response of await pending) await expectOk(response);
+	expect(put.mock.calls.filter(([key]) => key === f.sessionKey)).toHaveLength(1);
+	expect(put.mock.calls.filter(([key]) => key === f.poolKey)).toHaveLength(1);
+});
+
 describe('heartbeat read scheduling', () => {
 	it('starts project and session reads before either resolves, then preserves authorization order', async () => {
 		const f = await fixture();
@@ -390,7 +408,7 @@ describe('due heartbeat races', () => {
 				release.resolve();
 			}
 			if (race === 'leave') {
-				await expectError(await pending, 409, 'CONFLICT');
+				await expectError(await pending, 409, 'APP_ASSIGNMENT_EXPIRED');
 				const pool = await new AppPoolService(f.bucket, f.services.sessions).store.read(
 					f.project.id,
 					f.notebook.id,

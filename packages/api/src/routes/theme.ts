@@ -21,8 +21,9 @@ app.openapi(
 		},
 	}),
 	(c) => {
-		c.header('Cache-Control', 'no-store');
-		return ok(c, ThemeConfigSchema.parse(c.get('deps').theme ?? DEFAULT_THEME_CONFIG));
+		const theme = ThemeConfigSchema.parse(c.get('deps').theme ?? DEFAULT_THEME_CONFIG);
+		c.header('Cache-Control', 'public, max-age=60, must-revalidate');
+		return ok(c, theme);
 	},
 );
 

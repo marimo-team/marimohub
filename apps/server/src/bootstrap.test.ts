@@ -1003,17 +1003,38 @@ describe('bootstrap', () => {
 		expect(dispose).toHaveBeenCalledOnce();
 	});
 
-	it('defaults API shutdown to a 30 second drain budget', async () => {
+	it('defaults API shutdown to a 180 second drain budget', async () => {
 		const harness = makeHarness(deps);
 		const handle = await bootstrap({ MARIMOHUB_STATIC_ROOT: './public' }, harness.overrides);
 		void deps.backgroundWork!.defer('test', () => new Promise(() => {}));
 		const draining = handle!.drain();
-		await vi.advanceTimersByTimeAsync(29_999);
+		await vi.advanceTimersByTimeAsync(179_999);
 		expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('drain_timeout'));
 		await vi.advanceTimersByTimeAsync(1);
-		expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"timeoutMs":30000'));
+		expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"timeoutMs":180000'));
 		await vi.advanceTimersByTimeAsync(10_000);
 		await draining;
+	});
+
+	it('drains 32 slow session stops before disposing compute', async () => {
+		const dispose = vi.fn(async () => {});
+		deps.compute = { ...deps.compute, [Symbol.asyncDispose]: dispose };
+		const harness = makeHarness(deps);
+		const handle = await bootstrap({ MARIMOHUB_STATIC_ROOT: './public' }, harness.overrides);
+		const stopped = vi.fn(async () => {
+			await new Promise<void>((resolve) => setTimeout(resolve, 60_000));
+		});
+		for (let i = 0; i < 32; i++) {
+			expect(deps.backgroundWork!.defer('session.stop', stopped)).toBeUndefined();
+		}
+		const draining = handle!.drain();
+		await vi.advanceTimersByTimeAsync(119_999);
+		expect(dispose).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
+		await draining;
+		expect(stopped).toHaveBeenCalledTimes(32);
+		expect(dispose).toHaveBeenCalledOnce();
+		expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('drain_timeout'));
 	});
 
 	it('drains core work, including nested tasks, before disposing compute', async () => {

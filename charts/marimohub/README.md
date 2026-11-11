@@ -100,7 +100,7 @@ pod is pinned to one replica with the `Recreate` strategy — don't scale it.
 
 ### Shutdown
 
-API pods use a 30-second drain budget and a 50-second termination grace period.
+API pods use a 180-second drain budget and a 200-second termination grace period.
 `maintenance.shutdownTimeoutSeconds` sets the maintenance drain budget. The default is 120 seconds.
 The maintenance grace period adds 20 seconds for cleanup and exit.
 

@@ -571,7 +571,7 @@ async function waitUntilRunning(
 		}
 		const elapsed = READY_TIMEOUT_MS - remaining;
 		let delay =
-			elapsed < READY_FAST_POLL_MS ? READY_POLL_INTERVAL_MS : READY_POLL_MAX_RETRY_DELAY_MS;
+			elapsed < READY_FAST_POLL_MS ? READY_POLL_INTERVAL_MS : elapsed < 15_000 ? 500 : 1000;
 		if (status === undefined) {
 			delay = Math.min(READY_POLL_INTERVAL_MS * 2 ** retries++, READY_POLL_MAX_RETRY_DELAY_MS);
 		} else {

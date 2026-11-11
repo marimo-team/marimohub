@@ -79,6 +79,7 @@ const KNOWN_SERVER_ERROR_CODES = {
 	FORBIDDEN: true,
 	NOT_FOUND: true,
 	CONFLICT: true,
+	APP_ASSIGNMENT_EXPIRED: true,
 	PREVIEW_NOT_READY: true,
 	PROPOSAL_RETRY_REQUIRED: true,
 	IMPORT_RESTART_REQUIRED: true,
@@ -123,11 +124,17 @@ export class ApiRequestError extends Error {
 	readonly status?: number;
 	readonly requestId?: string;
 	readonly details?: ApiError['details'];
+	readonly retryAfterMs?: number;
 
 	constructor(
 		code: ApiRequestErrorCode,
 		message: string,
-		options: { status?: number; requestId?: string; details?: ApiError['details'] } = {},
+		options: {
+			status?: number;
+			requestId?: string;
+			details?: ApiError['details'];
+			retryAfterMs?: number;
+		} = {},
 	) {
 		super(message);
 		this.name = 'ApiRequestError';
@@ -135,6 +142,7 @@ export class ApiRequestError extends Error {
 		this.status = options.status;
 		this.requestId = options.requestId;
 		this.details = options.details;
+		this.retryAfterMs = options.retryAfterMs;
 	}
 }
 
@@ -265,7 +273,15 @@ function malformedResponse(status?: number): ApiRequestError {
 	return new ApiRequestError('PARSE_ERROR', `${detail}malformed response envelope`, { status });
 }
 
-function unwrapEnvelope<T>(value: T, status: number): ApiData<T> {
+function retryAfterMs(response: Response): number | undefined {
+	const header = response.headers.get('Retry-After')?.trim();
+	if (!header) return undefined;
+	const delay = /^\d+$/.test(header) ? Number(header) * 1000 : Date.parse(header) - Date.now();
+	return Number.isFinite(delay) && delay >= 0 ? delay : undefined;
+}
+
+function unwrapEnvelope<T>(value: T, response: Response): ApiData<T> {
+	const { status } = response;
 	if (!isRecord(value) || typeof value.success !== 'boolean') {
 		throw malformedResponse(status);
 	}
@@ -287,6 +303,7 @@ function unwrapEnvelope<T>(value: T, status: number): ApiData<T> {
 				status,
 				requestId: typeof error?.request_id === 'string' ? error.request_id : undefined,
 				details,
+				retryAfterMs: retryAfterMs(response),
 			},
 		);
 	}
@@ -312,13 +329,13 @@ export async function apiDataWithResponse<T>(
 
 	if (result.error !== undefined) {
 		return {
-			data: unwrapEnvelope(result.error, result.response.status),
+			data: unwrapEnvelope(result.error, result.response),
 			response: result.response,
 		};
 	}
 
 	return {
-		data: unwrapEnvelope(result.data, result.response.status),
+		data: unwrapEnvelope(result.data, result.response),
 		response: result.response,
 	};
 }
@@ -335,12 +352,15 @@ export async function apiErrorFromResponse(
 	try {
 		const body: unknown = await response.clone().json();
 		try {
-			unwrapEnvelope(body, response.status);
+			unwrapEnvelope(body, response);
 		} catch (err) {
 			if (err instanceof ApiRequestError) return err;
 		}
 	} catch {
 		// Raw-content endpoints and intermediaries may return non-JSON error bodies.
 	}
-	return new ApiRequestError('UNKNOWN', fallbackMessage, { status: response.status });
+	return new ApiRequestError('UNKNOWN', fallbackMessage, {
+		status: response.status,
+		retryAfterMs: retryAfterMs(response),
+	});
 }

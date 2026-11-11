@@ -751,7 +751,7 @@ describe('SessionLifecycleService', () => {
 				s.user_id,
 				'source',
 				undefined,
-				{ includeWorkspace: false },
+				{ includeWorkspace: false, sandboxId: s.sandbox_id },
 			);
 			expect((await getStored(s)).last_snapshot_at).toBe(iso(0));
 			expect(sandboxCalls.destroy).toBe(0);

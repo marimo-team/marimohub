@@ -129,9 +129,7 @@ export class SearchService {
 		await timed(async (deadline) => {
 			const ids = request.project_id
 				? [request.project_id]
-				: (await this.catalog.getCurrentSnapshot()).projects
-						.filter((p) => p.status !== 'deleted')
-						.map((p) => p.id);
+				: await this.projects.accessCandidateIds(principal, this.authz);
 			let embedding: { space: string; vector: number[] } | undefined;
 			if (request.mode === 'hybrid') {
 				if (this.embeddings) {

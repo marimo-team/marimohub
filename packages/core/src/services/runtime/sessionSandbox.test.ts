@@ -14,6 +14,19 @@ function setup(reference?: string) {
 }
 
 describe('sessionSandbox', () => {
+	it('attributes reconnect attempts without leaking references and tolerates metric failures', () => {
+		const { provider, session, instance } = setup('private-reference');
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		expect(sessionSandbox(provider, session, metrics, 'poll')).toBe(instance);
+		expect(metrics.increment).toHaveBeenCalledExactlyOnceWith('sandbox.reconnect', 1, {
+			path: 'poll',
+			method: 'reference',
+		});
+		metrics.increment.mockImplementation(() => {
+			throw new Error('metrics down');
+		});
+		expect(sessionSandbox(provider, session, metrics, 'teardown')).toBe(instance);
+	});
 	it.each([undefined, 'saved-reference'])(
 		'preserves lookup for providers without attach support (reference=%s)',
 		(reference) => {

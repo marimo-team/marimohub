@@ -1,3 +1,4 @@
+import { serveMarimoAssets } from './marimoAssets';
 import { serve } from '@hono/node-server';
 import type { ServerType } from '@hono/node-server';
 import { httpInstrumentationMiddleware } from '@hono/otel';
@@ -27,6 +28,8 @@ import { fanoutMetrics, OtelMetrics, WideEventMetrics } from './metrics';
 import { buildVersion, startOtel } from './otel';
 import { onceAsync, settleAllWithin, settleEach } from './promise';
 import { serveSpaFallback, serveStaticWithCache } from './staticCache';
+import { RequestStorage } from './requestStorage';
+import { SHELL_PREFETCH_CSP } from './shellPrefetch';
 import { attachSandboxProxyUpgrade } from './sandboxProxyWs';
 
 const CLEANUP_TIMEOUT_MS = 10_000;
@@ -76,6 +79,7 @@ export async function bootstrap(
 	const otelMetrics = otel?.metrics ? new OtelMetrics() : undefined;
 	const metrics = otelMetrics ? fanoutMetrics(wideEvents, otelMetrics) : wideEvents;
 	const backgroundWork = new DeferredWorkQueue(metrics);
+	const requestStorage = new RequestStorage();
 
 	// Config errors are deterministic — a restart can't fix them — so print a readable
 	// remediation block to stderr and exit. (Transient backend problems go through the
@@ -87,6 +91,7 @@ export async function bootstrap(
 		deps = await createDeps(validatedEnv, metrics, {
 			tracing: otel?.tracing ?? false,
 			backgroundWork,
+			decorateBucket: requestStorage.wrap,
 		});
 		await prepareDeps?.(deps);
 	} catch (err) {
@@ -100,13 +105,19 @@ export async function bootstrap(
 	const drainTimeoutMs =
 		Number(
 			validatedEnv.MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS ??
-				(validatedEnv.MARIMOHUB_RUN_MAINTENANCE === 'true' ? 120 : 30),
+				(validatedEnv.MARIMOHUB_RUN_MAINTENANCE === 'true' ? 120 : 180),
 		) * 1000;
 	deps.sandbox.thumbnailDeadline = () => thumbnailDeadline;
 	deps.backgroundWork = backgroundWork;
 	// Installed for metrics-only mode too: RED metrics still record, spans don't.
-	if (otel)
-		deps.tracingMiddleware = httpInstrumentationMiddleware({ disableTracing: !otel.tracing });
+	const tracing = otel
+		? httpInstrumentationMiddleware({ disableTracing: !otel.tracing })
+		: undefined;
+	deps.tracingMiddleware = (c, next) =>
+		requestStorage.middleware(c, async () => {
+			if (tracing) await tracing(c, next);
+			else await next();
+		});
 	const loops = new BackgroundLoops(metrics);
 	if (validatedEnv.MARIMOHUB_RUN_MAINTENANCE === 'true') deps.loopHealth = () => loops.health();
 	const app = createApi(deps);
@@ -139,6 +150,9 @@ export async function bootstrap(
 		}
 	}
 
+	const staticRoot = validatedEnv.MARIMOHUB_STATIC_ROOT ?? './public';
+	app.use('/_marimo/*', serveMarimoAssets(staticRoot));
+
 	// Keep SPA policy separate from terminal API, kernel-proxy, and snapshot responses.
 	app.use(
 		'*',
@@ -147,7 +161,7 @@ export async function bootstrap(
 				defaultSrc: ["'self'"],
 				baseUri: ["'self'"],
 				objectSrc: ["'none'"],
-				scriptSrc: ["'self'", "'wasm-unsafe-eval'"],
+				scriptSrc: ["'self'", "'wasm-unsafe-eval'", SHELL_PREFETCH_CSP],
 				styleSrc: ["'self'", "'unsafe-inline'"],
 				fontSrc: ["'self'"],
 				imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
@@ -163,7 +177,6 @@ export async function bootstrap(
 	// Serve the prebuilt SPA. API routes (registered inside createApi) are terminal,
 	// so they take precedence; everything else falls through to static assets, with
 	// a single-page-app fallback to index.html.
-	const staticRoot = validatedEnv.MARIMOHUB_STATIC_ROOT ?? './public';
 	const spaFallback = serveSpaFallback(staticRoot, validatedEnv.MARIMOHUB_APP_BASE_URL);
 	app.get('/', spaFallback);
 	app.get('/index.html', spaFallback);

@@ -1,3 +1,4 @@
+import type { Metrics } from '../../../ports/metrics';
 import { sessionSandbox } from '../sessionSandbox';
 import { MARIMO_PORT } from '../../../constants';
 import { KERNEL_AUTH_TOKEN_FILE } from '../kernelAuth';
@@ -109,6 +110,7 @@ export class SurfaceManager {
 		private readonly provider: SandboxProvider,
 		private readonly sessions: SessionService,
 		private readonly registry: SurfaceRegistry,
+		private readonly metrics?: Metrics,
 	) {}
 
 	async ensure(
@@ -138,7 +140,7 @@ export class SurfaceManager {
 			throw new SurfaceOpenInvalidError(`Surface ${id} does not support an open path`);
 		}
 		validateOpenPath(options.open);
-		const instance = sessionSandbox(this.provider, session);
+		const instance = sessionSandbox(this.provider, session, this.metrics, 'surface');
 		const context: SurfaceContext = {
 			sessionId: session.session_id,
 			projectId: session.project_id,
@@ -366,7 +368,7 @@ export class SurfaceManager {
 		const current = await this.sessions.getSession(session.project_id, session.session_id);
 		if (!current.sandbox_id) throw new ConflictError('The session has no sandbox');
 		const pidFile = surfacePidFile(session.session_id, id);
-		const instance = sessionSandbox(this.provider, current);
+		const instance = sessionSandbox(this.provider, current, this.metrics, 'surface');
 		const begun = await this.sessions.beginSurfaceStop(session.project_id, session.session_id, id);
 		if (!begun.transitioned) {
 			if (begun.session.surfaces?.[id]?.status === 'stopped') return;

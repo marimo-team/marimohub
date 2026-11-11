@@ -63,6 +63,7 @@ components:
                 - PRECONDITION_FAILED
                 - NOT_FOUND
                 - CONFLICT
+                - APP_ASSIGNMENT_EXPIRED
                 - PREVIEW_NOT_READY
                 - PROPOSAL_RETRY_REQUIRED
                 - IMPORT_RESTART_REQUIRED
@@ -479,6 +480,9 @@ components:
           type: array
           items:
             type: string
+        marimo_asset_url:
+          type: string
+          description: Public HTTPS marimo asset base or version template, when configured.
         sandbox_startup_timeout_seconds:
           type: number
         compute_profiles:
@@ -20588,6 +20592,18 @@ paths:
           required: true
           name: sid
           in: path
+        - schema:
+            type:
+              - integer
+              - 'null'
+            minimum: 0
+            maximum: 20
+            description: Wait up to this many seconds for a starting session to change
+              status.
+          required: false
+          description: Wait up to this many seconds for a starting session to change status.
+          name: wait
+          in: query
       responses:
         '200':
           description: Session

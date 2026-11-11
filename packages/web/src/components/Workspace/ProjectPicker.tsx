@@ -13,6 +13,8 @@ import { useNavigate } from 'react-router-dom';
 import { CreateProjectDialog } from '@/components/ProjectList/CreateProjectDialog';
 import { useDisclosure } from '@/hooks/useDisclosure';
 
+const EMPTY_PROJECT = '__empty_project_list__';
+
 export function ProjectPicker({
 	projects,
 	selectedId,
@@ -20,6 +22,7 @@ export function ProjectPicker({
 	isPending,
 	canCreate,
 	onNavigate,
+	onOpenChange,
 }: {
 	projects: { id: string; name: string }[];
 	selectedId?: string;
@@ -27,10 +30,15 @@ export function ProjectPicker({
 	isPending: boolean;
 	canCreate: boolean;
 	onNavigate?: () => void;
+	onOpenChange?: (open: boolean) => void;
 }) {
 	const navigate = useNavigate();
 	const [isOpen, setOpen] = useState(false);
 	const createDialog = useDisclosure();
+	const changeOpen = (open: boolean) => {
+		setOpen(open);
+		onOpenChange?.(open);
+	};
 	const options =
 		selectedId && !projects.some((project) => project.id === selectedId)
 			? [...projects, { id: selectedId, name: selectedName ?? 'Current project' }]
@@ -42,7 +50,7 @@ export function ProjectPicker({
 	const createButton = (
 		<Button
 			onPress={() => {
-				setOpen(false);
+				changeOpen(false);
 				createDialog.open();
 			}}
 			className="flex min-h-9 max-md:min-h-11 w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
@@ -54,13 +62,13 @@ export function ProjectPicker({
 	return (
 		<>
 			<Select
-				isDisabled={options.length === 0}
+				disabledKeys={[EMPTY_PROJECT]}
 				value={selectedId ?? null}
 				onChange={(id) => {
 					if (typeof id === 'string') openProject(id);
 				}}
 				isOpen={isOpen}
-				onOpenChange={setOpen}
+				onOpenChange={changeOpen}
 				placeholder={isPending ? 'Loading projects…' : 'All projects'}
 				className="space-y-2"
 			>
@@ -76,7 +84,11 @@ export function ProjectPicker({
 					className="z-50 w-(--trigger-width) min-w-56 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg"
 				>
 					<ListBox
-						items={options}
+						items={
+							options.length > 0
+								? options
+								: [{ id: EMPTY_PROJECT, name: isPending ? 'Loading projects…' : 'No projects yet' }]
+						}
 						className="max-h-64 overflow-y-auto overscroll-contain p-1 outline-none"
 						renderEmptyState={() => (
 							<p className="px-3 py-2 text-sm text-muted-foreground">
@@ -104,7 +116,7 @@ export function ProjectPicker({
 					{canCreate ? <div className="border-t p-1">{createButton}</div> : null}
 				</Popover>
 			</Select>
-			{canCreate && options.length === 0 ? createButton : null}
+			{canCreate && options.length === 0 && !isOpen ? createButton : null}
 			{canCreate ? (
 				<CreateProjectDialog
 					isOpen={createDialog.isOpen}

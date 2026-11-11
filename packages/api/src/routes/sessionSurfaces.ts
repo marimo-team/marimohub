@@ -171,7 +171,12 @@ async function createSurfaceManager(context: SurfaceFactoryContext): Promise<Sur
 		const config = deps.sandbox.surfaces?.[id];
 		if (config) specs.push(await specFor(id, config, context));
 	}
-	return new SurfaceManager(deps.compute, deps.services.sessions, new SurfaceRegistry(specs));
+	return new SurfaceManager(
+		deps.compute,
+		deps.services.sessions,
+		new SurfaceRegistry(specs),
+		deps.metrics,
+	);
 }
 
 export function surfaceStopManager(deps: ApiDeps): SurfaceManager {
@@ -182,6 +187,7 @@ export function surfaceStopManager(deps: ApiDeps): SurfaceManager {
 			marimoSurface,
 			...SECONDARY_SURFACE_IDS.map((id) => SURFACE_FACTORIES[id].stopSpec()),
 		]),
+		deps.metrics,
 	);
 }
 

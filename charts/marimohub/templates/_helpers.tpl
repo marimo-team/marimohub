@@ -125,7 +125,7 @@ Call with: (dict "root" $ "maintenance" true|false)
 {{- $hasConfigMap := or $v.config $v.compute.profiles (ne $v.compute.profileOverride "none") $v.surfaces.vscode.enabled $v.surfaces.opencode.enabled -}}
 {{- $res := $v.resources -}}
 {{- /* API pods: the 20 s of grace beyond the drain budget covers final cleanup. */ -}}
-{{- $apiShutdown := 30 -}}
+{{- $apiShutdown := 180 -}}
 {{- if .maintenance -}}{{- $res = $v.maintenance.resources -}}{{- end }}
 metadata:
   labels:

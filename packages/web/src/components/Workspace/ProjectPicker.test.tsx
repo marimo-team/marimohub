@@ -42,6 +42,19 @@ function setup(canCreate = true) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Project picker', () => {
+	it('reports programmatic closure when opening project creation', async () => {
+		const onOpenChange = vi.fn();
+		const user = userEvent.setup();
+		renderWithClient(
+			<ProjectPicker projects={[]} isPending={false} canCreate onOpenChange={onOpenChange} />,
+			{ route: '/projects', toaster: false },
+		);
+		await user.click(screen.getByRole('button', { name: /All projects/ }));
+		expect(onOpenChange).toHaveBeenLastCalledWith(true);
+		await user.click(screen.getByRole('button', { name: 'New project' }));
+		expect(await screen.findByRole('dialog', { name: 'Create New Project' })).toBeVisible();
+		expect(onOpenChange).toHaveBeenLastCalledWith(false);
+	});
 	it('switches projects with arrow keys and Enter', async () => {
 		const { user, onNavigate } = setup();
 		screen.getByRole('button', { name: /Alpha/ }).focus();

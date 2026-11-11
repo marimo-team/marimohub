@@ -1,3 +1,4 @@
+import { resolveMarimoAssetUrl } from './marimoAssets';
 import { makeSearch } from './search';
 import { parseWorkspaceLimits } from './workspaceLimits';
 import { parseTheme } from './theme';
@@ -59,6 +60,7 @@ import type {
 import { createPostgresDataQueryExecutorFactory } from '@marimo-hub/postgres-runtime/node';
 import type {
 	BackgroundWork,
+	Bucket,
 	EditorSandboxSharing,
 	Metrics,
 	AssignableRole,
@@ -618,6 +620,7 @@ function parseSandboxExposure(env: Env): SandboxExposure {
 }
 
 export interface CreateFromEnvOptions {
+	decorateBucket?: (bucket: Bucket) => Bucket;
 	backgroundWork?: BackgroundWork;
 	/** Wrap the bucket and services in OTEL spans (see `createServices`). */
 	tracing?: boolean;
@@ -633,7 +636,8 @@ export function createFromEnv(
 	parseExperiments(env);
 	const theme = parseTheme(env);
 	const serviceAccounts = serviceAccountsFromEnv(env);
-	const bucket = makeStorage(env, options?.libraries);
+	const storage = makeStorage(env, options?.libraries);
+	const bucket = options?.decorateBucket?.(storage) ?? storage;
 	const exposure = parseSandboxExposure(env);
 	// The same-origin isolation guard only applies to `subdomain` mode (a separate
 	// public kernel domain). `proxy` mode is intentionally same-origin and gated by
@@ -809,7 +813,7 @@ export function createFromEnv(
 			bucket: makeSandboxBucketConfig(env),
 			hostname: env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME ?? '',
 			workdir: env.MARIMOHUB_COMPUTE_WORKDIR ?? '/workspace',
-			assetUrl: env.MARIMOHUB_COMPUTE_ASSET_URL,
+			assetUrl: resolveMarimoAssetUrl(env),
 			notebookBridge: notebookBridgeRuntime(),
 			// Unset defers to the core default (2 min); served on /api/v1/capabilities.
 			startupTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS'),

@@ -150,6 +150,8 @@ These CAS-managed records also have one writer each:
   Other owners' move helpers run only under that record. Moves need no offline recovery:
   a repeated request takes over an expired lease, and an unpublished move can be cancelled.
 - `BucketSearchIndex` owns `_system/search/projects/{pid}/{source}/head.json`, immutable search snapshots, and retained deletion tombstones. `SearchIndexer` owns resumable crawl checkpoints, immutable pages, and `_system/search/cursor.json`. A notebook move's publishing `mutateSnapshot` write sets `search_refresh` on both project entries to request fresh crawls.
+- `ProjectService` owns the retention cursor at `_system/project-purge-cursor.json`.
+- `NotebookService` owns the retention cursor at `_system/notebook-purge-cursor.json`.
 - `ThumbnailService` owns each notebook-local `thumbnail.json` CAS record, immutable
   `thumbnails/{id}.png` images, and create-once `thumbnail-attempts/{sandbox-id}.json` markers.
 - `DeepLinkService` owns each slug at `_system/deep-links/{slug}.json` and each
@@ -243,7 +245,9 @@ These CAS-managed records also have one writer each:
   per-notebook `jobs` index (written through `mutateSnapshot`). Sole exception:
   `CatalogService.recover` rebuilds that index during offline recovery, only when
   `--writers-stopped` is asserted.
-- `JobRunService` owns each run record at
+- `JobRunService` owns the bounded retention CAS cursor at `_system/job-prune-cursor.json`
+  and each job-local `prune-runs.json` and `prune-occurrences.json` CAS cursor,
+  and each run record at
   `projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/run.json`, each
   immutable occurrence claim at `…/jobs/{jid}/occurrences/{key}.json`
   (create-if-absent), each immutable newest-first history entry at

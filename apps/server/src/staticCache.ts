@@ -3,6 +3,7 @@ import type { ServeStaticOptions } from '@hono/node-server/serve-static';
 import { appendVary } from '@marimo-hub/api';
 import { baseHrefFromUrl } from '@marimo-hub/core/url';
 import type { MiddlewareHandler } from 'hono';
+import { injectShellPrefetch } from './shellPrefetch';
 
 export const REVALIDATE_STATIC_CACHE_CONTROL = 'public, max-age=0, must-revalidate';
 export const IMMUTABLE_ASSET_CACHE_CONTROL = 'public, max-age=31536000, immutable';
@@ -72,9 +73,9 @@ export function serveSpaFallback(staticRoot: string, appBaseUrl?: string): Middl
 		if (!(response instanceof Response) || response.status !== 200) {
 			return response;
 		}
-		if (baseHref === '/') return response;
 		const headers = new Headers(response.headers);
 		headers.delete('Content-Length');
+		headers.delete('ETag');
 		if (context.req.method === 'HEAD') {
 			return new Response(null, {
 				status: response.status,
@@ -82,10 +83,14 @@ export function serveSpaFallback(staticRoot: string, appBaseUrl?: string): Middl
 				headers,
 			});
 		}
-		return new Response(injectAppBaseHref(await response.text(), baseHref), {
-			status: response.status,
-			statusText: response.statusText,
-			headers,
-		});
+		const html = await response.text();
+		return new Response(
+			injectShellPrefetch(baseHref === '/' ? html : injectAppBaseHref(html, baseHref)),
+			{
+				status: response.status,
+				statusText: response.statusText,
+				headers,
+			},
+		);
 	};
 }

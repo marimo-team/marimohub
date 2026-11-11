@@ -171,6 +171,159 @@ describe('wifCredentialCacheFor', () => {
 });
 
 describe('shared WIF credentials', () => {
+	it('refreshes for a long caller without shortening reuse for short callers', async () => {
+		const { cache, exchange, advance } = fixture();
+		const first = await cache.getShared('project', exchange);
+		advance(25 * MINUTE);
+		expect(await cache.getShared('project', exchange)).toEqual(first);
+		const refreshed = await cache.getShared('project', exchange, 45 * MINUTE);
+		expect(refreshed.accessKeyId).not.toBe(first.accessKeyId);
+		expect(exchange).toHaveBeenCalledTimes(2);
+		expect(await cache.getShared('project', exchange)).toEqual(refreshed);
+	});
+
+	it('rechecks a long job reuse floor after joining a slow short-job exchange', async () => {
+		const { cache, exchange, advance } = fixture();
+		const pending = Promise.withResolvers<TempS3Creds>();
+		const short = cache.getShared('project', () => pending.promise);
+		advance(25 * MINUTE);
+		const long = cache.getShared('project', exchange, 45 * MINUTE);
+		pending.resolve({
+			accessKeyId: 'old',
+			secretAccessKey: 'SK',
+			expiration: '2026-01-01T01:00:00Z',
+		});
+		expect((await short).accessKeyId).toBe('old');
+		expect((await long).accessKeyId).toBe('AK1');
+		expect(exchange).toHaveBeenCalledOnce();
+	});
+
+	it.each(['failure', 'undated'] as const)(
+		'handles a pending %s exchange with a waiting long job',
+		async (outcome) => {
+			const { cache, exchange } = fixture();
+			const pending = Promise.withResolvers<TempS3Creds>();
+			const waiting = Promise.allSettled([
+				cache.getShared('project', () => pending.promise),
+				cache.getShared('project', exchange, 45 * MINUTE),
+			]);
+			if (outcome === 'failure') pending.reject(new Error('broker failed'));
+			else pending.resolve({ accessKeyId: 'undated', secretAccessKey: 'SK' });
+			const results = await waiting;
+			expect(results.map((result) => result.status)).toEqual(
+				outcome === 'failure' ? ['rejected', 'rejected'] : ['fulfilled', 'fulfilled'],
+			);
+			expect(exchange).not.toHaveBeenCalled();
+			expect((await cache.getShared('project', exchange, 45 * MINUTE)).accessKeyId).toBe('AK1');
+		},
+	);
+
+	it('coalesces one refresh for waiting long jobs even when fresh broker lifetimes remain short', async () => {
+		const { cache, exchange, advance } = fixture(10 * MINUTE);
+		const pending = Promise.withResolvers<TempS3Creds>();
+		const short = cache.getShared('project', () => pending.promise);
+		advance(25 * MINUTE);
+		const waiting = Promise.all(
+			Array.from({ length: 20 }, () => cache.getShared('project', exchange, 45 * MINUTE)),
+		);
+		pending.resolve({
+			accessKeyId: 'old',
+			secretAccessKey: 'SK',
+			expiration: '2026-01-01T01:00:00Z',
+		});
+		await short;
+		expect((await waiting).every((creds) => creds.accessKeyId === 'AK1')).toBe(true);
+		expect(exchange).toHaveBeenCalledOnce();
+	});
+
+	it.each(['settled', 'pending'] as const)(
+		'revalidates an unrelated %s replacement before coalescing one fresh exchange',
+		async (state) => {
+			let now = Date.parse('2026-01-01T00:00:00Z');
+			const cache = new WifCredentialCache(() => now, 1);
+			const old = Promise.withResolvers<TempS3Creds>();
+			const original = cache.getShared('project', () => old.promise);
+			const fresh = vi.fn(async () => ({
+				accessKeyId: 'fresh',
+				secretAccessKey: 'SK',
+				expiration: new Date(now + 10 * MINUTE).toISOString(),
+			}));
+			const waiting = Promise.all(
+				Array.from({ length: 20 }, () => cache.getShared('project', fresh, 45 * MINUTE)),
+			);
+			const replacementCreds = {
+				accessKeyId: 'replacement',
+				secretAccessKey: 'SK',
+				expiration: '2026-01-01T01:00:00Z',
+			};
+			await cache.getShared('other', async () => replacementCreds);
+			const pending = Promise.withResolvers<TempS3Creds>();
+			const replacement = cache.getShared('project', () => pending.promise);
+			if (state === 'settled') {
+				pending.resolve(replacementCreds);
+				await replacement;
+			}
+			now += 25 * MINUTE;
+			old.resolve({ ...replacementCreds, accessKeyId: 'original' });
+			await original;
+			if (state === 'pending') pending.resolve(replacementCreds);
+			await replacement;
+			expect((await waiting).every((creds) => creds.accessKeyId === 'fresh')).toBe(true);
+			expect(fresh).toHaveBeenCalledOnce();
+		},
+	);
+
+	it('does not deliver an expired refresh to a waiter delayed by an evicted replacement', async () => {
+		let now = Date.parse('2026-01-01T00:00:00Z');
+		const cache = new WifCredentialCache(() => now, 1);
+		const old = Promise.withResolvers<TempS3Creds>();
+		const a = Promise.withResolvers<TempS3Creds>();
+		const b = Promise.withResolvers<TempS3Creds>();
+		const creds = { accessKeyId: 'old', secretAccessKey: 'SK', expiration: '2026-01-01T01:00:00Z' };
+		const fresh = vi.fn(async () => ({
+			...creds,
+			accessKeyId: 'fresh',
+			expiration: new Date(now + 10 * MINUTE).toISOString(),
+		}));
+		const original = cache.getShared('project', () => old.promise);
+		const first = cache.getShared('project', fresh, 45 * MINUTE);
+		const replace = original.then(() => {
+			void cache.getShared('other', async () => creds);
+			void cache.getShared('project', () => b.promise);
+		});
+		const second = cache.getShared('project', fresh, 45 * MINUTE);
+		const failed = expect(second).rejects.toThrow(/expiration/);
+		await cache.getShared('other', async () => creds);
+		void cache.getShared('project', () => a.promise);
+		now += 25 * MINUTE;
+		old.resolve(creds);
+		await replace;
+		await cache.getShared('other', async () => creds);
+		a.resolve(creds);
+		expect((await first).accessKeyId).toBe('fresh');
+		now += 20 * MINUTE;
+		b.resolve(creds);
+		await failed;
+		expect(fresh).toHaveBeenCalledOnce();
+	});
+
+	it('does not fall back to short-lived cached credentials when refresh fails', async () => {
+		const { cache, exchange, advance } = fixture();
+		await cache.getShared('project', exchange);
+		advance(25 * MINUTE);
+		exchange.mockRejectedValueOnce(new Error('broker unavailable'));
+		await expect(cache.getShared('project', exchange, 45 * MINUTE)).rejects.toThrow(
+			'broker unavailable',
+		);
+		await cache.getShared('project', exchange, 45 * MINUTE);
+		expect(exchange).toHaveBeenCalledTimes(3);
+	});
+
+	it.each([-1, Number.NaN, Infinity])('rejects an invalid reuse floor %s', (floor) => {
+		const { cache, exchange } = fixture();
+		expect(() => cache.getShared('project', exchange, floor)).toThrow(RangeError);
+		expect(exchange).not.toHaveBeenCalled();
+	});
 	it.each([
 		{ lifetime: 60 * MINUTE, reuse: 40 * MINUTE },
 		{ lifetime: 40 * MINUTE, reuse: 20 * MINUTE },

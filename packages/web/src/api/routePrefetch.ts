@@ -1,6 +1,8 @@
 import { queryOptions } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { appQueryOptions } from './apps';
+import { apiClient, apiData } from './client';
+import { projectKeys } from './queryKeys';
 import {
 	projectQueryOptions,
 	projectsQueryOptions,
@@ -36,5 +38,20 @@ export function projectRosterQueryOptions() {
 	return queryOptions({
 		...projectsQueryOptions({ status: 'active' }),
 		staleTime: 5 * 60_000,
+	});
+}
+
+export function firstProjectQueryOptions() {
+	return queryOptions({
+		queryKey: [...projectKeys.list(), 'first-active'],
+		staleTime: 60_000,
+		queryFn: async () =>
+			(
+				await apiData(
+					apiClient.GET('/api/v1/projects', {
+						params: { query: { status: 'active', limit: 1 } },
+					}),
+				)
+			).items[0] ?? null,
 	});
 }

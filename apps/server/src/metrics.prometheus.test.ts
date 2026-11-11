@@ -34,16 +34,20 @@ it('serves cache outcomes and deferred-work depth at /metrics', async () => {
 		const text = await response.text();
 		expect(text).toMatch(/cache_snapshot_reads_total\{result="miss"\} 1/);
 		expect(text).toMatch(/cache_snapshot_reads_total\{result="hit"\} 1/);
-		expect(text).toMatch(/cache_metadata_reads_total\{result="miss",consistency="validated"\} 1/);
-		expect(text).toMatch(/cache_metadata_reads_total\{result="hit",consistency="validated"\} 1/);
+		expect(text).toMatch(
+			/cache_metadata_reads_total\{cache="catalog",service="CatalogService",result="miss",consistency="validated"\} 1/,
+		);
+		expect(text).toMatch(
+			/cache_metadata_reads_total\{cache="catalog",service="CatalogService",result="hit",consistency="validated"\} 1/,
+		);
 		expect(text).toContain('cache_conditional_reads_total{result="not_modified"} 1');
 		expect(text).toContain('background_queue_depth{label="teardown"} 1');
 		expect(text).toContain('background_running{label="teardown"} 1');
 		expect(wide.collect()).toMatchObject({
 			'counter.cache.snapshot.reads{"result":"miss"}': 1,
 			'counter.cache.snapshot.reads{"result":"hit"}': 1,
-			'counter.cache.metadata.reads{"consistency":"validated","result":"miss"}': 1,
-			'counter.cache.metadata.reads{"consistency":"validated","result":"hit"}': 1,
+			'counter.cache.metadata.reads{"cache":"catalog","consistency":"validated","result":"miss","service":"CatalogService"}': 1,
+			'counter.cache.metadata.reads{"cache":"catalog","consistency":"validated","result":"hit","service":"CatalogService"}': 1,
 			'counter.cache.conditional.reads{"result":"not_modified"}': 1,
 		});
 	} finally {

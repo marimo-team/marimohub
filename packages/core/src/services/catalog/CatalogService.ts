@@ -79,7 +79,10 @@ export class CatalogService {
 		private backgroundWork?: BackgroundWork,
 	) {
 		this.cache = snapshotCache(cacheBucket);
-		this.pointer = new MetadataCache(bucket, 1, this.cache.pointer, metrics);
+		this.pointer = new MetadataCache(bucket, 1, this.cache.pointer, metrics, {
+			cache: 'catalog',
+			service: 'CatalogService',
+		});
 	}
 
 	async initialize(actor: UserId): Promise<Snapshot> {

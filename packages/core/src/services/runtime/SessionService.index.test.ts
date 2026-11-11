@@ -44,6 +44,26 @@ function pauseNextIndexWrite(bucket: MemoryBucket) {
 }
 
 describe('per-user session index', () => {
+	it('reports the cap source across migration readiness and missing-index recovery', async () => {
+		const { bucket, sessions, input } = fixture();
+		const session = await sessions.createSession(input);
+		let ready = false;
+		const reader = new SessionService(bucket, undefined, undefined, () => ready);
+		const source = vi.fn();
+		const read = async () => {
+			expect(
+				(await reader.listActiveForUser(ACTOR, 'user', source)).map((s) => s.session_id),
+			).toEqual([session.session_id]);
+		};
+		await read();
+		ready = true;
+		await read();
+		await bucket.delete(paths.sessionIndexForUser(ACTOR));
+		await read();
+		await read();
+		expect(source.mock.calls).toEqual([['scan'], ['index'], ['scan'], ['index']]);
+	});
+
 	it('reads only this user on a cold replica, with no LISTs', async () => {
 		const { bucket, sessions, input } = fixture();
 		const own = await sessions.createSession(input);

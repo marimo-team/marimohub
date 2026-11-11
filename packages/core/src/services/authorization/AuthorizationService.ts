@@ -653,6 +653,10 @@ export class AuthorizationService {
 			: 'project.read';
 	}
 
+	hasDefaultProjectRole(subject: AuthSubject): boolean {
+		return subjectDefaultRole(subject, this.policy) !== null;
+	}
+
 	isSuperAdmin(subject: AuthSubject): boolean {
 		return isSuperAdmin(subject, this.policy?.superAdmins);
 	}

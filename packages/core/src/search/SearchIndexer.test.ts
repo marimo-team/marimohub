@@ -100,9 +100,10 @@ it('finishes 200 projects in one round and stays idle across indexer restarts', 
 	expect(get.mock.calls.filter(([key]) => key.startsWith(searchPaths.projects))).toHaveLength(0);
 });
 
-it('wakes an idle crawler for a refresh token and after its recrawl interval', async () => {
+it('wakes for refresh tokens, skips unchanged catalogs, and periodically verifies sources', async () => {
 	vi.useFakeTimers({ toFake: ['Date'] });
 	const f = await seed(1, 1);
+	Object.assign(f.source, { catalogBacked: true });
 	await f.indexer().tick(signal());
 	const page = vi.spyOn(f.source, 'page');
 	await f.indexer().tick(signal());
@@ -114,6 +115,9 @@ it('wakes an idle crawler for a refresh token and after its recrawl interval', a
 	await f.indexer().tick(signal());
 	expect(page).toHaveBeenCalledOnce();
 	vi.setSystemTime(Date.now() + 5 * 60_000);
+	await f.indexer().tick(signal());
+	expect(page).toHaveBeenCalledTimes(1);
+	vi.setSystemTime(Date.now() + 24 * 3600_000);
 	await f.indexer().tick(signal());
 	expect(page).toHaveBeenCalledTimes(2);
 });
@@ -432,3 +436,99 @@ it('propagates cancellation during an idle catalog check', async () => {
 	await expect(f.indexer().tick(controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
 	expect(put).not.toHaveBeenCalled();
 });
+
+it('shouldRun respects the paused schedule and wakes for a refresh token', async () => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	const f = await seed(1, 1);
+	const indexer = f.indexer();
+	expect(await indexer.shouldRun()).toBe(true);
+	await indexer.tick(signal());
+	expect(await indexer.shouldRun()).toBe(false);
+	await f.services.catalog.mutateSnapshot('refresh', searchOwner.id, (snapshot) => ({
+		...snapshot,
+		projects: snapshot.projects.map((project) => ({ ...project, search_refresh: 'new' })),
+	}));
+	expect(await indexer.shouldRun()).toBe(true);
+});
+
+it('never skips a partial snapshot solely because its catalog is unchanged', async () => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	const f = await seed(1, 1);
+	Object.assign(f.source, { catalogBacked: true });
+	const original = f.source.page.bind(f.source);
+	const page = vi
+		.spyOn(f.source, 'page')
+		.mockImplementation(async (...args) => ({ ...(await original(...args)), partial: true }));
+	await f.indexer().tick(signal());
+	vi.setSystemTime(Date.now() + 5 * 60_000);
+	await f.indexer().tick(signal());
+	expect(page).toHaveBeenCalledTimes(2);
+});
+
+it('does not memoize a competing partial publication as a complete crawl', async () => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	const f = await seed(1, 1);
+	Object.assign(f.source, { catalogBacked: true });
+	const publish = f.index.publish.bind(f.index);
+	vi.spyOn(f.index, 'publish').mockImplementationOnce(async (scope, snapshot, revision) => {
+		const committed = await publish(scope, snapshot, revision);
+		expect(committed).toBe(true);
+		await publish(scope, { ...snapshot!, partial: true }, (await f.index.head(scope)).revision);
+		return committed;
+	});
+	const indexer = f.indexer();
+	await indexer.tick(signal());
+	expect((await f.snapshot())?.partial).toBe(true);
+	const page = vi.spyOn(f.source, 'page');
+	vi.setSystemTime(Date.now() + 5 * 60_000);
+	await indexer.tick(signal());
+	expect(page).toHaveBeenCalledOnce();
+	expect((await f.snapshot())?.partial).toBe(false);
+});
+
+it('restarts an unfinished crawl when its catalog fingerprint changes', async () => {
+	const f = await seed(1, 0);
+	const page = vi.fn<SearchSource['page']>(async () => ({
+		documents: [],
+		partial: false,
+		cursor: 'old-position',
+	}));
+	const source = stubSearchSource({ page });
+	const indexer = f.indexer(source);
+	expect(await indexer.step(f.entries[0].id, source, signal(), undefined, 'old')).toBe(false);
+	expect(await indexer.step(f.entries[0].id, source, signal(), undefined, 'new')).toBe(false);
+	expect(page.mock.calls.map((call) => call[1])).toEqual([undefined, undefined]);
+});
+it.each(['html', 'session'] as const)(
+	'refreshes notebook %s changed without a catalog mutation',
+	async (artifact) => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		const f = await seed(1, 1);
+		const entry = f.entries[0];
+		const keys = paths.project(entry.id).notebook(entry.notebooks[0].id);
+		const source = await (await f.bucket.get(keys.source))!.json<{
+			current_version_id: ReturnType<typeof createVersionId>;
+		}>();
+		const output = keys.version(source.current_version_id)[artifact];
+		const body = (text: string) =>
+			artifact === 'html'
+				? `<p>${text}</p>`
+				: JSON.stringify({
+						cells: [{ outputs: [{ type: 'data', data: { 'text/plain': text } }] }],
+					});
+		await f.bucket.put(output, body('old artifact output'));
+		await f.indexer().tick(signal());
+		expect(
+			(await f.snapshot())?.documents.some((doc) => doc.text.includes('old artifact output')),
+		).toBe(true);
+		await f.bucket.put(output, body('new artifact output'));
+		vi.setSystemTime(Date.now() + 5 * 60_000);
+		await f.indexer().tick(signal());
+		expect(
+			(await f.snapshot())?.documents.some((doc) => doc.text.includes('new artifact output')),
+		).toBe(true);
+		expect(
+			(await f.snapshot())?.documents.some((doc) => doc.text.includes('old artifact output')),
+		).toBe(false);
+	},
+);

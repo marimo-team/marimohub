@@ -23,6 +23,7 @@ import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk
 import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { BackgroundSpanProcessor } from './backgroundSpanProcessor';
+import { LoopSampler } from './loopSampler';
 import { logEvent } from './log';
 
 export interface OtelHandle {
@@ -121,6 +122,7 @@ export function startOtel(version: string): OtelHandle | null {
 	if (tracing) {
 		const provider = new NodeTracerProvider({
 			resource,
+			sampler: new LoopSampler(),
 			spanProcessors: [
 				new BackgroundSpanProcessor(new BatchSpanProcessor(new OTLPTraceExporter())),
 			],

@@ -1416,6 +1416,33 @@ describe('Preview failure recovery and boundaries', () => {
 		expect(reader.fetchWorkspace).not.toHaveBeenCalled();
 	});
 
+	it.each(['shortened', 'extended'] as const)(
+		'refreshes a preview deadline changed after launch discovery (%s)',
+		async (change) => {
+			const record = await create();
+			const key = paths.preview(pid, nid, record.id);
+			const initial = { ...record, expires_at: new Date(Date.now() + 20 * 60_000).toISOString() };
+			await api.bucket.put(key, JSON.stringify(initial));
+			const expiresAt = new Date(
+				Date.now() + (change === 'shortened' ? 10 : 30) * 60_000,
+			).toISOString();
+			const service = api.deps.services.previews;
+			const get = service.get.bind(service);
+			vi.spyOn(service, 'get').mockImplementationOnce(async (...args) => {
+				const discovered = await get(...args);
+				await api.bucket.put(key, JSON.stringify({ ...initial, expires_at: expiresAt }));
+				return discovered;
+			});
+			const session = await expectOk<Session>(
+				await api.request('POST', `${base}/${record.id}/sessions`, { mode: 'edit' }),
+			);
+			expect(
+				(await api.deps.services.sessions.getSession(pid, session.session_id))
+					.authorization_expires_at,
+			).toBe(expiresAt);
+		},
+	);
+
 	it('rejects an expired preview even when its runtime metadata is cached', async () => {
 		const record = await create();
 		const child = record.current!.notebook_id;
@@ -1697,6 +1724,19 @@ describe('Preview admission fencing', () => {
 		await expect(
 			service.reserveAdmission(record, record.current!.notebook_id, createSessionId(), 10),
 		).rejects.toThrow(NotFoundError);
+	});
+
+	it('reaps expired reservations created after the caller read the preview', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		const record = await create();
+		const service = api.deps.services.previews;
+		await service.reserveAdmission(record, record.current!.notebook_id, createSessionId(), 1);
+		vi.setSystemTime(Date.now() + 600_001);
+		const reaped = await service.reapAdmissions(record, async (): Promise<undefined> => {});
+		expect(reaped.admissions).toEqual([]);
+		await expect(
+			service.reserveAdmission(reaped, record.current!.notebook_id, createSessionId(), 1),
+		).resolves.toBeUndefined();
 	});
 
 	it('does not reap a reservation that commits after an expired reservation scan', async () => {

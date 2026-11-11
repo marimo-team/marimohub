@@ -423,6 +423,159 @@ describe('JobRunService', () => {
 		expect(await env.bucket.head(jobPaths.occurrence('20260902T0600Z'))).not.toBeNull();
 	});
 
+	it('bounds inspection and resumes past retained runs and fresh occurrence claims', async () => {
+		const now = Date.now();
+		await finalizedRun(now - 10_000, now);
+		await finalizedRun(now - 11_000, now);
+		const expired = await finalizedRun(now - 12_000);
+		for (let i = 0; i < 6; i++)
+			await runs.claimOccurrence(
+				job,
+				occurrenceKey(now + i * 60_000),
+				createRunId(),
+				new Date(now).toISOString(),
+			);
+		const get = vi.spyOn(env.bucket, 'get');
+		const list = vi.spyOn(env.bucket, 'list');
+		expect(await runs.pruneJob(job, 1000, now, 1000, 2)).toBe(0);
+		expect(get.mock.calls.filter(([key]) => key.endsWith('/run.json'))).toHaveLength(2);
+		expect(
+			list.mock.calls.filter(([options]) => options?.prefix?.endsWith('/occurrences/')),
+		).toHaveLength(1);
+		get.mockClear();
+		list.mockClear();
+		const restarted = new JobRunService(env.bucket);
+		expect(await restarted.pruneJob(job, 1000, now, 1000, 2)).toBe(1);
+		expect(get.mock.calls.filter(([key]) => key.endsWith('/run.json'))).toHaveLength(1);
+		expect(
+			await env.bucket.head(
+				paths.project(pid).notebook(nid).job(job.id).run(expired.run_id).record,
+			),
+		).toBeNull();
+		expect(
+			list.mock.calls.find(([options]) => options?.prefix?.endsWith('/occurrences/'))?.[0]
+				?.startAfter,
+		).toContain('/occurrences/');
+	});
+
+	it('revisits newly eligible records after completing the bounded rotation', async () => {
+		const now = Date.now();
+		const newlyExpired = await finalizedRun(now - 500);
+		await finalizedRun(now - 2000);
+		const oldest = await finalizedRun(now - 3000);
+		const key = paths.project(pid).notebook(nid).job(job.id).run(newlyExpired.run_id).record;
+		expect(await runs.pruneJob(job, 1000, now, 1000, 1)).toBe(1);
+		const restarted = new JobRunService(env.bucket);
+		expect(await restarted.pruneJob(job, 1000, now + 1000, 1000, 1)).toBe(1);
+		expect(await env.bucket.head(key)).not.toBeNull();
+		expect(
+			await env.bucket.head(paths.project(pid).notebook(nid).job(job.id).run(oldest.run_id).record),
+		).toBeNull();
+		expect(await restarted.pruneJob(job, 1000, now + 2000, 1000, 1)).toBe(1);
+		expect(await env.bucket.head(key)).toBeNull();
+	});
+
+	it('bounds expired run deletion and resumes without replaying deleted runs', async () => {
+		const now = Date.now();
+		for (let i = 0; i < 5; i++) await finalizedRun(now - 10_000 - i);
+		expect(await runs.pruneJob(job, 1000, now, 1000, 2)).toBe(2);
+		expect(await runs.pruneJob(job, 1000, now, 1000, 2)).toBe(2);
+		expect(await runs.pruneJob(job, 1000, now, 1000, 2)).toBe(1);
+	});
+
+	it.each(['read', 'delete'] as const)(
+		'advances bounded pruning past a persistent run %s failure and retries after wrapping',
+		async (failure) => {
+			const now = Date.now();
+			const blocked = await finalizedRun(now - 10_000);
+			const healthy = await finalizedRun(now - 11_000);
+			const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+			const blockedKey = jobPaths.run(blocked.run_id).record;
+			const get = env.bucket.get.bind(env.bucket);
+			const remove = env.bucket.delete.bind(env.bucket);
+			vi.spyOn(env.bucket, 'get').mockImplementation((key) => {
+				if (failure === 'read' && key === blockedKey) throw new Error('read unavailable');
+				return get(key);
+			});
+			vi.spyOn(env.bucket, 'delete').mockImplementation((keys) => {
+				if (failure === 'delete' && [keys].flat().includes(blockedKey))
+					throw new Error('delete unavailable');
+				return remove(keys);
+			});
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			expect(await runs.pruneJob(job, 1000, now, 1000, 1)).toBe(0);
+			expect(log).toHaveBeenCalled();
+			const restarted = new JobRunService(env.bucket);
+			expect(await restarted.pruneJob(job, 1000, now, 1000, 1)).toBe(1);
+			expect(await env.bucket.head(jobPaths.run(healthy.run_id).record)).toBeNull();
+			expect(await env.bucket.head(blockedKey)).not.toBeNull();
+			vi.restoreAllMocks();
+			expect(await restarted.pruneJob(job, 1000, now, 1000, 1)).toBe(1);
+			expect(await env.bucket.head(blockedKey)).toBeNull();
+		},
+	);
+
+	it.each(['read', 'delete'] as const)(
+		'propagates cancellation during bounded run %s',
+		async (phase) => {
+			const now = Date.now();
+			const run = await finalizedRun(now - 10_000);
+			const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+			const failure = new DOMException('Cancelled', 'AbortError');
+			if (phase === 'read') {
+				const get = env.bucket.get.bind(env.bucket);
+				vi.spyOn(env.bucket, 'get').mockImplementation((key) => {
+					if (key === jobPaths.run(run.run_id).record) throw failure;
+					return get(key);
+				});
+			} else vi.spyOn(env.bucket, 'delete').mockRejectedValueOnce(failure);
+			await expect(runs.pruneJob(job, 1000, now, 1000, 1)).rejects.toBe(failure);
+			expect(await env.bucket.head(`${jobPaths.base}/prune-runs.json`)).toBeNull();
+		},
+	);
+
+	it.each(['runs', 'occurrences'] as const)(
+		'surfaces a failed %s cursor write and resumes cleanup',
+		async (phase) => {
+			const now = Date.now();
+			await finalizedRun(now - 10_000);
+			await finalizedRun(now - 11_000);
+			const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+			const claims = [now - 180_000, now - 120_000, now + 60_000].map((instant) =>
+				occurrenceKey(instant),
+			);
+			for (const claim of claims)
+				await runs.claimOccurrence(job, claim, createRunId(), new Date(now).toISOString());
+			const key = `${jobPaths.base}/prune-${phase}.json`;
+			const put = env.bucket.put.bind(env.bucket);
+			vi.spyOn(env.bucket, 'put').mockImplementation((target, ...args) => {
+				if (target === key) throw new Error('cursor unavailable');
+				return put(target, ...args);
+			});
+			await expect(runs.pruneJob(job, 1000, now, 1000, 1)).rejects.toThrow('cursor unavailable');
+			expect(await env.bucket.head(key)).toBeNull();
+			expect(await env.bucket.head(jobPaths.occurrence(claims[0]))).toEqual(
+				phase === 'occurrences' ? null : expect.anything(),
+			);
+			for (const claim of claims.slice(1))
+				expect(await env.bucket.head(jobPaths.occurrence(claim))).not.toBeNull();
+			vi.restoreAllMocks();
+			expect(await new JobRunService(env.bucket).pruneJob(job, 1000, now, 1000, 1)).toBe(1);
+			expect(await runs.listRuns(pid, nid, job.id)).toEqual([]);
+			await runs.pruneJob(job, 1000, now, 1000, 1);
+			for (const claim of claims.slice(0, 2))
+				expect(await env.bucket.head(jobPaths.occurrence(claim))).toBeNull();
+			expect(await env.bucket.head(jobPaths.occurrence(claims[2]))).not.toBeNull();
+			const claimAgain = await runs.claimOccurrence(
+				job,
+				claims[2],
+				createRunId(),
+				new Date(now).toISOString(),
+			);
+			expect(claimAgain.claimed).toBe(false);
+		},
+	);
+
 	it('prunes 10 expired runs without reading 1,000 retained runs', async () => {
 		const now = Date.now();
 		const retention = 60_000;

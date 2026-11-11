@@ -19,6 +19,7 @@ export class MetadataCache<T> {
 		maxSize = METADATA_CACHE_MAX_ENTRIES,
 		entries?: EtagRecordCache<T>,
 		private readonly metrics: Metrics = noopMetrics,
+		private readonly labels: { cache: string; service: string } | Record<string, never> = {},
 	) {
 		this.entries = entries ?? new EtagRecordCache(maxSize);
 	}
@@ -35,7 +36,11 @@ export class MetadataCache<T> {
 				: await this.bucket.get(key);
 			if (!object) {
 				if (cached) this.metrics.increment('cache.conditional.reads', 1, { result: 'missing' });
-				this.metrics.increment('cache.metadata.reads', 1, { result: 'miss', consistency });
+				this.metrics.increment('cache.metadata.reads', 1, {
+					...this.labels,
+					result: 'miss',
+					consistency,
+				});
 				this.entries.delete(key);
 				continue;
 			}
@@ -45,12 +50,20 @@ export class MetadataCache<T> {
 					throw new Error('Invalid conditional read response');
 				}
 				this.metrics.increment('cache.conditional.reads', 1, { result: 'not_modified' });
-				this.metrics.increment('cache.metadata.reads', 1, { result: 'hit', consistency });
+				this.metrics.increment('cache.metadata.reads', 1, {
+					...this.labels,
+					result: 'hit',
+					consistency,
+				});
 				this.entries.get(key, cached.etag);
 				return structuredClone(cached.value);
 			}
 			if (cached) this.metrics.increment('cache.conditional.reads', 1, { result: 'modified' });
-			this.metrics.increment('cache.metadata.reads', 1, { result: 'miss', consistency });
+			this.metrics.increment('cache.metadata.reads', 1, {
+				...this.labels,
+				result: 'miss',
+				consistency,
+			});
 			const value = await parse(object);
 			if (consistency !== 'validated') return value;
 			this.entries.set(key, object.etag, value);

@@ -334,7 +334,7 @@ user identities, not machine identities or client-credentials grants.</p>
 </tr>
 <tr>
 <td><code>marimohub:edit</code></td>
-<td>Run, edit notebooks, and publish change requests</td>
+<td>Run, edit notebooks, save working branches, and publish change requests</td>
 </tr>
 <tr>
 <td><code>marimohub:full</code></td>

@@ -9,7 +9,7 @@ import { prefetchAppLink } from '@/api/deepLinks';
 import {
 	prefetchProjectSource,
 	prefetchAppEntry,
-	projectRosterQueryOptions,
+	firstProjectQueryOptions,
 } from '@/api/routePrefetch';
 import { readLastProject } from '@/components/Workspace/lastProject';
 import { appBasePath } from './basePath';
@@ -40,23 +40,30 @@ export async function preloadInitialRoute(client: QueryClient): Promise<InitialR
 		return {};
 	}
 	if (/^\/(cli|oauth)\//.test(path) || /^\/projects\/[^/]+\/notebooks\//.test(path)) return {};
-	const layout = import('@/components/Workspace/WorkspaceLayout');
 	const index = matchRoutes([{ path: '/projects/:pid' }], path)?.[0];
 	if (index) {
 		const data = prefetchProjectSource(client, index.params.pid!, search);
-		const [shell, page] = await Promise.all([layout, import('@/components/Project/Project'), data]);
+		const [shell, page] = await Promise.all([
+			import('@/components/Workspace/WorkspaceLayout'),
+			import('@/components/Project/Project'),
+			data,
+		]);
 		// A resolved React.lazy import still suspends on its first render.
 		return { Layout: shell.WorkspaceLayout, Project: page.Project };
 	}
 	if (path === '/') {
+		const firstProject = !search
+			? client.fetchQuery(firstProjectQueryOptions()).catch(() => null)
+			: Promise.resolve(null);
+		const userRequest = client.fetchQuery(userQueryOptions()).catch(() => null);
+		const layout = import('@/components/Workspace/WorkspaceLayout');
 		const home = import('@/components/Workspace/WorkspaceHome');
 		const project = import('@/components/Project/Project');
 		const projects = import('@/components/ProjectList/ProjectList');
-		const user = await client.fetchQuery(userQueryOptions()).catch(() => null);
+		const user = await userRequest;
 		if (user && !user.app_only && !search) {
 			const remembered = readLastProject(user.id);
-			const pid =
-				remembered ?? (await client.fetchQuery(projectRosterQueryOptions()).catch(() => []))[0]?.id;
+			const pid = remembered ?? (await firstProject)?.id;
 			if (pid) await prefetchProjectSource(client, pid, '');
 		}
 		const [shell, landing, page, list] = await Promise.all([layout, home, project, projects]);
@@ -67,5 +74,5 @@ export async function preloadInitialRoute(client: QueryClient): Promise<InitialR
 			Projects: list.ProjectList,
 		};
 	}
-	return { Layout: (await layout).WorkspaceLayout };
+	return { Layout: (await import('@/components/Workspace/WorkspaceLayout')).WorkspaceLayout };
 }

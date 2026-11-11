@@ -59,6 +59,7 @@ export type SearchDocument = z.infer<typeof SearchDocumentSchema>;
 export const SearchSnapshotSchema = z.object({
 	schema_version: z.literal(1),
 	indexed_at: z.iso.datetime(),
+	catalog_fingerprint: z.string().max(128).optional(),
 	partial: z.boolean(),
 	documents: z.array(SearchDocumentSchema).max(MAX_INDEX_DOCUMENTS),
 });
@@ -83,12 +84,16 @@ export const SearchHeadSchema = z.object({
 });
 export type SearchHead = z.infer<typeof SearchHeadSchema>;
 export const SearchCursorSchema = z.object({
+	schedule: z.string().max(64).optional(),
+	next_run_at: z.number().nonnegative().optional(),
+	round_started_at: z.number().nonnegative().optional(),
 	after: z.string().max(1024),
 	cleanup: z.string().max(2048).optional(),
 });
 export const SearchCheckpointSchema = z.object({
 	build: SearchBuildSchema.optional(),
 	ready: z.boolean().default(false),
+	catalog_fingerprint: z.string().max(128).optional(),
 	schema_version: z.literal(1),
 	generation: z.uuid(),
 	revision: z.string().nullable(),

@@ -31,8 +31,8 @@ the image".
 | Body                                       | HTTP  | Meaning                                                                                               |
 | ------------------------------------------ | ----- | ----------------------------------------------------------------------------------------------------- |
 | `{ "status": "ok", "loops": {…} }`         | `200` | No loop is `failing` or `stalled`, and no successful retention attempt triggers the duration warning. |
-| `{ "status": "degraded", "loops": {…} }`   | `200` | A loop is `failing`, or a successful retention attempt reached 80% of its deadline.                   |
-| `{ "status": "stalled", "loops": {…} }`    | `503` | At least one loop is `stalled`. Restarting the pod can recover.                                       |
+| `{ "status": "degraded", "loops": {…} }`   | `200` | A loop failed, or retention reached 80% of its deadline or stalled.                                   |
+| `{ "status": "stalled", "loops": {…} }`    | `503` | A non-retention loop stalled. Restarting the pod can recover.                                         |
 | `{ "status": "unavailable", "loops": {} }` | `200` | This process runs no loops (`MARIMOHUB_RUN_MAINTENANCE` is not `true`, e.g. API pods).                |
 
 A dependency outage (storage, compute) makes a loop `failing`, so the pod stays
@@ -43,7 +43,7 @@ intentionally returns `200` because a restart cannot fix slow work that still
 completes. Before any attempt completes, the response remains `ok` unless a
 loop stalls.
 
-Only a stalled loop returns `503`. The Helm chart and the example Kubernetes
+Only a stalled non-retention loop returns `503`. Overdue retention returns `degraded` with HTTP 200 so cleanup can finish. The Helm chart and the example Kubernetes
 manifests wire the maintenance Deployment's `livenessProbe`
 to this endpoint (`initialDelaySeconds: 10`, `periodSeconds: 20`,
 `timeoutSeconds: 5`, `failureThreshold: 3`). API pods keep `/api/health`.
@@ -107,20 +107,22 @@ On SIGTERM or SIGINT, the Node server:
 4. Disposes compute clients and flushes telemetry.
 
 `MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` sets the drain budget.
-The default is 30 seconds on API replicas and 120 seconds on maintenance.
+The default is 180 seconds on API replicas and 120 seconds on maintenance.
+The API budget allows two waves of 16 session teardowns that each take 60 seconds.
+Larger queues or slower providers can still exceed the budget; lifecycle maintenance retries unfinished stops.
 On expiry, the server logs `drain_timeout` and allows up to 10 seconds for final cleanup. A forced exit can interrupt unfinished captures.
 A second signal during the drain exits immediately, without cleanup.
 
 Set the platform's kill window to the drain budget plus 20 seconds or more.
-With the defaults, this is 50 seconds for API replicas and 140 seconds for maintenance.
+With the defaults, this is 200 seconds for API replicas and 140 seconds for maintenance.
 
-| Platform          | Setting (default)                                                    | Guidance                                                                                                 |
-| ----------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Kubernetes / Helm | `terminationGracePeriodSeconds` (chart: API 50 s, maintenance 140 s) | The chart derives it from the drain budget.                                                              |
-| Docker / Compose  | `stop_grace_period`, `docker stop -t` (10 s)                         | Set `50s` on API replicas and `140s` on maintenance. The compose examples set `140s`.                    |
-| Cloud Run         | Fixed (10 s)                                                         | Set the budget to 10 or less on every service. Expect a forced drain, or run maintenance on GKE or a VM. |
-| Amazon ECS        | `stopTimeout` (30 s, maximum 120 s)                                  | Set `stopTimeout: 50` on API tasks. On maintenance, set `stopTimeout: 120` and a budget of 100 or less.  |
-| systemd           | `TimeoutStopSec` (90 s)                                              | Set `TimeoutStopSec=140` on a maintenance unit, or lower the budget.                                     |
+| Platform          | Setting (default)                                                     | Guidance                                                                                                 |
+| ----------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Kubernetes / Helm | `terminationGracePeriodSeconds` (chart: API 200 s, maintenance 140 s) | The chart derives it from the drain budget.                                                              |
+| Docker / Compose  | `stop_grace_period`, `docker stop -t` (10 s)                          | Set `200s` on API replicas and `140s` on maintenance. The compose examples set `140s`.                   |
+| Cloud Run         | Fixed (10 s)                                                          | Set the budget to 10 or less on every service. Expect a forced drain, or run maintenance on GKE or a VM. |
+| Amazon ECS        | `stopTimeout` (30 s, maximum 120 s)                                   | Set `stopTimeout: 120` and a drain budget of 100 or less on both API and maintenance tasks.              |
+| systemd           | `TimeoutStopSec` (90 s)                                               | Set `TimeoutStopSec=200` on API units and `140` on maintenance, or lower the budget.                     |
 
 With Helm, set the maintenance budget through `maintenance.shutdownTimeoutSeconds`.
 The chart rejects `MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` in `extraEnv`, `config`, and `secrets.data`.
@@ -215,6 +217,8 @@ of the remaining objects. Unreadable or invalid metadata logs
 `projects.cleanup_failed` and leaves the project intact.
 
 The catalog entry remains until cleanup succeeds, so later sweeps can retry failures.
+Each sweep attempts at most 25 projects with one five-minute budget for the entire purge batch, checked between projects. Metadata discovery and an in-progress deletion can extend the elapsed time.
+Each project deletes at most five pages of 200 objects. Remaining objects preserve progress across restarts.
 App pool tombstones and preview records follow separate retention rules.
 
 ## Reclaim a stuck editor sandbox
@@ -455,9 +459,11 @@ include `MaintenanceLock.acquire`, `MaintenanceLock.release`, and
 the acquire span adds `marimohub.lock.acquired` (boolean). Lock contention does
 not mark the acquisition span as an error.
 
-The Node server omits background `Bucket.*`, `SessionService.getSession`, and lock
-spans unless they have ERROR status or a recorded exception. This filter leaves
-loop summaries, other operations, and foreground spans unchanged.
+The Node server samples 1% of background loop traces before it creates their child spans.
+`OTEL_TRACES_LOOP_SAMPLE_RATIO` controls this additional limit, from `0` to `1`.
+The global sampler still applies. Set the loop ratio to `1` for diagnostic captures.
+Within sampled traces, routine storage and session-read spans are omitted unless they record an error.
+Unsampled failures remain visible through operational logs and loop health metrics.
 
 `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER` /
 `OTEL_TRACES_SAMPLER_ARG`, `OTEL_EXPORTER_OTLP_HEADERS`, and
@@ -489,6 +495,22 @@ carries `trace_id` / `span_id`, so your log pipeline can pivot from a line
 straight to its trace.
 
 ### Metrics (OpenTelemetry)
+
+Node request logs include `storage_ops` counts for `get`, `head`, `list`, `put`, `delete`, `putStream`, and the multipart calls `multipart_create`, `multipart_putPart`, `multipart_complete`, and `multipart_abort`. Counts include failed calls and describe bucket-port calls, not provider RPCs.
+Counting ends with the response. Deferred work is excluded after that point.
+Storage keys and credentials are never included in these counts.
+
+`cache.metadata.reads` includes `cache` and `service` labels, plus the existing result and consistency labels.
+`sandbox.reconnect` counts attachment attempts by `path` and `method` (`reference` or `lookup`).
+It measures attempts, not successful provider connections.
+`session_provision.cap_source` identifies the admission read path: `index` or `scan`.
+`notebook.artifact_uploads_skipped` counts unchanged HTML and session snapshots omitted from storage writes.
+
+The Node deferred-work queue reserves 16 execution slots for session teardown.
+Long-lived conversations and surface startup promises remain tracked without occupying ordinary queue slots.
+Teardown overflow remains tracked without blocking the response. Other queue overflow retains inline fallback.
+Queue gauges with `lane=teardown` report the reserved lane; per-label gauges identify individual task types.
+Shutdown still uses its configured deadline. It cannot guarantee completion during a prolonged provider outage.
 
 The server records RED metrics per request — the `http.server.request.duration`
 histogram (labelled by route, method, and status code) and the
@@ -587,3 +609,14 @@ Compute backends differ in cost model — pick per [Compute](/compute):
   orphan backstops.
 - `kubernetes` / `docker`: you own the nodes; cap per-kernel CPU/memory/GPU.
 - `MARIMOHUB_MAX_SESSIONS_PER_USER` bounds concurrent kernels per user.
+
+### Background performance metrics
+
+Search exports `search.documents.reused`, `search.documents.read`, and `search.projects.unchanged`, tagged by source.
+`search.round.duration_ms` measures crawl rounds. `search.snapshot.parse_ms` measures snapshot parsing and posting-list construction.
+Notebook cleanup exports `notebook_gc.visited`, `notebook_gc.rotation.position`, and `notebook_gc.rotation.total`.
+The rotation gauges show progress through the current notebook catalog.
+
+App-pool, warm-pool, search, and job loops retain their leases between ticks.
+They renew by CAS before the remaining lease becomes shorter than the next attempt's deadline.
+Shutdown releases an idle retained lease. An unfinished attempt leaves its lease to expire.

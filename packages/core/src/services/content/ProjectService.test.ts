@@ -1402,6 +1402,41 @@ describe('ProjectService', () => {
 	});
 
 	describe('hardDeleteProject', () => {
+		it('rotates past a full batch of failed project deletions', async () => {
+			const ids: ProjectId[] = [];
+			for (let i = 0; i < 26; i++) {
+				const project = await projects.createProject(
+					{ name: `Deleted ${i}`, description: '' },
+					ACTOR,
+				);
+				await projects.deleteProject(project.id, ACTOR);
+				ids.push(project.id);
+			}
+			ids.sort();
+			const remove = vi.spyOn(projects, 'hardDeleteProject').mockImplementation(async (id) => {
+				if (id !== ids[25]) throw new Error('storage unavailable');
+				return true;
+			});
+			expect(await projects.sweepDeletedProjects(0)).toBe(0);
+			expect(remove).toHaveBeenCalledTimes(25);
+			remove.mockClear();
+			expect(await projects.sweepDeletedProjects(0)).toBe(1);
+			expect(remove).toHaveBeenCalledExactlyOnceWith(ids[25], 5);
+		});
+
+		it('bounds project object deletion and resumes from objects remaining in storage', async () => {
+			const project = await projects.createProject({ name: 'Large', description: '' }, ACTOR);
+			await projects.deleteProject(project.id, ACTOR);
+			for (let i = 0; i < 450; i++) await bucket.put(`projects/${project.id}/files/${i}`, 'data');
+			expect(await projects.hardDeleteProject(project.id, 1)).toBe(false);
+			expect((await catalog.getCurrentSnapshot()).projects.map((entry) => entry.id)).toContain(
+				project.id,
+			);
+			expect(await projects.hardDeleteProject(project.id, 1)).toBe(false);
+			expect(await projects.hardDeleteProject(project.id, 1)).toBe(true);
+			expect((await catalog.getCurrentSnapshot()).projects).toEqual([]);
+		});
+
 		it('removes the catalog entry and is idempotent', async () => {
 			const project = await projects.createProject({ name: 'Doomed', description: '' }, ACTOR);
 			await projects.deleteProject(project.id, ACTOR);

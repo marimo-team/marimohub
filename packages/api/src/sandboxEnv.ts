@@ -22,6 +22,7 @@ import type {
 	UserId,
 	WorkloadRef,
 } from '@marimo-hub/core';
+import { JOB_PROVISION_ALLOWANCE_MS } from '@marimo-hub/core/jobs';
 import type { JobRunContext } from '@marimo-hub/core/jobs';
 import type { FederatedCredentialResolver } from '@marimo-hub/core/ports/integrations';
 import { federationFor } from './federation';
@@ -78,7 +79,7 @@ export function federatedCredentialsFor(
 	deps: Partial<Pick<ApiDeps, 'wif'>>,
 	project: Project,
 	workload: WorkloadRef,
-	options: { restricted?: boolean } = {},
+	options: { restricted?: boolean; minimumReuseLifetimeMs?: number } = {},
 ): FederatedCredentials | undefined {
 	const wif = federationFor(project, deps.wif, options);
 	if (!wif) return;
@@ -87,14 +88,17 @@ export function federatedCredentialsFor(
 	const key = JSON.stringify([project.id, workload.kind]);
 	return Object.assign(
 		() =>
-			(exchange ??= cache.getShared(key, () =>
-				exchangeFederatedStorageCredentials(
-					wif.issuer,
-					wif.issuerUrl,
-					wif.target,
-					project.id,
-					workload,
-				),
+			(exchange ??= cache.getShared(
+				key,
+				() =>
+					exchangeFederatedStorageCredentials(
+						wif.issuer,
+						wif.issuerUrl,
+						wif.target,
+						project.id,
+						workload,
+					),
+				options.minimumReuseLifetimeMs,
 			)),
 		{ sourceIdentity: JSON.stringify([cache.scopeId, key]) },
 	);
@@ -233,7 +237,9 @@ export async function resolveJobSandboxEnv(
 	const identity = await deps.services.identities.get(userId).catch(() => null);
 	const fields = { project_id: run.project_id, job_id: run.job_id, run_id: run.run_id };
 	const workload: WorkloadRef = { kind: 'job-run', id: run.run_id };
-	const federatedCredentials = federatedCredentialsFor(deps, project, workload);
+	const federatedCredentials = federatedCredentialsFor(deps, project, workload, {
+		minimumReuseLifetimeMs: run.timeout_seconds * 1000 + JOB_PROVISION_ALLOWANCE_MS,
+	});
 	const [wifVars, render] = await Promise.all([
 		resolveFederatedVars(deps, {
 			project,

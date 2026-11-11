@@ -61,6 +61,78 @@ describe('IdentityService', () => {
 			expect(put).toHaveBeenCalledTimes(1);
 		});
 
+		it('shares concurrent unchanged writes and skips an unchanged stored profile after restart', async () => {
+			const user = { id: uid('burst'), email: 'ada@x.io', name: 'Ada' };
+			const put = vi.spyOn(bucket, 'put');
+			await Promise.all(Array.from({ length: 20 }, () => identities.upsert(user)));
+			expect(put).toHaveBeenCalledTimes(1);
+			await new IdentityService(bucket).upsert(user);
+			expect(put).toHaveBeenCalledTimes(1);
+		});
+
+		it('does not publish an unchanged profile read after suspension wins', async () => {
+			const user = { id: uid('suspension-race'), email: 'ada@x.io', name: 'Ada' };
+			await identities.upsert(user);
+			const restarted = new IdentityService(bucket);
+			const captured = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const get = bucket.get.bind(bucket);
+			vi.spyOn(bucket, 'get').mockImplementationOnce(async (key) => {
+				const object = await get(key);
+				captured.resolve();
+				await release.promise;
+				return object;
+			});
+			const pending = restarted.upsert(user);
+			await captured.promise;
+			await restarted.setSuspension(user.id, true);
+			release.resolve();
+			await pending;
+			expect(await restarted.isSuspended(user.id)).toBe(true);
+			expect((await restarted.get(user.id))?.suspended_at).toBeDefined();
+		});
+
+		it('does not clear suspension when a successful profile write returns late', async () => {
+			const user = { id: uid('late-profile'), email: 'ada@x.io', name: 'Ada' };
+			await identities.upsert(user);
+			const written = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const put = bucket.put.bind(bucket);
+			vi.spyOn(bucket, 'put').mockImplementationOnce(async (...args) => {
+				const result = await put(...args);
+				written.resolve();
+				await release.promise;
+				return result;
+			});
+			const pending = identities.upsert({ ...user, name: 'Updated' });
+			await written.promise;
+			await identities.setSuspension(user.id, true);
+			release.resolve();
+			await pending;
+			expect(await identities.isSuspended(user.id)).toBe(true);
+		});
+
+		it('preserves queued profile changes, including a return to the cached profile', async () => {
+			const user = { id: uid('changes'), email: 'ada@x.io', name: 'Ada' };
+			await identities.upsert(user);
+			await Promise.all([identities.upsert({ ...user, name: 'Grace' }), identities.upsert(user)]);
+			expect((await identities.get(user.id))?.name).toBe('Ada');
+		});
+
+		it('retries after a failed profile write and preserves suspension', async () => {
+			const user = { id: uid('retry'), email: 'ada@x.io', name: 'Ada' };
+			await identities.upsert(user);
+			await identities.setSuspension(user.id, true);
+			const other = new IdentityService(bucket);
+			vi.spyOn(bucket, 'put').mockRejectedValueOnce(new Error('unavailable'));
+			await expect(other.upsert({ ...user, name: 'Updated' })).rejects.toThrow('unavailable');
+			await other.upsert({ ...user, name: 'Updated' });
+			expect(await other.get(user.id)).toMatchObject({
+				name: 'Updated',
+				suspended_at: expect.any(String),
+			});
+		});
+
 		it('re-writes when the email, name, or profile picture changes', async () => {
 			const put = vi.spyOn(bucket, 'put');
 
