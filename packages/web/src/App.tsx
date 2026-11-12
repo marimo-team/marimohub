@@ -81,6 +81,7 @@ const DataBrowserPage = lazyRoute(() => import('@/components/DataBrowser/DataBro
 const AdminUsersPage = lazyRoute(() => import('@/components/Admin/AdminUsersPage'));
 const AdminSettingsPage = lazyRoute(() => import('@/components/Admin/AdminSettingsPage'));
 const AdminColorsPage = lazyRoute(() => import('@/components/Admin/AdminColorsPage'));
+const AdminMigrationsPage = lazyRoute(() => import('@/components/Admin/AdminMigrationsPage'));
 const AdminRuntimePage = lazyRoute(() => import('@/components/Admin/AdminRuntimePage'));
 const AdminDebugPage = lazyRoute(() => import('@/components/Admin/AdminDebugPage'));
 const AdminPolicyAnalyzerPage = lazyRoute(
@@ -250,6 +251,7 @@ function StandardLayout({ initialRoutes }: { initialRoutes: InitialRoutes }) {
 							<Route path="policy-analyzer" element={<AdminPolicyAnalyzerPage />} />
 							<Route path="debug" element={<AdminDebugPage />} />
 							<Route path="runtime" element={<AdminRuntimePage />} />
+							<Route path="migrations" element={<AdminMigrationsPage />} />
 						</Route>
 						<Route path="*" element={<NotFoundPage />} />
 					</Routes>

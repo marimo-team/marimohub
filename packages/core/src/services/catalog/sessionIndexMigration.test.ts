@@ -111,7 +111,10 @@ it.each([
 	});
 	await expect(services.migrations.tick()).rejects.toThrow();
 	expect(services.migrations.isComplete(SESSION_INDEX_MIGRATION)).toBe(false);
-	expect(await (await bucket.get(receipt))!.json()).toEqual({ version: 1, status: 'pending' });
+	expect(await (await bucket.get(receipt))!.json()).toMatchObject({
+		version: 1,
+		status: 'pending',
+	});
 	vi.restoreAllMocks();
 	await bucket.put(key, JSON.stringify(session));
 	await bucket.delete(indexKey);
@@ -212,7 +215,10 @@ it('cancels during a session read without publishing an index or completion', as
 	});
 	await expect(services.migrations.tick(controller.signal)).rejects.toThrow('shutdown');
 	expect(await index.read(ACTOR)).toBeNull();
-	expect(await (await bucket.get(receipt))!.json()).toEqual({ version: 1, status: 'pending' });
+	expect(await (await bucket.get(receipt))!.json()).toMatchObject({
+		version: 1,
+		status: 'pending',
+	});
 	spy.mockRestore();
 	expect(await createServices(bucket).migrations.tick()).toBe(true);
 });
@@ -269,7 +275,10 @@ it.each(['list', 'read', 'corrupt', 'wrong-source', 'write'] as const)(
 		await index.update(ACTOR, async () => []);
 		await services.migrations.tick();
 		await services.migrations.tick();
-		const checkpoint = await (await bucket.get(receipt))!.json();
+		const checkpoint = await (await bucket.get(receipt))!.json<{
+			cursor: string;
+			progress: unknown;
+		}>();
 		const indexKey = paths.sessionIndexForUser(ACTOR);
 		await bucket.delete(indexKey);
 		const first = [...records].sort((a, b) => a.session_id.localeCompare(b.session_id))[0];
@@ -297,7 +306,10 @@ it.each(['list', 'read', 'corrupt', 'wrong-source', 'write'] as const)(
 		await expect(cold.migrations.tick()).rejects.toThrow();
 		expect(cold.migrations.isComplete(SESSION_INDEX_MIGRATION)).toBe(false);
 		expect(await index.read(ACTOR)).toBeNull();
-		expect(await (await bucket.get(receipt))!.json()).toEqual(checkpoint);
+		expect(await (await bucket.get(receipt))!.json()).toMatchObject({
+			cursor: checkpoint.cursor,
+			progress: checkpoint.progress,
+		});
 		vi.restoreAllMocks();
 		await bucket.put(firstKey, JSON.stringify(first));
 		await finish(cold);
@@ -355,7 +367,10 @@ it.each(['list', 'read'] as const)(
 			getSpy.mock.calls.filter(([key]) => key === paths.sessionIndexForUser(ACTOR)),
 		).toHaveLength(1);
 		expect(await index.read(ACTOR)).toBeNull();
-		expect(await (await bucket.get(receipt))!.json()).toEqual({ version: 1, status: 'pending' });
+		expect(await (await bucket.get(receipt))!.json()).toMatchObject({
+			version: 1,
+			status: 'pending',
+		});
 		vi.restoreAllMocks();
 		await finish(services);
 		expect((await index.read(ACTOR))?.entries).toHaveLength(3);

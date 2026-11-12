@@ -52,9 +52,17 @@ it('retains the preceding checkpoint when a later page fails and replays partial
 		if (key === 'records/3') throw new Error('write failed');
 	});
 	const key = paths.migration(definition.id);
-	const checkpoint = await (await bucket.get(key))!.json();
+	const checkpoint = await (await bucket.get(key))!.json<{
+		status: string;
+		cursor: string;
+		progress: unknown;
+	}>();
 	await expect(runner.tick()).rejects.toThrow('write failed');
-	expect(await (await bucket.get(key))!.json()).toEqual(checkpoint);
+	expect(await (await bucket.get(key))!.json()).toMatchObject({
+		status: checkpoint.status,
+		cursor: checkpoint.cursor,
+		progress: checkpoint.progress,
+	});
 	expect(runner.isComplete(definition.id)).toBe(false);
 	migrate.mockResolvedValue(undefined);
 	const restarted = new MigrationService(bucket, [definition]);
@@ -109,7 +117,7 @@ it('waits for active visitors and cancels queued work before releasing the lease
 	release.resolve();
 	await rejection;
 	expect(migrate).toHaveBeenCalledTimes(BUCKET_SCAN_CONCURRENCY);
-	expect(await (await bucket.get(paths.migration('records-v1')))!.json()).toEqual({
+	expect(await (await bucket.get(paths.migration('records-v1')))!.json()).toMatchObject({
 		version: 1,
 		status: 'pending',
 	});

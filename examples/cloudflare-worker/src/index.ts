@@ -176,6 +176,20 @@ function createDeploymentDeps(env: Env): ApiDeps {
 	};
 
 	return {
+		requestMigrationTick: async () => {
+			const ctx = executionContext.getStore();
+			if (!ctx) throw new Error('Migration invocation context unavailable');
+			const deadline = new AbortController();
+			const timer = setTimeout(
+				() => deadline.abort(new DOMException('Migration deadline', 'TimeoutError')),
+				20_000,
+			);
+			ctx.waitUntil(
+				Promise.resolve()
+					.then(() => services.migrations.tick(deadline.signal))
+					.finally(() => clearTimeout(timer)),
+			);
+		},
 		theme: parseTheme(env),
 		backgroundWork,
 		teardownInline: true,

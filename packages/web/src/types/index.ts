@@ -143,3 +143,5 @@ export type User = ClientUser;
 export type ServerVersion = ClientDeploymentInfo;
 
 export type RuntimeDashboard = components['schemas']['RuntimeDashboard'];
+
+export type MigrationDashboard = components['schemas']['MigrationDashboard'];

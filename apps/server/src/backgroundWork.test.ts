@@ -268,3 +268,19 @@ describe('DeferredWorkQueue', () => {
 		}
 	});
 });
+
+it('rejects explicit admission at capacity without executing inline, then drains admitted work', async () => {
+	const queue = new DeferredWorkQueue(new WideEventMetrics(), { concurrency: 1, queueSize: 1 });
+	const gate = Promise.withResolvers<void>();
+	const overflow = vi.fn(async () => {});
+	expect(queue.tryDefer('migration.attempt', () => gate.promise)).toBe(true);
+	expect(queue.tryDefer('migration.attempt', () => gate.promise)).toBe(true);
+	expect(queue.tryDefer('migration.attempt', overflow)).toBe(false);
+	await Promise.resolve();
+	expect(overflow).not.toHaveBeenCalled();
+	gate.resolve();
+	await queue.drain();
+	expect(queue.tryDefer('migration.attempt', overflow)).toBe(true);
+	await queue.drain();
+	expect(overflow).toHaveBeenCalledOnce();
+});

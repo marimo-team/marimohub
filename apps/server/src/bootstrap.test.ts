@@ -121,6 +121,21 @@ describe('bootstrap', () => {
 		},
 	);
 
+	it('registers manual migrations before completion and cancels them during shutdown', async () => {
+		const gate = Promise.withResolvers<boolean>();
+		const tick = vi.spyOn(deps.services.migrations, 'tick').mockReturnValue(gate.promise);
+		const handle = await bootstrap(BASE_ENV, makeHarness(deps).overrides);
+		await deps.requestMigrationTick!();
+		expect(tick).toHaveBeenCalledOnce();
+		const signal = tick.mock.calls[0][0]!;
+		expect(signal.aborted).toBe(false);
+		const draining = handle!.drain();
+		expect(signal.aborted).toBe(true);
+		await expect(deps.requestMigrationTick!()).rejects.toThrow('unavailable');
+		gate.resolve(false);
+		await draining;
+	});
+
 	it('configures the shared logger from LOG_LEVEL', async () => {
 		const harness = makeHarness(deps);
 		const handle = await bootstrap({ ...BASE_ENV, LOG_LEVEL: 'warn' }, harness.overrides);

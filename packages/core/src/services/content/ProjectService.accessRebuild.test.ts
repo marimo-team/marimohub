@@ -29,7 +29,10 @@ describe('project access summary rebuild', () => {
 				default_role: 'none',
 			}),
 		);
-		expect(await reader.migrateAccessSummaries({ force })).toEqual({ done: true });
+		expect(await reader.migrateAccessSummaries({ force })).toEqual({
+			done: true,
+			progress: { delta: 1 },
+		});
 		const [entry] = (await catalog.getCurrentSnapshot()).projects;
 		expect(entry.access).toEqual({
 			members: [{ user_id: subject.id, role: 'viewer' }],
@@ -50,7 +53,10 @@ describe('project access summary rebuild', () => {
 			paths.project(project.id).meta,
 			JSON.stringify({ ...project, members: [{ user_id: subject.id, role: 'viewer' }] }),
 		);
-		expect(await reader.migrateAccessSummaries({ force })).toEqual({ done: true });
+		expect(await reader.migrateAccessSummaries({ force })).toEqual({
+			done: true,
+			progress: { delta: 1 },
+		});
 		expect((await catalog.getCurrentSnapshot()).projects[0].access).toEqual(before);
 		expect((await reader.listProjects({ subject })).map((entry) => entry.id)).toEqual([project.id]);
 	});

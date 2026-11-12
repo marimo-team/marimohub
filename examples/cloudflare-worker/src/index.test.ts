@@ -865,3 +865,32 @@ it('keeps HTTP requests available when background receipt refresh fails', async 
 		),
 	).toBe(false);
 });
+
+it('requires an invocation context before starting a manual migration attempt', async () => {
+	const deps = buildDeps(new Request('https://hub.example.com'), makeEnv());
+	const tick = vi.spyOn(deps.services.migrations, 'tick');
+	await expect(deps.requestMigrationTick!()).rejects.toThrow('context unavailable');
+	expect(tick).not.toHaveBeenCalled();
+});
+
+it('registers manual migration work on the request invocation without awaiting its batch', async () => {
+	const env = { ...makeEnv(), MARIMOHUB_SUPER_ADMINS: ACTOR };
+	const gate = Promise.withResolvers<boolean>();
+	const tick = vi.spyOn(MigrationService.prototype, 'tick').mockReturnValue(gate.promise);
+	const tasks: Promise<unknown>[] = [];
+	const ctx = makeContext(vi.fn((work) => tasks.push(work)));
+	const response = await worker.fetch(
+		new Request('https://hub.example.com/api/v1/admin/migrations/run', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: '{}',
+		}),
+		env,
+		ctx,
+	);
+	expect(response.status).toBe(202);
+	expect(tick).toHaveBeenCalledOnce();
+	expect(tasks.length).toBeGreaterThan(0);
+	gate.resolve(true);
+	await Promise.allSettled(tasks);
+});

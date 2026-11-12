@@ -9,6 +9,7 @@ const TABS = [
 	{ to: '/admin/audit-logs', label: 'Audit logs' },
 	{ to: '/admin/policy-analyzer', label: 'Policy' },
 	{ to: '/admin/runtime', label: 'Runtime' },
+	{ to: '/admin/migrations', label: 'Migrations' },
 	{ to: '/admin/debug', label: 'Debug' },
 ];
 

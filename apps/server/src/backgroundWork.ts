@@ -65,21 +65,31 @@ export class DeferredWorkQueue implements BackgroundWork {
 			if (overflow) void overflow.catch(() => {});
 			return;
 		}
-		if (this.canStart(label)) {
-			this.start(task);
-			return;
-		}
-		if (
-			this.tasks.length >= this.limits.queueSize ||
-			this.queuedCount(label) >= this.limits.perLabelQueueSize
-		) {
+		if (!this.admit(task)) {
 			try {
 				this.metrics.increment('background.inline_fallback', 1, { label });
 			} catch {}
 			return this.execute(task);
 		}
+	}
+
+	tryDefer(label: string, run: () => Promise<unknown>): boolean {
+		return this.admit({ label, run: context.bind(context.active(), run) });
+	}
+
+	private admit(task: Task): boolean {
+		if (this.canStart(task.label)) {
+			this.start(task);
+			return true;
+		}
+		if (
+			this.tasks.length >= this.limits.queueSize ||
+			this.queuedCount(task.label) >= this.limits.perLabelQueueSize
+		)
+			return false;
 		this.tasks.push(task);
-		this.record(label);
+		this.record(task.label);
+		return true;
 	}
 
 	async drain(): Promise<void> {

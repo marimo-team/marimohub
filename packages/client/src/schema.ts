@@ -534,6 +534,43 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/admin/migrations': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Inspect automatic migrations */
+		get: operations['admin.migrations.list'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/admin/migrations/run': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Request a bounded migration attempt
+		 * @description Registers one best-effort attempt with the host. Dependencies, leases and retry backoff remain in effect. Automatic continuation requires the host scheduler. Registration is not durable delivery.
+		 */
+		post: operations['admin.migrations.run'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/admin/policy-analyzer/metadata': {
 		parameters: {
 			query?: never;
@@ -3610,6 +3647,63 @@ export interface components {
 			/** @enum {string|null} */
 			default_role: 'manager' | 'editor' | 'viewer' | 'app-user' | null;
 			super_admins: string[];
+		};
+		MigrationDashboard: {
+			rows: {
+				id: string;
+				title: string;
+				description: string;
+				impact: string;
+				progress_unit?: string;
+				retired: boolean;
+				/** @enum {string} */
+				status:
+					| 'waiting'
+					| 'initializing'
+					| 'dependency'
+					| 'running'
+					| 'resuming'
+					| 'retrying'
+					| 'blocked'
+					| 'unavailable'
+					| 'completed'
+					| 'not_recorded';
+				dependencies: string[];
+				/** Format: date-time */
+				started_at?: string;
+				/** Format: date-time */
+				last_attempt_at?: string;
+				/** Format: date-time */
+				last_progress_at?: string;
+				attempts?: number;
+				progress?: {
+					processed: number;
+					total?: number;
+					partial: boolean;
+				};
+				/** Format: date-time */
+				completed_at?: string;
+				failure?: {
+					/** @enum {string} */
+					code: 'migration_failed' | 'timeout';
+					/** Format: date-time */
+					at: string;
+					message: string;
+				};
+			}[];
+			/** Format: date-time */
+			observed_at: string;
+			incomplete: boolean;
+			counts: {
+				waiting: number;
+				running: number;
+				completed: number;
+				needs_attention: number;
+			};
+			/** @enum {string} */
+			action: 'ready' | 'already_complete' | 'blocked' | 'unavailable';
+			poll: boolean;
+			actions_available: boolean;
 		};
 		PolicyAnalyzerMetadata: {
 			/** @enum {number} */
@@ -9103,6 +9197,198 @@ export interface operations {
 			};
 			/** @description Access forbidden */
 			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'admin.migrations.list': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Saved migration progress */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['MigrationDashboard'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'admin.migrations.run': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': Record<string, never>;
+			};
+		};
+		responses: {
+			/** @description Already complete */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							/** @enum {string} */
+							status: 'requested' | 'already_complete';
+						};
+					};
+				};
+			};
+			/** @description Attempt registered */
+			202: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							/** @enum {string} */
+							status: 'requested' | 'already_complete';
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
 				headers: {
 					[name: string]: unknown;
 				};
