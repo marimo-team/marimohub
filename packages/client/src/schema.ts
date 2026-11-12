@@ -3675,14 +3675,14 @@ export interface components {
 				last_attempt_at?: string;
 				/** Format: date-time */
 				last_progress_at?: string;
-				/** Format: date-time */
-				completed_at?: string;
 				attempts?: number;
 				progress?: {
 					processed: number;
 					total?: number;
 					partial: boolean;
 				};
+				/** Format: date-time */
+				completed_at?: string;
 				failure?: {
 					/** @enum {string} */
 					code: 'migration_failed' | 'timeout';

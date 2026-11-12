@@ -14,17 +14,22 @@ export const MigrationFailureSchema = z.object({
 	at: utcTimestamp(),
 });
 
-export const migrationTelemetry = {
+const migrationActivityFields = {
 	started_at: utcTimestamp().optional(),
 	last_attempt_at: utcTimestamp().optional(),
 	last_progress_at: utcTimestamp().optional(),
 	attempts: z.number().int().nonnegative().optional(),
 	progress: MigrationProgressSchema.optional(),
+};
+
+export const migrationTelemetry = {
+	...migrationActivityFields,
 	waiting_reason: z.literal('waiting_for_initialization').optional(),
 	failure: MigrationFailureSchema.optional(),
 };
 
 export interface MigrationDescriptor {
+	/** Permanent identity: change the ID when changing the migration's meaning. */
 	id: string;
 	title?: string;
 	description?: string;
@@ -52,12 +57,8 @@ export const MigrationRowSchema = z.object({
 		'not_recorded',
 	]),
 	dependencies: z.array(z.string()),
-	started_at: utcTimestamp().optional(),
-	last_attempt_at: utcTimestamp().optional(),
-	last_progress_at: utcTimestamp().optional(),
+	...migrationActivityFields,
 	completed_at: utcTimestamp().optional(),
-	attempts: z.number().int().nonnegative().optional(),
-	progress: MigrationProgressSchema.optional(),
 	failure: MigrationFailureSchema.extend({ message: z.string() }).optional(),
 });
 export const MigrationInspectionSchema = z.object({

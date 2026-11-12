@@ -1826,9 +1826,6 @@ components:
               last_progress_at:
                 type: string
                 format: date-time
-              completed_at:
-                type: string
-                format: date-time
               attempts:
                 type: integer
                 minimum: 0
@@ -1846,6 +1843,9 @@ components:
                 required:
                   - processed
                   - partial
+              completed_at:
+                type: string
+                format: date-time
               failure:
                 type: object
                 properties:

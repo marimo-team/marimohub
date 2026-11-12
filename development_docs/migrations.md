@@ -58,32 +58,29 @@ after the other scheduled work finishes.
 
 ### Admin progress and manual attempts
 
-Session-authenticated super admins can open **Admin → Migrations**. The page shows
-saved progress, completion receipts, dependencies, and safe failure messages.
-It reads known checkpoint keys without listing storage or running domain scans.
-Unknown historical IDs remain untouched. Retired descriptors appear separately.
+Session-authenticated super admins can open **Admin → Migrations** to inspect
+progress, dependencies, completion receipts, and safe failure messages. Inspection
+reads known checkpoints without storage listings, domain scans, or repairs.
+Retired migrations appear separately; unknown historical IDs remain untouched.
 
-**Request attempt** registers one bounded attempt with the host. It preserves
-active leases, dependencies, and retry backoff. It does not target a specific row.
-Registration is best effort; process death can lose a request. Startup and scheduled
-attempts resume from saved checkpoints. Closing the browser does not cancel registered work.
+**Request attempt** registers one bounded attempt, without targeting a row or
+bypassing dependencies, leases, or backoff. Closing the browser does not cancel it.
+Registration is not durable: process death can lose a request. Startup and scheduled
+attempts resume from saved checkpoints.
 
-Node uses its shutdown-aware queue and a 55-second deadline. A full queue or shutdown
-returns unavailable without inline execution. Worker requests use invocation-local
-`waitUntil` with a 20-second cancellation budget. Worker deployments require the
-configured cron for automatic continuation; the page does not verify live cron health.
-Hosts without registration support expose inspection but disable manual attempts.
+Node uses a 55-second deadline and rejects registration during shutdown or queue
+saturation. Worker requests use invocation-local `waitUntil` with a 20-second
+cancellation budget. Automatic Worker continuation requires cron; the page does
+not verify live scheduler health. Hosts without registration support disable the action.
 
-Progress counts committed batch visits, including skipped or already-current entries.
-Concurrent changes can revisit entries, so counts do not establish unique coverage.
-A legacy cursor without telemetry starts a partial counter: “visited since tracking began”.
-Missing telemetry means unavailable, not zero. Older writers can discard optional
-telemetry during rolling deployments without changing execution semantics.
+Progress counts committed visits, including skipped and already-current entries,
+not unique items. A legacy cursor starts a partial counter labeled “visited since
+tracking began”. Missing telemetry means unavailable, not zero. Older writers can
+discard telemetry during rolling deployments without changing execution semantics.
 
-Failures use fixed messages and timestamps. Check server logs for diagnosis.
-Invalid checkpoints block their dependents; independent migrations can continue.
-Inspection never repairs or overwrites corrupt records. Shutdown cancellation is
-not an operator failure. Failed attempts preserve the last saved progress.
+Check server logs to diagnose failures. Invalid checkpoints block dependents while
+independent migrations can continue. Failed attempts retain saved progress;
+shutdown cancellation is not an operator failure.
 
 ### Project access v1
 
@@ -175,14 +172,13 @@ node dist/session-index-rebuild.mjs
 3. Check cancellation before storage work and publication. Preserve domain concurrency safeguards.
 4. Keep readers compatible with unmigrated data. Keep checkpoint reads out of domain request methods.
 5. Test interruption, competing replicas, lost responses, corrupt records,
-   concurrent mutations, and completed migrations without repeated I/O.
+   concurrent mutations, retirement, and completed migrations without repeated I/O.
 6. Retain definitions required by supported upgrades. A replacement must handle
    all earlier supported data shapes, or retain its prerequisites in registry order.
    Set `after` to the IDs it needs; omitting it waits for every earlier migration.
 7. Remove obsolete definitions when supported upgrades no longer need them.
    Retain their receipts and move display metadata to `retiredMigrations`.
-   Remove stale dependency declarations. The viewer reads retained descriptors
-   without listing storage. Missing historical receipts display “Not recorded”.
+   Remove stale dependencies. Missing historical receipts display “Not recorded”.
    Update readiness consumers to use the replacement migration or the current format.
 
 A registry entry supplies execution and display metadata:
@@ -207,7 +203,6 @@ Compute `delta` inside each successful domain CAS attempt, including the final b
 Do not increment a counter outside a retry callback. Return
 `waiting_reason: 'waiting_for_initialization'` without progress when initialization is required.
 A fixed work set can also return `progress.total`; it must cover all committed visits.
-Test replay, competing replicas, cancellation, lost responses, and retirement before registration.
 The page and API require no migration-specific code.
 
 This runner is unsuitable for non-idempotent external effects or destructive work

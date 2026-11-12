@@ -8641,11 +8641,11 @@ components:
             version:
               type: number
               const: 1
+            cursor:
+              type: string
             status:
               type: string
               const: pending
-            cursor:
-              type: string
           required:
             - version
             - status
@@ -8705,11 +8705,11 @@ components:
             version:
               type: number
               const: 1
+            cursor:
+              type: string
             status:
               type: string
               const: running
-            cursor:
-              type: string
             lease:
               type: string
               minLength: 1

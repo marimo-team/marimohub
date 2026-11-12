@@ -22,41 +22,23 @@ export type MigrationBatch = ({ done: true } | { done: false; cursor?: string })
 };
 
 export interface BackgroundMigration extends MigrationDescriptor {
-	/** Permanent identity: change the ID when changing the migration's meaning. */
-	id: string;
 	/** Earlier migrations that must complete first. Defaults to every earlier registered migration. */
 	after?: readonly string[];
 	/** Bounded, idempotent work. A crash or expired lease can replay this batch. */
 	runBatch(context: MigrationContext): Promise<MigrationBatch>;
 }
 
+const migrationRecord = z.looseObject({ ...migrationTelemetry, version: z.literal(1) });
+const migrationCheckpoint = migrationRecord.extend({ cursor: z.string().optional() });
+
 export const MigrationStateSchema = z.discriminatedUnion('status', [
-	z
-		.object({
-			...migrationTelemetry,
-			version: z.literal(1),
-			status: z.literal('complete'),
-			completed_at: utcTimestamp(),
-		})
-		.loose(),
-	z
-		.object({
-			...migrationTelemetry,
-			version: z.literal(1),
-			status: z.literal('pending'),
-			cursor: z.string().optional(),
-		})
-		.loose(),
-	z
-		.object({
-			...migrationTelemetry,
-			version: z.literal(1),
-			status: z.literal('running'),
-			cursor: z.string().optional(),
-			lease: z.string().min(1),
-			expires_at: z.number().int().nonnegative(),
-		})
-		.loose(),
+	migrationRecord.extend({ status: z.literal('complete'), completed_at: utcTimestamp() }),
+	migrationCheckpoint.extend({ status: z.literal('pending') }),
+	migrationCheckpoint.extend({
+		status: z.literal('running'),
+		lease: z.string().min(1),
+		expires_at: z.number().int().nonnegative(),
+	}),
 ]);
 
 type MigrationState = z.infer<typeof MigrationStateSchema>;
@@ -82,22 +64,19 @@ export class MigrationService {
 		private readonly retired: readonly MigrationDescriptor[] = [],
 	) {
 		const ids = new Set<string>();
-		for (const migration of migrations) {
-			if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(migration.id) || ids.has(migration.id)) {
-				throw new Error(`Invalid or duplicate migration ID: ${migration.id}`);
-			}
-			const after = migration.after ?? [...ids];
-			const unknown = after.find((dependency) => !ids.has(dependency));
-			if (unknown !== undefined) {
-				throw new Error(`Migration ${migration.id} must follow registered migration ${unknown}`);
-			}
-			this.prerequisites.set(migration.id, after);
-			ids.add(migration.id);
+		for (const { id } of [...migrations, ...retired]) {
+			if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id) || ids.has(id))
+				throw new Error(`Invalid or duplicate migration ID: ${id}`);
+			ids.add(id);
 		}
-		for (const descriptor of retired) {
-			if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(descriptor.id) || ids.has(descriptor.id))
-				throw new Error(`Invalid or duplicate migration ID: ${descriptor.id}`);
-			ids.add(descriptor.id);
+		const earlier = new Set<string>();
+		for (const migration of migrations) {
+			const after = migration.after ?? [...earlier];
+			const unknown = after.find((dependency) => !earlier.has(dependency));
+			if (unknown !== undefined)
+				throw new Error(`Migration ${migration.id} must follow registered migration ${unknown}`);
+			this.prerequisites.set(migration.id, after);
+			earlier.add(migration.id);
 		}
 		this.migrations = [...migrations];
 	}
@@ -130,23 +109,16 @@ export class MigrationService {
 			const dependencies = (this.prerequisites.get(definition.id) ?? []).filter(
 				(id) => !readyReceipts.has(id),
 			);
-			const status: MigrationRow['status'] =
-				error ??
-				(state?.status === 'complete'
-					? 'completed'
-					: retired
-						? 'not_recorded'
-						: state?.status === 'running' && state.expires_at > now
-							? 'running'
-							: dependencies.length > 0
-								? 'dependency'
-								: state?.waiting_reason
-									? 'initializing'
-									: state?.failure
-										? 'retrying'
-										: state?.status === 'running'
-											? 'resuming'
-											: 'waiting');
+			let status: MigrationRow['status'] = error ?? 'waiting';
+			if (!error) {
+				if (state?.status === 'complete') status = 'completed';
+				else if (retired) status = 'not_recorded';
+				else if (state?.status === 'running' && state.expires_at > now) status = 'running';
+				else if (dependencies.length > 0) status = 'dependency';
+				else if (state?.waiting_reason) status = 'initializing';
+				else if (state?.failure) status = 'retrying';
+				else if (state?.status === 'running') status = 'resuming';
+			}
 			return {
 				id: definition.id,
 				title: definition.title ?? definition.id,
