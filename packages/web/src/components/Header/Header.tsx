@@ -131,6 +131,7 @@ export function Header({ navigationTrigger }: { navigationTrigger?: ReactNode })
 									else if (key === 'copy-id') {
 										void copy(user.id).then((ok) => ok && toast.success('User id copied'));
 									} else if (key === 'api-tokens') tokensDialog.open();
+									else if (key === 'github-account') void navigate('/account/github');
 									else if (key === 'mcp') mcpDialog.open();
 									else if (key === 'org-integrations') orgIntegrationsDialog.open();
 									else if (key === 'admin') void navigate('/admin/users');
@@ -170,6 +171,14 @@ export function Header({ navigationTrigger }: { navigationTrigger?: ReactNode })
 									>
 										<Plug className="size-3.5" />
 										MCP
+									</MenuItem>
+								) : null}
+								{capabilities?.source_control?.github_account_management ? (
+									<MenuItem
+										id="github-account"
+										className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] outline-none focus:bg-muted max-md:min-h-11"
+									>
+										GitHub account
 									</MenuItem>
 								) : null}
 								{user.is_super_admin && (

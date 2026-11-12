@@ -2052,6 +2052,16 @@ async function startNotebookSessionOnce(
 			}).then((layers) =>
 				composeSessionEnv({ ...layers, endpointDelivery: credentialsEndpoint !== undefined }),
 			);
+			const gitIdentity =
+				mode === 'edit' && sandbox.gitIdentity === 'user'
+					? deps.services.identities.get(user.id).then((identity) => {
+							return {
+								name: identity?.name ?? user.name ?? user.email,
+								email: identity?.email ?? user.email,
+							};
+						})
+					: undefined;
+			gitIdentity?.catch(() => {});
 			const launchStrategy = resolveLaunchStrategyForSession({
 				entryNotebookKey: launchSource.entryNotebookKey,
 				bucket: bucketHandle,
@@ -2062,7 +2072,7 @@ async function startNotebookSessionOnce(
 			});
 			// Record-phase or boot failures can reject before provisioning consumes these.
 			for (const pending of [sessionEnv, launchStrategy]) pending.catch(() => {});
-			return { sessionEnv, launchStrategy };
+			return { sessionEnv, launchStrategy, gitIdentity };
 		};
 		let envResolution: ReturnType<typeof startEnvResolution> | undefined;
 		if (replacementTarget) {
@@ -2112,6 +2122,7 @@ async function startNotebookSessionOnce(
 				? (previewIdleTimeout(sandbox.sessionLifetime?.idleTimeoutMsByMode[mode]) as Millis)
 				: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
 			sessionEnv: envResolution!.sessionEnv,
+			gitIdentity: envResolution!.gitIdentity,
 			entryNotebook: workspacePolicy.entryNotebook,
 			launchStrategy: envResolution!.launchStrategy,
 			launchMode: mode,

@@ -1,7 +1,7 @@
 import { serveMarimoAssets } from './marimoAssets';
 import { serve } from '@hono/node-server';
 import type { ServerType } from '@hono/node-server';
-import { httpInstrumentationMiddleware } from '@hono/otel';
+import { safeHttpInstrumentation } from './httpTracing';
 import { secureHeaders } from 'hono/secure-headers';
 import { Hono } from 'hono';
 import type { ApiDeps } from '@marimo-hub/api';
@@ -110,9 +110,7 @@ export async function bootstrap(
 	deps.sandbox.thumbnailDeadline = () => thumbnailDeadline;
 	deps.backgroundWork = backgroundWork;
 	// Installed for metrics-only mode too: RED metrics still record, spans don't.
-	const tracing = otel
-		? httpInstrumentationMiddleware({ disableTracing: !otel.tracing })
-		: undefined;
+	const tracing = otel ? safeHttpInstrumentation({ disableTracing: !otel.tracing }) : undefined;
 	deps.tracingMiddleware = (c, next) =>
 		requestStorage.middleware(c, async () => {
 			if (tracing) await tracing(c, next);

@@ -1,3 +1,4 @@
+import { safeHttpInstrumentation } from './httpTracing';
 import { httpInstrumentationMiddleware } from '@hono/otel';
 import { logOperationalError, StoredObjectError } from '@marimo-hub/core';
 import { metrics as metricsApi, ROOT_CONTEXT, SpanStatusCode, trace } from '@opentelemetry/api';
@@ -454,4 +455,28 @@ describe('OTEL_SDK_DISABLED', () => {
 			metricsExporter({ OTEL_METRICS_EXPORTER: 'prometheus', OTEL_SDK_DISABLED: 'TRUE' }),
 		).toBe(null);
 	});
+});
+
+it('excludes OAuth callback secrets from HTTP spans while retaining ordinary request tracing', async () => {
+	const exporter = new InMemorySpanExporter();
+	const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+	const app = new Hono();
+	app.use('*', safeHttpInstrumentation({ tracerProvider: provider }));
+	app.get('/api/v1/me/github/callback', (c) =>
+		c.text(c.req.query('code') ? 'received' : 'missing'),
+	);
+	app.get('/ordinary', (c) => c.text('ok'));
+	expect(
+		await (
+			await app.request('/api/v1/me/github/callback?code=SECRET_CODE&state=SECRET_STATE')
+		).text(),
+	).toBe('received');
+	await app.request('/ordinary');
+	await provider.forceFlush();
+	const spans = exporter.getFinishedSpans();
+	expect(spans.length).toBeGreaterThan(0);
+	expect(JSON.stringify(spans.map((span) => span.attributes))).not.toMatch(
+		/SECRET_CODE|SECRET_STATE/,
+	);
+	await provider.shutdown();
 });

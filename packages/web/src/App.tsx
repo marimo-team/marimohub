@@ -20,6 +20,11 @@ import { ApiRequestError } from '@/api/client';
 import { appBasePath, withBasePath } from '@/lib/basePath';
 import { RetainedEditorRoute } from '@/components/NotebookPage/RetainedEditorRoute';
 
+const GitHubAccountPage = lazyRoute(async () => {
+	const module = await import('@/components/Account/GitHubAccountPage');
+	return { default: module.GitHubAccountPage };
+});
+
 const WorkspaceLayout = lazyRoute(async () => {
 	const module = await import('@/components/Workspace/WorkspaceLayout');
 	return { default: module.WorkspaceLayout };
@@ -211,6 +216,7 @@ function StandardLayout({ initialRoutes }: { initialRoutes: InitialRoutes }) {
 				<Suspense fallback={<PageFallback />}>
 					<Routes>
 						<Route path="/" element={<Home />} />
+						<Route path="/account/github" element={<GitHubAccountPage />} />
 						<Route path={SEARCH_ROUTE} element={<SearchPage />} />
 						<Route path={PROJECT_SEARCH_ROUTE} element={<SearchPage />} />
 						<Route path="/apps" element={<AppsPage />} />

@@ -125,6 +125,35 @@ describe('Session routes', () => {
 		persistWorkspace: 'source',
 		...overrides,
 	});
+	it.each([
+		{ setting: 'user' as const, mode: 'edit' as const, enabled: true },
+		{ setting: 'none' as const, mode: 'edit' as const, enabled: false },
+		{ setting: 'user' as const, mode: 'app' as const, enabled: false },
+	])(
+		'injects authenticated creator Git identity only for opted-in editors: $setting $mode',
+		async ({ setting, mode, enabled }) => {
+			const { instance, calls } = makeFakeSandbox();
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				subject: { name: 'Session Creator', email: 'creator@example.com' },
+				compute: fakeComputeFrom(instance),
+				deps: { sandbox: sandboxConfig({ gitIdentity: setting }) },
+			});
+			vi.spyOn(api.deps.services.identities, 'get').mockResolvedValue(null);
+			await expectOk(await api.request('POST', sessionsPath(), { mode }));
+			const identity = calls.setEnvVars.find((vars) => vars.GIT_AUTHOR_EMAIL !== undefined);
+			if (enabled)
+				expect(identity).toMatchObject({
+					GIT_AUTHOR_NAME: 'Session Creator',
+					GIT_AUTHOR_EMAIL: 'creator@example.com',
+					GIT_COMMITTER_NAME: 'Session Creator',
+					GIT_COMMITTER_EMAIL: 'creator@example.com',
+				});
+			else expect(identity).toBeUndefined();
+		},
+	);
+
 	const authWorld = () => {
 		const { instance, calls } = makeFakeSandbox();
 		return {

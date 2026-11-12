@@ -175,6 +175,7 @@ These CAS-managed records also have one writer each:
 - `DeepLinkService` owns each slug at `_system/deep-links/{slug}.json` and each
   notebook-local `deep-links/{slug}.json` index marker. Global records use CAS
   release markers and must not be deleted.
+- `SourceControlAccountService` owns `_system/source-control-accounts/{user-id}/head.json`, each connection record, and `_system/source-control-account-cleanup.json`. Retain heads and credential-free connection tombstones to fence delayed callbacks and refreshes.
 - `IdentityService` owns each identity at `_system/identities/{user-id}.json`.
 - `CliAuthorizationService` owns each short-lived CLI login grant at
   `_system/cli-authorizations/{authorization-id}.json`.

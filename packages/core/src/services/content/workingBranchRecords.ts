@@ -1,3 +1,8 @@
+import {
+	PublicationActorSchema,
+	SignedPreparationSchema,
+	CommitVerificationSchema,
+} from '../../sourceControlPublication';
 import { utcTimestamp } from '../../stringFormats';
 import { logOperationalError } from '../../operationalLog';
 import { listAllPrefixes } from '../catalog/storage';
@@ -23,6 +28,7 @@ export const WORKING_BRANCH_RETENTION_MS = 24 * 60 * 60 * 1000;
 // window can no longer land, so an unconfirmed dispatch may be finished as a conflict.
 export const WORKING_BRANCH_DISPATCH_BOUND_MS = 15 * 60 * 1000;
 export const WorkingBranchCreationSchema = z.object({
+	publication_actor: PublicationActorSchema.optional(),
 	fingerprint: z.string(),
 	notebook_id: NotebookIdSchema,
 	id: z.string(),
@@ -43,6 +49,8 @@ export const WorkingBranchChangeRequestSchema = z.object({
 });
 export type WorkingBranchChangeRequest = z.infer<typeof WorkingBranchChangeRequestSchema>;
 export const WorkingBranchRecordSchema = z.object({
+	publication_actor: PublicationActorSchema.optional(),
+	change_request_actor: PublicationActorSchema.optional(),
 	schema_version: z.literal(1),
 	id: z.string().regex(/^[a-f0-9]{64}$/),
 	project_id: ProjectIdSchema,
@@ -64,6 +72,9 @@ export const WorkingBranchRecordSchema = z.object({
 });
 export type WorkingBranchRecord = z.infer<typeof WorkingBranchRecordSchema>;
 export const WorkingBranchSaveSchema = z.object({
+	verification: CommitVerificationSchema.optional(),
+	publication_actor: PublicationActorSchema.optional(),
+	signed_preparation: SignedPreparationSchema.optional(),
 	schema_version: z.literal(1),
 	id: z.string().regex(/^[a-f0-9]{64}$/),
 	project_id: ProjectIdSchema,

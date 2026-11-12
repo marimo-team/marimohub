@@ -6,6 +6,7 @@ import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-brid
 import type { Hono, MiddlewareHandler } from 'hono';
 import type { LanguageModel, ToolLoopAgentSettings } from 'ai';
 import type {
+	SourceControlAccountService,
 	BackgroundWork,
 	AppPoolPolicy,
 	WarmPoolService,
@@ -126,6 +127,7 @@ export interface SandboxUserHomeResolver {
 
 /** Everything about how a notebook sandbox is mounted, exposed, and persisted. */
 export interface SandboxConfig {
+	gitIdentity?: 'none' | 'user';
 	/** Ingress identity headers stripped before HTTP and WebSocket kernel forwarding. */
 	credentialHeaders?: readonly string[];
 	/** Bucket connection info the sandbox mounts for notebook files (was `c.env.R2_*`). */
@@ -464,6 +466,8 @@ export interface ApiDeps {
 	compute: SandboxProvider;
 	/** Server-side source-control publishers and readers. Provider credentials never enter a sandbox. */
 	sourceControl?: SourceControlRegistry;
+	githubPublishActor?: 'app' | 'user';
+	githubAccounts?: SourceControlAccountService;
 	authenticator: Authenticator;
 	/** Outbound notification channel. `createApi` supplies a no-op when absent. */
 	notifier?: Notifier;

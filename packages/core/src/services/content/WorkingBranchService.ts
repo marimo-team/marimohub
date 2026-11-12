@@ -1,3 +1,4 @@
+import type { PublicationActor } from '../../sourceControlPublication';
 import { z } from 'zod';
 import { SingleFlight } from '../../cache';
 import { logEvent } from '../../logs';
@@ -125,10 +126,10 @@ export class WorkingBranchService {
 		this.enabled = deps.sourceControl?.workingBranchesEnabled === true;
 	}
 
-	private provider(provider: string, repo: string, pid: ProjectId) {
+	private provider(provider: string, repo: string, pid: ProjectId, actor?: PublicationActor) {
 		const registry = this.deps.sourceControl;
 		const reader = registry?.getReader(provider, pid);
-		const writer = registry?.getPublisher(provider, pid)?.workingBranches;
+		const writer = registry?.getPublisher(provider, pid, actor)?.workingBranches;
 		if (
 			!registry?.workingBranchesEnabled ||
 			!reader?.supportsRepository(repo) ||
@@ -165,7 +166,7 @@ export class WorkingBranchService {
 			this.deps.sourceControl?.repositoryHosts,
 		);
 		if (!initial.provider) throw new BadRequestError('Unsupported repository provider');
-		const { reader, writer } = this.provider(initial.provider, initial.repo, pid);
+		const { reader } = this.provider(initial.provider, initial.repo, pid);
 		const fingerprint = await sha256Hex(
 			JSON.stringify({ ...input, repo: initial.repo, root_path: initial.root_path }),
 		);
@@ -186,6 +187,10 @@ export class WorkingBranchService {
 				receiptKey,
 				JSON.stringify({
 					fingerprint,
+					publication_actor: await this.deps.sourceControl?.publicationActor?.(
+						initial.provider,
+						actor,
+					),
 					notebook_id: notebookId,
 					id,
 					fork_commit: fork.commit,
@@ -199,6 +204,12 @@ export class WorkingBranchService {
 		if (creation.fingerprint !== fingerprint)
 			throw new ConflictError('Idempotency key was used for different notebook settings');
 		const nid = creation.notebook_id;
+		const { writer } = this.provider(
+			initial.provider,
+			initial.repo,
+			pid,
+			creation.publication_actor,
+		);
 		await this.store.create({
 			schema_version: 1,
 			id,
@@ -209,6 +220,7 @@ export class WorkingBranchService {
 			base_branch: initial.branch,
 			fork_commit: creation.fork_commit,
 			created_by: actor,
+			publication_actor: creation.publication_actor,
 			created_at: new Date().toISOString(),
 			state: 'claimed',
 		});
@@ -404,6 +416,12 @@ export class WorkingBranchService {
 				notebook_id: receipt.notebook_id,
 				save_id: receipt.id,
 				stage: receipt.state,
+				actor_kind: receipt.publication_actor?.kind ?? 'app',
+				github_account_id:
+					receipt.publication_actor?.kind === 'user'
+						? receipt.publication_actor.accountId
+						: undefined,
+				verification: receipt.verification?.status,
 				commit: receipt.commit,
 				changed_files: receipt.changes.length,
 			});
@@ -435,7 +453,7 @@ export class WorkingBranchService {
 		// Source identity is pinned by the head record; only dispatch and sync re-validate the notebook.
 		const { source } = await this.source(pid, nid);
 		return this.store.withLease(pid, nid, async (check, update, record) => {
-			const { reader, writer } = this.provider(record.provider, source.repo, pid);
+			const { reader } = this.provider(record.provider, source.repo, pid);
 			let receipt: WorkingBranchSave;
 			try {
 				receipt = await this.getSave(pid, nid, id);
@@ -466,6 +484,10 @@ export class WorkingBranchService {
 					notebook_id: nid,
 					session_id: input.sessionId,
 					author: actor,
+					publication_actor: await this.deps.sourceControl?.publicationActor?.(
+						record.provider,
+						actor,
+					),
 					fingerprint,
 					message: input.message ?? 'Save notebook changes',
 					co_author: input.coAuthor,
@@ -520,7 +542,22 @@ export class WorkingBranchService {
 					error: 'Captured source bytes expired; start a new save',
 				});
 			}
-			const context: SaveContext = { input, source, record, reader, writer, check, update, finish };
+			let writer: WorkingBranchWriter | undefined;
+			const context: SaveContext = {
+				input,
+				source,
+				record,
+				reader,
+				get writer() {
+					return (writer ??= registryWriter());
+				},
+				check,
+				update,
+				finish,
+			};
+			const registryWriter = () =>
+				this.provider(record.provider, source.repo, pid, receipt.publication_actor).writer;
+
 			while (true) {
 				const stage = SAVE_STAGES[receipt.state];
 				if (!stage.handler) return receipt;
@@ -651,42 +688,68 @@ export class WorkingBranchService {
 		receipt: WorkingBranchSave,
 		context: SaveContext,
 	): Promise<WorkingBranchSave> {
+		let currentReceipt = receipt;
 		const { source, writer, check, finish } = context;
-		const validated = await this.validateRemoteSave(receipt, context);
+		const validated = await this.validateRemoteSave(currentReceipt, context);
 		if (SAVE_STAGES[validated.state].terminal) return validated;
-		const sized = await this.validateSaveSize(receipt, context);
+		const sized = await this.validateSaveSize(currentReceipt, context);
 		if (SAVE_STAGES[sized.state].terminal) return sized;
-		const changes = await this.payload(receipt, source.root_path);
+		const changes = await this.payload(currentReceipt, source.root_path);
 		if (
-			receipt.changes.some(
+			currentReceipt.changes.some(
 				(change) => change.path === source.entry_notebook && change.operation === 'delete',
 			)
 		) {
 			return finish({
-				...receipt,
+				...currentReceipt,
 				state: 'conflict',
 				error: 'The notebook entry file cannot be deleted. Restore it before starting a new save.',
 			});
 		}
-		let prepared: { commit: string };
+		let prepared: Awaited<ReturnType<WorkingBranchWriter['prepareCommit']>>;
 		try {
 			prepared = await writer.prepareCommit({
+				preparation: {
+					assertCurrent: async () => {
+						await check();
+						await context.input.authorize?.();
+					},
+					read: async () =>
+						(
+							await this.getSave(
+								currentReceipt.project_id,
+								currentReceipt.notebook_id,
+								currentReceipt.id,
+							)
+						).signed_preparation,
+					write: async (signed_preparation) => {
+						currentReceipt = await this.putSave({ ...currentReceipt, signed_preparation }, check);
+					},
+				},
 				repository: source.repo,
-				parentCommit: receipt.base_commit,
-				message: receipt.message,
-				coAuthor: receipt.co_author,
+				parentCommit: currentReceipt.base_commit,
+				message: currentReceipt.message,
+				coAuthor: currentReceipt.co_author,
 				changes,
 			});
 		} catch (error) {
 			if (!(error instanceof ConflictError)) throw error;
 			return finish({
-				...receipt,
+				...currentReceipt,
 				state: 'conflict',
 				error:
 					'Captured source conflicts with the repository tree. Export recovery or correct the files before starting a new save.',
 			});
 		}
-		return this.putSave({ ...receipt, state: 'commit_prepared', commit: prepared.commit }, check);
+		return this.putSave(
+			{
+				...currentReceipt,
+				state: 'commit_prepared',
+				commit: prepared.commit,
+				verification: prepared.verification,
+			},
+			check,
+		);
 	}
 
 	private async dispatchSave(
@@ -995,7 +1058,23 @@ export class WorkingBranchService {
 			const { source, record } = await this.source(pid, nid);
 			if (record.active_save)
 				throw new ConflictError('Complete the pending save before opening a PR');
-			const { writer } = this.provider(record.provider, source.repo, pid);
+			const publicationActor =
+				record.change_request_actor ??
+				(await this.deps.sourceControl?.publicationActor?.(record.provider, actor));
+			if (
+				!record.change_request &&
+				publicationActor?.kind === 'user' &&
+				publicationActor.userId !== actor
+			)
+				throw new ForbiddenError('Only the original author can finish opening this pull request');
+			if (!record.change_request_actor && publicationActor)
+				await update((current) => ({ ...current, change_request_actor: publicationActor }));
+			const { writer } = this.provider(
+				record.provider,
+				source.repo,
+				pid,
+				record.change_request ? undefined : publicationActor,
+			);
 			const remote = await writer.inspectBranch({
 				repository: source.repo,
 				branch: source.branch,
@@ -1114,6 +1193,34 @@ export class WorkingBranchService {
 				}
 				// An unknown ref outcome can still become a remote commit; keep its capture and baseline.
 				if (!SAVE_STAGES[receipt.state].terminal) continue;
+				if (receipt.signed_preparation && !receipt.signed_preparation.cleaned) {
+					const record = await this.store.read(receipt.project_id, receipt.notebook_id);
+					const publisher = this.deps.sourceControl?.getPublisher(
+						record.provider,
+						receipt.project_id,
+					);
+					if (
+						await publisher?.cleanupPreparation?.({
+							repository: record.source.repo,
+							preparation: receipt.signed_preparation,
+						})
+					) {
+						await withCasRetry(this.deps.bucket, async (cas) => {
+							const fresh = await this.deps.bucket.get(item.key);
+							if (!fresh) return;
+							const value = await readStored(WorkingBranchSaveSchema, fresh, item.key);
+							if (value.signed_preparation?.branch !== receipt.signed_preparation?.branch) return;
+							await cas.put(
+								item.key,
+								JSON.stringify({
+									...value,
+									signed_preparation: { ...value.signed_preparation, cleaned: true },
+								}),
+								{ onlyIfEtagMatches: fresh.etag },
+							);
+						});
+					}
+				}
 				const captureKey = workingBranchPaths(receipt.project_id, receipt.notebook_id).capture(
 					receipt.id,
 				);

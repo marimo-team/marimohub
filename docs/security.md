@@ -451,3 +451,30 @@ Configuring the [GitHub App](configuration.md#github-app) enables previews.
 Protect previewed branches with GitHub branch protection or rulesets, so that only
 trusted people can push to them. Restrict the App's repositories with
 [repository project policies](syncing.md#repository-project-policies).
+
+## Personal GitHub publishing
+
+**Use isolated notebook origins for untrusted code.** Same-origin proxy notebooks can invoke authenticated hub actions as the viewer, including personal GitHub publication.
+Server-only tokens, [app routing](configuration.md), and iframe controls do not isolate code on a shared origin.
+
+Personal publishing requires hub authorization, repository policy approval, and GitHub user/App access.
+Account connections grant no hub roles or API token scopes.
+Only browser sessions can manage connections. API tokens, service accounts, MCP credentials, and job credentials cannot manage them.
+
+OAuth binds one-use state and S256 PKCE to the hub user, browser, App, origin, and callback URI.
+It uses an expiring HttpOnly cookie and shared storage rate limits.
+Access and refresh tokens use path-bound encryption in hub storage.
+They never enter sandboxes, Git configuration, clone URLs, captured workspaces, or status responses.
+Encryption protects a bucket-only leak. Server or KEK compromise can expose credentials.
+Provider errors omit token bodies and transport causes from application logs.
+
+**Exclude OAuth callback query strings from reverse-proxy logs.** The hub omits callback URLs from HTTP tracing.
+
+**A verified signature proves provenance, not human review.** Agents and notebooks can cause authorized commits without the connected person's review.
+The guarantee covers new personal publication commits, not repository history or merge results.
+[Local Git identity](syncing.md#local-git-identity) uses editable profile metadata that can become public.
+
+Disconnect blocks new credential use before remote revocation. It cannot recall requests already sent to GitHub.
+If revocation is uncertain, revoke the App authorization in GitHub account settings.
+App mode does not revoke personal credentials. Its shared installation authority is independent of each user's GitHub permissions.
+Limit installation repositories and hub repository policies. See [Operations](operations.md#personal-github-credentials) before configuration changes or backup restore.

@@ -31,6 +31,25 @@ describe('createFromEnv auth backend selection', () => {
 		MARIMOHUB_COMPUTE_BACKEND: 'none',
 	};
 
+	it.each([undefined, 'none', 'user'])('configures local Git identity %s', (value) => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_GIT_SANDBOX_IDENTITY: value,
+		});
+		expect(deps.sandbox.gitIdentity).toBe(value ?? 'none');
+	});
+
+	it('rejects an unknown local Git identity setting', () => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+				MARIMOHUB_GIT_SANDBOX_IDENTITY: 'github',
+			}),
+		).toThrow(/MARIMOHUB_GIT_SANDBOX_IDENTITY/);
+	});
+
 	it.each([
 		[undefined, 'notebook'],
 		['', 'notebook'],

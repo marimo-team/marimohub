@@ -31,6 +31,7 @@ const WIRING_SOURCES = [
 	fileURLToPath(new URL('./projectAlerts.ts', import.meta.url)),
 	fileURLToPath(new URL('./resourceSecurity.ts', import.meta.url)),
 	fileURLToPath(new URL('./sourceControl.ts', import.meta.url)),
+	fileURLToPath(new URL('./sourceControlAccounts.ts', import.meta.url)),
 	fileURLToPath(new URL('./surfaces.ts', import.meta.url)),
 	fileURLToPath(new URL('../../../apps/server/src/index.ts', import.meta.url)),
 	fileURLToPath(new URL('../../../apps/server/src/bootstrap.ts', import.meta.url)),

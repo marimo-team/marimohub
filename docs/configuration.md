@@ -531,9 +531,15 @@ Headless notebook runs on a cron schedule or on demand, with a durable run histo
 
 Connect to GitHub, GitLab, and Azure DevOps Services. Editors can create pull sources and use **Sync now**. Managers can publish session edits as draft change requests. Provider credentials stay on the server. See [Syncing from external sources](./syncing.md) for modes and limits.
 
+### Local Git identity
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_GIT_SANDBOX_IDENTITY` | `user` sets local edit-session attribution from the hub profile. Shared editors use the creator’s identity. It does not sign commits or change publication. See [Local Git identity](syncing.md#local-git-identity). | — | `none` | `user` |
+
 ### Working branches
 
-Requires GitHub publishing and pull-source credentials. Editors publish through the server identity under existing repository/project policies. See [Working notebooks](syncing.md#working-notebooks) for usage, limits, and recovery.
+Requires a GitHub App. Editors publish with the configured App or personal identity, subject to repository policies. See [Working notebooks](syncing.md#working-notebooks).
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
@@ -545,6 +551,9 @@ Create a GitHub App with Contents and Pull requests read/write permissions. Inst
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
+| `MARIMOHUB_SOURCE_CONTROL_GITHUB_PUBLISH_ACTOR` | `app` uses shared installation authority. `user` requires a personal connection and verified commits. Hub roles and repository policies still apply. Mode changes do not revoke credentials. | — | `app` | `user` |
+| `MARIMOHUB_SOURCE_CONTROL_GITHUB_CLIENT_ID` | OAuth client ID from the configured GitHub App, distinct from its numeric App ID. See [Personal publishing setup](syncing.md#configuration-and-account-connection) for the callback, app URL, and encryption key. | — | — | — |
+| `MARIMOHUB_SOURCE_CONTROL_GITHUB_CLIENT_SECRET` 🔒 | Server-only OAuth client secret from the same App. User tokens remain encrypted in hub storage, outside sandboxes. See [Security](security.md#personal-github-publishing). | — | — | — |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL` | GitHub web origin without a path, such as `https://github.example.com`, not the API URL. GHES sources and allowlist rules require full repository URLs; `owner/repo` still means github.com. | — | `https://github.com` | `https://git.acme.corp` |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID` | Numeric app id from the GitHub App settings page. | — | — | `123456` |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY` 🔒 | PKCS8 or PKCS1 PEM private key downloaded for the GitHub App, or its single-line base64 encoding. Held by the server and never injected into notebook sandboxes. | — | — | `-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----` |

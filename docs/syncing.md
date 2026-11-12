@@ -31,17 +31,25 @@ GitHub, GitLab, and Azure DevOps Services support pull sources, **Sync now**, an
 Each provider uses separate server credentials and [repository policies](#repository-project-policies).
 A deployment can configure multiple providers.
 
+## Local Git identity
+
+Set `MARIMOHUB_GIT_SANDBOX_IDENTITY=user` to use the hub profile name and email
+for local commits in new edit sessions. The default, `none`, leaves Git identity
+unchanged. App and job sessions do not receive this identity.
+
+This attribution is editable metadata, not a signature or GitHub authorization.
+Published commits expose the name and email. Shared editors and agents use the session creator's identity.
+Server-created proposal commits have separate attribution. After a configuration change, restart edit sessions.
+
 ## Working notebooks
 
 Working notebooks use dedicated GitHub branches. They require the
 [working-branch opt-in](configuration.md#working-branches) and a GitHub App.
 If the opt-in is set without a GitHub App, startup fails with a configuration error.
 
-> **Warning:** Editors write through the GitHub App identity. If
-> `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` is unset, any editor can create
-> branches, commit, and open PRs in every repository where the App is installed.
-> Startup logs a warning in this case.
-> Set a [repository policy](#repository-project-policies) before you enable working branches.
+> **Warning:** Set a [repository policy](#repository-project-policies) before you enable working branches.
+> Without `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES`, App mode lets any editor write to every installed repository.
+> Startup logs a warning for this configuration. Personal mode also requires the connected user's GitHub access.
 
 Editors use **New working branch** in the project creation menu. Managers select
 this workflow in the **Sync from git repo** dialog.
@@ -710,3 +718,36 @@ Each provider has an independent `ALLOWED_REPOSITORIES` policy for its shared cr
 
 Policies cover branch checks, workspace and Git downloads, preview reads, and the creation and update of pull requests and merge requests.
 The provider identity must also have repository access. These policies do not restrict user-supplied credentials.
+
+## Personal GitHub publishing
+
+`MARIMOHUB_SOURCE_CONTROL_GITHUB_PUBLISH_ACTOR` selects the identity for new interactive commits and PRs.
+The default, `app`, uses the shared App installation. The `user` value requires the acting user's connected GitHub account and verified commits.
+Pull sync, previews, and background jobs retain the App identity.
+You can combine either mode with [local Git identity](#local-git-identity).
+
+### Configuration and account connection
+
+1. Configure a [GitHub App](configuration.md#github-app) with Contents and Pull requests read/write permissions.
+2. Install the App on the allowed repositories.
+3. Set `MARIMOHUB_SOURCE_CONTROL_GITHUB_CLIENT_ID` and `MARIMOHUB_SOURCE_CONTROL_GITHUB_CLIENT_SECRET` from that same App.
+4. Set `MARIMOHUB_APP_BASE_URL` to the canonical HTTPS hub origin.
+5. Register `<hub-origin>/api/v1/me/github/callback` as the App callback URL.
+6. Set `MARIMOHUB_SECRETS_KEK` for encrypted account storage.
+7. Set `MARIMOHUB_SOURCE_CONTROL_GITHUB_PUBLISH_ACTOR=user`.
+8. Configure [repository project policies](#repository-project-policies).
+9. Select **GitHub account → Connect GitHub** from your user menu.
+
+Personal publishing supports github.com. HTTP callbacks work only on loopback development origins.
+The user and App both need repository access. Hub roles and repository policies still apply.
+Missing access, revoked credentials, or failed verification stop publication. The hub never substitutes App credentials for a personal write.
+
+GitHub creates the commit on a temporary branch. Repository rules must permit these branches.
+The hub verifies its SHA, parent, tree, message, account ID, and GitHub signature before it updates the target branch.
+A concurrent target change stops publication. Modifications to executable files, symlinks, or unsupported modes fail before blob writes.
+Personal commits omit hub coauthor trailers. Local commits, ancestors, and merge commits have no signing guarantee from this configuration.
+GitHub labels also depend on vigilant mode and repository policy.
+
+Retries retain their original connection and verification requirement. A replacement connection cannot take over an unfinished operation.
+If the original connection is unusable, start a new operation from the saved recovery payload.
+See [Security](security.md#personal-github-publishing) for trust boundaries and [Operations](operations.md#personal-github-credentials) for configuration changes and recovery.

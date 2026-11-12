@@ -128,6 +128,12 @@ app.openapi(capabilitiesRoute, (c) => {
 		},
 		integrations: { available: Boolean(deps.integrations) },
 		source_control: {
+			...(deps.githubAccounts
+				? {
+						github_account_management: true,
+						github_publish_actor: deps.githubPublishActor ?? 'app',
+					}
+				: {}),
 			...(deps.sourceControl?.workingBranchesEnabled
 				? { working_branch_providers: [...(deps.sourceControl.workingBranchProviders?.() ?? [])] }
 				: {}),

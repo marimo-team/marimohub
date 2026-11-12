@@ -154,3 +154,7 @@ describe('WorkingBranchActions', () => {
 		},
 	);
 });
+
+vi.mock('@/components/Account/PersonalPublishingNotice', () => ({
+	PersonalPublishingNotice: () => null,
+}));

@@ -1,3 +1,4 @@
+import { PersonalPublishingNotice } from '@/components/Account/PersonalPublishingNotice';
 import { GitCommitHorizontal, GitPullRequest } from 'lucide-react';
 import { toast } from 'sonner';
 import { useOpenBranchPR, useSaveToBranch, useWorkingBranch } from '@/api/workingBranches';
@@ -48,6 +49,12 @@ export function WorkingBranchActions({
 	const label = save.isPending ? 'Saving…' : pending ? 'Retry save' : 'Save to branch';
 	return (
 		<div className="flex flex-wrap items-center justify-end gap-2 text-xs">
+			<PersonalPublishingNotice provider="github" />
+			{last?.verification && ['complete', 'remote_committed', 'hub_synced'].includes(last.state) ? (
+				<a className="underline" href={last.verification.url} target="_blank" rel="noreferrer">
+					Verified commit {last.verification.commit.slice(0, 7)}
+				</a>
+			) : null}
 			<Button
 				size="sm"
 				variant="default"

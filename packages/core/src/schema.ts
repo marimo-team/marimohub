@@ -1,3 +1,8 @@
+import {
+	PublicationActorSchema,
+	SignedPreparationSchema,
+	CommitVerificationSchema,
+} from './sourceControlPublication';
 import { utcTimestamp } from './stringFormats';
 import { z } from 'zod';
 import { isAuthGroupId } from './ports/auth';
@@ -753,6 +758,7 @@ export const ProposalPayloadMarkerSchema = z.object({
 export type ProposalPayloadMarker = z.infer<typeof ProposalPayloadMarkerSchema>;
 
 export const ChangeRequestPublicationSchema = z.object({
+	verification: CommitVerificationSchema.optional(),
 	provider: z.string().min(1),
 	number: z.number().int().positive(),
 	url: z.url().refine((value) => value.startsWith('https://')),
@@ -763,10 +769,16 @@ export const ChangeRequestPublicationSchema = z.object({
 export const ProposalPublicationSchema = z.discriminatedUnion('state', [
 	z.looseObject({
 		state: z.literal('pending'),
+		publication_actor: PublicationActorSchema.optional(),
+		signed_preparation: SignedPreparationSchema.optional(),
+		publication_lease: z.object({ owner: z.string(), until: z.number() }).optional(),
 		updated_at: utcTimestamp(),
 	}),
 	z.looseObject({
 		state: z.literal('published'),
+		publication_actor: PublicationActorSchema.optional(),
+		signed_preparation: SignedPreparationSchema.optional(),
+		publication_lease: z.object({ owner: z.string(), until: z.number() }).optional(),
 		updated_at: utcTimestamp(),
 		change_request: ChangeRequestPublicationSchema,
 	}),

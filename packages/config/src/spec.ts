@@ -2025,9 +2025,22 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 			'Connect to GitHub, GitLab, and Azure DevOps Services. Editors can create pull sources and use **Sync now**. Managers can publish session edits as draft change requests. Provider credentials stay on the server. See [Syncing from external sources](./syncing.md) for modes and limits.',
 		backends: [
 			{
+				name: 'Local Git identity',
+				vars: [
+					{
+						id: 'MARIMOHUB_GIT_SANDBOX_IDENTITY',
+						name: 'Sandbox Git identity',
+						description:
+							'`user` sets local edit-session attribution from the hub profile. Shared editors use the creator’s identity. It does not sign commits or change publication. See [Local Git identity](syncing.md#local-git-identity).',
+						default: 'none',
+						example: 'user',
+					},
+				],
+			},
+			{
 				name: 'Working branches',
 				description:
-					'Requires GitHub publishing and pull-source credentials. Editors publish through the server identity under existing repository/project policies. See [Working notebooks](syncing.md#working-notebooks) for usage, limits, and recovery.',
+					'Requires a GitHub App. Editors publish with the configured App or personal identity, subject to repository policies. See [Working notebooks](syncing.md#working-notebooks).',
 				vars: [
 					{
 						id: 'MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED',
@@ -2045,6 +2058,27 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				description:
 					'Create a GitHub App with Contents and Pull requests read/write permissions. Install it on the allowed repositories, then set its numeric id and private key below. No webhook is required. For GHES, follow [Enterprise setup](syncing.md#github-enterprise-server).',
 				vars: [
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_PUBLISH_ACTOR',
+						name: 'Interactive publishing actor',
+						description:
+							'`app` uses shared installation authority. `user` requires a personal connection and verified commits. Hub roles and repository policies still apply. Mode changes do not revoke credentials.',
+						default: 'app',
+						example: 'user',
+					},
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_CLIENT_ID',
+						name: 'GitHub OAuth client ID',
+						description:
+							'OAuth client ID from the configured GitHub App, distinct from its numeric App ID. See [Personal publishing setup](syncing.md#configuration-and-account-connection) for the callback, app URL, and encryption key.',
+					},
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_CLIENT_SECRET',
+						name: 'GitHub OAuth client secret',
+						description:
+							'Server-only OAuth client secret from the same App. User tokens remain encrypted in hub storage, outside sandboxes. See [Security](security.md#personal-github-publishing).',
+						secret: true,
+					},
 					{
 						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL',
 						name: 'GitHub server URL',
@@ -2660,9 +2694,6 @@ kind lists the packages to add to the notebook.
 Integrations are enabled by default. Set \`MARIMOHUB_INTEGRATIONS=off\` to
 disable the management routes and session injection. The feature requires only
 the deployment bucket.
-
-Before upgrading, replace the former \`true\` and \`none\` aliases with \`on\`
-and \`off\`. Those aliases are no longer accepted.
 
 Secret fields use inline encryption or an external resolver. A rendering error
 blocks session creation. Disable or override the integration to restore access.

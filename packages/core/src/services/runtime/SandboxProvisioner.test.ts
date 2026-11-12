@@ -109,6 +109,57 @@ describe('SandboxProvisioner', () => {
 			command.includes('sh -e ') ? result : exec(command, options);
 	}
 
+	it('injects validated Git identity into a reused edit sandbox', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+		await provisioner.provision({
+			...startupOptions,
+			existingSandbox: instance,
+			gitIdentity: { name: 'Ada', email: 'ada@example.com' },
+		});
+		await provisioner.provision({
+			...startupOptions,
+			existingSandbox: instance,
+			gitIdentity: { name: 'Grace', email: 'grace@example.com' },
+		});
+		expect(calls.setEnvVars.at(-1)).toMatchObject({
+			GIT_AUTHOR_NAME: 'Grace',
+			GIT_AUTHOR_EMAIL: 'grace@example.com',
+			GIT_COMMITTER_NAME: 'Grace',
+			GIT_COMMITTER_EMAIL: 'grace@example.com',
+		});
+		expect(
+			calls.writeFiles
+				.flat()
+				.some(
+					(file) => typeof file.content === 'string' && file.content.includes('ada@example.com'),
+				),
+		).toBe(false);
+	});
+
+	it.each(['app', 'job'] as const)('does not inject Git identity for %s', async (launchMode) => {
+		const { instance, calls } = makeFakeSandbox();
+		await new SandboxProvisioner(fakeComputeFrom(instance)).prepare({
+			...startupOptions,
+			launchMode,
+			bucketHandle: new MemoryBucket(),
+			workspaceLoadMode: 'copy-only',
+			gitIdentity: { name: 'Ada', email: 'ada@example.com' },
+		});
+		expect(calls.setEnvVars.some((vars) => 'GIT_AUTHOR_NAME' in vars)).toBe(false);
+	});
+
+	it.each([
+		{ name: '', email: 'ada@example.com' },
+		{ name: 'Ada\nOther', email: 'ada@example.com' },
+		{ name: 'Ada', email: 'ada@example.com\n' },
+	])('rejects malformed Git identity', async (gitIdentity) => {
+		const { instance } = makeFakeSandbox();
+		await expect(
+			new SandboxProvisioner(fakeComputeFrom(instance)).prepare({ ...startupOptions, gitIdentity }),
+		).rejects.toThrow('cannot be used as a Git identity');
+	});
+
 	it('boots before preparation and preserves cold adapter diagnostics', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const ready = deferred<void>();

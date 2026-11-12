@@ -15,7 +15,11 @@ import {
 	markSourceControlPublishFailure,
 	sourceControlPublishFailure,
 } from '../../ports/sourceControl';
-import type { OpenChangeRequestResult, SourceControlPublisher } from '../../ports/sourceControl';
+import type {
+	OpenChangeRequestResult,
+	SourceControlPublisher,
+	SourceControlRegistry,
+} from '../../ports/sourceControl';
 import type { SandboxInstance } from '../../ports/sandbox';
 import type { Session } from '../../schema';
 import {
@@ -772,6 +776,72 @@ describe('NotebookProposalService', () => {
 			sizes: { 'dashboard.py': 1 },
 		});
 		await expect(capture(instance)).rejects.toThrow(`exceeds the ${MAX_REQUEST_BYTES}-byte limit`);
+	});
+
+	it('fences concurrent personal publications and rejects cross-user retries', async () => {
+		const { instance } = makeFsSandbox({ files: { 'dashboard.py': 'print("personal")' } });
+		const proposal = await capture(instance);
+		const publicationKey = paths
+			.project(projectId)
+			.notebook(notebookId)
+			.proposal(proposal.proposal_id).publication;
+		const stored = await (await env.bucket.get(publicationKey))!.json<Record<string, unknown>>();
+		const actor = {
+			kind: 'user' as const,
+			verification: 'required' as const,
+			userId: ACTOR,
+			connectionId: 'original',
+			generation: 'generation',
+			accountId: '123',
+		};
+		await env.bucket.put(publicationKey, JSON.stringify({ ...stored, publication_actor: actor }));
+		const gate = deferred<void>();
+		const openChangeRequest = vi.fn<SourceControlPublisher['openChangeRequest']>(async (input) => {
+			await input.preparation?.assertCurrent?.();
+			await gate.promise;
+			await input.preparation?.assertCurrent?.();
+			return {
+				number: 17,
+				url: 'https://github.com/owner/repo/pull/17',
+				headBranch: input.headBranch,
+				headCommit: 'personal',
+				verification: {
+					status: 'verified',
+					commit: 'personal',
+					url: 'https://github.com/owner/repo/commit/personal',
+				},
+			};
+		});
+		const getPublisher = vi.fn(() => ({ provider: 'github', openChangeRequest }));
+		const registry = {
+			getPublisher,
+			getReader: vi.fn<SourceControlRegistry['getReader']>(),
+			publisherProviders: () => ['github'],
+			readerProviders: () => [],
+			pullSourceProviders: () => [],
+		};
+		const service = new NotebookProposalService(env.bucket, undefined, registry);
+		const input = {
+			projectId,
+			notebookId,
+			proposalId: proposal.proposal_id,
+			actor: ACTOR,
+			title: 'Personal',
+			body: '',
+			authorize: vi.fn(async () => {}),
+		};
+		await expect(
+			service.publishChangeRequest({ ...input, actor: uid('user-other') }),
+		).rejects.toThrow('original author');
+		const first = service.publishChangeRequest(input);
+		await vi.waitFor(() => expect(openChangeRequest).toHaveBeenCalledOnce());
+		await expect(service.publishChangeRequest(input)).rejects.toThrow('already running');
+		gate.resolve();
+		expect(await first).toMatchObject({ verification: { status: 'verified', commit: 'personal' } });
+		expect(getPublisher).toHaveBeenCalledWith('github', projectId, actor);
+		expect(input.authorize.mock.calls.length).toBeGreaterThanOrEqual(2);
+		await service.publishChangeRequest({ ...input, actor: uid('user-other') });
+		expect(openChangeRequest).toHaveBeenCalledOnce();
 	});
 
 	it('publishes a repo-relative change and returns the stored PR on retry', async () => {

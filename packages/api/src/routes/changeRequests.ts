@@ -1,3 +1,4 @@
+import { CommitVerificationSchema } from '@marimo-hub/core/source-control-publication';
 import { createRoute, z } from '@hono/zod-openapi';
 import { deriveProposalId, ProposalId, sourceControlPublishFailure } from '@marimo-hub/core';
 import type {
@@ -51,6 +52,7 @@ const ChangeRequestResponse = z
 			example: 'prop-7h2k9qm4xz7rp3w8',
 		}),
 		change_request: z.object({
+			verification: CommitVerificationSchema.optional(),
 			provider: z.string().min(1).openapi({ example: 'github' }),
 			number: z.number().int().positive().openapi({ example: 42 }),
 			url: z
@@ -145,6 +147,17 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 		let changeRequest: OpenChangeRequestResult;
 		try {
 			changeRequest = await deps.services.proposals.publishChangeRequest({
+				actor: user.id,
+				authorize: async () => {
+					const current = await assertProjectRole(
+						deps.services.projects,
+						pid,
+						user,
+						'change-request.publish',
+						deps,
+					);
+					await loadAuthorizedNotebookMeta(deps, current, nid, user, 'change-request.publish');
+				},
 				projectId: pid,
 				notebookId: nid,
 				proposalId: proposal.proposal_id,
@@ -180,6 +193,8 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 				provider: proposal.source.provider,
 				repo: proposal.source.repo,
 				pr_number: changeRequest.number,
+				verification: changeRequest.verification?.status ?? null,
+				commit: changeRequest.headCommit,
 			});
 		} else {
 			logEvent({
@@ -189,6 +204,8 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 				provider: proposal.source.provider,
 				repo: proposal.source.repo,
 				pr_number: changeRequest.number,
+				verification: changeRequest.verification?.status ?? null,
+				commit: changeRequest.headCommit,
 				latency_ms: Date.now() - publishStartedAt,
 			});
 		}
@@ -224,6 +241,7 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 				url: changeRequest.url,
 				head_branch: changeRequest.headBranch,
 				head_commit: changeRequest.headCommit,
+				verification: changeRequest.verification,
 			},
 		};
 	});

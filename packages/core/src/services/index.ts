@@ -1,3 +1,4 @@
+export { SourceControlAccountService } from './identity/SourceControlAccountService';
 import { MigrationService } from './catalog/MigrationService';
 import { backgroundMigrations, SESSION_INDEX_MIGRATION } from './catalog/migrations';
 export { MigrationService } from './catalog/MigrationService';
@@ -659,14 +660,19 @@ export function createServices(
 			setFsSnapshot: notebook,
 		},
 	);
-	const proposals = wrap('NotebookProposalService', new NotebookProposalService(bucket, metrics), {
-		captureProposal: (input) => notebook(input.projectId, input.notebookId),
-		captureProposalWithOutcome: (input) => notebook(input.projectId, input.notebookId),
-		getProposal: proposal,
-		getReusableProposal: proposal,
-		publishChangeRequest: (input) => proposal(input.projectId, input.notebookId, input.proposalId),
-		pruneExpiredPayloads: () => ({}),
-	});
+	const proposals = wrap(
+		'NotebookProposalService',
+		new NotebookProposalService(bucket, metrics, options?.sourceControl),
+		{
+			captureProposal: (input) => notebook(input.projectId, input.notebookId),
+			captureProposalWithOutcome: (input) => notebook(input.projectId, input.notebookId),
+			getProposal: proposal,
+			getReusableProposal: proposal,
+			publishChangeRequest: (input) =>
+				proposal(input.projectId, input.notebookId, input.proposalId),
+			pruneExpiredPayloads: () => ({}),
+		},
+	);
 	const tokens = wrap('TokenService', new TokenService(bucket, identities), {
 		list: user,
 		revoke: (userId, tokenId) => ({ ...user(userId), 'marimohub.token_id': tokenId }),

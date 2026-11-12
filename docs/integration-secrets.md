@@ -220,3 +220,9 @@ References must include their complete backend and locator.
 Copies decrypt and encrypt inline values for the destination. They keep
 external references unchanged. Organization integrations use the same secret
 sources as project integrations.
+
+## Personal source-control accounts
+
+Personal GitHub credentials belong to the hub user, outside project integrations and sandbox environments.
+Use [GitHub account controls](syncing.md#personal-github-publishing) to connect or disconnect.
+See [Operations](operations.md#personal-github-credentials) for encryption, KEK changes, and backup restore.

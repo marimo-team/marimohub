@@ -1,3 +1,4 @@
+import { PersonalPublishingNotice } from '@/components/Account/PersonalPublishingNotice';
 import { ChevronDown, GitPullRequest, RefreshCw } from 'lucide-react';
 import { useLayoutEffect, useRef } from 'react';
 import { toast } from 'sonner';
@@ -74,15 +75,18 @@ export function ChangeRequestActions({
 
 	if (!activeChangeRequest) {
 		return (
-			<Button
-				variant="unstyled"
-				className="flex h-8 items-center justify-center gap-1 rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary max-md:size-11"
-				isDisabled={publisher.isPending}
-				onPress={() => publish('open')}
-			>
-				<GitPullRequest className="size-3 max-md:size-4" />
-				<span className="max-md:sr-only">{publisher.isPending ? 'Opening…' : terms.open}</span>
-			</Button>
+			<>
+				<PersonalPublishingNotice provider={provider} />
+				<Button
+					variant="unstyled"
+					className="flex h-8 items-center justify-center gap-1 rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary max-md:size-11"
+					isDisabled={publisher.isPending}
+					onPress={() => publish('open')}
+				>
+					<GitPullRequest className="size-3 max-md:size-4" />
+					<span className="max-md:sr-only">{publisher.isPending ? 'Opening…' : terms.open}</span>
+				</Button>
+			</>
 		);
 	}
 	const viewButton = (
@@ -99,6 +103,17 @@ export function ChangeRequestActions({
 
 	return (
 		<div className="flex items-center">
+			{activeChangeRequest.change_request.verification ? (
+				<a
+					className="text-xs underline"
+					href={activeChangeRequest.change_request.verification.url}
+					target="_blank"
+					rel="noreferrer"
+				>
+					Verified commit {activeChangeRequest.change_request.verification.commit.slice(0, 7)}
+				</a>
+			) : null}
+			<PersonalPublishingNotice provider={provider} />
 			{viewButton}
 			<DropdownMenu
 				label={`${terms.kind} options`}

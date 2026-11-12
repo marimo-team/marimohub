@@ -1928,3 +1928,19 @@ It marks pre-dispatch saves `expired` one hour past `expires_at`, including save
 This cleanup also runs while working branches are disabled, so captures left by an earlier deployment still expire.
 The [publication protocol](source_control_publishing.md#working-branch-publication)
 defines save stages and the dispatch bound.
+
+### Personal source-control accounts
+
+`SourceControlAccountService` owns `_system/source-control-accounts/{user-id}/head.json`,
+connection records at `{connection-id}.json`, and `_system/source-control-account-cleanup.json`.
+Heads use ETag CAS for the current connection, generation, one-use OAuth attempt, and shared rate limits.
+Connection records contain provider/App identity, immutable account ID, a path-bound encrypted token pair, and an exclusive refresh claim.
+
+Disconnect advances the head generation before it clears credentials. Retained heads and connection tombstones prevent delayed writes from restoring access.
+Maintenance scans at most 100 records per sweep. A corrupt cleanup cursor restarts the scan.
+Orphan cleanup fences head publication before credential removal and token revocation.
+After backup restore, [operators must revoke and reconnect](../docs/operations.md#personal-github-credentials) before personal writes resume.
+
+Publication owners retain the actor and verification policy in working-branch receipts and proposal publication records.
+Their signed preparation checkpoints contain the temporary ref, repository, account ID, parent, tree, message, dispatch state, result SHA, and cleanup state.
+Source-control adapters never write bucket records.

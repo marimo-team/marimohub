@@ -108,10 +108,12 @@ export class GitHubClient {
 			response = await this.fetcher(url, {
 				...init,
 				headers,
+				redirect: init.redirect ?? 'error',
+				signal: init.signal ?? AbortSignal.timeout(30_000),
 			});
-		} catch (error) {
+		} catch {
 			init.signal?.throwIfAborted();
-			throw new UnavailableError('GitHub is unavailable', { cause: error });
+			throw new UnavailableError('GitHub is unavailable');
 		}
 		init.signal?.throwIfAborted();
 		if (!response.ok && !allowedStatuses.includes(response.status)) {

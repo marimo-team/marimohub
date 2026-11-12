@@ -40,6 +40,8 @@ export const WorkingBranchSaveResponse = WorkingBranchSaveSchema.omit({
 	schema_version: true,
 	fingerprint: true,
 	co_author: true,
+	publication_actor: true,
+	signed_preparation: true,
 }).openapi('WorkingBranchSave');
 const CHANGE_REQUEST_STATES = ['open', 'closed', 'merged'] as const satisfies readonly z.infer<
 	typeof WorkingBranchChangeRequestSchema

@@ -6206,6 +6206,91 @@ components:
             state:
               type: string
               const: pending
+            publication_actor:
+              oneOf:
+                - type: object
+                  properties:
+                    kind:
+                      type: string
+                      const: app
+                    verification:
+                      type: string
+                      enum:
+                        - unchecked
+                        - required
+                  required:
+                    - kind
+                    - verification
+                - type: object
+                  properties:
+                    kind:
+                      type: string
+                      const: user
+                    verification:
+                      type: string
+                      enum:
+                        - unchecked
+                        - required
+                    userId:
+                      type: string
+                    connectionId:
+                      type: string
+                    generation:
+                      type: string
+                    accountId:
+                      type: string
+                  required:
+                    - kind
+                    - verification
+                    - userId
+                    - connectionId
+                    - generation
+                    - accountId
+            signed_preparation:
+              type: object
+              properties:
+                protocol:
+                  type: string
+                  const: github-graphql-v1
+                branch:
+                  type: string
+                repository:
+                  type: string
+                accountId:
+                  type: string
+                ownedHead:
+                  type: string
+                parent:
+                  type: string
+                tree:
+                  type: string
+                message:
+                  type: string
+                dispatched:
+                  type: boolean
+                commit:
+                  type: string
+                cleaned:
+                  type: boolean
+              required:
+                - protocol
+                - branch
+                - repository
+                - accountId
+                - parent
+                - tree
+                - message
+                - dispatched
+            publication_lease:
+              type: object
+              properties:
+                owner:
+                  type: string
+                until:
+                  type: number
+              required:
+                - owner
+                - until
             updated_at:
               type: string
               format: date-time
@@ -6219,6 +6304,91 @@ components:
             state:
               type: string
               const: published
+            publication_actor:
+              oneOf:
+                - type: object
+                  properties:
+                    kind:
+                      type: string
+                      const: app
+                    verification:
+                      type: string
+                      enum:
+                        - unchecked
+                        - required
+                  required:
+                    - kind
+                    - verification
+                - type: object
+                  properties:
+                    kind:
+                      type: string
+                      const: user
+                    verification:
+                      type: string
+                      enum:
+                        - unchecked
+                        - required
+                    userId:
+                      type: string
+                    connectionId:
+                      type: string
+                    generation:
+                      type: string
+                    accountId:
+                      type: string
+                  required:
+                    - kind
+                    - verification
+                    - userId
+                    - connectionId
+                    - generation
+                    - accountId
+            signed_preparation:
+              type: object
+              properties:
+                protocol:
+                  type: string
+                  const: github-graphql-v1
+                branch:
+                  type: string
+                repository:
+                  type: string
+                accountId:
+                  type: string
+                ownedHead:
+                  type: string
+                parent:
+                  type: string
+                tree:
+                  type: string
+                message:
+                  type: string
+                dispatched:
+                  type: boolean
+                commit:
+                  type: string
+                cleaned:
+                  type: boolean
+              required:
+                - protocol
+                - branch
+                - repository
+                - accountId
+                - parent
+                - tree
+                - message
+                - dispatched
+            publication_lease:
+              type: object
+              properties:
+                owner:
+                  type: string
+                until:
+                  type: number
+              required:
+                - owner
+                - until
             updated_at:
               type: string
               format: date-time
@@ -6226,6 +6396,21 @@ components:
             change_request:
               type: object
               properties:
+                verification:
+                  type: object
+                  properties:
+                    status:
+                      type: string
+                      const: verified
+                    commit:
+                      type: string
+                    url:
+                      type: string
+                      format: uri
+                  required:
+                    - status
+                    - commit
+                    - url
                 provider:
                   type: string
                   minLength: 1
@@ -6256,6 +6441,86 @@ components:
     WorkingBranch:
       type: object
       properties:
+        publication_actor:
+          oneOf:
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  const: app
+                verification:
+                  type: string
+                  enum:
+                    - unchecked
+                    - required
+              required:
+                - kind
+                - verification
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  const: user
+                verification:
+                  type: string
+                  enum:
+                    - unchecked
+                    - required
+                userId:
+                  type: string
+                connectionId:
+                  type: string
+                generation:
+                  type: string
+                accountId:
+                  type: string
+              required:
+                - kind
+                - verification
+                - userId
+                - connectionId
+                - generation
+                - accountId
+        change_request_actor:
+          oneOf:
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  const: app
+                verification:
+                  type: string
+                  enum:
+                    - unchecked
+                    - required
+              required:
+                - kind
+                - verification
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  const: user
+                verification:
+                  type: string
+                  enum:
+                    - unchecked
+                    - required
+                userId:
+                  type: string
+                connectionId:
+                  type: string
+                generation:
+                  type: string
+                accountId:
+                  type: string
+              required:
+                - kind
+                - verification
+                - userId
+                - connectionId
+                - generation
+                - accountId
         schema_version:
           type: number
           const: 1
@@ -6372,6 +6637,96 @@ components:
     WorkingBranchSave:
       type: object
       properties:
+        verification:
+          type: object
+          properties:
+            status:
+              type: string
+              const: verified
+            commit:
+              type: string
+            url:
+              type: string
+              format: uri
+          required:
+            - status
+            - commit
+            - url
+        publication_actor:
+          oneOf:
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  const: app
+                verification:
+                  type: string
+                  enum:
+                    - unchecked
+                    - required
+              required:
+                - kind
+                - verification
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  const: user
+                verification:
+                  type: string
+                  enum:
+                    - unchecked
+                    - required
+                userId:
+                  type: string
+                connectionId:
+                  type: string
+                generation:
+                  type: string
+                accountId:
+                  type: string
+              required:
+                - kind
+                - verification
+                - userId
+                - connectionId
+                - generation
+                - accountId
+        signed_preparation:
+          type: object
+          properties:
+            protocol:
+              type: string
+              const: github-graphql-v1
+            branch:
+              type: string
+            repository:
+              type: string
+            accountId:
+              type: string
+            ownedHead:
+              type: string
+            parent:
+              type: string
+            tree:
+              type: string
+            message:
+              type: string
+            dispatched:
+              type: boolean
+            commit:
+              type: string
+            cleaned:
+              type: boolean
+          required:
+            - protocol
+            - branch
+            - repository
+            - accountId
+            - parent
+            - tree
+            - message
+            - dispatched
         schema_version:
           type: number
           const: 1
@@ -6490,6 +6845,46 @@ components:
     WorkingBranchCreation:
       type: object
       properties:
+        publication_actor:
+          oneOf:
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  const: app
+                verification:
+                  type: string
+                  enum:
+                    - unchecked
+                    - required
+              required:
+                - kind
+                - verification
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  const: user
+                verification:
+                  type: string
+                  enum:
+                    - unchecked
+                    - required
+                userId:
+                  type: string
+                connectionId:
+                  type: string
+                generation:
+                  type: string
+                accountId:
+                  type: string
+              required:
+                - kind
+                - verification
+                - userId
+                - connectionId
+                - generation
+                - accountId
         fingerprint:
           type: string
         notebook_id:

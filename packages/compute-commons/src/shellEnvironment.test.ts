@@ -202,3 +202,39 @@ describe('ShellEnvironment', () => {
 		]);
 	});
 });
+
+it.skipIf(process.platform === 'win32')(
+	'does not inherit a previous Git identity from restored environment files',
+	async () => {
+		const paths: string[] = [];
+		const write = async (path: string, content: string) => {
+			paths.push(path);
+			execFileSync('sh', ['-c', privateEnvironmentWriteCommand(path)], { input: content });
+		};
+		const command = 'printf "%s|%s" "${GIT_AUTHOR_NAME-unset}" "${GIT_COMMITTER_EMAIL-unset}"';
+		const cleanEnvironment = Object.fromEntries(
+			Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+		);
+		const run = (value: string) =>
+			execFileSync('sh', ['-c', value], { env: cleanEnvironment, encoding: 'utf8' });
+		try {
+			const original = new ShellEnvironment(write);
+			original.setEnvVars({
+				GIT_AUTHOR_NAME: 'Previous',
+				GIT_COMMITTER_EMAIL: 'previous@example.com',
+			});
+			expect(run(await original.command(command))).toBe('Previous|previous@example.com');
+			// Restoring a filesystem leaves these files present; a new sandbox handle has its own environment.
+			expect(statSync(paths[0]).isFile()).toBe(true);
+			const restored = new ShellEnvironment(write);
+			expect(run(await restored.command(command))).toBe('unset|unset');
+			restored.setEnvVars({
+				GIT_AUTHOR_NAME: 'Current',
+				GIT_COMMITTER_EMAIL: 'current@example.com',
+			});
+			expect(run(await restored.command(command))).toBe('Current|current@example.com');
+		} finally {
+			for (const path of paths) rmSync(dirname(path), { recursive: true, force: true });
+		}
+	},
+);

@@ -1,7 +1,13 @@
+import type {
+	PublicationActor,
+	PreparationCheckpoint,
+	CommitVerification,
+	SignedPreparation,
+} from '../sourceControlPublication';
 import { MAX_WORKSPACE_FILE_BYTES } from '../constants';
 import { BadRequestError } from '../errors';
 import type { GitProviderHosts } from '../integrations/gitRepo';
-import type { ProjectId } from '../ids';
+import type { ProjectId, UserId } from '../ids';
 
 export interface SourceControlContentChange {
 	/** Repository-relative path; absolute paths and `..` segments are invalid. */
@@ -24,6 +30,7 @@ export interface SourceControlCommitIdentity {
 }
 
 export interface OpenChangeRequestInput {
+	preparation?: PreparationCheckpoint;
 	/** Provider-specific repository coordinate from the synced source revision. */
 	repository: string;
 	/** Branch configured on the synced source. */
@@ -41,6 +48,7 @@ export interface OpenChangeRequestInput {
 }
 
 export interface OpenChangeRequestResult {
+	verification?: CommitVerification;
 	number: number;
 	/** HTTPS browser URL for the provider's pull request, merge request, or equivalent. */
 	url: string;
@@ -49,6 +57,7 @@ export interface OpenChangeRequestResult {
 }
 
 export interface UpdateChangeRequestInput {
+	preparation?: PreparationCheckpoint;
 	/** Provider-specific repository coordinate from the synced source revision. */
 	repository: string;
 	/** Branch and commit against which the change request was originally opened. */
@@ -134,14 +143,18 @@ export interface WorkingBranchWriter {
 		branch: string;
 		fromCommit: string;
 	}): Promise<{ commit: string }>;
-	/** Creates immutable Git objects without changing any reference. */
+	/** Prepares immutable Git objects. Signed preparation may change only its checkpoint-owned temporary ref; never the target branch. */
 	prepareCommit(input: {
+		preparation?: PreparationCheckpoint;
 		repository: string;
 		parentCommit: string;
 		message: string;
 		coAuthor?: SourceControlCommitIdentity;
 		changes: readonly SourceControlChange[];
-	}): Promise<{ commit: string }>;
+	}): Promise<{
+		commit: string;
+		verification?: CommitVerification;
+	}>;
 	/** Exact expected-head compare-and-swap; never allows non-fast-forward updates. */
 	advanceBranch(input: {
 		repository: string;
@@ -174,6 +187,10 @@ export interface SourceControlPublisher {
 	/** Stable id stored on source revisions, such as `github` or `gitlab`. */
 	readonly provider: string;
 	readonly workingBranches?: WorkingBranchWriter;
+	cleanupPreparation?(input: {
+		repository: string;
+		preparation: SignedPreparation;
+	}): Promise<boolean>;
 	openChangeRequest(input: OpenChangeRequestInput): Promise<OpenChangeRequestResult>;
 	/** Update an existing open change request, when supported by the provider. */
 	updateChangeRequest?(input: UpdateChangeRequestInput): Promise<OpenChangeRequestResult>;
@@ -324,7 +341,12 @@ export interface SourceControlRegistry {
 	/** Required for notebook moves involving a recognized provider; moves fail closed without it. */
 	assertRepositoryAllowed?(provider: string, repository: string, projectId: ProjectId): void;
 	readonly repositoryHosts?: GitProviderHosts;
-	getPublisher(provider: string, projectId?: ProjectId): SourceControlPublisher | undefined;
+	getPublisher(
+		provider: string,
+		projectId?: ProjectId,
+		actor?: PublicationActor,
+	): SourceControlPublisher | undefined;
+	publicationActor?(provider: string, userId: UserId): Promise<PublicationActor>;
 	getReader(provider: string, projectId?: ProjectId): SourceControlReader | undefined;
 	/** Provider ids that can publish change requests. */
 	publisherProviders(): readonly string[];
