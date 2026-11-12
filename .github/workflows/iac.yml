@@ -1,0 +1,128 @@
+name: Integration IaC SDK
+
+on:
+  pull_request:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the package from the selected release tag
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - node: '24.11.0'
+            deno: '2.5.0'
+          - node: '24'
+            deno: '2.x'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          version: 1.3.0
+          node-version: ${{ matrix.node }}
+          run-install: |
+            - args: ['--frozen-lockfile']
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
+        with:
+          deno-version: ${{ matrix.deno }}
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: '1.13.5'
+      - run: pnpm --filter @marimo-hub/iac build
+      - run: pnpm --filter @marimo-hub/iac typecheck
+      - run: pnpm --filter @marimo-hub/iac test
+      - name: Test packed package against the Hub
+        env:
+          MARIMOHUB_IAC_SMOKE: 'true'
+          MARIMOHUB_IAC_LOCK_PATH: ${{ runner.temp }}/iac-deno.lock
+        run: pnpm --filter @marimo-hub/api test run src/testing/iacPackage.test.ts
+      - name: Validate Terraform example
+        run: |
+          cp -R examples/integration-iac "$RUNNER_TEMP/iac-examples"
+          cp "$RUNNER_TEMP/iac-deno.lock" "$RUNNER_TEMP/iac-examples/deno/deno.lock"
+          terraform -chdir="$RUNNER_TEMP/iac-examples/terraform" fmt -check
+          terraform -chdir="$RUNNER_TEMP/iac-examples/terraform" init -backend=false
+          terraform -chdir="$RUNNER_TEMP/iac-examples/terraform" validate
+      - name: Inspect package artifact
+        working-directory: packages/iac
+        run: npm publish --dry-run --ignore-scripts
+
+  package:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: compatibility
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Require a matching release tag
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: node scripts/check-iac-release.mjs
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          version: 1.3.0
+          node-version-file: '.node-version'
+          cache: false
+          run-install: |
+            - args: ['--frozen-lockfile']
+      - run: pnpm --filter @marimo-hub/iac build
+      - name: Pack release artifact
+        working-directory: packages/iac
+        run: |
+          mkdir -p "$RUNNER_TEMP/iac-package"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/iac-package"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: iac-npm-package
+          path: ${{ runner.temp }}/iac-package/*.tgz
+          if-no-files-found: error
+          overwrite: true
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: package
+    runs-on: ubuntu-24.04
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: iac-npm-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: iac-npm-package
+          path: ${{ runner.temp }}/iac-package
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Check npm trusted publishing support
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          const version = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim();
+          const [major, minor, patch] = version.split('.').map(Number);
+          if (!(major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1))))) {
+            throw new Error(`Trusted publishing requires npm >= 11.5.1; found ${version}.`);
+          }
+          console.log(`Publishing with npm ${version}`);
+          NODE
+      - name: Publish release artifact
+        run: |
+          packages=("$RUNNER_TEMP"/iac-package/*.tgz)
+          test "${#packages[@]}" -eq 1
+          test -f "${packages[0]}"
+          npm publish "${packages[0]}" --ignore-scripts --registry=https://registry.npmjs.org

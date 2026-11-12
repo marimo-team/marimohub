@@ -2649,6 +2649,123 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "integrations.reconcile.apply",
+			"command": ["integrations", "reconcile", "apply"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/integrations/reconcile/apply",
+			"summary": "Apply an integration declaration with a required state precondition",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "desired",
+						"cli_name": "desired",
+						"required": true,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "expected",
+						"cli_name": "expected",
+						"required": true,
+						"value_type": "object",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.reconcile.plan",
+			"command": ["integrations", "reconcile", "plan"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/integrations/reconcile/plan",
+			"summary": "Preview an integration declaration without writing configuration",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "allowOrgOverride",
+						"cli_name": "allow-org-override",
+						"required": false,
+						"value_type": "boolean",
+						"repeatable": false
+					},
+					{
+						"name": "change_note",
+						"cli_name": "change-note",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "config",
+						"cli_name": "config",
+						"required": true,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "enabled",
+						"cli_name": "enabled",
+						"required": false,
+						"value_type": "boolean",
+						"repeatable": false
+					},
+					{
+						"name": "kind",
+						"cli_name": "kind",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "mode",
+						"cli_name": "mode",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "name",
+						"cli_name": "name",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "jobs.create",
 			"command": ["jobs", "create"],
 			"method": "POST",

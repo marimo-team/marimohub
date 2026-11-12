@@ -441,3 +441,22 @@ export async function configForCopy(options: {
 	}
 	return copied;
 }
+
+/** Apply current defaults without opening secret boxes. */
+export function normalizeStoredConfig(options: {
+	schema: z.ZodType;
+	paths: SecretPath[];
+	stored: Record<string, unknown>;
+}): Record<string, unknown> {
+	const parsed = options.schema.safeParse(placeholderSubstituted(options.stored, options.paths));
+	if (!parsed.success) throw new ValidationError('Stored config does not match the kind schema.');
+	const normalized = parsed.data as Record<string, unknown>;
+	for (const path of options.paths) {
+		for (const concrete of expandPath(normalized, path)) {
+			if (getAt(normalized, concrete) === PLACEHOLDER) {
+				setAt(normalized, concrete, getAt(options.stored, concrete));
+			}
+		}
+	}
+	return normalized;
+}

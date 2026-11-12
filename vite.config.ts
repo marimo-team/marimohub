@@ -50,6 +50,7 @@ export default defineConfig({
 			'tools/oxlint/anti-slop',
 			'**/ts-reset.d.ts',
 			'packages/client/src/schema.ts',
+			'packages/iac/src/generated.ts',
 		],
 		rules: {
 			// The broader anti-slop rules reject legitimate boundary parsing, dynamic JSON,
@@ -457,7 +458,7 @@ export default defineConfig({
 		tasks: {
 			'test:root:vitest': {
 				command:
-					'vp test tools/oxlint/anti-slop/index.test.ts scripts/sea/launcher.test.ts scripts/sea/payload.test.ts --silent=passed-only --hideSkippedTests',
+					'vp test tools/oxlint/anti-slop/index.test.ts scripts/sea/launcher.test.ts scripts/sea/payload.test.ts scripts/iac-release.test.ts --silent=passed-only --hideSkippedTests',
 				cache: {
 					...vitestTaskCache,
 					// Launcher fixtures must live outside world-writable temp directories.

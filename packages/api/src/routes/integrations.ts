@@ -602,7 +602,115 @@ function detailResponse(d: IntegrationDetail) {
 	};
 }
 
+const ReconcileInput = z
+	.object({
+		change_note: z.string().max(500).optional(),
+		kind: z.string().min(1),
+		name: IntegrationNameSchema,
+		config: ConfigSchema,
+		enabled: z.boolean().optional(),
+		mode: z.enum(['insert', 'ensure', 'upsert']).optional(),
+		allowOrgOverride: z.boolean().optional(),
+	})
+	.strict();
+const ReconcilePrecondition = z.discriminatedUnion('state', [
+	z.object({ state: z.literal('absent') }).strict(),
+	z
+		.object({ state: z.literal('existing'), id: IntegrationIdSchema, revision: utcTimestamp() })
+		.strict(),
+]);
+const ReconcilePlan = z.object({
+	name: z.string(),
+	kind: z.string(),
+	action: z.enum(['create', 'update', 'unchanged']),
+	changed_paths: z.array(z.string()),
+	precondition: ReconcilePrecondition,
+	org_override: z.boolean(),
+});
+const ReconcileResult = z.object({
+	name: z.string(),
+	kind: z.string(),
+	id: IntegrationIdSchema,
+	action: z.enum(['created', 'updated', 'unchanged']),
+	current_version: z.number().int(),
+	config_changed: z.boolean(),
+});
+const planReconciliation = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/integrations/reconcile/plan',
+	operationId: 'integrations.reconcile.plan',
+	tags: ['Integrations'],
+	summary: 'Preview an integration declaration without writing configuration',
+	request: { params: ProjectIdParam, body: jsonBody(ReconcileInput) },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: ReconcilePlan }),
+			'Integration plan',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 409),
+	},
+});
+const applyReconciliation = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/integrations/reconcile/apply',
+	operationId: 'integrations.reconcile.apply',
+	tags: ['Integrations'],
+	summary: 'Apply an integration declaration with a required state precondition',
+	request: {
+		params: ProjectIdParam,
+		body: jsonBody(z.object({ desired: ReconcileInput, expected: ReconcilePrecondition }).strict()),
+	},
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: ReconcileResult }),
+			'Integration outcome',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 409, 412),
+	},
+});
+
 const app = createApp();
+
+app.openapi(planReconciliation, async (c) => {
+	const deps = c.get('deps');
+	const { pid } = c.req.valid('param');
+	await assertProjectRole(deps.services.projects, pid, c.get('user'), 'integration.manage', deps);
+	const data = await requireIntegrations(deps).planReconciliation(pid, c.req.valid('json'));
+	return c.json({ success: true as const, data }, 200);
+});
+
+app.openapi(applyReconciliation, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid } = c.req.valid('param');
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps);
+	const { desired, expected } = c.req.valid('json');
+	const data = await requireIntegrations(deps).applyReconciliation(pid, desired, expected, user.id);
+	if (data.action !== 'unchanged') {
+		const event = data.action === 'created' ? 'integration.create' : 'integration.update';
+		await appendAudit(
+			deps,
+			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+			event,
+			() =>
+				deps.services.events.append({
+					event,
+					actor: user.id,
+					project_id: pid,
+					integration_scope: 'project',
+					integration_id: data.id,
+					integration_kind: data.kind,
+					integration_name: data.name,
+					...(event === 'integration.update'
+						? { config_changed: data.config_changed, current_version: data.current_version }
+						: {}),
+				}),
+		);
+	}
+	return c.json({ success: true as const, data }, 200);
+});
 
 app.openapi(listKinds, (c) => {
 	const integrations = requireIntegrations(c.get('deps'));

@@ -25,7 +25,7 @@
 		"react:doctor:changed": "react-doctor --scope changed --base origin/main --include-untracked",
 		"audit:prod": "node scripts/audit-production.mjs",
 		"e2e": "pnpm --filter @marimo-hub/e2e e2e",
-		"schemas:generate": "pnpm --filter @marimo-hub/api openapi:generate && pnpm --filter @marimo-hub/api cli:generate && pnpm --filter @marimo-hub/core schemas:generate && vp fmt internal/schemas && pnpm --filter @marimo-hub/client generate && pnpm --filter @marimo-hub/docs integrations:generate",
+		"schemas:generate": "pnpm --filter @marimo-hub/api openapi:generate && pnpm --filter @marimo-hub/api cli:generate && pnpm --filter @marimo-hub/core schemas:generate && vp fmt internal/schemas && pnpm --filter @marimo-hub/client generate && pnpm --filter @marimo-hub/docs integrations:generate && pnpm --filter @marimo-hub/iac generate",
 		"build": "vp run -r build",
 		"cli:version-check": "node scripts/check-cli-version.mjs",
 		"build:sea": "node scripts/build-sea.mjs",
@@ -39,7 +39,8 @@
 		"oxlint": "catalog:",
 		"postject": "catalog:",
 		"react-doctor": "catalog:",
-		"vite-plus": "catalog:"
+		"vite-plus": "catalog:",
+		"yaml": "catalog:"
 	},
 	"engines": {
 		"node": ">=24.11.0"

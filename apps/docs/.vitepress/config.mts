@@ -104,7 +104,7 @@ export default defineConfig({
 			{
 				text: 'Configure',
 				activeMatch:
-					'^/(auth|service-accounts|storage|compute|marimo-assets|editor-sessions|surfaces|theming|sandbox-image|apps|thumbnails|jobs|ai|environment-and-access|integration-secrets|integrations|data-browser|support|notifications|project-alerts|organizing-projects|importing-notebooks|syncing|notebook-previews|workload-identity-federation)',
+					'^/(auth|service-accounts|storage|compute|marimo-assets|editor-sessions|surfaces|theming|sandbox-image|apps|thumbnails|jobs|ai|environment-and-access|integration-iac|integration-secrets|integrations|data-browser|support|notifications|project-alerts|organizing-projects|importing-notebooks|syncing|notebook-previews|workload-identity-federation)',
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },
@@ -127,6 +127,7 @@ export default defineConfig({
 					{ text: 'Project alerts', link: '/project-alerts' },
 					{ text: 'Organizing projects', link: '/organizing-projects' },
 					{ text: 'Integration secret sources', link: '/integration-secrets' },
+					{ text: 'Integrations as code', link: '/integration-iac' },
 					{ text: 'Import notebooks from a folder', link: '/importing-notebooks' },
 					{ text: 'Syncing from external sources', link: '/syncing' },
 					{ text: 'Notebook previews', link: '/notebook-previews' },
@@ -199,6 +200,7 @@ export default defineConfig({
 					{ text: 'Project alerts', link: '/project-alerts' },
 					{ text: 'Organizing projects', link: '/organizing-projects' },
 					{ text: 'Integration secret sources', link: '/integration-secrets' },
+					{ text: 'Integrations as code', link: '/integration-iac' },
 					{ text: 'Import notebooks from a folder', link: '/importing-notebooks' },
 					{ text: 'Syncing from external sources', link: '/syncing' },
 					{ text: 'Notebook previews', link: '/notebook-previews' },

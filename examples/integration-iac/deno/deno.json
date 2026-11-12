@@ -1,0 +1,11 @@
+{
+	"imports": {
+		"@marimo-hub/iac": "npm:@marimo-hub/iac@0.6.4",
+		"@marimo-hub/iac/runner": "npm:@marimo-hub/iac@0.6.4/runner"
+	},
+	"tasks": {
+		"plan": "deno run --no-prompt --frozen --allow-net --allow-env=MARIMOHUB_URL,MARIMOHUB_TOKEN,MARIMOHUB_PROJECT_ID,WAREHOUSE_HOST integrations.ts --plan",
+		"apply": "deno run --no-prompt --frozen --allow-net --allow-env=MARIMOHUB_URL,MARIMOHUB_TOKEN,MARIMOHUB_PROJECT_ID,WAREHOUSE_HOST integrations.ts",
+		"check": "deno run --no-prompt --frozen --allow-net --allow-env=MARIMOHUB_URL,MARIMOHUB_TOKEN,MARIMOHUB_PROJECT_ID,WAREHOUSE_HOST integrations.ts --check"
+	}
+}

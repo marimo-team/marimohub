@@ -1492,3 +1492,5 @@ For source layout, kind contracts, schema evolution, and tests, see the
 
 S3, GCS, and Azure Blob integrations can opt into uploads with `allow_write: true`.
 See [Object uploads in the data browser](./data-browser.md) for credentials, permissions, limits, and resume behavior.
+
+For typed project provisioning scripts, see [Integrations as code](./integration-iac.md).
