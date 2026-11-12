@@ -71,6 +71,57 @@ describe('WorkingBranchService', { timeout: 60_000 }, () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
+	it('pins the personal save actor before preparation and preserves it after a mode change', async () => {
+		const actor = {
+			kind: 'user' as const,
+			verification: 'required' as const,
+			userId: ACTOR,
+			connectionId: 'original',
+			generation: 'generation',
+			accountId: '123',
+		};
+		registry.publicationActor = vi.fn(async () => actor);
+		const getPublisher = vi.spyOn(registry, 'getPublisher');
+		vi.mocked(writer.prepareCommit).mockRejectedValueOnce(new Error('provider unavailable'));
+		write('dashboard.py', 'personal changes');
+		await expect(save('personal-retry')).rejects.toThrow('provider unavailable');
+		const pending = await service.status(pid, nid);
+		expect(pending.last_save?.publication_actor).toEqual(actor);
+		registry.publicationActor = vi.fn(async () => ({
+			kind: 'app' as const,
+			verification: 'unchecked' as const,
+		}));
+		await save('personal-retry');
+		expect(
+			getPublisher.mock.calls.some(
+				(call) => call[2]?.kind === 'user' && call[2].connectionId === 'original',
+			),
+		).toBe(true);
+	});
+
+	it('prevents a different user from finishing an unconfirmed personal PR dispatch', async () => {
+		const store = new WorkingBranchStore(env.bucket);
+		const record = await store.read(pid, nid);
+		await env.bucket.put(
+			workingBranchPaths(pid, nid).head,
+			JSON.stringify({
+				...record,
+				change_request_actor: {
+					kind: 'user',
+					verification: 'required',
+					userId: ACTOR,
+					connectionId: 'original',
+					generation: 'generation',
+					accountId: '123',
+				},
+			}),
+		);
+		await expect(service.openChangeRequest(pid, nid, uid('user-other'), {})).rejects.toThrow(
+			'original author',
+		);
+		expect(writer.openBranchChangeRequest).not.toHaveBeenCalled();
+	});
+
 	function write(path: string, content: string | Uint8Array) {
 		tree.set(path, typeof content === 'string' ? encode(content) : content);
 	}
@@ -150,6 +201,27 @@ describe('WorkingBranchService', { timeout: 60_000 }, () => {
 		);
 		expect((await new WorkingBranchStore(env.bucket).read(pid, nid)).active_save).toBeUndefined();
 		expect(writer.prepareCommit).not.toHaveBeenCalled();
+	});
+	it('reconciles a confirmed personal save after personal publishing configuration is removed', async () => {
+		registry.publicationActor = async () => ({
+			kind: 'user',
+			verification: 'required',
+			userId: ACTOR,
+			connectionId: 'original',
+			generation: 'generation',
+			accountId: '123',
+		});
+		write('dashboard.py', 'saved remotely');
+		vi.mocked(reader.fetchWorkspace).mockRejectedValueOnce(new Error('provider unavailable'));
+		const pending = await save('personal-confirmed');
+		expect(pending.state).toBe('remote_committed');
+		const getPublisher = registry.getPublisher.bind(registry);
+		registry.getPublisher = (provider, project, actor) => {
+			if (actor?.kind === 'user') throw new Error('personal setup removed');
+			return getPublisher(provider, project, actor);
+		};
+		expect((await save('personal-confirmed')).state).toBe('complete');
+		expect(writer.advanceBranch).toHaveBeenCalledOnce();
 	});
 	it('finishes with recoverable conflict when the hub advances after a remote commit', async () => {
 		write('dashboard.py', 'saved remotely');

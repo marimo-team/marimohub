@@ -98,6 +98,7 @@ import { supportReports } from './support';
 import { makeProjectAlerts } from './projectAlerts';
 import { makeResourceSecurity, validateResourceSecurityEnv } from './resourceSecurity';
 import { makeSourceControl } from './sourceControl';
+import { makeSourceControlAccounts } from './sourceControlAccounts';
 import { makeStorage, makeSandboxBucketConfig, storageBackend } from './storage';
 import { loadAdapterLibraries } from './library';
 import type { LoadedAdapterLibraries } from './library';
@@ -717,7 +718,8 @@ export function createFromEnv(
 		if (appProfileNotice) console.warn(appProfileNotice);
 		warnedUnsupportedProfileBackends.add(computeBackendValue);
 	}
-	const sourceControlConfig = makeSourceControl(env);
+	const sourceControlAccounts = makeSourceControlAccounts(env, bucket);
+	const sourceControlConfig = makeSourceControl(env, sourceControlAccounts.githubAccounts, bucket);
 	const workspaceLimits = parseWorkspaceLimits(env);
 	const services = createServices(bucket, metrics, {
 		workspaceLimits,
@@ -811,6 +813,12 @@ export function createFromEnv(
 		}),
 		authRoutes,
 		sandbox: {
+			gitIdentity: parseEnumOr(
+				env,
+				'MARIMOHUB_GIT_SANDBOX_IDENTITY',
+				['none', 'user'] as const,
+				'none',
+			),
 			credentialHeaders: env.MARIMOHUB_AUTH_PROXY_HEADER?.split(',').map((header) => header.trim()),
 			bucket: makeSandboxBucketConfig(env),
 			hostname: env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME ?? '',
@@ -888,6 +896,7 @@ export function createFromEnv(
 		// Managed AI proxy (no-op unless MARIMOHUB_AI_BACKEND is configured).
 		...makeAi(env),
 		...sourceControlConfig,
+		...sourceControlAccounts,
 		...makeIntegrations(env, bucket, metrics, dataPreview, dataQuery),
 		backgroundWork: options?.backgroundWork,
 		// Deployment metadata surfaced read-only via GET /api/v1/version (UI footer).

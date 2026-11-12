@@ -613,3 +613,52 @@ Search exports `search.documents.reused` and `search.documents.read`, tagged by 
 `search.round.duration_ms` measures crawl rounds. `search.snapshot.parse_ms` measures snapshot parsing and posting-list construction.
 Notebook cleanup exports `notebook_gc.visited`, `notebook_gc.rotation.position`, and `notebook_gc.rotation.total`.
 The rotation gauges show progress through the current notebook catalog.
+
+## Personal GitHub credentials
+
+Personal access and refresh tokens use `MARIMOHUB_SECRETS_KEK`, separately from the App private key and OAuth client secret.
+Restrict access to the bucket, backups, KEK, and logs. The installation credentials and OAuth client must belong to the same GitHub App.
+
+Refresh replaces both tokens under a storage claim. An uncertain refresh requires reconnection because the hub cannot safely replay it.
+A new connection cannot take over pending publications. Those retain their original connection ID.
+
+Before a mode, App, client-secret, origin, or KEK change:
+
+1. Stop new publication requests.
+2. Let dispatched requests finish or reconcile their stored receipts.
+3. Keep old decryption keys until users disconnect or you revoke their GitHub grants.
+4. Apply the configuration on all instances.
+5. Restart instances and verify account status before new publications.
+
+In App mode, retain OAuth configuration and the KEK until existing users disconnect.
+The account page still permits disconnect, but disables new connections.
+If the App or KEK changes first, local disconnect still clears credentials. Remote revocation can remain uncertain.
+In that case, revoke the old App authorization through GitHub.
+
+**After a backup restore, revoke affected GitHub grants and require reconnection before personal writes resume.**
+Local records cannot detect restored generations or refresh claims. Restoring the KEK does not make stale tokens safe.
+Notebook deletion neither revokes account connections nor erases remote commits.
+
+### Temporary branches and cleanup
+
+Preparation uses random `marimohub/preparation/` branches and durable receipts.
+Cleanup deletes a ref only at its recorded SHA. A moved ref remains untouched.
+Maintenance can use App credentials for this cleanup, never to publish on a user's behalf.
+
+Retries repeat failed cleanup. Maintenance also cleans terminal or expired preparations and orphan account credentials.
+An uncertain dispatch without a recorded result can leave a ref whose ownership the hub cannot establish.
+
+Before manual deletion:
+
+1. Retain the operation receipt and stop the affected operation.
+2. Verify the repository, ref, expected parent, and resulting commit against the receipt.
+3. Delete only that verified ref. Do not bulk-delete the `marimohub/` prefix.
+
+### Optional live signing test
+
+The live probe requires a disposable repository and GitHub App user credentials.
+It creates and deletes a temporary branch without updating the base branch or opening a PR.
+Normal tests use deterministic HTTP responses. Production verifies each commit before publication.
+
+1. Set the opt-in variables documented in `packages/source-control-github/src/githubSignedCommit.live.test.ts`.
+2. Run `pnpm --filter @marimo-hub/source-control-github exec vp test src/githubSignedCommit.live.test.ts` to bypass the task cache.

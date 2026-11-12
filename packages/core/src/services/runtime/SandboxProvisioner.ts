@@ -1,3 +1,4 @@
+import { EmailAddressSchema } from '../../schema';
 import {
 	SessionArtifactCache,
 	probeSessionArtifacts,
@@ -21,7 +22,8 @@ import { notebookBridgePaths, resolveBridgeLauncher } from './notebookBridgePath
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
 import { Millis } from '../../duration';
-import { PythonEnvironmentSetupError, UnavailableError } from '../../errors';
+import { BadRequestError, PythonEnvironmentSetupError, UnavailableError } from '../../errors';
+import type { SourceControlCommitIdentity } from '../../ports/sourceControl';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { effectivePersistenceMode } from './sessionPersistence';
 import {
@@ -321,6 +323,7 @@ export interface ProvisionOptions {
 	 * Promises let credential resolution overlap sandbox boot. The caller resolves credentials.
 	 */
 	sessionEnv?: SessionEnv | Promise<SessionEnv | undefined>;
+	gitIdentity?: SourceControlCommitIdentity | Promise<SourceControlCommitIdentity>;
 	/** Interactive marimo credential. Scheduled-job preparation omits it. */
 	kernelAuthToken?: string;
 	/** Known content joins pre-launch file writes; otherwise published after exposure resolves. */
@@ -1558,9 +1561,21 @@ export class SandboxProvisioner {
 		},
 	): Promise<void> {
 		const resolvedEnv = await options.sessionEnv;
+		const gitIdentity =
+			(options.launchMode ?? 'edit') === 'edit' ? await options.gitIdentity : undefined;
+		if (
+			gitIdentity &&
+			(!gitIdentity.name.trim() ||
+				!EmailAddressSchema.safeParse(gitIdentity.email).success ||
+				gitIdentity.name.length > 256 ||
+				/[\p{Cc}<>]/u.test(gitIdentity.name + gitIdentity.email))
+		) {
+			throw new BadRequestError('The user profile cannot be used as a Git identity');
+		}
 		const kernelAuthToken = options.kernelAuthToken;
 		if (
 			!resolvedEnv &&
+			!gitIdentity &&
 			kernelAuthToken === undefined &&
 			!options.contextFile &&
 			!options.restoreFilesystemSnapshotId
@@ -1587,6 +1602,14 @@ export class SandboxProvisioner {
 					files.push({ path: options.contextFile.path, content: options.contextFile.content });
 				}
 				const vars = { ...sessionEnv?.vars };
+				if (gitIdentity) {
+					Object.assign(vars, {
+						GIT_AUTHOR_NAME: gitIdentity.name.trim(),
+						GIT_AUTHOR_EMAIL: gitIdentity.email.trim(),
+						GIT_COMMITTER_NAME: gitIdentity.name.trim(),
+						GIT_COMMITTER_EMAIL: gitIdentity.email.trim(),
+					});
+				}
 				if (options.restoreFilesystemSnapshotId && vars[AGENT_CONTEXT_DIR_ENV] === undefined) {
 					vars[AGENT_CONTEXT_DIR_ENV] = '';
 				}

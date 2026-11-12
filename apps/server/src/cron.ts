@@ -180,6 +180,7 @@ export function startMaintenance(
 				const eventsPruned = await step(() => maintenance.pruneEvents());
 				const idempotencyPruned = await step(() => idempotency.prune());
 				const hostRetriesCompacted = await step(() => deps.services.hostRetries.compactExpired());
+				await step(() => deps.githubAccounts?.sweep() ?? Promise.resolve());
 				const proposalPayloadsPruned = await step(() => proposals.pruneExpiredPayloads());
 				const workingBranchPayloadsPruned = await step(() =>
 					deps.services.workingBranches.pruneExpiredPayloads(),

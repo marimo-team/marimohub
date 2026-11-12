@@ -1,3 +1,4 @@
+import type { GitHubUserCredential } from './githubSignedCommit';
 import { ConflictError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
 import type {
 	OpenChangeRequestResult,
@@ -41,17 +42,22 @@ function fullCommit(commit: string): string {
 }
 
 export class GitHubWorkingBranches implements WorkingBranchWriter {
-	constructor(private readonly client: GitHubClient) {}
+	constructor(
+		private readonly client: GitHubClient,
+		private readonly user?: GitHubUserCredential,
+	) {}
 
 	private async context(coordinate: string, access: 'preview' | 'write' = 'write') {
 		const { owner, repo } = parseRepository(coordinate, this.client.origin);
-		const token = await this.client.installationToken(owner, repo, access);
+		const token = this.user
+			? await this.user.token()
+			: await this.client.installationToken(owner, repo, access);
 		return {
 			owner,
 			repo,
 			token,
 			base: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
-			repository: new GitHubRepositoryWriter(this.client, owner, repo, token),
+			repository: new GitHubRepositoryWriter(this.client, owner, repo, token, this.user),
 		};
 	}
 
@@ -67,7 +73,9 @@ export class GitHubWorkingBranches implements WorkingBranchWriter {
 		return { commit: fromCommit };
 	}
 
-	async prepareCommit(input: Input<'prepareCommit'>): Promise<{ commit: string }> {
+	async prepareCommit(
+		input: Input<'prepareCommit'>,
+	): ReturnType<WorkingBranchWriter['prepareCommit']> {
 		const parentCommit = fullCommit(input.parentCommit);
 		validateChanges(input.changes);
 		validateCommitIdentity(input.coAuthor);
@@ -86,7 +94,19 @@ export class GitHubWorkingBranches implements WorkingBranchWriter {
 		if (!FULL_COMMIT.test(commit)) {
 			throw new UnavailableError('GitHub returned an invalid working branch commit');
 		}
-		return { commit: commit.toLowerCase() };
+		const { owner, repo } = parseRepository(input.repository, this.client.origin);
+		return {
+			commit: commit.toLowerCase(),
+			...(this.user
+				? {
+						verification: {
+							status: 'verified' as const,
+							commit: commit.toLowerCase(),
+							url: `${this.client.origin}/${owner}/${repo}/commit/${commit}`,
+						},
+					}
+				: {}),
+		};
 	}
 
 	async advanceBranch(input: Input<'advanceBranch'>): Promise<{ commit: string }> {
@@ -133,7 +153,10 @@ export class GitHubWorkingBranches implements WorkingBranchWriter {
 			per_page: '100',
 		});
 		const data = await responseJson(
-			await this.client.request(`${ctx.base}/pulls?${query}`, ctx.token),
+			await this.client.request(
+				`${ctx.base}/pulls?${query}`,
+				this.user ? await this.user.token() : ctx.token,
+			),
 		);
 		if (!Array.isArray(data) || data.length >= 100) {
 			throw new UnavailableError('Could not determine the working branch pull request');
@@ -172,7 +195,7 @@ export class GitHubWorkingBranches implements WorkingBranchWriter {
 			const comparison = await responseJson(
 				await this.client.request(
 					`${ctx.base}/compare/${commit}...${headCommit}?per_page=1`,
-					ctx.token,
+					this.user ? await this.user.token() : ctx.token,
 				),
 			);
 			const status = stringField(comparison, 'status');
@@ -185,7 +208,10 @@ export class GitHubWorkingBranches implements WorkingBranchWriter {
 		if (input.changeRequestNumber !== undefined) {
 			const pull = this.parsePull(
 				await responseJson(
-					await this.client.request(`${ctx.base}/pulls/${input.changeRequestNumber}`, ctx.token),
+					await this.client.request(
+						`${ctx.base}/pulls/${input.changeRequestNumber}`,
+						this.user ? await this.user.token() : ctx.token,
+					),
 				),
 				ctx.owner,
 				ctx.repo,
@@ -234,7 +260,7 @@ export class GitHubWorkingBranches implements WorkingBranchWriter {
 		}
 		const response = await this.client.request(
 			`${ctx.base}/pulls`,
-			ctx.token,
+			this.user ? await this.user.token() : ctx.token,
 			{
 				method: 'POST',
 				body: JSON.stringify({

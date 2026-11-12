@@ -1,3 +1,7 @@
+import type { SignedPreparation } from '@marimo-hub/core/source-control-publication';
+import { cleanupSignedPreparation } from './githubSignedCommit';
+export { GitHubUserPublisher } from './githubUserPublisher';
+export { GitHubAccountProvider } from './githubAccount';
 import { createPublishStage } from '@marimo-hub/source-control-git/publication';
 import { ConflictError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
 import { markSourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
@@ -48,6 +52,20 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 		this.client = new GitHubClient(options, runtime);
 		this.workingBranches = new GitHubWorkingBranches(this.client);
 		this.fetcher = runtime.fetcher ?? fetch;
+	}
+
+	async cleanupPreparation(input: {
+		repository: string;
+		preparation: SignedPreparation;
+	}): Promise<boolean> {
+		const { owner, repo } = parseRepository(input.repository, this.client.origin);
+		if (input.preparation.repository !== `${owner}/${repo}`)
+			throw new ValidationError('Preparation repository changed');
+		const token = await this.client.installationToken(owner, repo, 'write');
+		return cleanupSignedPreparation(
+			new GitHubRepositoryWriter(this.client, owner, repo, token),
+			input.preparation,
+		);
 	}
 
 	private readonly atStage = createPublishStage(this.provider);

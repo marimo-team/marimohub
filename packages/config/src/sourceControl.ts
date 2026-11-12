@@ -1,9 +1,13 @@
+import { IdentityService, UserId } from '@marimo-hub/core';
+import type { Bucket } from '@marimo-hub/core/ports/bucket';
+import type { SourceControlAccountService } from '@marimo-hub/core';
 import type { SourceControlRegistry } from '@marimo-hub/core/ports/source-control';
 import type { GitProvider } from '@marimo-hub/core/git-repo';
 import { ForbiddenError } from '@marimo-hub/core/errors';
 import { allowsProjectResource } from '@marimo-hub/core/project-resource-policy';
 import {
 	GitHubAppPublisher,
+	GitHubUserPublisher,
 	githubOrigin,
 	parseGitHubRepository,
 } from '@marimo-hub/source-control-github';
@@ -32,7 +36,11 @@ type SourceControlConfig = {
 	sourceControl?: SourceControlRegistry;
 };
 
-function makeGitHubSourceControl(env: Env): SourceControlRegistration | undefined {
+function makeGitHubSourceControl(
+	env: Env,
+	accounts?: SourceControlAccountService,
+	bucket?: Bucket,
+): SourceControlRegistration | undefined {
 	const appId = env[GITHUB_APP_ID_ENV]?.trim();
 	const privateKey = env[GITHUB_APP_PRIVATE_KEY_ENV]?.trim();
 	if (!appId && !privateKey) return undefined;
@@ -74,6 +82,35 @@ function makeGitHubSourceControl(env: Env): SourceControlRegistration | undefine
 	return {
 		reader: github,
 		publisher: github,
+		publicationActor: async (userId) => {
+			if (env.MARIMOHUB_SOURCE_CONTROL_GITHUB_PUBLISH_ACTOR?.trim().toLowerCase() !== 'user')
+				return { kind: 'app', verification: 'unchecked' };
+			if (!accounts) throw new ForbiddenError('Personal GitHub authorization is not configured');
+			return {
+				kind: 'user',
+				verification: 'required',
+				userId,
+				...(await accounts.reference(userId)),
+			};
+		},
+		personalPublisher: (actor) => {
+			if (!accounts || !bucket)
+				throw new ForbiddenError('Personal GitHub authorization is not configured');
+			if (actor.verification !== 'required')
+				throw new ForbiddenError('Personal publication requires verified commits');
+			const uid = UserId.parse(actor.userId);
+			return new GitHubUserPublisher(
+				{ appId, privateKey, url },
+				{
+					accountId: actor.accountId,
+					token: async () => {
+						if (await new IdentityService(bucket).isSuspended(uid))
+							throw new ForbiddenError('Account is suspended');
+						return accounts.accessToken(uid, actor);
+					},
+				},
+			);
+		},
 		repositoryHosts: { [new URL(url).host]: github.provider },
 		authorize: repositoryPolicy(
 			env,
@@ -195,10 +232,17 @@ const SOURCE_CONTROL_FACTORIES = {
 	'azure-devops': makeAzureSourceControl,
 } satisfies Record<GitProvider, ((env: Env) => SourceControlRegistration | undefined) | null>;
 
-export function makeSourceControl(env: Env): SourceControlConfig {
+export function makeSourceControl(
+	env: Env,
+	accounts?: SourceControlAccountService,
+	bucket?: Bucket,
+): SourceControlConfig {
 	const workingBranchesEnabled = parseBool(env, 'MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED');
 	const registrations = Object.values(SOURCE_CONTROL_FACTORIES).flatMap(
-		(factory) => factory?.(env) ?? [],
+		(factory) =>
+			(factory === makeGitHubSourceControl
+				? makeGitHubSourceControl(env, accounts, bucket)
+				: factory?.(env)) ?? [],
 	);
 	return registrations.length === 0 && !workingBranchesEnabled
 		? {}

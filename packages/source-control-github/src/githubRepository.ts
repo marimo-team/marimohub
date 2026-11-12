@@ -1,3 +1,6 @@
+import { prepareSignedGitHubCommit } from './githubSignedCommit';
+import type { GitHubUserCredential } from './githubSignedCommit';
+import type { PreparationCheckpoint } from '@marimo-hub/core/source-control-publication';
 import {
 	ConflictError,
 	ProposalRetryRequiredError,
@@ -16,17 +19,27 @@ import type { GitTreeEntry } from './githubResponses';
 import { coAuthorTrailer, refPath } from './githubValidation';
 
 export class GitHubRepositoryWriter {
+	private changes?: OpenChangeRequestInput['changes'];
+	private checkpoint?: PreparationCheckpoint;
 	constructor(
 		private readonly client: GitHubClient,
 		private readonly owner: string,
 		private readonly repo: string,
 		private readonly token: string,
+		private readonly user?: GitHubUserCredential,
 	) {}
+
+	private async authToken(): Promise<string> {
+		if (!this.user) return this.token;
+		const token = await this.user.token();
+		await this.checkpoint?.assertCurrent?.();
+		return token;
+	}
 
 	async getRef(branch: string): Promise<string | null> {
 		const response = await this.client.request(
 			`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/git/ref/heads/${refPath(branch)}`,
-			this.token,
+			await this.authToken(),
 			{},
 			[404],
 		);
@@ -38,7 +51,7 @@ export class GitHubRepositoryWriter {
 	private async getBaseTreeEntries(baseTree: string): Promise<Map<string, GitTreeEntry>> {
 		const response = await this.client.request(
 			`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/git/trees/${encodeURIComponent(baseTree)}?recursive=1`,
-			this.token,
+			await this.authToken(),
 		);
 		return gitTreeEntries(await responseJson(response));
 	}
@@ -47,7 +60,7 @@ export class GitHubRepositoryWriter {
 		const query = new URLSearchParams({ ref: commit });
 		const response = await this.client.request(
 			`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/contents/${refPath(path)}?${query}`,
-			this.token,
+			await this.authToken(),
 			{},
 			[404],
 		);
@@ -55,12 +68,14 @@ export class GitHubRepositoryWriter {
 	}
 
 	async createProposalTree(
-		input: Pick<OpenChangeRequestInput, 'changes'>,
+		input: Pick<OpenChangeRequestInput, 'changes' | 'preparation'>,
 		treeBaseCommit: string,
 	): Promise<string> {
+		this.changes = input.changes;
+		this.checkpoint = input.preparation;
 		const commitResponse = await this.client.request(
 			`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/git/commits/${encodeURIComponent(treeBaseCommit)}`,
-			this.token,
+			await this.authToken(),
 		);
 		const baseTree = nestedString(await responseJson(commitResponse), 'tree', 'sha');
 		const baseEntries = input.changes.some((change) => change.operation !== 'add')
@@ -78,6 +93,16 @@ export class GitHubRepositoryWriter {
 					}
 				}),
 		);
+		if (
+			this.user &&
+			input.changes.some(
+				(change) =>
+					change.operation === 'modify' && baseEntries?.get(change.path)?.mode !== '100644',
+			)
+		)
+			throw new ConflictError(
+				'Personal signed commits support changes to regular non-executable files only',
+			);
 		const tree = await Promise.all(
 			input.changes.map(async (change) => {
 				const baseEntry = baseEntries?.get(change.path);
@@ -92,7 +117,7 @@ export class GitHubRepositoryWriter {
 				}
 				const blobResponse = await this.client.request(
 					`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/git/blobs`,
-					this.token,
+					await this.authToken(),
 					{
 						method: 'POST',
 						body: JSON.stringify({
@@ -111,7 +136,7 @@ export class GitHubRepositoryWriter {
 		);
 		const treeResponse = await this.client.request(
 			`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/git/trees`,
-			this.token,
+			await this.authToken(),
 			{ method: 'POST', body: JSON.stringify({ base_tree: baseTree, tree }) },
 		);
 		return stringField(await responseJson(treeResponse), 'sha');
@@ -124,11 +149,24 @@ export class GitHubRepositoryWriter {
 		body: string,
 		coAuthor?: OpenChangeRequestInput['coAuthor'],
 	): Promise<string> {
+		if (this.user)
+			return prepareSignedGitHubCommit({
+				client: this.client,
+				writer: this,
+				owner: this.owner,
+				repo: this.repo,
+				credential: this.user,
+				parent: parentCommit,
+				tree,
+				message: `${title}\n\n${body}`.trim().replace(/\n+/, '\n\n'),
+				changes: this.changes ?? [],
+				checkpoint: this.checkpoint,
+			});
 		const trailer = coAuthorTrailer(coAuthor);
 		const message = [`${title}\n\n${body}`.trim(), trailer].filter(Boolean).join('\n\n');
 		const response = await this.client.request(
 			`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/git/commits`,
-			this.token,
+			await this.authToken(),
 			{
 				method: 'POST',
 				body: JSON.stringify({
@@ -147,7 +185,7 @@ export class GitHubRepositoryWriter {
 	): Promise<{ headCommit: string; existed: boolean }> {
 		const response = await this.client.request(
 			`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/git/refs`,
-			this.token,
+			await this.authToken(),
 			{
 				method: 'POST',
 				body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: commit }),
@@ -168,7 +206,7 @@ export class GitHubRepositoryWriter {
 	async updateRef(branch: string, commit: string, force: boolean): Promise<boolean> {
 		const response = await this.client.request(
 			`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/git/refs/heads/${refPath(branch)}`,
-			this.token,
+			await this.authToken(),
 			{ method: 'PATCH', body: JSON.stringify({ sha: commit, force }) },
 			[409, 422],
 		);
@@ -191,10 +229,10 @@ export class GitHubRepositoryWriter {
 	): Promise<void> {
 		const repositoryResponse = await this.client.request(
 			`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}`,
-			this.token,
+			await this.authToken(),
 		);
 		const repositoryId = stringField(await responseJson(repositoryResponse), 'node_id');
-		const response = await this.client.request('/graphql', this.token, {
+		const response = await this.client.request('/graphql', await this.authToken(), {
 			method: 'POST',
 			body: JSON.stringify({
 				query:
@@ -252,7 +290,7 @@ export class GitHubRepositoryWriter {
 	): Promise<boolean> {
 		const response = await this.client.request(
 			`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/git/commits/${encodeURIComponent(commitSha)}`,
-			this.token,
+			await this.authToken(),
 		);
 		const commit = await responseJson(response);
 		if (!isRecord(commit) || !Array.isArray(commit.parents)) {

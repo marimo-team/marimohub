@@ -54,6 +54,8 @@
 		"./ports/sandbox": "./src/ports/sandbox.ts",
 		"./ports/sandbox-exposure": "./src/ports/sandboxExposure.ts",
 		"./ports/secrets": "./src/ports/secrets.ts",
+		"./source-control-publication": "./src/sourceControlPublication.ts",
+		"./ports/source-control-account": "./src/ports/sourceControlAccount.ts",
 		"./ports/source-control": "./src/ports/sourceControl.ts",
 		"./ports/subject-context": "./src/ports/subjectContext.ts",
 		"./preview-policy": "./src/previewPolicy.ts",

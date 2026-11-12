@@ -275,3 +275,12 @@ the same identity without changing the authentication-time enforcement path.
 ## Troubleshooting
 
 See [Troubleshooting -> Login fails](./troubleshooting.md#login-fails).
+
+## GitHub publication accounts
+
+A [GitHub connection](syncing.md#personal-github-publishing) authorizes outbound writes, independently of hub login and project membership.
+It binds one immutable hub user ID to one immutable GitHub account ID. GitHub login or email does not merge hub identities.
+
+The account page shows connection status. GitHub evaluates repository access on each operation.
+Suspension blocks new account actions and personal writes. Disconnect blocks further use of that connection.
+Neither cancels requests already sent to GitHub. See [Security](security.md#personal-github-publishing) for the same-origin proxy boundary.

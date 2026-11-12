@@ -1,8 +1,10 @@
+import type { PreparationCheckpoint } from '../../sourceControlPublication';
 import { copyMovePrefix, moveJson } from './moveObjects';
 import { forEachConcurrentUntilFailure } from '../../async';
 import { Millis } from '../../duration';
 import {
 	ConflictError,
+	ForbiddenError,
 	NotFoundError,
 	PreconditionFailedError,
 	ProposalRetryRequiredError,
@@ -20,6 +22,7 @@ import type {
 	SourceControlChange,
 	SourceControlCommitIdentity,
 	SourceControlPublisher,
+	SourceControlRegistry,
 } from '../../ports/sourceControl';
 import {
 	markSourceControlPublishFailure,
@@ -79,6 +82,8 @@ export interface CaptureProposalResult {
 }
 
 export interface PublishProposalChangeRequestInput {
+	actor?: UserId;
+	authorize?: () => Promise<void>;
 	projectId: ProjectId;
 	notebookId: NotebookId;
 	proposalId: ProposalId;
@@ -86,6 +91,8 @@ export interface PublishProposalChangeRequestInput {
 	title: string;
 	body: string;
 	coAuthor?: SourceControlCommitIdentity;
+	preparation?: PreparationCheckpoint;
+	checkPublication?: () => Promise<void>;
 }
 
 export interface NotebookProposalRecord {
@@ -128,6 +135,7 @@ export class NotebookProposalService {
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
+		private sourceControl?: SourceControlRegistry,
 	) {}
 
 	async resolveSourceRevision(
@@ -335,6 +343,10 @@ export class NotebookProposalService {
 
 				const publication: ProposalPublication = {
 					state: 'pending',
+					publication_actor: await this.sourceControl?.publicationActor?.(
+						captured.source.provider,
+						input.author,
+					),
 					updated_at: captured.created_at,
 				};
 				try {
@@ -417,6 +429,51 @@ export class NotebookProposalService {
 					.project(marker.project_id)
 					.notebook(marker.notebook_id)
 					.proposal(marker.proposal_id);
+				const publicationObject = await this.bucket.get(proposalPaths.publication);
+				const publication = publicationObject
+					? await readStored(
+							ProposalPublicationSchema,
+							publicationObject,
+							proposalPaths.publication,
+						)
+					: undefined;
+				const preparation = publication?.signed_preparation;
+				if (preparation && !preparation.cleaned) {
+					if (publication?.publication_lease && publication.publication_lease.until > nowMs)
+						continue;
+					const record = await this.getProposal(
+						marker.project_id,
+						marker.notebook_id,
+						marker.proposal_id,
+					);
+					const publisher = this.sourceControl?.getPublisher(
+						record.proposal.source.provider,
+						marker.project_id,
+					);
+					if (
+						!(await publisher?.cleanupPreparation?.({
+							repository: record.proposal.source.repo,
+							preparation,
+						}))
+					)
+						continue;
+					await mutateObject(
+						this.bucket,
+						proposalPaths.publication,
+						(raw) => parseStored(ProposalPublicationSchema, raw, proposalPaths.publication),
+						(value) => {
+							if (
+								value.signed_preparation?.branch !== preparation.branch ||
+								(value.publication_lease && value.publication_lease.until > nowMs)
+							)
+								return null;
+							return {
+								...value,
+								signed_preparation: { ...value.signed_preparation, cleaned: true },
+							};
+						},
+					);
+				}
 				if (marker.change_indexes.length > 0) {
 					await this.bucket.delete(
 						marker.change_indexes.map((index) => proposalPaths.change(index)),
@@ -494,6 +551,81 @@ export class NotebookProposalService {
 	async publishChangeRequest(
 		input: PublishProposalChangeRequestInput,
 	): Promise<OpenChangeRequestResult> {
+		const record = await this.getProposal(input.projectId, input.notebookId, input.proposalId);
+		if (
+			record.publication.publication_actor?.kind !== 'user' ||
+			record.publication.state === 'published'
+		)
+			return this.publishPreparedChangeRequest(input);
+		if (record.publication.publication_actor.userId !== input.actor)
+			throw new ForbiddenError('Only the original author can finish this personal publication');
+		const key = paths
+			.project(input.projectId)
+			.notebook(input.notebookId)
+			.proposal(input.proposalId).publication;
+		const owner = crypto.randomUUID();
+		const modify = (apply: (value: ProposalPublication) => ProposalPublication | null) =>
+			mutateObject(
+				this.bucket,
+				key,
+				(raw) => parseStored(ProposalPublicationSchema, raw, key),
+				apply,
+			);
+		await modify((value) => {
+			if (value.publication_lease && value.publication_lease.until > Date.now())
+				throw new ConflictError('Proposal publication is already running');
+			return { ...value, publication_lease: { owner, until: Date.now() + 120_000 } };
+		});
+		const checkPublication = async () => {
+			await input.authorize?.();
+			await modify((value) => {
+				if (value.publication_lease?.owner !== owner || value.publication_lease.until <= Date.now())
+					throw new ConflictError('Proposal publication lease expired');
+				return { ...value, publication_lease: { owner, until: Date.now() + 120_000 } };
+			});
+		};
+		const preparation: PreparationCheckpoint = {
+			assertCurrent: checkPublication,
+			read: async () =>
+				(await this.getProposal(input.projectId, input.notebookId, input.proposalId)).publication
+					.signed_preparation,
+			write: async (signed_preparation) => {
+				await modify((value) => {
+					if (
+						value.publication_lease?.owner !== owner ||
+						value.publication_lease.until <= Date.now()
+					)
+						throw new ConflictError('Proposal publication lease expired');
+					return { ...value, signed_preparation };
+				});
+			},
+		};
+		try {
+			const publisher = this.sourceControl?.getPublisher(
+				record.proposal.source.provider,
+				input.projectId,
+				record.publication.publication_actor,
+			);
+			if (!publisher)
+				throw new UnavailableError('The personal publication account is not configured');
+			return await this.publishPreparedChangeRequest({
+				...input,
+				publisher,
+				preparation,
+				checkPublication,
+			});
+		} finally {
+			await modify((value) =>
+				value.publication_lease?.owner === owner
+					? { ...value, publication_lease: undefined }
+					: null,
+			);
+		}
+	}
+
+	private async publishPreparedChangeRequest(
+		input: PublishProposalChangeRequestInput,
+	): Promise<OpenChangeRequestResult> {
 		const { proposal, publication } = await this.getProposal(
 			input.projectId,
 			input.notebookId,
@@ -505,6 +637,7 @@ export class NotebookProposalService {
 				url: publication.change_request.url,
 				headBranch: publication.change_request.head_branch,
 				headCommit: publication.change_request.head_commit,
+				verification: publication.change_request.verification,
 			};
 			if (proposal.target_proposal_id) {
 				try {
@@ -602,7 +735,9 @@ export class NotebookProposalService {
 			headBranch = expectedChangeRequest.headBranch;
 			publishStartedAt = Date.now();
 			try {
+				await input.checkPublication?.();
 				result = await publisher.updateChangeRequest({
+					preparation: input.preparation,
 					repository: proposal.source.repo,
 					baseBranch: proposal.source.branch,
 					baseCommit: proposal.source.commit,
@@ -619,7 +754,9 @@ export class NotebookProposalService {
 			headBranch = `marimohub/${proposal.notebook_id}/${proposal.proposal_id}`;
 			publishStartedAt = Date.now();
 			try {
+				await input.checkPublication?.();
 				result = await publisher.openChangeRequest({
+					preparation: input.preparation,
 					repository: proposal.source.repo,
 					baseBranch: proposal.source.branch,
 					baseCommit: proposal.source.commit,
@@ -640,6 +777,7 @@ export class NotebookProposalService {
 			url: result.url,
 			head_branch: result.headBranch,
 			head_commit: result.headCommit,
+			verification: result.verification,
 		});
 		if (
 			!parsedResult.success ||
@@ -661,6 +799,7 @@ export class NotebookProposalService {
 			(current) => {
 				if (current.state === 'published') return null;
 				return {
+					...current,
 					state: 'published' as const,
 					updated_at: new Date().toISOString(),
 					change_request: {
@@ -669,6 +808,7 @@ export class NotebookProposalService {
 						url: result.url,
 						head_branch: result.headBranch,
 						head_commit: result.headCommit,
+						verification: result.verification,
 					},
 				};
 			},
@@ -681,6 +821,7 @@ export class NotebookProposalService {
 			url: published.change_request.url,
 			headBranch: published.change_request.head_branch,
 			headCommit: published.change_request.head_commit,
+			verification: published.change_request.verification,
 		};
 		if (
 			published.change_request.provider !== publisher.provider ||
@@ -839,6 +980,7 @@ export class NotebookProposalService {
 					change_request: {
 						...changeRequest,
 						head_commit: result.headCommit,
+						verification: result.verification,
 					},
 				};
 			},

@@ -1714,6 +1714,8 @@ export const CapabilitiesResponseSchema = z
 		federation: z.object({ available: z.boolean(), default_enabled: z.boolean() }),
 		integrations: z.object({ available: z.boolean() }),
 		source_control: z.object({
+			github_account_management: z.boolean().optional(),
+			github_publish_actor: z.enum(['app', 'user']).optional(),
 			working_branch_providers: z.array(z.string()).optional(),
 			preview_providers: z.array(z.string()).openapi({
 				description: 'Provider ids configured to publish notebook previews through a GitHub App.',

@@ -1,10 +1,11 @@
+import type { PublicationActor } from '@marimo-hub/core/source-control-publication';
 import type {
 	SourceControlPublisher,
 	SourceControlReader,
 	SourceControlRegistry,
 	WorkingBranchWriter,
 } from '@marimo-hub/core/ports/source-control';
-import type { ProjectId } from '@marimo-hub/core/ids';
+import type { ProjectId, UserId } from '@marimo-hub/core/ids';
 import type { GitProvider, GitProviderHosts } from '@marimo-hub/core/git-repo';
 import { ConfigError } from './errors';
 
@@ -16,6 +17,10 @@ type RepositoryArgument = string | { repository: string };
 export interface SourceControlRegistration {
 	reader?: SourceControlReader;
 	publisher?: SourceControlPublisher;
+	personalPublisher?: (
+		actor: Extract<PublicationActor, { kind: 'user' }>,
+	) => SourceControlPublisher;
+	publicationActor?: (userId: UserId) => Promise<PublicationActor>;
 	authorize?: AuthorizeRepository;
 	repositoryHosts?: SourceControlRegistry['repositoryHosts'];
 }
@@ -122,10 +127,28 @@ export class ConfiguredSourceControlRegistry implements SourceControlRegistry {
 		};
 	}
 
-	getPublisher(provider: string, projectId?: ProjectId): SourceControlPublisher | undefined {
+	async publicationActor(provider: string, userId: UserId): Promise<PublicationActor> {
+		return (
+			this.publishers.get(provider)?.publicationActor?.(userId) ?? {
+				kind: 'app',
+				verification: 'unchecked',
+			}
+		);
+	}
+
+	getPublisher(
+		provider: string,
+		projectId?: ProjectId,
+		actor?: PublicationActor,
+	): SourceControlPublisher | undefined {
 		const registration = this.publishers.get(provider);
 		if (!registration) return undefined;
-		const { publisher, authorize } = registration;
+		if (actor?.kind === 'app' && actor.verification !== 'unchecked')
+			throw new ConfigError('Verified App publication is not supported');
+		const { authorize } = registration;
+		const publisher =
+			actor?.kind === 'user' ? registration.personalPublisher?.(actor) : registration.publisher;
+		if (!publisher) throw new ConfigError('The publication account is not configured');
 		const workingBranches =
 			this.workingBranchesEnabled && this.readers.get(provider)?.reader.fetchGitDirectory
 				? publisher.workingBranches
@@ -135,6 +158,15 @@ export class ConfiguredSourceControlRegistry implements SourceControlRegistry {
 		const updateChangeRequest = publisher.updateChangeRequest?.bind(publisher);
 		return {
 			provider,
+			...(publisher.cleanupPreparation
+				? {
+						cleanupPreparation: this.guard(
+							publisher.cleanupPreparation.bind(publisher),
+							check,
+							projectId,
+						),
+					}
+				: {}),
 			openChangeRequest: this.guard(publisher.openChangeRequest.bind(publisher), check, projectId),
 			...(updateChangeRequest
 				? { updateChangeRequest: this.guard(updateChangeRequest, check, projectId) }

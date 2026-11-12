@@ -20,7 +20,8 @@
 	"dependencies": {
 		"@marimo-hub/core": "workspace:*",
 		"@marimo-hub/source-control-git": "workspace:*",
-		"fflate": "catalog:"
+		"fflate": "catalog:",
+		"zod": "catalog:"
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",

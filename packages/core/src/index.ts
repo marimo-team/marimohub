@@ -79,3 +79,5 @@ export * from './fsm';
 export * from './deepLinks';
 
 export * from './tagPaths';
+
+export * from './sourceControlPublication';
