@@ -147,3 +147,29 @@ it('shows a forbidden response without enabling actions', async () => {
 	expect(await screen.findByRole('alert')).toHaveTextContent('super-admin access');
 	expect(screen.getByRole('button', { name: 'Request attempt' })).toBeDisabled();
 });
+
+it('stops automatic polling after exhausted read failures and recovers on manual refresh', async () => {
+	vi.useFakeTimers();
+	const fetcher = vi.fn(async () => jsonError('SERVICE_UNAVAILABLE', 'Unavailable', 503));
+	vi.stubGlobal('fetch', fetcher);
+	const { result } = renderHookWithClient(() => useAdminMigrationsQuery());
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(100);
+	});
+	expect(result.current.isError).toBe(true);
+	expect(fetcher).toHaveBeenCalledTimes(3);
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(60_000);
+	});
+	expect(fetcher).toHaveBeenCalledTimes(3);
+	fetcher.mockImplementation(async () => jsonOk(fixture));
+	await act(async () => {
+		await result.current.refetch();
+		await vi.advanceTimersByTimeAsync(1);
+	});
+	expect(result.current.data).toEqual(fixture);
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(5_000);
+	});
+	expect(fetcher).toHaveBeenCalledTimes(5);
+});

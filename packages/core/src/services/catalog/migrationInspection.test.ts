@@ -321,3 +321,46 @@ it('replaces initialization waiting with a failure when execution fails', async 
 	await expect(service.tick()).rejects.toThrow('failed');
 	expect((await service.inspect()).rows[0].status).toBe('retrying');
 });
+
+it('does not let unreadable retired history turn an executable checkpoint conflict into an outage', async () => {
+	const bucket = new MemoryBucket();
+	await put(bucket, 'first-v1', { version: 2, status: 'pending' });
+	const get = bucket.get.bind(bucket);
+	vi.spyOn(bucket, 'get').mockImplementation((key) =>
+		key === paths.migration('old-v1') ? Promise.reject(new Error('unavailable')) : get(key),
+	);
+	const service = new MigrationService(bucket, [definition()], [{ id: 'old-v1' }]);
+	expect(await service.inspect()).toMatchObject({
+		action: 'blocked',
+		poll: false,
+		incomplete: true,
+		counts: { waiting: 0, running: 0, completed: 0, needs_attention: 1 },
+	});
+});
+
+it('keeps retry backoff intact across inspection and repeated manual ticks', async () => {
+	vi.useFakeTimers();
+	try {
+		const batch = vi.fn<BackgroundMigration['runBatch']>().mockRejectedValue(new Error('failed'));
+		const service = new MigrationService(new MemoryBucket(), [
+			{ ...definition(), runBatch: batch },
+		]);
+		for (let attempt = 0; attempt < 3; attempt++)
+			await expect(service.tick()).rejects.toThrow('failed');
+		for (let click = 0; click < 3; click++) {
+			expect((await service.inspect()).rows[0].status).toBe('retrying');
+			expect(await service.tick()).toBe(false);
+		}
+		expect(batch).toHaveBeenCalledTimes(3);
+		await vi.advanceTimersByTimeAsync(30_000);
+		batch.mockResolvedValue({ done: true, progress: { delta: 1 } });
+		expect(await service.tick()).toBe(true);
+		expect((await service.inspect()).rows[0]).toMatchObject({
+			status: 'completed',
+			attempts: 4,
+			progress: { processed: 1 },
+		});
+	} finally {
+		vi.useRealTimers();
+	}
+});

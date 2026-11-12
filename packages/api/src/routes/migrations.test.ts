@@ -129,3 +129,44 @@ it('does not initialize or scan the catalog while inspecting an empty installati
 	expect(tick).not.toHaveBeenCalled();
 	expect(await bucket.get(paths.catalog)).toBeNull();
 });
+
+it.each([false, true])(
+	'keeps independent work available beside an unreadable or corrupt checkpoint (corrupt: %s)',
+	async (corrupt) => {
+		const { request, bucket, deps, register } = fixture();
+		deps.services.migrations = new MigrationService(bucket, [
+			{ id: 'broken-v1', runBatch: async () => ({ done: true }) },
+			{ id: 'independent-v1', after: [], runBatch: async () => ({ done: true }) },
+		]);
+		const key = paths.migration('broken-v1');
+		if (corrupt) await bucket.put(key, '{secret-invalid-json');
+		else {
+			const get = bucket.get.bind(bucket);
+			vi.spyOn(bucket, 'get').mockImplementation((path) =>
+				path === key ? Promise.reject(new Error('secret-provider-response')) : get(path),
+			);
+		}
+		const snapshot = await request('GET', '/admin/migrations');
+		expect(snapshot.status).toBe(200);
+		const payload = await snapshot.text();
+		expect(payload).not.toContain('secret');
+		expect((await request('POST', '/admin/migrations/run', {})).status).toBe(202);
+		expect(register).toHaveBeenCalledOnce();
+	},
+);
+
+it('refuses registration when unreadable prerequisites leave no known eligible work', async () => {
+	const { request, bucket, deps, register } = fixture();
+	deps.services.migrations = new MigrationService(bucket, [
+		{ id: 'first-v1', runBatch: async () => ({ done: true }) },
+		{ id: 'dependent-v1', runBatch: async () => ({ done: true }) },
+	]);
+	const get = bucket.get.bind(bucket);
+	vi.spyOn(bucket, 'get').mockImplementation((path) =>
+		path === paths.migration('first-v1') ? Promise.reject(new Error('secret')) : get(path),
+	);
+	const response = await request('POST', '/admin/migrations/run', {});
+	expect(response.status).toBe(503);
+	expect(await response.text()).not.toContain('secret');
+	expect(register).not.toHaveBeenCalled();
+});
