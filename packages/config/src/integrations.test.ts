@@ -46,7 +46,7 @@ describe('makeIntegrations', () => {
 					access_delegation: 'none',
 					storage: {
 						scheme: 's3',
-						endpoint: 'https://objects.example.com',
+						endpoint: 'https://s3.us-east-1.amazonaws.com',
 						credentials: { method: 'ambient' },
 						broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables/' }],
 					},

@@ -6,6 +6,7 @@ const input = {
 	config: {
 		storage: {
 			scheme: 's3',
+			endpoint: 'https://s3.us-east-1.amazonaws.com',
 			credentials: { method: 'ambient' },
 			broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables/' }],
 		},
@@ -33,6 +34,27 @@ describe('ambient S3 SQL policy', () => {
 			ambientS3QueryGate({ ...env, MARIMOHUB_STORAGE_S3_BUCKET: 'warehouse' })(input),
 		).toMatchObject({ ready: false, reason: expect.stringContaining('Control-plane') });
 	});
+
+	it.each(['https://hub.s3.us-east-1.amazonaws.com', 'https://storage.example.com'])(
+		'reports an unsafe ambient endpoint in readiness: %s',
+		(endpoint) => {
+			expect(
+				ambientS3QueryGate({
+					MARIMOHUB_DATA_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS: 'true',
+					MARIMOHUB_STORAGE_S3_BUCKET: 'hub',
+				})({
+					...input,
+					config: {
+						storage: {
+							...input.config.storage,
+							endpoint,
+							broker_read_locations: [{ bucket: 'projects', prefix: 'other-project' }],
+						},
+					},
+				}),
+			).toMatchObject({ ready: false, reason: expect.stringContaining('AWS S3 service endpoint') });
+		},
+	);
 
 	it('does not gate static, anonymous, or catalog-vended credentials', () => {
 		for (const storage of [

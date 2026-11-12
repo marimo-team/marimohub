@@ -67,7 +67,11 @@ const ACCESS = {
 
 const AMBIENT_ACCESS = {
 	...ACCESS,
-	storage: { ...ACCESS.storage, credentials: { method: 'ambient' as const } },
+	storage: {
+		...ACCESS.storage,
+		endpoint: 'https://s3.us-east-1.amazonaws.com',
+		credentials: { method: 'ambient' as const },
+	},
 };
 
 const R2_ACCESS = {
@@ -669,13 +673,13 @@ describe('createDuckDBHttpSessionFactory', () => {
 			ambientS3: { credentials },
 		})(AMBIENT_ACCESS, { expiresAtMs: NOW + 60_000 });
 		const request = {
-			url: 'https://objects.example.test/warehouse/tables/file.parquet',
+			url: 'https://s3.us-east-1.amazonaws.com/warehouse/tables/file.parquet',
 			method: 'GET' as const,
 		};
 		await expect(
 			session.fetch({
 				...request,
-				url: 'https://objects.example.test/warehouse/private/file.parquet',
+				url: 'https://s3.us-east-1.amazonaws.com/warehouse/private/file.parquet',
 			}),
 		).rejects.toMatchObject({ code: 'target_denied' });
 		expect(credentials).not.toHaveBeenCalled();
@@ -727,7 +731,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 			ambientS3: { credentials },
 		})(AMBIENT_ACCESS, { expiresAtMs: NOW + 60_000 });
 		const result = session.fetch({
-			url: 'https://objects.example.test/warehouse/tables/file.parquet',
+			url: 'https://s3.us-east-1.amazonaws.com/warehouse/tables/file.parquet',
 			method: 'GET',
 		});
 		const rejected = expect(result).rejects.toThrow();
@@ -760,7 +764,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 		})(AMBIENT_ACCESS, { expiresAtMs: NOW + 60_000 });
 		await expect(
 			session.fetch({
-				url: 'https://objects.example.test/warehouse/tables/file.parquet',
+				url: 'https://s3.us-east-1.amazonaws.com/warehouse/tables/file.parquet',
 				method: 'GET',
 			}),
 		).rejects.toThrow('S3 credentials are unavailable or expired');
@@ -882,7 +886,7 @@ describe('createDuckDBHttpSessionFactory', () => {
 				return rangedObjectResponse(request, bytes, '"fixture-1"');
 			});
 			const config = s3.configSchema.parse({
-				endpoint_url: 'https://objects.example.test',
+				endpoint_url: 'https://s3.us-east-1.amazonaws.com',
 				region: 'us-east-1',
 				path_style: true,
 				auth: {

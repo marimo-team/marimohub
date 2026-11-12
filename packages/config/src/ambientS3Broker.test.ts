@@ -4,13 +4,13 @@ import type { IcebergHttpBrokerTransport } from '@marimo-hub/duckdb-wasm-runtime
 import { createDuckDBHttpSessionFactory } from './duckdbHttpBroker';
 
 const NOW = Date.parse('2026-08-13T12:00:00Z');
-const URL = 'https://objects.example.test/warehouse/tables/file.parquet';
+const URL = 'https://s3.us-east-1.amazonaws.com/warehouse/tables/file.parquet';
 const ACCESS = {
 	kind: 'iceberg-rest',
 	catalog: { url: 'https://catalog.example.test/iceberg', authorization: 'Bearer catalog-secret' },
 	storage: {
 		kind: 's3',
-		endpoint: 'https://objects.example.test',
+		endpoint: 'https://s3.us-east-1.amazonaws.com',
 		region: 'us-east-1',
 		urlStyle: 'path',
 		credentials: { method: 'ambient' },
@@ -26,10 +26,103 @@ const RESPONSE = { status: 200, headers: {}, body: new Uint8Array() };
 
 describe('ambient S3 broker boundaries', () => {
 	it.each([
+		'https://hub.s3.us-east-1.amazonaws.com',
+		'https://hub.s3.amazonaws.com',
+		'https://hub.s3.dualstack.us-east-1.amazonaws.com',
+		'https://hub.s3-us-east-1.amazonaws.com',
+		'https://hub.s3-accelerate.amazonaws.com',
+		'https://access-123456789012.s3-accesspoint.us-east-1.amazonaws.com',
+		'https://s3.us-east-1.amazonaws.com.attacker.example',
+		'https://custom-storage.example',
+		'https://s3.us-east-1.amazonaws.com:8443',
+	])('rejects an untrusted or bucket-qualified ambient endpoint: %s', (endpoint) => {
+		const credentials = vi.fn(async () => KEYS);
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async () => RESPONSE);
+		const factory = createDuckDBHttpSessionFactory({
+			transport,
+			now: () => NOW,
+			ambientS3: { credentials, blockedBucket: 'hub' },
+		});
+		for (const urlStyle of ['path', 'vhost'] as const) {
+			expect(() =>
+				factory(
+					{
+						...ACCESS,
+						storage: {
+							...ACCESS.storage,
+							endpoint,
+							urlStyle,
+							locations: [{ bucket: 'projects', prefix: 'other-project' }],
+						},
+					},
+					{ expiresAtMs: NOW + 60_000 },
+				),
+			).toThrow('AWS S3 service endpoint');
+		}
+		expect(credentials).not.toHaveBeenCalled();
+		expect(transport).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		'hub-access-s3alias',
+		'hub-access--ol-s3',
+		'hub--use1-az1--x-s3',
+		'hub--table-s3',
+		'hub.mrap',
+	])('rejects bucket aliases and alternate bucket types: %s', (bucket) => {
+		const credentials = vi.fn(async () => KEYS);
+		const factory = createDuckDBHttpSessionFactory({
+			now: () => NOW,
+			ambientS3: { credentials, blockedBucket: 'hub' },
+		});
+		for (const urlStyle of ['path', 'vhost'] as const) {
+			expect(() =>
+				factory(
+					{
+						...ACCESS,
+						storage: { ...ACCESS.storage, urlStyle, locations: [{ bucket, prefix: 'projects' }] },
+					},
+					{ expiresAtMs: NOW + 60_000 },
+				),
+			).toThrow('bucket names');
+		}
+		expect(credentials).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		'https://s3.amazonaws.com',
+		'https://s3.us-east-1.amazonaws.com',
+		'https://s3.dualstack.eu-west-1.amazonaws.com',
+		'https://s3-fips.us-gov-west-1.amazonaws.com',
+		'https://s3-fips.dualstack.us-east-1.amazonaws.com',
+		'https://s3.cn-north-1.amazonaws.com.cn',
+	])('signs reads for the configured bucket on a service endpoint: %s', async (endpoint) => {
+		for (const urlStyle of ['path', 'vhost'] as const) {
+			const credentials = vi.fn(async () => KEYS);
+			const transport = vi.fn<IcebergHttpBrokerTransport>(async () => RESPONSE);
+			const session = createDuckDBHttpSessionFactory({
+				transport,
+				now: () => NOW,
+				ambientS3: { credentials, blockedBucket: 'hub' },
+			})(
+				{ ...ACCESS, storage: { ...ACCESS.storage, endpoint, urlStyle } },
+				{ expiresAtMs: NOW + 60_000 },
+			);
+			const url =
+				urlStyle === 'path'
+					? `${endpoint}/warehouse/tables/file.parquet`
+					: `${endpoint.replace('https://', 'https://warehouse.')}/tables/file.parquet`;
+			await expect(session.fetch({ url, method: 'GET' })).resolves.toMatchObject({ status: 200 });
+			expect(transport.mock.calls[0][0].headers?.authorization).toContain('Credential=AMBIENT/');
+			session.close();
+		}
+	});
+
+	it.each([
 		'https://attacker.example.test/warehouse/tables/file.parquet',
-		'https://objects.example.test/warehouse/tables-other/file.parquet',
-		'https://objects.example.test/other-bucket/tables/file.parquet',
-		'http://objects.example.test/warehouse/tables/file.parquet',
+		'https://s3.us-east-1.amazonaws.com/warehouse/tables-other/file.parquet',
+		'https://s3.us-east-1.amazonaws.com/other-bucket/tables/file.parquet',
+		'http://s3.us-east-1.amazonaws.com/warehouse/tables/file.parquet',
 	])('rejects a redirect outside the authorized storage scope: %s', async (location) => {
 		const credentials = vi.fn(async () => KEYS);
 		const transport = vi.fn<IcebergHttpBrokerTransport>(async () => ({
@@ -137,10 +230,29 @@ describe('ambient S3 broker boundaries', () => {
 		const factory = createDuckDBHttpSessionFactory({ now: () => NOW, ambientS3: { credentials } });
 		expect(() =>
 			factory(
-				{ ...ACCESS, storage: { ...ACCESS.storage, endpoint: 'http://objects.example.test' } },
+				{
+					...ACCESS,
+					storage: { ...ACCESS.storage, endpoint: 'http://s3.us-east-1.amazonaws.com' },
+				},
 				{ expiresAtMs: NOW + 60_000 },
 			),
 		).toThrow(/HTTPS/);
+		expect(credentials).not.toHaveBeenCalled();
+	});
+
+	it('does not let the insecure-transport override bypass ambient endpoint restrictions', () => {
+		const credentials = vi.fn(async () => KEYS);
+		const factory = createDuckDBHttpSessionFactory({ now: () => NOW, ambientS3: { credentials } });
+		expect(() =>
+			factory(
+				{
+					...ACCESS,
+					allowInsecureTransport: true,
+					storage: { ...ACCESS.storage, endpoint: 'http://s3.us-east-1.amazonaws.com' },
+				},
+				{ expiresAtMs: NOW + 60_000 },
+			),
+		).toThrow('HTTPS AWS S3 service endpoint');
 		expect(credentials).not.toHaveBeenCalled();
 	});
 

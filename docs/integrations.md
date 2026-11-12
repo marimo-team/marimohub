@@ -239,6 +239,11 @@ profile. The `storage.broker_read_locations` field only appears on that `s3` bra
 the bucket prefixes that DuckDB can read. Set **Access delegation** to `none`.
 For Iceberg REST SQL with server ambient credentials, set `storage.credentials.method: ambient`
 and `MARIMOHUB_DATA_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS=true`. Restart the server.
+
+Use an HTTPS AWS S3 service endpoint, such as `https://s3.us-east-1.amazonaws.com`, without a bucket name.
+Regional, dual-stack, and FIPS service endpoints are supported. Custom endpoints require static credentials.
+Read locations must use ordinary bucket names, not access-point aliases or directory buckets.
+
 The broker uses the server's AWS credential chain and refreshes temporary credentials.
 Configured read prefixes still apply. The hub's `MARIMOHUB_STORAGE_S3_BUCKET` is always blocked.
 

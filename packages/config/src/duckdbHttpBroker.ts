@@ -458,12 +458,13 @@ function s3RoutesFor(
 		'S3',
 	);
 	if (credentials.method === 'ambient') {
-		const reason = ambientS3Blocker(
+		const blocker = ambientS3Blocker(
 			ambientS3 !== undefined,
 			ambientS3?.blockedBucket,
 			storage.locations,
+			storage.endpoint,
 		);
-		if (reason) throw new IcebergHttpBrokerError('invalid_capability', reason);
+		if (blocker) throw new IcebergHttpBrokerError('invalid_capability', blocker.reason);
 	}
 	const prepareStorageHeaders =
 		credentials.method === 'anonymous'
