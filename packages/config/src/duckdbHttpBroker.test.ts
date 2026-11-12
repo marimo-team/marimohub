@@ -65,6 +65,11 @@ const ACCESS = {
 	},
 } as const satisfies DuckDBHttpAccess;
 
+const AMBIENT_ACCESS = {
+	...ACCESS,
+	storage: { ...ACCESS.storage, credentials: { method: 'ambient' as const } },
+};
+
 const R2_ACCESS = {
 	kind: 'iceberg-rest',
 	catalog: {
@@ -639,6 +644,130 @@ describe('createDuckDBHttpSessionFactory', () => {
 		).rejects.toMatchObject({ code: 'capability_unknown' });
 	});
 
+	it('resolves ambient credentials for each authorized read without exposing provider errors', async () => {
+		const transport = vi.fn<IcebergHttpBrokerTransport>(async () => ({
+			status: 200,
+			headers: {},
+			body: new Uint8Array(),
+		}));
+		const credentials = vi
+			.fn()
+			.mockResolvedValueOnce({
+				accessKeyId: 'FIRST',
+				secretAccessKey: 'secret',
+				sessionToken: 'token-one',
+			})
+			.mockResolvedValueOnce({
+				accessKeyId: 'SECOND',
+				secretAccessKey: 'secret',
+				sessionToken: 'token-two',
+			})
+			.mockRejectedValueOnce(new Error('private-provider-secret'));
+		const session = createDuckDBHttpSessionFactory({
+			transport,
+			now: () => NOW,
+			ambientS3: { credentials },
+		})(AMBIENT_ACCESS, { expiresAtMs: NOW + 60_000 });
+		const request = {
+			url: 'https://objects.example.test/warehouse/tables/file.parquet',
+			method: 'GET' as const,
+		};
+		await expect(
+			session.fetch({
+				...request,
+				url: 'https://objects.example.test/warehouse/private/file.parquet',
+			}),
+		).rejects.toMatchObject({ code: 'target_denied' });
+		expect(credentials).not.toHaveBeenCalled();
+		await session.fetch(request);
+		await session.fetch(request);
+		expect(transport.mock.calls[0][0].headers).toMatchObject({
+			authorization: expect.stringContaining('Credential=FIRST/'),
+			'x-amz-security-token': 'token-one',
+		});
+		expect(transport.mock.calls[1][0].headers).toMatchObject({
+			authorization: expect.stringContaining('Credential=SECOND/'),
+			'x-amz-security-token': 'token-two',
+		});
+		await expect(session.fetch(request)).rejects.toThrow(
+			'S3 credentials are unavailable or expired',
+		);
+		expect(transport).toHaveBeenCalledTimes(2);
+		session.close();
+	});
+
+	it('denies ambient access without operator opt-in and to the control-plane bucket', () => {
+		const credentials = vi.fn();
+		expect(() =>
+			createDuckDBHttpSessionFactory({ now: () => NOW })(AMBIENT_ACCESS, {
+				expiresAtMs: NOW + 60_000,
+			}),
+		).toThrow('MARIMOHUB_DATA_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS');
+		expect(() =>
+			createDuckDBHttpSessionFactory({
+				now: () => NOW,
+				ambientS3: { credentials, blockedBucket: 'warehouse' },
+			})(AMBIENT_ACCESS, { expiresAtMs: NOW + 60_000 }),
+		).toThrow('Control-plane storage');
+		expect(credentials).not.toHaveBeenCalled();
+	});
+
+	it('does not send a request when a session closes during ambient credential lookup', async () => {
+		const transport = vi.fn<IcebergHttpBrokerTransport>();
+		let resolveCredentials!: (value: { accessKeyId: string; secretAccessKey: string }) => void;
+		const credentials = vi.fn(
+			() =>
+				new Promise<{ accessKeyId: string; secretAccessKey: string }>((resolve) => {
+					resolveCredentials = resolve;
+				}),
+		);
+		const session = createDuckDBHttpSessionFactory({
+			transport,
+			now: () => NOW,
+			ambientS3: { credentials },
+		})(AMBIENT_ACCESS, { expiresAtMs: NOW + 60_000 });
+		const result = session.fetch({
+			url: 'https://objects.example.test/warehouse/tables/file.parquet',
+			method: 'GET',
+		});
+		const rejected = expect(result).rejects.toThrow();
+		await vi.waitFor(() => expect(credentials).toHaveBeenCalledOnce());
+		session.close();
+		await rejected;
+		resolveCredentials({ accessKeyId: 'late', secretAccessKey: 'secret' });
+		await Promise.resolve();
+		expect(transport).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		['expired', { expiration: new Date(NOW - 1) }],
+		['expires now', { expiration: new Date(NOW) }],
+		['invalid expiration', { expiration: new Date(Number.NaN) }],
+		['empty access key', { accessKeyId: '' }],
+		['empty secret key', { secretAccessKey: '' }],
+	])('rejects %s ambient credentials before sending an S3 request', async (_case, overrides) => {
+		const transport = vi.fn<IcebergHttpBrokerTransport>();
+		const session = createDuckDBHttpSessionFactory({
+			transport,
+			now: () => NOW,
+			ambientS3: {
+				credentials: async () => ({
+					accessKeyId: 'expired',
+					secretAccessKey: 'secret',
+					...overrides,
+				}),
+			},
+		})(AMBIENT_ACCESS, { expiresAtMs: NOW + 60_000 });
+		await expect(
+			session.fetch({
+				url: 'https://objects.example.test/warehouse/tables/file.parquet',
+				method: 'GET',
+			}),
+		).rejects.toThrow('S3 credentials are unavailable or expired');
+		expect(transport).not.toHaveBeenCalled();
+		session.close();
+	});
+
 	it('signs standalone S3 routes without granting a catalog or sibling prefix', async () => {
 		const calls: IcebergHttpBrokerTransportRequest[] = [];
 		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
@@ -743,67 +872,84 @@ describe('createDuckDBHttpSessionFactory', () => {
 		},
 	);
 
-	it('runs an S3 integration query through the packaged worker and parent signer', async () => {
-		const bytes = new TextEncoder().encode('region,revenue\nnorth,12500.50\nsouth,9800.00\n');
-		const calls: IcebergHttpBrokerTransportRequest[] = [];
-		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
-			calls.push(request);
-			return rangedObjectResponse(request, bytes, '"fixture-1"');
-		});
-		const config = s3.configSchema.parse({
-			endpoint_url: 'https://objects.example.test',
-			region: 'us-east-1',
-			path_style: true,
-			auth: {
-				method: 'static',
-				access_key_id: 'AKIDEXAMPLE',
-				secret_access_key: 'secret-example',
-			},
-			broker_read_locations: [{ bucket: 'warehouse', prefix: 'analytics' }],
-		});
-		const integration = {
-			id: createIntegrationId(),
-			name: 'warehouse',
-			kind: 's3',
-			version: 1,
-		} as const;
-		const plan = s3.query?.plan({ config, integration });
-		if (!plan) throw new Error('Expected an S3 query plan.');
-		const executor = await createNodeDataQueryExecutorFactory({
-			memoryLimitMb: 128,
-			httpSessionFactory: createDuckDBHttpSessionFactory({ transport, now: () => NOW }),
-		}).create(new AbortController().signal);
-
-		try {
-			await expect(
-				executor.execute(
-					{
-						sql: "SELECT region, revenue FROM read_csv_auto('s3://warehouse/analytics/report.csv') ORDER BY region",
-						connection: { files: [], vars: {}, integration, plan },
-						accessMode: 'read-only',
-						limits: { maxRows: 10, maxBytes: 1_048_576, deadlineMs: 20_000 },
-					},
-					new AbortController().signal,
-				),
-			).resolves.toEqual({
-				columns: ['region', 'revenue'],
-				rows: [
-					['north', 12500.5],
-					['south', 9800],
-				],
-				truncated: false,
+	it.each(['static', 'ambient'] as const)(
+		'runs an S3 query through the packaged worker with %s broker credentials',
+		async (method) => {
+			const bytes = new TextEncoder().encode('region,revenue\nnorth,12500.50\nsouth,9800.00\n');
+			const calls: IcebergHttpBrokerTransportRequest[] = [];
+			const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
+				calls.push(request);
+				return rangedObjectResponse(request, bytes, '"fixture-1"');
 			});
-		} finally {
-			executor.terminate();
-		}
+			const config = s3.configSchema.parse({
+				endpoint_url: 'https://objects.example.test',
+				region: 'us-east-1',
+				path_style: true,
+				auth: {
+					method: 'static',
+					access_key_id: 'AKIDEXAMPLE',
+					secret_access_key: 'secret-example',
+				},
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'analytics' }],
+			});
+			const integration = {
+				id: createIntegrationId(),
+				name: 'warehouse',
+				kind: 's3',
+				version: 1,
+			} as const;
+			const plan = s3.query?.plan({ config, integration });
+			if (plan?.httpAccess?.kind !== 's3-object-store')
+				throw new Error('Expected an S3 query plan.');
+			if (method === 'ambient') {
+				plan.httpAccess = { ...plan.httpAccess, credentials: { method: 'ambient' } };
+			}
+			const executor = await createNodeDataQueryExecutorFactory({
+				memoryLimitMb: 128,
+				httpSessionFactory: createDuckDBHttpSessionFactory({
+					transport,
+					now: () => NOW,
+					ambientS3: {
+						credentials: async () => ({
+							accessKeyId: 'AKIDEXAMPLE',
+							secretAccessKey: 'secret-example',
+						}),
+					},
+				}),
+			}).create(new AbortController().signal);
 
-		expect(calls.length).toBeGreaterThan(0);
-		for (const call of calls) {
-			expect(new URL(call.url).pathname).toBe('/warehouse/analytics/report.csv');
-			expect(call.headers?.authorization).toContain('Credential=AKIDEXAMPLE/');
-		}
-		expect(JSON.stringify(calls)).not.toContain('secret-example');
-	}, 30_000);
+			try {
+				await expect(
+					executor.execute(
+						{
+							sql: "SELECT region, revenue FROM read_csv_auto('s3://warehouse/analytics/report.csv') ORDER BY region",
+							connection: { files: [], vars: {}, integration, plan },
+							accessMode: 'read-only',
+							limits: { maxRows: 10, maxBytes: 1_048_576, deadlineMs: 20_000 },
+						},
+						new AbortController().signal,
+					),
+				).resolves.toEqual({
+					columns: ['region', 'revenue'],
+					rows: [
+						['north', 12500.5],
+						['south', 9800],
+					],
+					truncated: false,
+				});
+			} finally {
+				executor.terminate();
+			}
+
+			expect(calls.length).toBeGreaterThan(0);
+			for (const call of calls) {
+				expect(new URL(call.url).pathname).toBe('/warehouse/analytics/report.csv');
+				expect(call.headers?.authorization).toContain('Credential=AKIDEXAMPLE/');
+			}
+			expect(JSON.stringify(calls)).not.toContain('secret-example');
+		},
+		30_000,
+	);
 
 	it('runs an anonymous S3 query through the packaged worker without authorization headers', async () => {
 		const bytes = new TextEncoder().encode('value\n42\n');

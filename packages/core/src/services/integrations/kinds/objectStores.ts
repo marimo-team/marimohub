@@ -27,7 +27,13 @@ import {
 	s3BrokerReadLocationsSchema,
 	usesInsecureAuthenticatedS3,
 } from './common';
-import { brokeredS3Secret, duckdbS3StorageAccess, staticS3Credentials } from './duckdbS3';
+import {
+	brokeredS3Secret,
+	duckdbS3StorageAccess,
+	staticS3Credentials,
+	readinessCheck,
+	s3EndpointReadiness,
+} from './duckdbS3';
 
 const s3Config = z.strictObject({
 	allow_write: z
@@ -252,20 +258,7 @@ function s3QueryReadiness(config: S3Config): QueryReadinessCheck[] {
 	const endpoint = config.endpoint_url ? new URL(config.endpoint_url) : undefined;
 	const locations = config.broker_read_locations;
 	return [
-		readinessCheck(
-			's3-endpoint',
-			'Set an explicit S3 endpoint',
-			endpoint !== undefined,
-			'endpoint_url',
-			'DuckDB-Wasm Run SQL requires an explicit S3 endpoint',
-		),
-		readinessCheck(
-			's3-endpoint-origin',
-			'Use an origin-only S3 endpoint',
-			endpoint?.pathname === '/' && endpoint.search === '' && endpoint.hash === '',
-			'endpoint_url',
-			'DuckDB-Wasm Run SQL requires an origin-only S3 endpoint',
-		),
+		...s3EndpointReadiness(endpoint, 'endpoint_url', 'Endpoint URL'),
 		readinessCheck(
 			's3-secure-transport',
 			'Use HTTPS for authenticated S3',
@@ -289,14 +282,14 @@ function s3QueryReadiness(config: S3Config): QueryReadinessCheck[] {
 			'Use static S3 credentials or anonymous access',
 			config.auth.method === 'static' || config.auth.method === 'anonymous',
 			'auth',
-			'DuckDB-Wasm Run SQL requires static S3 credentials or anonymous access',
+			'Ambient credentials are not supported for standalone S3 SQL queries. Set Authentication to static and provide an access key and secret key, or use a notebook with ambient credentials. Use anonymous access only for public data.',
 		),
 		readinessCheck(
 			's3-read-locations',
 			'Add at least one guarded S3 read location',
 			locations.length > 0,
 			'broker_read_locations',
-			'DuckDB-Wasm Run SQL requires at least one guarded S3 read location',
+			'No S3 read locations are configured. Add the bucket and prefix that SQL can read under Broker read locations (broker_read_locations). Setting the default bucket alone does not grant SQL access.',
 		),
 		readinessCheck(
 			's3-virtual-host-buckets',
@@ -306,16 +299,6 @@ function s3QueryReadiness(config: S3Config): QueryReadinessCheck[] {
 			'virtual-hosted S3 addressing requires DNS-compatible bucket names',
 		),
 	];
-}
-
-function readinessCheck(
-	id: string,
-	label: string,
-	ready: boolean,
-	field: string,
-	reason: string,
-): QueryReadinessCheck {
-	return { id, label, ready, field, reason };
 }
 
 function s3QueryBlocker(config: S3Config): string | undefined {

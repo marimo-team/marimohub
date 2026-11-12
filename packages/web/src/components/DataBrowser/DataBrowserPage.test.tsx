@@ -52,6 +52,25 @@ describe('DataBrowserPage catalog', () => {
 		expect(screen.queryByRole('button', { name: 'Objects' })).not.toBeInTheDocument();
 		expect(screen.getByText('Run SQL unavailable.')).toBeInTheDocument();
 		expect(screen.getByText('Broker unavailable.')).toBeInTheDocument();
+		expect(screen.getByRole('link', { name: 'Open integration settings' })).toHaveAttribute(
+			'href',
+			`/projects/${PID}/integrations`,
+		);
+	});
+
+	it('directs shared integration fixes to an organization administrator', async () => {
+		setup(`/projects/${PID}/data/${IID}`, {
+			role: 'manager',
+			entry: { ...lakeEntry, scope: 'org' },
+			querySurface: { available: false, reason: 'S3 endpoint missing.' },
+		});
+		await screen.findByText('Run SQL unavailable.');
+		expect(
+			screen.getByText(/Ask an organization administrator to edit this shared integration/),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole('link', { name: 'Open integration settings' }),
+		).not.toBeInTheDocument();
 	});
 
 	it('shows the deployment blocker when the global Run SQL capability is off', async () => {

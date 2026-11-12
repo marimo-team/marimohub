@@ -16,6 +16,7 @@ export type DuckDBPreviewParameter = string | number | boolean | null;
 
 export type DuckDBS3Credentials =
 	| { method: 'anonymous' }
+	| { method: 'ambient' }
 	| {
 			method: 'static';
 			accessKeyId: string;

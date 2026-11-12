@@ -2690,6 +2690,13 @@ See the [secret-source guide](./integration-secrets.md).`,
 						default: 'metadata',
 					},
 					{
+						id: 'MARIMOHUB_DATA_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS',
+						name: 'Server ambient S3 SQL credentials',
+						description:
+							'Allows Iceberg REST SQL to use the server AWS credential chain within configured read prefixes. The control-plane bucket stays blocked. Does not enable standalone S3 SQL, project WIF, or named integration profiles.',
+						default: 'false',
+					},
+					{
 						id: 'MARIMOHUB_POSTGRES_DATA_ACCESS',
 						name: 'PostgreSQL data access',
 						description:

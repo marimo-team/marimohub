@@ -230,21 +230,25 @@ The brokered runtime supports explicit S3 storage. It requires all these values:
 - no authentication, bearer-token authentication, or OAuth2 client credentials
 - no access delegation
 - explicit S3 storage with an origin-only endpoint, using path-style or virtual-hosted addressing
-- static S3 credentials or anonymous access
+- static S3 credentials, permitted server ambient credentials, or anonymous access
 - one or more guarded S3 read locations
 - system TLS and default runtime options
 
 Switch **Storage** from the default `catalog` scheme to `s3` before you configure the brokered
 profile. The `storage.broker_read_locations` field only appears on that `s3` branch; set it to
 the bucket prefixes that DuckDB can read. Set **Access delegation** to `none`.
+For Iceberg REST SQL with server ambient credentials, set `storage.credentials.method: ambient`
+and `MARIMOHUB_DATA_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS=true`. Restart the server.
+The broker uses the server's AWS credential chain and refreshes temporary credentials.
+Configured read prefixes still apply. The hub's `MARIMOHUB_STORAGE_S3_BUCKET` is always blocked.
+
+This option does not enable standalone S3 SQL, project WIF, or named integration profiles.
+Object browsing has a separate opt-in. Ambient row previews retain the Python sandbox's identity.
+
 The worker receives no real catalog or S3 credentials.
 The parent broker authorizes each request, injects credentials, checks DNS results, and pins the target socket.
 Authenticated catalog, OAuth2, and S3 endpoints require HTTPS by default. Enable
 `allow_insecure_transport` only for local development.
-
-> **Upgrade note:** Stored authenticated HTTP S3 configurations keep their current behavior.
-> The schema migration enables `allow_insecure_transport` for those configurations.
-> New configurations must enable this option explicitly.
 
 For OAuth2, the parent owns the client secret and refreshes the access token. The token endpoint
 uses the configured integration egress policy. Access tokens stay in one broker session. The worker

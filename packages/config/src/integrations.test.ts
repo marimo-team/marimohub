@@ -28,6 +28,36 @@ const PG_CONFIG = { host: 'db.internal', database: 'db', username: 'u', password
 afterEach(() => vi.restoreAllMocks());
 
 describe('makeIntegrations', () => {
+	it.each([false, true])(
+		'reports ambient Iceberg SQL readiness with operator opt-in=%s',
+		(enabled) => {
+			const { integrations } = makeIntegrations(
+				{
+					MARIMOHUB_DATA_BROWSER: 'full',
+					MARIMOHUB_DATA_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS: String(enabled),
+				},
+				new MemoryBucket(),
+			);
+			const checks = integrations!.queryReadiness({
+				kind: 'iceberg_rest',
+				config: {
+					uri: 'https://catalog.example.com/api',
+					auth: { method: 'none' },
+					access_delegation: 'none',
+					storage: {
+						scheme: 's3',
+						endpoint: 'https://objects.example.com',
+						credentials: { method: 'ambient' },
+						broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables/' }],
+					},
+				},
+			});
+			expect(checks.filter((check) => !check.ready).map((check) => check.id)).toEqual(
+				enabled ? [] : ['ambient-s3-access'],
+			);
+		},
+	);
+
 	it.each(['off', 'metadata', 'full'])('wires warehouse capabilities in %s mode', async (mode) => {
 		const { integrations } = makeIntegrations(
 			{

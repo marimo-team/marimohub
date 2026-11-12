@@ -1,3 +1,5 @@
+import { ambientS3Blocker } from './ambientS3';
+import type { AmbientS3Access } from './ambientS3';
 import { createHmac, createHash } from 'node:crypto';
 import { isIpAddressHost, isValidS3Bucket, noopMetrics } from '@marimo-hub/core';
 import type { DuckDBHttpAccess, DuckDBS3StorageAccess, Metrics } from '@marimo-hub/core';
@@ -40,6 +42,7 @@ const MAX_CREDENTIAL_JSON_ITEMS = 100_000;
 const MAX_CREDENTIAL_JSON_STRING_LENGTH = 1024 * 1024;
 
 export interface DuckDBHttpBrokerOptions {
+	ambientS3?: AmbientS3Access;
 	allowPrivate?: boolean;
 	metrics?: Metrics;
 	now?: () => number;
@@ -94,7 +97,13 @@ export function createDuckDBHttpSessionFactory(
 		const broker = new IcebergHttpBroker(transport, now, undefined, options.metrics);
 		const id = broker.open({
 			expiresAtMs: sessionOptions.expiresAtMs,
-			routes: routesFor(access, now, oauthProvider, options.metrics ?? noopMetrics),
+			routes: routesFor(
+				access,
+				now,
+				oauthProvider,
+				options.metrics ?? noopMetrics,
+				options.ambientS3,
+			),
 			limits: {
 				maxRequests: DEFAULT_MAX_REQUESTS,
 				maxConcurrentRequests: DEFAULT_MAX_CONCURRENT_REQUESTS,
@@ -123,17 +132,18 @@ function routesFor(
 	now: () => number,
 	oauthProvider?: OAuthTokenProvider,
 	metrics: Metrics = noopMetrics,
+	ambientS3?: AmbientS3Access,
 ) {
 	if (access.kind === 'http-database') {
 		return [databaseRouteFor(access, metrics)];
 	}
 	if (access.kind === 's3-object-store') {
-		return s3RoutesFor(access, now, access.allowInsecureTransport === true);
+		return s3RoutesFor(access, now, access.allowInsecureTransport === true, ambientS3);
 	}
 	if (access.kind === 'ducklake') {
 		return [
 			databaseRouteFor(access.metadata, metrics),
-			...s3RoutesFor(access.storage, now, access.allowInsecureTransport === true),
+			...s3RoutesFor(access.storage, now, access.allowInsecureTransport === true, ambientS3),
 		];
 	}
 	if (access.kind !== 'iceberg-rest') {
@@ -222,7 +232,7 @@ function routesFor(
 	}
 	return catalogAndStorageRoutes(
 		catalog,
-		s3RoutesFor(storage, now, access.allowInsecureTransport === true),
+		s3RoutesFor(storage, now, access.allowInsecureTransport === true, ambientS3),
 	);
 }
 
@@ -437,26 +447,54 @@ function s3RoutesFor(
 	storage: Readonly<DuckDBS3StorageAccess>,
 	now: () => number,
 	allowInsecureTransport: boolean,
+	ambientS3?: AmbientS3Access,
 ): IcebergHttpBrokerRoute[] {
 	const endpoint = parseEndpoint(storage.endpoint);
 	const credentials = storage.credentials;
 	assertCredentialTransport(
 		endpoint.toString(),
-		credentials.method === 'static',
+		credentials.method !== 'anonymous',
 		allowInsecureTransport,
 		'S3',
 	);
+	if (credentials.method === 'ambient') {
+		const reason = ambientS3Blocker(
+			ambientS3 !== undefined,
+			ambientS3?.blockedBucket,
+			storage.locations,
+		);
+		if (reason) throw new IcebergHttpBrokerError('invalid_capability', reason);
+	}
 	const prepareStorageHeaders =
-		credentials.method === 'static'
-			? (request: Readonly<IcebergHttpBrokerRequest>) =>
-					Promise.resolve(
-						signS3Request(request, {
-							...credentials,
-							region: storage.region,
-							now: now(),
-						}),
-					)
-			: undefined;
+		credentials.method === 'anonymous'
+			? undefined
+			: async (request: Readonly<IcebergHttpBrokerRequest>) => {
+					let signingCredentials;
+					try {
+						signingCredentials =
+							credentials.method === 'static' ? credentials : await ambientS3!.credentials();
+						if (
+							!signingCredentials.accessKeyId ||
+							!signingCredentials.secretAccessKey ||
+							('expiration' in signingCredentials &&
+								signingCredentials.expiration &&
+								(!Number.isFinite(signingCredentials.expiration.getTime()) ||
+									signingCredentials.expiration.getTime() <= now()))
+						) {
+							throw new Error('Invalid credentials');
+						}
+					} catch {
+						throw new IcebergHttpBrokerError(
+							'invalid_capability',
+							'S3 credentials are unavailable or expired. Check the server AWS credential configuration.',
+						);
+					}
+					return signS3Request(request, {
+						...signingCredentials,
+						region: storage.region,
+						now: now(),
+					});
+				};
 	return storage.locations.map((location) => ({
 		kind: 'storage' as const,
 		url: storagePrefixUrl(endpoint, location.bucket, location.prefix, storage.urlStyle),

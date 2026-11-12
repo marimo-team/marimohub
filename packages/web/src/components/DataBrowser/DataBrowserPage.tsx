@@ -3,7 +3,7 @@ import { canEditProject } from '@/lib/roles';
 /* oxlint-disable jsx-a11y/prefer-tag-over-role -- output cannot contain this status's paragraphs */
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import { ChevronDown, ChevronRight, Database, Folder, RefreshCw, Table2 } from 'lucide-react';
@@ -339,8 +339,17 @@ export default function DataBrowserPage() {
 						</span>
 					</p>
 					<p className="mt-1 text-xs text-muted-foreground">
-						Edit this integration under Project environment → Integrations to see its SQL-ready
-						checklist.
+						{selected?.scope === 'org' ? (
+							'Ask an organization administrator to edit this shared integration and review its Run SQL readiness checklist.'
+						) : (
+							<>
+								<Link to={`/projects/${pid}/integrations`} className="underline underline-offset-2">
+									Open integration settings
+								</Link>{' '}
+								and edit {selected?.name ?? 'this integration'}. Expand Run SQL readiness for the
+								remaining checks and select a check to find its field.
+							</>
+						)}
 					</p>
 				</div>
 			)}

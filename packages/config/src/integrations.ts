@@ -7,6 +7,7 @@ import {
 } from '@marimo-hub/core';
 import type {
 	Bucket,
+	IntegrationQueryGate,
 	DataPreviewService,
 	DataQueryService,
 	IntegrationProbe,
@@ -21,6 +22,7 @@ import {
 	DEFAULT_POSTGRES_RUNTIME_LIMITS,
 	PostgresDatabaseBrowser,
 } from '@marimo-hub/postgres-runtime/node';
+import { ambientS3QueryGate } from './ambientS3';
 import { parseBool, parseIntEnv, parseOnOff, parseSecondsEnv } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
@@ -147,6 +149,8 @@ export function makeIntegrations(
 					...(postgresFeatures.enabled && postgresRuntime ? { postgres: postgresRuntime } : {}),
 					...(bigqueryBrowser ? { bigquery: bigqueryBrowser } : {}),
 				};
+	const postgresQueryGate = postgresDataAccessGate(postgresFeatures);
+	const ambientQueryGate = ambientS3QueryGate(env);
 	const options = {
 		bucket,
 		registry: defaultRegistry(),
@@ -176,7 +180,8 @@ export function makeIntegrations(
 		dataPreview,
 		dataQuery: enabledDataQuery,
 		databaseTestGate: postgresTransportGate(postgresFeatures),
-		queryGate: postgresDataAccessGate(postgresFeatures),
+		queryGate: ((input) =>
+			postgresQueryGate(input) ?? ambientQueryGate(input)) satisfies IntegrationQueryGate,
 	};
 	return {
 		integrations: new ProjectIntegrationsStore(options),

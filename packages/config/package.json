@@ -26,6 +26,7 @@
 	"dependencies": {
 		"@ai-sdk/amazon-bedrock": "catalog:",
 		"@ai-sdk/openai-compatible": "catalog:",
+		"@aws-sdk/credential-provider-node": "catalog:",
 		"@marimo-hub/api": "workspace:*",
 		"@marimo-hub/auth-dev": "workspace:*",
 		"@marimo-hub/auth-oidc": "workspace:*",
