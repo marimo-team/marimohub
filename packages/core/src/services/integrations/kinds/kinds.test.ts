@@ -1530,6 +1530,33 @@ describe('kind renders (golden)', () => {
 		});
 	});
 
+	it('iceberg_rest keeps ambient S3 credentials as a parent-broker reference', () => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.example.com/api',
+			auth: { method: 'none' },
+			access_delegation: 'none',
+			storage: {
+				scheme: 's3',
+				endpoint: 'https://objects.example.com',
+				credentials: { method: 'ambient' },
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+			},
+		});
+		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
+		const plan = icebergRest.query?.plan({
+			config,
+			integration: {
+				id: createIntegrationId(),
+				name: 'lake',
+				kind: 'iceberg_rest',
+				version: 1,
+			},
+		});
+		expect(plan).toMatchObject({ httpAccess: { storage: { credentials: { method: 'ambient' } } } });
+		expect(icebergPreviewPrograms(config)?.duckdbWasm).toBeUndefined();
+		expect(icebergPreviewPrograms(config)?.python).toBeDefined();
+	});
+
 	it.each([
 		['ambient', { method: 'ambient' as const }],
 		['profile', { method: 'profile' as const, profile_name: 'development' }],
@@ -1562,7 +1589,7 @@ describe('kind renders (golden)', () => {
 			expect(icebergRest.query?.readiness?.(allowed)).toContainEqual(
 				expect.objectContaining({ id: 's3-secure-transport', ready: true }),
 			);
-			expect(icebergRest.query?.available(allowed).ok).toBe(false);
+			expect(icebergRest.query?.available(allowed).ok).toBe(_method === 'ambient');
 
 			const secure = icebergRest.configSchema.parse({
 				...base,
@@ -2451,7 +2478,8 @@ describe('kind renders (golden)', () => {
 		);
 		expect(s3.query?.available(config)).toEqual({
 			ok: false,
-			reason: 'DuckDB-Wasm Run SQL requires at least one guarded S3 read location',
+			reason:
+				'No S3 read locations are configured. Add the bucket and prefix that SQL can read under Broker read locations (broker_read_locations). Setting the default bucket alone does not grant SQL access.',
 		});
 	});
 
@@ -2573,7 +2601,8 @@ describe('kind renders (golden)', () => {
 		);
 		expect(s3.query?.available(allowed)).toEqual({
 			ok: false,
-			reason: 'DuckDB-Wasm Run SQL requires static S3 credentials or anonymous access',
+			reason:
+				'Ambient credentials are not supported for standalone S3 SQL queries. Set Authentication to static and provide an access key and secret key, or use a notebook with ambient credentials. Use anonymous access only for public data.',
 		});
 	});
 

@@ -1145,6 +1145,9 @@ importers:
       '@ai-sdk/openai-compatible':
         specifier: 'catalog:'
         version: 3.0.74(zod@4.6.6)
+      '@aws-sdk/credential-provider-node':
+        specifier: 'catalog:'
+        version: 3.972.59
       '@marimo-hub/api':
         specifier: workspace:*
         version: link:../api

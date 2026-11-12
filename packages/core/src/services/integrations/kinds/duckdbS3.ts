@@ -1,3 +1,4 @@
+import type { QueryReadinessCheck } from '../../../ports/integrations';
 import type {
 	DuckDBPreviewStatement,
 	DuckDBS3Credentials,
@@ -56,4 +57,37 @@ export function duckdbS3StorageAccess(options: {
 			prefix: normalizeBrokerPrefix(prefix),
 		})),
 	};
+}
+
+export function readinessCheck(
+	id: string,
+	label: string,
+	ready: boolean,
+	field: string,
+	reason: string,
+): QueryReadinessCheck {
+	return { id, label, ready, field, reason };
+}
+
+export function s3EndpointReadiness(
+	endpoint: URL | undefined,
+	field: string,
+	label: string,
+): QueryReadinessCheck[] {
+	return [
+		readinessCheck(
+			's3-endpoint',
+			'Set an explicit S3 endpoint',
+			endpoint !== undefined,
+			field,
+			`S3 endpoint missing. Set ${label} (${field}) to your storage service URL. For AWS S3, replace the region in https://s3.us-east-1.amazonaws.com with your bucket’s region. Do not include the bucket name or object path.`,
+		),
+		readinessCheck(
+			's3-endpoint-origin',
+			'Use an origin-only S3 endpoint',
+			endpoint?.pathname === '/' && endpoint.search === '' && endpoint.hash === '',
+			field,
+			`${label} (${field}) must contain only the scheme and host, with an optional port. Remove the bucket name, path, query parameters, and fragment.`,
+		),
+	];
 }

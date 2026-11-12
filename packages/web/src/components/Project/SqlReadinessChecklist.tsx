@@ -79,7 +79,12 @@ export function SqlReadinessChecklist({
 									<CircleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-600" aria-hidden />
 								)}
 								<span className={check.ready ? 'text-muted-foreground' : 'text-foreground'}>
-									{check.label}
+									<span className="block">{check.label}</span>
+									{!check.ready && check.reason && (
+										<span className="mt-1 block break-words text-muted-foreground">
+											{check.reason}
+										</span>
+									)}
 								</span>
 							</button>
 						</li>

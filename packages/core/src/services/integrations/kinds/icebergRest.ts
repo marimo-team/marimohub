@@ -35,7 +35,13 @@ import {
 	isValidS3Bucket,
 	usesInsecureAuthenticatedS3,
 } from './common';
-import { brokeredS3Secret, duckdbS3StorageAccess, staticS3Credentials } from './duckdbS3';
+import {
+	brokeredS3Secret,
+	duckdbS3StorageAccess,
+	staticS3Credentials,
+	readinessCheck,
+	s3EndpointReadiness,
+} from './duckdbS3';
 
 const httpUrl = httpUrlField;
 
@@ -304,7 +310,7 @@ export const icebergRest = defineIntegration({
 			return {
 				ok: true,
 				programs: {
-					...(duckdbPreviewBlocker(config) === undefined
+					...(!usesAmbientS3(config) && duckdbPreviewBlocker(config) === undefined
 						? { duckdbWasm: duckdbPreviewFeatures(config) }
 						: {}),
 					python: true,
@@ -328,7 +334,7 @@ export const icebergRest = defineIntegration({
 				sessionId: input.sessionId,
 				credentialVars: input.credentialVars,
 			};
-			if (duckdbPreviewBlocker(input.config)) return { python };
+			if (usesAmbientS3(input.config) || duckdbPreviewBlocker(input.config)) return { python };
 			const alias = `preview_${input.integration.id.replaceAll('-', '_')}`;
 			const attachment = duckdbIcebergAttachment(
 				input.config,
@@ -587,16 +593,6 @@ const advancedS3Fields = [
 	'request_timeout',
 ] as const;
 
-function readinessCheck(
-	id: string,
-	label: string,
-	ready: boolean,
-	field: string,
-	reason: string,
-): QueryReadinessCheck {
-	return { id, label, ready, field, reason };
-}
-
 function parsedUrl(value: unknown): URL | undefined {
 	if (typeof value !== 'string') return undefined;
 	try {
@@ -683,6 +679,15 @@ function r2CatalogRoutesOverlap(config: IcebergRestConfig, access: R2CatalogAcce
 	);
 }
 
+// Ambient previews retain the sandbox identity; Run SQL opts into the server identity separately.
+function usesAmbientS3(config: IcebergRestConfig): boolean {
+	return (
+		config.storage.scheme === 's3' &&
+		!config.storage.anonymous &&
+		config.storage.credentials.method === 'ambient'
+	);
+}
+
 function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[] {
 	const config = asRecord(value) ?? {};
 	const auth = asRecord(config.auth) ?? {};
@@ -695,7 +700,6 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 	const rest: Record<string, unknown> = asRecord(config.rest) ?? ICEBERG_REST_DEFAULTS;
 	const catalogUrl = parsedUrl(config.uri);
 	const endpoint = parsedUrl(storage.endpoint);
-	const hasEndpoint = typeof storage.endpoint === 'string' && storage.endpoint.length > 0;
 	const storageIsS3 = storage.scheme === 's3';
 	const r2Catalog = r2CatalogAccess(value);
 	const vendedS3 =
@@ -704,9 +708,6 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 			: undefined;
 	const supportedStorage = storageIsS3 || r2Catalog !== undefined || vendedS3 !== undefined;
 	const usesCatalogDelegation = storage.scheme === 'catalog';
-	const endpointOriginOnly = endpoint
-		? endpoint.pathname === '/' && endpoint.search === '' && endpoint.hash === ''
-		: false;
 	const authMethod = auth.method;
 	const credentialsMethod = credentials.method;
 	const advancedField = advancedS3Fields.find((field) => {
@@ -717,13 +718,13 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 	});
 	const supportedCredentials =
 		storageIsS3 &&
-		(storage.anonymous === true || (storage.anonymous !== true && credentialsMethod === 'static'));
+		(storage.anonymous === true ||
+			credentialsMethod === 'static' ||
+			credentialsMethod === 'ambient');
 	const credentialsReason =
-		credentialsMethod === 'ambient'
-			? 'ambient S3 credentials are not supported by DuckDB-Wasm preview'
-			: credentialsMethod === 'profile'
-				? 'profile S3 credentials are not supported by DuckDB-Wasm preview'
-				: 'DuckDB-Wasm preview requires static or anonymous S3 credentials';
+		credentialsMethod === 'profile'
+			? 'profile S3 credentials are not supported by DuckDB-Wasm preview'
+			: 'DuckDB-Wasm preview requires static, ambient, or anonymous S3 credentials';
 	const defaultRestOptions =
 		(rest.snapshot_loading_mode ?? ICEBERG_REST_DEFAULTS.snapshot_loading_mode) ===
 			ICEBERG_REST_DEFAULTS.snapshot_loading_mode &&
@@ -842,20 +843,7 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 		),
 		...(storageIsS3
 			? [
-					readinessCheck(
-						's3-endpoint',
-						'Set an explicit S3 endpoint',
-						storageIsS3 && hasEndpoint,
-						storageIsS3 ? 'storage.endpoint' : 'storage',
-						'DuckDB-Wasm preview requires an explicit S3 endpoint',
-					),
-					readinessCheck(
-						's3-endpoint-origin',
-						'Use an origin-only S3 endpoint',
-						storageIsS3 && endpointOriginOnly,
-						storageIsS3 ? 'storage.endpoint' : 'storage',
-						'DuckDB-Wasm preview requires an origin-only S3 endpoint',
-					),
+					...s3EndpointReadiness(endpoint, 'storage.endpoint', 'Storage → Endpoint'),
 					readinessCheck(
 						's3-secure-transport',
 						'Use HTTPS for authenticated S3',
@@ -885,7 +873,7 @@ function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[]
 					),
 					readinessCheck(
 						's3-credentials',
-						'Use static S3 credentials or anonymous access',
+						'Use static or ambient S3 credentials, or anonymous access',
 						supportedCredentials,
 						storageIsS3 ? 'storage.credentials' : 'storage',
 						credentialsReason,
@@ -1044,10 +1032,11 @@ function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
 	if (config.storage.scheme !== 's3' || !config.storage.endpoint) {
 		throw new ValidationError('DuckDB-Wasm requires explicit S3 storage configuration.');
 	}
-	const credentials =
-		config.storage.anonymous || config.storage.credentials.method !== 'static'
-			? ({ method: 'anonymous' } as const)
-			: staticS3Credentials(config.storage.credentials);
+	const credentials = config.storage.anonymous
+		? ({ method: 'anonymous' } as const)
+		: config.storage.credentials.method === 'static'
+			? staticS3Credentials(config.storage.credentials)
+			: ({ method: 'ambient' } as const);
 	return {
 		kind: 'iceberg-rest',
 		...(config.allow_insecure_transport ? { allowInsecureTransport: true } : {}),

@@ -90,6 +90,7 @@ import {
 	unsupportedBackendNotice,
 } from './computeProfiles';
 import { integrationProbePolicy, integrationsEnabled, makeIntegrations } from './integrations';
+import { ambientS3FromEnv } from './ambientS3';
 import { createDuckDBHttpSessionFactory } from './duckdbHttpBroker';
 import { createGuardedHostResolver } from './integrationProbe';
 import { makeNotifier } from './notifications';
@@ -762,6 +763,7 @@ export function createFromEnv(
 		brokerPolicy !== undefined && brokerPolicy !== 'off'
 			? createDuckDBHttpSessionFactory({
 					allowPrivate: brokerPolicy === 'private',
+					ambientS3: ambientS3FromEnv(env),
 					metrics,
 				})
 			: undefined;
