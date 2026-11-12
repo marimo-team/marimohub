@@ -7,7 +7,7 @@ import { CatalogService, UserId } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { makeTestDeps } from './index';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
-import type { ApiDeps } from '../context';
+import type { ApiDeps, ResolvedApiDeps } from '../context';
 import { createMcpServer } from '../mcp/server';
 import type { StartRequestContext } from '../mcp/server';
 
@@ -21,7 +21,7 @@ export const mcpRequest: StartRequestContext = {
 
 /** Connect an in-memory client; `configure` adds tools the app would register around the server. */
 export async function connectMcpClient(
-	deps: ApiDeps,
+	deps: ResolvedApiDeps,
 	principal: AuthenticatedPrincipal,
 	request: StartRequestContext = mcpRequest,
 	configure?: (server: ReturnType<typeof createMcpServer>) => void,

@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { SessionId, toPublicNotebookMeta, toPublicSource } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, WorkingBranchSave } from '@marimo-hub/core';
-import type { ApiDeps } from '../context';
+import type { ResolvedApiDeps } from '../context';
 import type { StartRequestContext } from './server';
 import { result, toolError } from './results';
 import {
@@ -52,7 +52,7 @@ const mutations = {
 
 export function registerWorkingBranchTools(
 	server: McpServer,
-	deps: ApiDeps,
+	deps: ResolvedApiDeps,
 	principal: AuthenticatedPrincipal,
 	request: StartRequestContext,
 ) {
@@ -267,7 +267,7 @@ export function registerWorkingBranchTools(
 }
 
 export function workingBranchConsentInput(
-	deps: ApiDeps,
+	deps: ResolvedApiDeps,
 	principal: AuthenticatedPrincipal,
 	projectId: string,
 	name: string,

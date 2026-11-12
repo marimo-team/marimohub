@@ -6,7 +6,6 @@ import {
 	ConversationService,
 } from '@marimo-hub/core/chat';
 import type { Conversation, PermissionDecision } from '@marimo-hub/core/chat';
-import { sleep } from '@marimo-hub/core';
 import type { NotebookId } from '@marimo-hub/core';
 import { DomainError, UnavailableError } from '@marimo-hub/core/errors';
 import { DEFAULT_CHAT_CONFIG } from '../context';
@@ -130,7 +129,7 @@ export async function decidePermission(
 		);
 		if (outcome !== 'missing') break;
 		input.signal?.throwIfAborted();
-		await (input.deps.sleep ?? sleep)(DECISION_RETRY.delayMs);
+		await input.deps.sleep(DECISION_RETRY.delayMs);
 	}
 	const accepted = outcome === 'accepted';
 	if (accepted)

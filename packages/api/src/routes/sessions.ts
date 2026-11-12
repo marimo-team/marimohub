@@ -37,7 +37,6 @@ import {
 	sessionResourcePath,
 	PREVIEW_IDLE_MS,
 	AppVisitSchema,
-	sleep,
 	jitteredBackoff,
 	BadRequestError,
 	ConflictError,
@@ -84,7 +83,6 @@ import {
 	writeSandboxContext,
 	sessionSandbox,
 	sessionWorkspaceDir,
-	SubdomainExposure,
 	UnavailableError,
 	EditSessionOwnedError,
 	EditSessionRetiringError,
@@ -111,7 +109,7 @@ import {
 	scheduleNotification,
 	scheduleProjectAlert,
 } from '../notifications';
-import type { ApiDeps, SandboxConfig } from '../context';
+import type { ApiDeps, ResolvedApiDeps, SandboxConfig } from '../context';
 import {
 	composeSessionEnv,
 	federatedCredentialsFor,
@@ -1166,7 +1164,7 @@ app.openapi(getEditorSession, async (c) => {
 });
 
 export async function takeOverNotebookEditor(input: {
-	deps: ApiDeps;
+	deps: ResolvedApiDeps;
 	user: AuthenticatedPrincipal;
 	pid: ProjectId;
 	nid: NotebookId;
@@ -1385,7 +1383,7 @@ export type SessionCreateResult = z.infer<typeof SessionCreateResponseSchema>;
 const EDITOR_STOP_WAIT_MS = 10_000;
 
 export async function startNotebookSession(input: {
-	deps: ApiDeps;
+	deps: ResolvedApiDeps;
 	user: AuthenticatedPrincipal;
 	pid: ProjectId;
 	nid: NotebookId;
@@ -1448,7 +1446,7 @@ export async function startNotebookSession(input: {
 		const deadline = waitStarted + EDITOR_STOP_WAIT_MS;
 		try {
 			while (Date.now() < deadline) {
-				await (input.deps.sleep ?? sleep)(Math.min(500, deadline - Date.now()), request.signal);
+				await input.deps.sleep(Math.min(500, deadline - Date.now()), request.signal);
 				const current = await sessions.getEditorClaim(pid, nid);
 				if (
 					current?.transfer ||
@@ -1684,7 +1682,7 @@ async function startNotebookSessionOnce(
 			recovered: true,
 		});
 
-	const sandboxExposure = sandbox.exposure ?? new SubdomainExposure();
+	const sandboxExposure = sandbox.exposure;
 	const hostname = sandbox.hostname || request.hostname;
 	const { appBaseUrl } = request;
 	const image = resolveBaseImage(notebook.meta.base_image, sandbox.images ?? [], () =>
@@ -1747,7 +1745,7 @@ async function startNotebookSessionOnce(
 		body?.replace_app_session_id
 			? appPool.replace({ ...admissionInput, replacesSessionId: body.replace_app_session_id })
 			: appPool.admit({ ...admissionInput, visitId: body?.app_visit_id });
-	const pace = deps.sleep ?? sleep;
+	const pace = deps.sleep;
 	const admitWithRetry = async () => {
 		for (let attempt = 0; ; attempt++) {
 			try {
@@ -1821,8 +1819,7 @@ async function startNotebookSessionOnce(
 			mayRetire && reusable.status === 'running' && reusable.sandbox_id
 				? (reusable.sandbox_origin_url ?? reusable.sandbox_url)
 				: undefined;
-		const dead =
-			!!kernelUrl && !!deps.kernelProbe && (await deps.kernelProbe(kernelUrl)) === 'dead';
+		const dead = !!kernelUrl && (await deps.kernelProbe(kernelUrl)) === 'dead';
 		if (!authorizationExpired && (!mayRetire || (!dead && !classMismatch))) {
 			if (reusable.status === 'running' && requestedSurfaces.length > 0) {
 				reusable = await beginSessionSurfaces({
@@ -2876,7 +2873,7 @@ app.openapi(ensureSurfaceRoute, async (c) => {
 	const user = c.get('user');
 	const { pid, nid, sid, surface } = c.req.valid('param');
 	const session = await loadSurfaceSession(deps, user, { pid, nid, sid });
-	const exposure = deps.sandbox.exposure ?? new SubdomainExposure();
+	const exposure = deps.sandbox.exposure;
 	const appBaseUrl = resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl);
 	const begun = await beginSessionSurface({
 		deps,

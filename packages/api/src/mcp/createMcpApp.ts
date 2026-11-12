@@ -4,7 +4,7 @@ import { initializeForSubject } from '../shared';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { mcpAuthRouter, StreamableHTTPTransport } from '@hono/mcp';
-import type { ApiDeps, HonoEnv } from '../context';
+import type { HonoEnv, ResolvedApiDeps } from '../context';
 import { authenticateMcpRequest } from './auth';
 import { createOAuthProvider } from './oauthProvider';
 import { createMcpServer } from './server';
@@ -16,7 +16,7 @@ function rateLimited(c: { json(body: unknown, status: 429): Response }): Respons
 	return c.json({ error: 'too_many_requests', error_description: 'Try again later' }, 429);
 }
 
-export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
+export function createMcpApp(deps: ResolvedApiDeps): Hono<HonoEnv> {
 	const app = new Hono<HonoEnv>();
 	if (!deps.mcp) return app;
 	const { publicBaseUrl } = deps.mcp;

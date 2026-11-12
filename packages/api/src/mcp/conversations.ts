@@ -4,7 +4,7 @@ import { ConversationIdSchema, messageText, summarizeConversation } from '@marim
 import type { ConversationMessage } from '@marimo-hub/core/chat';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import { UnavailableError } from '@marimo-hub/core/errors';
-import type { ApiDeps } from '../context';
+import type { ResolvedApiDeps } from '../context';
 import {
 	assertConversationPrincipal,
 	createConversation,
@@ -93,7 +93,7 @@ function compactMessage(message: ConversationMessage, includeToolDetails: boolea
 
 export function registerConversationTools(
 	server: McpServer,
-	deps: ApiDeps,
+	deps: ResolvedApiDeps,
 	principal: AuthenticatedPrincipal,
 	request: StartRequestContext,
 ): void {

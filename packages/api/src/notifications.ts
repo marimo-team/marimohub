@@ -15,7 +15,7 @@ import type {
 	SlidingWindowBudget,
 	UserId,
 } from '@marimo-hub/core';
-import type { ApiDeps } from './context';
+import type { ApiDeps, ResolvedApiDeps } from './context';
 import { errorMetadata, logEvent } from './log';
 
 type RenderNotifications = () =>
@@ -45,11 +45,11 @@ const mutationBudgets = deploymentState(
 );
 
 export function assertNotificationMutationAllowed(
-	deps: ApiDeps,
+	deps: ResolvedApiDeps,
 	actor: UserId,
 	options: NotificationMutationOptions = {},
 ): void {
-	const notifierEnabled = Boolean(deps.notifier && deps.notifier !== noopNotifier);
+	const notifierEnabled = deps.notifier !== noopNotifier;
 	const projectAlertsEnabled = Boolean(deps.projectAlerts);
 	const delivery = options.delivery ?? 'either';
 	const deliveryEnabled =
@@ -113,7 +113,7 @@ function scheduleDelivery(
 }
 
 export function scheduleNotification(
-	deps: ApiDeps,
+	deps: ResolvedApiDeps,
 	kind: NotificationKind,
 	fields: Record<string, unknown>,
 	makeNotification: RenderNotifications,
@@ -127,7 +127,7 @@ export function scheduleNotification(
 		async (notifications) => {
 			if (notifications.length === 0) return 'skipped';
 			const results = await Promise.allSettled(
-				notifications.map((notification) => (deps.notifier ?? noopNotifier).deliver(notification)),
+				notifications.map((notification) => deps.notifier.deliver(notification)),
 			);
 			return reduceNotificationDeliveryResults(results, 'No notification variant delivered');
 		},

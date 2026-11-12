@@ -115,7 +115,7 @@ app.openapi(
 	}),
 	async (c) => {
 		const deps = c.get('deps');
-		if (!deps.supportReports || !deps.notifier) {
+		if (!deps.supportReports) {
 			throw new NotFoundError('Support reports are not enabled on this deployment');
 		}
 		const input = c.req.valid('json');

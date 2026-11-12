@@ -8,7 +8,7 @@ import { createApp } from '../shared';
 import integrationBrowseRoutes from '../routes/integrationBrowse';
 import { connectMcpClient, mcpPrincipal, mcpRequest } from '../testing/mcp';
 import { openToolSession } from '../chat/tools';
-import type { ApiDeps } from '../context';
+import type { ResolvedApiDeps } from '../context';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -475,7 +475,7 @@ describe('MCP data discovery', () => {
 		expect(objectBrowser.listObjects).not.toHaveBeenCalled();
 	});
 
-	async function chatTools(deps: ApiDeps, project: Project) {
+	async function chatTools(deps: ResolvedApiDeps, project: Project) {
 		const session = await openToolSession(deps, mcpPrincipal, project, mcpRequest);
 		onTestFinished(() => session.close());
 		const emit = vi.fn();

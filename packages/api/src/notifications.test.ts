@@ -10,7 +10,7 @@ import type { ApiDeps } from './context';
 import { scheduleNotification, scheduleProjectAlert } from './notifications';
 import { makeTestDeps } from './testing';
 
-function notificationDeps(overrides: Partial<ApiDeps>): ApiDeps {
+function notificationDeps(overrides: Partial<ApiDeps>) {
 	return makeTestDeps(new MemoryBucket(), overrides);
 }
 

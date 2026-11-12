@@ -147,7 +147,7 @@ export async function notebookRecord(
 				mode: 'edit',
 				ephemeral: false,
 				user_id: principal.id,
-				editor_sandbox_sharing: deps.policy.editorSandboxSharing ?? 'shared',
+				editor_sandbox_sharing: deps.policy.editorSandboxSharing,
 			},
 		}),
 	]);

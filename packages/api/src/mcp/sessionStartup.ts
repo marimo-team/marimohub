@@ -5,7 +5,6 @@ import {
 	SessionId,
 	sessionMode,
 	sessionSandbox,
-	sleep,
 	withAbortSignal,
 	withDeadline,
 } from '@marimo-hub/core';
@@ -16,7 +15,7 @@ import type {
 	Project,
 	Session,
 } from '@marimo-hub/core';
-import type { ApiDeps } from '../context';
+import type { ResolvedApiDeps } from '../context';
 import { errorMetadataChain, logEvent } from '../log';
 import { withRequestMemo } from '../requestMemo';
 import { assertSessionNotebookVisible, sessionGrantsFor } from '../shared';
@@ -61,7 +60,7 @@ class SessionWaitTimeoutError extends Error {
 }
 
 async function waitForSession(
-	deps: ApiDeps,
+	deps: ResolvedApiDeps,
 	principal: AuthenticatedPrincipal,
 	session: Session,
 	deadline: number,
@@ -76,7 +75,7 @@ async function waitForSession(
 		try {
 			current = await withDeadline(
 				async (pollSignal) => {
-					await withAbortSignal((deps.sleep ?? sleep)(Math.min(2_000, remaining)), pollSignal);
+					await withAbortSignal(deps.sleep(Math.min(2_000, remaining)), pollSignal);
 					pollSignal.throwIfAborted();
 					sessionAuthorizationDeadline(current, principal);
 					if (Date.now() >= deadline) return current;
@@ -102,7 +101,7 @@ async function waitForSession(
 }
 
 export async function startMcpSession(input: {
-	deps: ApiDeps;
+	deps: ResolvedApiDeps;
 	principal: AuthenticatedPrincipal;
 	request: StartRequestContext;
 	project: Project;

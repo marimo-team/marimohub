@@ -182,9 +182,7 @@ app.openapi(capabilitiesRoute, (c) => {
 			query: deps.dataBrowser?.query ?? false,
 			ai_query: Boolean(deps.dataBrowser?.query && deps.ai?.generateSql),
 		},
-		// createApi defaults this; the fallback satisfies the optional type for
-		// direct callers (mirrors the sandbox.exposure pattern).
-		viewer_mode: deps.policy.viewerMode ?? 'static',
+		viewer_mode: deps.policy.viewerMode,
 		viewer_session_modes: [...viewerSessionModes(deps.policy.viewerMode)],
 		app_pool: {
 			heartbeat_interval_seconds:
@@ -193,7 +191,7 @@ app.openapi(capabilitiesRoute, (c) => {
 					(deps.policy.appPool?.userLeaseMs ?? DEFAULT_APP_POOL_POLICY.userLeaseMs) / 4,
 				) / 1000,
 		},
-		editor_sandbox_sharing: deps.policy.editorSandboxSharing ?? 'shared',
+		editor_sandbox_sharing: deps.policy.editorSandboxSharing,
 		default_role: subjectDefaultRole(c.get('user'), deps.policy),
 		project_groups: { available: deps.policy.groupsCarried ?? false },
 		limits: {
