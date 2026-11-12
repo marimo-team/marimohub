@@ -19,17 +19,39 @@ repository**. Choose a source mode when you create the notebook:
 The source mode cannot change after creation. For a push source, **Sync now**
 updates the files but does not add Git metadata to the version.
 
-Each successful sync creates an immutable version of the repository files under
-`root_path`. Each session starts with a fresh copy of the latest version. Optional
+Syncing a new commit creates an immutable version of the files under `root_path`.
+New sessions use the latest version. Repeating a sync for the same commit is a
+[no-op](#idempotency). Optional
 [source-control publishing](configuration.md#source-control-publishing) can send
 session edits to a separate proposal branch. Working notebooks also support explicit
 saves that update their own stored versions.
-With the GitHub App configured, managers can also publish a branch or commit as a
-[notebook preview](notebook-previews.md) without changing the synced versions.
+With a GitHub App connection, managers can also create a [notebook preview](notebook-previews.md)
+from a branch or commit. Previews do not change the synced version.
 
 GitHub, GitLab, and Azure DevOps Services support pull sources, **Sync now**, and draft change requests.
 Each provider uses separate server credentials and [repository policies](#repository-project-policies).
 A deployment can configure multiple providers.
+
+## Choose a CI workflow
+
+| Goal                     | Tool                                                            | Code source                                      | Hub credential                  |
+| ------------------------ | --------------------------------------------------------------- | ------------------------------------------------ | ------------------------------- |
+| Preview a pull request   | [`actions/preview`](notebook-previews.md#automatic-pr-previews) | Hub fetches the PR commit through its GitHub App | API token with `preview.manage` |
+| Sync a configured branch | [`mohub notebooks source sync`](#sync-now)                      | Hub fetches the notebook's configured branch     | API token with `notebook.write` |
+| Publish a checkout       | [`mohub notebooks push`](#push-with-the-cli)                    | Runner uploads local files                       | Notebook sync token             |
+
+[setup-marimohub-cli](https://github.com/marimo-team/setup-marimohub-cli) installs
+`mohub` for either CLI command. The preview action calls the Hub directly and
+needs neither the CLI nor a checkout.
+
+A typical repository uses two workflows: previews on PR events, then sync on
+pushes to `main`. Merging retires the PR previews. The sync workflow updates the
+notebook to the merged commit.
+
+Both workflows can target the same notebooks across projects. Preview `targets`
+contains project/notebook pairs. The [push manifest](#several-apps-in-one-repository)
+also specifies local folders and a sync-token name for each notebook.
+API tokens and sync tokens are not interchangeable.
 
 ## Local Git identity
 
@@ -389,6 +411,15 @@ Both endpoints require the project **editor** role or a higher role. They use
 the repository, branch, and root path from the notebook's source settings. A
 caller cannot supply different source coordinates.
 
+To sync from CI, set `MARIMOHUB_URL` and an API token in `MARIMOHUB_TOKEN`, then run:
+
+```bash
+mohub notebooks source sync --pid "$PROJECT_ID" --nid "$NOTEBOOK_ID" --yes
+```
+
+This command does not need a checkout. The Hub reads the configured branch
+through its provider connection.
+
 The drift response includes `current_commit`, `remote_commit`, `in_sync`,
 `pending_config`, and `checked_at`. The request resolves the branch head each
 time and does not change notebook state. Pending source settings always set
@@ -419,18 +450,136 @@ provider supports server sync.
 CI uploads and **Sync now** share commit-based idempotency. If one method already
 synced a commit, the other method does not create a duplicate version.
 
-A pull-mode version always includes `.git`. Publishing can therefore capture
-added, modified, and deleted files across the working tree. A push-mode server
+A pull-mode version includes `.git`, so [proposals](#publishing-edits-back-to-the-repository)
+can capture added, modified, and deleted workspace files. A push-mode server
 sync stores repository files only. Include `.git` in CI archives when a push
-source needs multi-file capture.
+source needs to send multi-file edits back to Git.
+
+## Push with the CLI
+
+Set `MARIMOHUB_URL` and `MARIMOHUB_SYNC_TOKEN` in the job environment, then run:
+
+```bash
+mohub notebooks push --pid proj-… --nid nb-… --root-path apps
+```
+
+`--root-path` selects a folder relative to the repository root. The command
+packs its working tree. `--repo`, `--branch`, and `--commit` override Git metadata.
+Missing values fall back to GitHub or GitLab CI variables.
+
+Use `--dry-run` to list files and source headers without credentials or an upload.
+Successful uploads print `version_id` and `synced`. An unchanged commit returns
+`version_id: null` and `synced: false`. Errors include the server message and exit nonzero.
+Commit local changes before uploading. [Repeated SHAs do not create versions](#idempotency).
+
+Archives default to `tar.gz`. Use `--format zip` for ZIP.
+`.marimohubignore` uses Git ignore patterns, including negation. Subtree uploads
+inherit rules from the checkout root through the selected folder. Rules remain
+relative to their own directory. `.gitignore` does not apply. Exclude secrets and build output explicitly: hidden files are included.
+The CLI excludes `.git` and rejects symlinks and special files.
+
+Limits are 1,000 files, 25 MiB per file, and 100 MiB total.
+To [send multi-file edits back to Git](#include-git-metadata-for-proposals), use `--include-git`
+with an empty `root-path` and a shallow checkout without stored credentials.
+Linked worktrees are unsupported.
+
+### Several apps in one repository
+
+Create an `apps.json` manifest with 1–256 notebooks across projects.
+Each entry specifies a folder, project ID, notebook ID, and sync-token secret name:
+
+```json
+[
+	{ "path": "apps/sales", "pid": "proj-…", "nid": "nb-…", "secret": "MARIMOHUB_SYNC_SALES" },
+	{ "path": "apps/ops", "pid": "proj-…", "nid": "nb-…", "secret": "MARIMOHUB_SYNC_OPS" }
+]
+```
+
+For CLI runs, export each named secret as an environment variable, then run:
+
+```bash
+mohub notebooks push --manifest apps.json --dry-run
+mohub notebooks push --manifest apps.json
+```
+
+Store secret names, never tokens, in the manifest. Paths are relative to the
+repository root. `--repo`, `--branch`, `--commit`, and `--format` apply to all entries.
+Bulk uploads exclude `.git`.
+
+The CLI checks all entries before uploading and rejects duplicate targets or
+missing tokens. Uploads run sequentially and continue after individual server errors.
+Results identify each project, notebook, version, and error. Any failure exits
+nonzero, but completed uploads remain published. Retry the manifest to finish.
+
+## GitHub Actions example
+
+Use [setup-marimohub-cli](https://github.com/marimo-team/setup-marimohub-cli) to
+install the CLI, then run `mohub notebooks push`. The same command works locally
+and in CI. The example uses `latest`. For production, pin a release that includes `notebooks push`.
+
+```yaml
+name: Publish app
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: publish-app-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: marimo-team/setup-marimohub-cli@15f7152034cdf6728c02be77d39526360ce60ec2 # v1.0.1
+        with:
+          version: latest
+      - run: mohub notebooks push --pid "$PROJECT_ID" --nid "$NOTEBOOK_ID" --root-path apps
+        env:
+          MARIMOHUB_URL: ${{ vars.MARIMOHUB_URL }}
+          MARIMOHUB_SYNC_TOKEN: ${{ secrets.MARIMOHUB_SYNC_TOKEN }}
+          PROJECT_ID: ${{ vars.MARIMOHUB_PROJECT_ID }}
+          NOTEBOOK_ID: ${{ vars.MARIMOHUB_NOTEBOOK_ID }}
+```
+
+### Publish several apps
+
+Use the [bulk manifest](#several-apps-in-one-repository) and replace the push step with:
+
+```yaml
+- run: mohub notebooks push --manifest apps.json
+  env:
+    MARIMOHUB_URL: ${{ vars.MARIMOHUB_URL }}
+    MARIMOHUB_SYNC_SALES: ${{ secrets.MARIMOHUB_SYNC_SALES }}
+    MARIMOHUB_SYNC_OPS: ${{ secrets.MARIMOHUB_SYNC_OPS }}
+```
+
+Pass each secret named in the manifest explicitly. Keep the checkout, setup,
+and concurrency configuration from the single-app example. Run on trusted branch pushes.
+
+## GitLab CI example
+
+Install `mohub` on the runner and set `MARIMOHUB_URL`.
+Store `MARIMOHUB_SYNC_TOKEN` as a masked, protected CI variable.
+
+```yaml
+sync-notebook:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  script:
+    - mohub notebooks push --pid "$MARIMOHUB_PROJECT_ID" --nid "$MARIMOHUB_NOTEBOOK_ID" --root-path apps
+```
 
 ## Push an archive
 
 Use push sync for providers without a configured reader, or when CI must control sync.
 Push sources can also use **Sync now** when their provider supports it.
 
-Upload the tree under `root_path` as the request body. Authenticate with the
-sync token and describe the commit via headers:
+The CLI builds this request for you. For a custom client, send the archive as
+the request body with a sync token and source headers:
 
 ```http
 POST {sync_url}
@@ -453,12 +602,10 @@ X-Marimohub-Commit: 9f2c1ab…
 | `X-Marimohub-Commit`         | yes      | The git commit SHA being pushed.                            |
 | `X-Marimohub-Archive-Format` | no       | `zip`, `tar`, or `tar.gz`. Otherwise sniffed from the body. |
 
-`X-Marimohub-Repo` / `-Branch` / `-Root-Path` re-state the notebook's
-configuration so a misrouted workflow can't push to the wrong notebook; a
-mismatch is rejected with `400`. `X-Marimohub-Repo` may state the repo as its
-bare path even when the notebook stores a full URL — `$GITHUB_REPOSITORY` and
-`$CI_PROJECT_PATH` work as-is. The response names every mismatched header and
-includes its received and expected values, for example:
+The repository, branch, and root-path headers must match the notebook's source
+settings. A mismatch returns `400` with the received and expected values.
+The repository header accepts a bare path even if the notebook stores a full
+URL, so `$GITHUB_REPOSITORY` and `$CI_PROJECT_PATH` work directly:
 
 ```json
 {
@@ -480,23 +627,26 @@ present in the archive.
   entries that `git archive` and GitHub codeload emit)
 - **tar.gz** (gzip-compressed tar)
 
-Symlinks and other non-regular entries are skipped. Archives are size-capped;
-oversized or malformed archives are rejected with `400`.
+The server skips symlinks and other non-regular entries. It rejects oversized
+or malformed archives with `400`.
 
-Producing the archive is a one-liner in CI — for example:
+To archive the committed files under `apps/`:
 
 ```bash
 git archive --format=tar.gz -o sync.tgz HEAD:apps   # tree under apps/
 ```
 
-### Include `.git` for multi-file publishing
+<span id="include-git-for-multi-file-publishing"></span>
 
-`git archive` excludes `.git`. This is sufficient for sync, but publishing then
-captures only the configured entry notebook.
+### Include Git metadata for proposals
 
-For multi-file capture, upload the repository root with its `.git` directory.
-marimohub uses Git to find added, modified, deleted, and untracked files. It
-honors `.gitignore` and excludes runtime and cache paths.
+Git metadata is not required to sync files or run an app. It is required to
+[send multi-file editor changes back to Git](#publishing-edits-back-to-the-repository).
+Without `.git`, proposals capture only the configured entry notebook.
+
+Add `--include-git` to the push command to include Git metadata. For a custom
+archive, include the repository root and its `.git` directory. During proposal
+capture, marimohub honors `.gitignore` and excludes runtime and cache paths.
 
 Archive the complete checkout instead of using `git archive`:
 
@@ -525,66 +675,35 @@ This method has these requirements:
 
 marimohub stores `.git` with the immutable version and restores it into each
 session workspace. If `.git` is absent or the `git` binary is unavailable,
-capture uses the entry-notebook fallback. If Git cannot resolve
-`X-Marimohub-Commit`, publishing fails without falling back.
+proposal capture uses the entry-notebook fallback. If Git cannot resolve
+`X-Marimohub-Commit`, proposal capture fails.
 
 ### Idempotency
 
-Git commit SHAs are content-addressed, so re-pushing the **same commit** is a
-no-op — safe to retry. Pushing a **new commit** cuts a new immutable version and
-advances the notebook. A push matching pending settings always creates and
-promotes a version, even if its SHA matches the version from the previous source
-configuration.
+Re-pushing the **same commit** is a no-op. Pushing a **new commit** creates an
+immutable version and advances the notebook. Commit changes before uploading:
+new working-tree bytes with the same SHA do not create a version.
 
-## GitHub Actions example
+A push that matches pending source settings always creates a version and activates
+those settings, even if the previous source used the same SHA.
 
-```yaml
-name: Sync notebook to marimohub
-on:
-  push:
-    branches: [main]
+<span id="without-the-cli"></span>
 
-jobs:
-  sync:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Archive the app subtree
-        run: git archive --format=tar.gz -o sync.tgz "HEAD:apps"
-      - name: Push to marimohub
-        env:
-          SYNC_URL: ${{ secrets.MARIMOHUB_SYNC_URL }}
-          SYNC_TOKEN: ${{ secrets.MARIMOHUB_SYNC_TOKEN }}
-        run: |
-          curl --fail-with-body -X POST "$SYNC_URL" \
-            -H "Authorization: Bearer $SYNC_TOKEN" \
-            -H "Content-Type: application/gzip" \
-            -H "X-Marimohub-Archive-Format: tar.gz" \
-            -H "X-Marimohub-Repo: ${{ github.repository }}" \
-            -H "X-Marimohub-Branch: main" \
-            -H "X-Marimohub-Root-Path: apps" \
-            -H "X-Marimohub-Commit: ${{ github.sha }}" \
-            --data-binary @sync.tgz
-```
+### Upload with curl
 
-## GitLab CI example
+This example uses GitLab CI variables to describe the commit.
 
-```yaml
-sync-notebook:
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-  script:
-    - git archive --format=tar.gz -o sync.tgz "HEAD:apps"
-    - |
-      curl --fail-with-body -X POST "$MARIMOHUB_SYNC_URL" \
-        -H "Authorization: Bearer $MARIMOHUB_SYNC_TOKEN" \
-        -H "Content-Type: application/gzip" \
-        -H "X-Marimohub-Archive-Format: tar.gz" \
-        -H "X-Marimohub-Repo: $CI_PROJECT_PATH" \
-        -H "X-Marimohub-Branch: main" \
-        -H "X-Marimohub-Root-Path: apps" \
-        -H "X-Marimohub-Commit: $CI_COMMIT_SHA" \
-        --data-binary @sync.tgz
+```bash
+git archive --format=tar.gz -o /tmp/sync.tgz HEAD:apps
+curl --fail-with-body -X POST "$MARIMOHUB_SYNC_URL" \
+  -H "Authorization: Bearer $MARIMOHUB_SYNC_TOKEN" \
+  -H "Content-Type: application/gzip" \
+  -H "X-Marimohub-Archive-Format: tar.gz" \
+  -H "X-Marimohub-Repo: $CI_PROJECT_PATH" \
+  -H "X-Marimohub-Branch: $CI_COMMIT_REF_NAME" \
+  -H "X-Marimohub-Root-Path: apps" \
+  -H "X-Marimohub-Commit: $CI_COMMIT_SHA" \
+  --data-binary @/tmp/sync.tgz
 ```
 
 ## Rotating the sync token
@@ -619,9 +738,10 @@ including Python-version and custom-index limits.
 ## Read-only sessions
 
 Each session starts from the latest synced version. Session edits do not change
-that version. The sandbox is discarded on teardown. Users can publish edits
-before teardown, but publishing does not create a marimohub version. A session
-cannot start before the first successful sync (`400` otherwise).
+that version. The sandbox is discarded on teardown. Before teardown, users can
+send edits to a [proposal branch](#publishing-edits-back-to-the-repository).
+The notebook version changes only after a sync. A session cannot start before
+the first successful sync (`400` otherwise).
 
 ### Publishing edits back to the repository
 
@@ -651,7 +771,7 @@ The web interface uses this endpoint:
 POST /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests
 ```
 
-If the synced version [includes `.git`](#include-git-for-multi-file-publishing),
+If the synced version [includes `.git`](#include-git-metadata-for-proposals),
 the proposal can contain changes from the full working tree. Otherwise, the
 proposal contains only the entry notebook. Each proposal supports 1,000 changes
 and 10 MiB of added or modified content.

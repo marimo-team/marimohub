@@ -100,7 +100,7 @@ for credentials. See [secrets handling](./security.md#secrets-handling).
    - **Git-synced notebooks:** Before stopping the session, save the updated notebook and `studio/` files to the repository.
      Commit and push them to the tracked branch, or
      [publish a pull request](./syncing.md#publishing-edits-back-to-the-repository) and merge it into that branch.
-     Publishing view files requires a synced version that [includes `.git`](./syncing.md#include-git-for-multi-file-publishing).
+     Publishing view files requires a synced version that [includes `.git`](./syncing.md#include-git-metadata-for-proposals).
      Then sync the notebook again. Git-synced sessions discard edits at teardown, even with workspace persistence enabled.
 
 5. Select **Open → Run as app** to serve the saved default view.
@@ -371,3 +371,18 @@ Use **Edit thumbnail** to upload and crop a screenshot of your app. See
 
 App headers include Help and deployment announcements. New app and preview sessions inherit deployment colors and notebook CSS, and receive the hub's `marimo.toml` display defaults like editor sessions.
 See [the theming guide](./theming.md) for configuration, CSS limits, and restart requirements.
+
+## Publishing apps from git
+
+1. Create a project with **app-user** as its default role, or map an IdP group to that role.
+2. Give maintainers the **editor** role or higher.
+3. Create one push-mode synced notebook per app. Match its repository, branch, folder, and entry notebook to the checkout.
+4. Add the [CI publish workflow](./syncing.md#github-actions-example) with each sync token in a protected secret.
+5. After the first successful sync, share apps through the `/apps` gallery or [app links](#authenticated-app-links).
+
+For staging, use a separate project and tokens with source branches set to `dev`.
+Configure the production workflow to sync on pushes to `main`. To roll back,
+revert the Git commit and push again. The workflow syncs the revert as a new Hub version.
+
+Use the [bulk manifest](./syncing.md#several-apps-in-one-repository) to publish
+multiple notebooks across projects from one repository.

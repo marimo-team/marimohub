@@ -11,6 +11,10 @@ homepage = "https://github.com/marimo-team/marimohub"
 readme = "../../README.md"
 
 [dependencies]
+ignore = "0.4"
+tar = "0.4"
+flate2 = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 clap = { version = "4.5.32", features = ["env", "string"] }
 clap_complete = "4.5.46"
 clap_complete_nushell = "4.6.2"

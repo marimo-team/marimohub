@@ -1,6 +1,7 @@
 # Notebook previews
 
-A preview publishes GitHub code through an existing notebook, with a stable share URL and separate, disposable compute.
+A preview runs a GitHub branch or commit through an existing notebook. It has a
+stable share URL and separate, disposable compute.
 Managers and admins can create and delete previews. Sharing a URL does not grant notebook access.
 
 ::: warning Previews run branch code with the notebook's credentials
@@ -13,8 +14,9 @@ Protect previewed branches, or pin a reviewed commit. See [Security model → Pr
 ## Automatic PR previews
 
 Select **Set up GitHub Action** on the notebook's **Previews** page to generate a workflow and token instructions.
-The [Action README](https://github.com/marimo-team/marimohub/tree/main/actions/preview) describes the Action inputs, workflow, PR comment, outputs, and version pinning.
-This section describes how the Hub manages the previews that the Action requests.
+The [Action README](https://github.com/marimo-team/marimohub/tree/main/actions/preview) covers inputs, workflow configuration, PR comments, outputs, and version pinning.
+The action updates previews and PR comments. The Hub manages retention and cleanup.
+To update the notebook after merge, add a [sync workflow](syncing.md#choose-a-ci-workflow).
 
 ### Lifecycle
 
