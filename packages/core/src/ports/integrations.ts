@@ -379,3 +379,35 @@ export interface SessionRender extends RuntimeContributions {
 	/** User-safe notices about best-effort integration features. */
 	warnings: string[];
 }
+
+export interface ReconcileIntegrationInput {
+	change_note?: string;
+	kind: string;
+	name: string;
+	config: Record<string, unknown>;
+	enabled?: boolean;
+	mode?: 'insert' | 'ensure' | 'upsert';
+	allowOrgOverride?: boolean;
+}
+
+export type IntegrationPrecondition =
+	| { state: 'absent' }
+	| { state: 'existing'; id: IntegrationId; revision: string };
+
+export interface IntegrationReconciliationPlan {
+	name: string;
+	kind: string;
+	action: 'create' | 'update' | 'unchanged';
+	changed_paths: string[];
+	precondition: IntegrationPrecondition;
+	org_override: boolean;
+}
+
+export interface IntegrationReconciliationResult {
+	name: string;
+	kind: string;
+	id: IntegrationId;
+	action: 'created' | 'updated' | 'unchanged';
+	current_version: number;
+	config_changed: boolean;
+}

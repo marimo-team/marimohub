@@ -125,3 +125,5 @@ They do not appear in any single project's audit log.
 The `token.create` event includes the immutable grant for a scoped token. For
 a manual MCP token, it also includes `source: "mcp-manual"` and the bound
 `mcp_resource` URL. It never includes the token secret.
+
+For typed project provisioning scripts, see [Integrations as code](./integration-iac.md).

@@ -112,3 +112,42 @@ End users then upgrade with:
 helm upgrade --install marimohub oci://ghcr.io/marimo-team/charts/marimohub \
   --version X.Y.Z -n marimohub -f values.yaml
 ```
+
+## Integration IaC package
+
+`pnpm release` updates the IaC package version and Deno example imports.
+The [Integration IaC SDK workflow](../.github/workflows/iac.yml) tests the packed package in Node and Deno.
+Publication requires a manual run from a matching release tag.
+
+### Configure trusted publishing once
+
+1. Create the `npm` environment in GitHub.
+2. For a new package, publish the initial version before publisher registration.
+3. Configure the package's npm trusted publisher with these values:
+
+| npm setting          | Value                      |
+| -------------------- | -------------------------- |
+| Provider             | GitHub Actions             |
+| Organization or user | `marimo-team`              |
+| Repository           | `marimohub`                |
+| Workflow filename    | `iac.yml`                  |
+| Environment name     | `npm`                      |
+| Allowed actions      | Allow direct `npm publish` |
+
+Registration requires package write access and account 2FA.
+See [npm trust prerequisites](https://docs.npmjs.com/cli/v11/commands/npm-trust/).
+The workflow uses OIDC, requires no `NPM_TOKEN`, and receives automatic provenance for this public package and repository.
+See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) for configuration details.
+
+### Publish a release
+
+Run **Integration IaC SDK** from the matching `vX.Y.Z` tag with `publish` selected.
+The root and IaC package versions must match the tag.
+After the initial publication, use a new version. npm cannot republish an existing version.
+
+The workflow builds the tarball in a job without OIDC permission.
+The publish job downloads that artifact and runs `npm publish --ignore-scripts`.
+Only this job has `id-token: write`. It uses Node 24 and requires npm >= 11.5.1.
+Runs for the same tag cannot cancel an active publication.
+
+After publication, consumers run `deno install` in their copied example and commit `deno.lock`.

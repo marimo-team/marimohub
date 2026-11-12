@@ -1,5 +1,7 @@
+import { changedConfigPaths } from './reconciliation';
 import { BoundedLruMap } from '../../cache';
 import {
+	PreconditionFailedError,
 	ForbiddenError,
 	ConflictError,
 	assertVersionMatch,
@@ -60,6 +62,10 @@ import type {
 	PreviewPrograms,
 } from './data-preview/programs';
 import type {
+	ReconcileIntegrationInput,
+	IntegrationPrecondition,
+	IntegrationReconciliationPlan,
+	IntegrationReconciliationResult,
 	BrowseCapabilityResult,
 	BrowseNamespacesRequest,
 	BrowsePage,
@@ -128,6 +134,7 @@ import { assertValidIntegrationName, bundleIntegrations } from './bundle';
 import type { RenderedIntegration } from './bundle';
 import type { IntegrationRegistry } from './registry';
 import {
+	normalizeStoredConfig,
 	findStraySecretBoxes,
 	configForCopy,
 	openConfig,
@@ -506,14 +513,171 @@ class ScopedIntegrationsStore {
 		return this.toDetail(scope, head, version, config);
 	}
 
+	private async headByName(
+		scope: IntegrationScope,
+		name: string,
+	): Promise<IntegrationRecord | undefined> {
+		const claim = await this.bucket.get(scope.nameClaim(name));
+		if (claim) {
+			const holder = this.nameClaimConfig(scope, name).parseHolder(
+				await readStoredJson(claim, scope.nameClaim(name)),
+			);
+			if (holder) {
+				try {
+					const head = await this.getHead(scope, holder as IntegrationId);
+					if (head.name === name) return head;
+				} catch (error) {
+					if (!(error instanceof NotFoundError)) throw error;
+				}
+			}
+		}
+		// A create or rename publishes its head before it claims the name.
+		if ((await this.listHeads(scope)).some((head) => head.name === name)) {
+			throw new ConflictError('Integration name publication is in progress. Retry the operation.');
+		}
+		return undefined;
+	}
+
+	private async comparable(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		def: IntegrationDefinition,
+		config: Record<string, unknown>,
+	) {
+		return configForCopy({
+			stored: normalizeStoredConfig({
+				schema: def.configSchema,
+				paths: this.registry.secretPathsOf(def.kind),
+				stored: config,
+			}),
+			paths: this.registry.secretPathsOf(def.kind),
+			decrypt: async (envelope, at) => {
+				if (!this.codec)
+					throw new ValidationError(
+						'Managed secret comparison requires a configured secret codec.',
+					);
+				try {
+					return await this.codec.decrypt(envelope, { path: this.secretContext(scope, id)(at) });
+				} catch {
+					throw new ValidationError(
+						'Cannot compare a managed secret. Check the deployment secret codec.',
+					);
+				}
+			},
+		});
+	}
+
+	async planReconciliation(
+		projectId: ProjectId,
+		input: ReconcileIntegrationInput,
+	): Promise<IntegrationReconciliationPlan> {
+		return (await this.prepareReconciliation(projectId, input)).plan;
+	}
+
+	private async prepareReconciliation(
+		projectId: ProjectId,
+		input: ReconcileIntegrationInput,
+		expected?: IntegrationPrecondition,
+	) {
+		assertValidIntegrationName(input.name);
+		const scope = projectScope(projectId);
+		const def = this.registry.get(input.kind);
+		const head = await this.headByName(scope, input.name);
+		if (
+			expected &&
+			(expected.state === 'absent'
+				? head !== undefined
+				: !head || head.id !== expected.id || head.updated_at !== expected.revision)
+		) {
+			throw new PreconditionFailedError('Integration changed after planning. Create a new plan.');
+		}
+		const inherited = !head && (await this.headByName(ORG_SCOPE, input.name));
+		if (inherited && !input.allowOrgOverride)
+			throw new ConflictError(
+				'An organization integration has this name. Set allowOrgOverride to create a project override.',
+			);
+		if (head && head.kind !== input.kind)
+			throw new ConflictError('Integration name belongs to a different kind.');
+		if (head && input.mode === 'insert')
+			throw new ConflictError('Integration already exists. Use ensure or upsert.');
+		const previous = head ? (await this.loadCurrent(scope, head)).config : undefined;
+		const id = head?.id ?? createIntegrationId();
+		const sealed = await this.seal(scope, id, def, input.config, previous);
+		const changed =
+			head && input.mode !== 'ensure'
+				? changedConfigPaths(
+						await this.comparable(scope, id, def, previous!),
+						await this.comparable(scope, id, def, sealed),
+					)
+				: [];
+		if (head && input.mode !== 'ensure' && head.enabled !== (input.enabled ?? true))
+			changed.push('enabled');
+		const plan: IntegrationReconciliationPlan = {
+			name: input.name,
+			kind: input.kind,
+			action: head ? (changed.length > 0 ? 'update' : 'unchanged') : 'create',
+			changed_paths: head ? changed : ['config', 'enabled'],
+			precondition: head
+				? { state: 'existing', id: head.id, revision: head.updated_at }
+				: { state: 'absent' },
+			org_override: Boolean(inherited),
+		};
+		return { plan, head, scope };
+	}
+
+	async applyReconciliation(
+		projectId: ProjectId,
+		input: ReconcileIntegrationInput,
+		expected: IntegrationPrecondition,
+		actor: UserId,
+	): Promise<IntegrationReconciliationResult> {
+		const { plan, head, scope } = await this.prepareReconciliation(projectId, input, expected);
+		const configChanged =
+			plan.action === 'create' || plan.changed_paths.some((path) => path.startsWith('config.'));
+		let result: Pick<IntegrationReconciliationResult, 'name' | 'kind' | 'id' | 'current_version'>;
+		if (plan.action === 'create') {
+			result = await this.create(scope, input, actor, {
+				enabled: input.enabled,
+				reconciliation: true,
+			});
+		} else if (plan.action === 'update') {
+			result = await this.update(
+				scope,
+				head!.id,
+				{
+					...(configChanged ? { config: input.config, change_note: input.change_note } : {}),
+					enabled: input.enabled ?? true,
+				},
+				actor,
+				head!.updated_at,
+			);
+		} else {
+			const current = await this.headByName(scope, input.name);
+			if (!current || current.id !== head!.id || current.updated_at !== head!.updated_at) {
+				throw new PreconditionFailedError('Integration changed after planning. Create a new plan.');
+			}
+			result = current;
+		}
+		return {
+			name: result.name,
+			kind: result.kind,
+			id: result.id,
+			action:
+				plan.action === 'create' ? 'created' : plan.action === 'update' ? 'updated' : 'unchanged',
+			current_version: result.current_version,
+			config_changed: configChanged,
+		};
+	}
+
 	async create(
 		scope: IntegrationScope,
 		input: CreateIntegrationInput,
 		actor: UserId,
+		options: { enabled?: boolean; reconciliation?: boolean } = {},
 	): Promise<IntegrationDetail> {
 		const def = this.registry.get(input.kind);
 		assertValidIntegrationName(input.name);
-		await this.assertNameFree(scope, input.name);
+		await this.assertNameFree(scope, input.name, options.reconciliation);
 		if ((await this.listHeads(scope)).length >= MAX_INTEGRATIONS_PER_SCOPE) {
 			throw new ResourceExhaustedError(
 				`Integration limit reached ${scope.where} (${MAX_INTEGRATIONS_PER_SCOPE}).`,
@@ -538,7 +702,7 @@ class ScopedIntegrationsStore {
 			...(scope.projectId !== undefined ? { project_id: scope.projectId } : {}),
 			kind: def.kind,
 			name: input.name,
-			enabled: true,
+			enabled: options.enabled ?? true,
 			current_version: 1,
 			...this.ambientEnvField(def.kind, config),
 			created_by: actor,
@@ -565,7 +729,7 @@ class ScopedIntegrationsStore {
 					}),
 				compensate: () => this.bucket.delete(integrationPaths.head),
 			})
-			.step('claim_name', () => this.claimName(scope, input.name, id))
+			.step('claim_name', () => this.claimName(scope, input.name, id, options.reconciliation))
 			.run();
 		return this.toDetail(scope, head, version, config);
 	}
@@ -1868,10 +2032,16 @@ class ScopedIntegrationsStore {
 		);
 	}
 
-	private async assertNameFree(scope: IntegrationScope, name: string): Promise<void> {
+	private async assertNameFree(
+		scope: IntegrationScope,
+		name: string,
+		reconciliation = false,
+	): Promise<void> {
 		const heads = await this.listHeads(scope);
 		if (heads.some((h) => h.name === name)) {
-			throw new ValidationError(`An integration named "${name}" already exists ${scope.where}.`);
+			throw new (reconciliation ? ConflictError : ValidationError)(
+				`An integration named "${name}" already exists ${scope.where}.`,
+			);
 		}
 	}
 
@@ -1889,7 +2059,12 @@ class ScopedIntegrationsStore {
 	}
 
 	// The claim is the atomic name arbiter; the earlier listing check is only a fast path.
-	private async claimName(scope: IntegrationScope, name: string, id: IntegrationId): Promise<void> {
+	private async claimName(
+		scope: IntegrationScope,
+		name: string,
+		id: IntegrationId,
+		reconciliation = false,
+	): Promise<void> {
 		const claim = await acquireSingletonClaim(
 			{
 				...this.nameClaimConfig(scope, name),
@@ -1904,7 +2079,9 @@ class ScopedIntegrationsStore {
 			id,
 		);
 		if (!claim.acquired) {
-			throw new ValidationError(`An integration named "${name}" already exists ${scope.where}.`);
+			throw new (reconciliation ? ConflictError : ValidationError)(
+				`An integration named "${name}" already exists ${scope.where}.`,
+			);
 		}
 	}
 
@@ -2151,6 +2328,22 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 
 	constructor(options: IntegrationsStoreOptions) {
 		this.store = new ScopedIntegrationsStore(options);
+	}
+
+	planReconciliation(
+		projectId: ProjectId,
+		input: ReconcileIntegrationInput,
+	): Promise<IntegrationReconciliationPlan> {
+		return this.store.planReconciliation(projectId, input);
+	}
+
+	applyReconciliation(
+		projectId: ProjectId,
+		input: ReconcileIntegrationInput,
+		expected: IntegrationPrecondition,
+		actor: UserId,
+	): Promise<IntegrationReconciliationResult> {
+		return this.store.applyReconciliation(projectId, input, expected, actor);
 	}
 
 	listKinds(): KindDescriptor[] {

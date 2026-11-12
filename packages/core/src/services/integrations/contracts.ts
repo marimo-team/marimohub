@@ -1,5 +1,9 @@
 import type { IntegrationId, ProjectId, SessionId, UserId } from '../../ids';
 import type {
+	ReconcileIntegrationInput,
+	IntegrationPrecondition,
+	IntegrationReconciliationPlan,
+	IntegrationReconciliationResult,
 	BrowseCapabilityResult,
 	BrowseNamespacesRequest,
 	BrowsePage,
@@ -59,6 +63,16 @@ export interface IntegrationListOptions {
 
 /** Application service for project integrations and inherited organization integrations. */
 export interface ProjectIntegrationsService {
+	planReconciliation(
+		projectId: ProjectId,
+		input: ReconcileIntegrationInput,
+	): Promise<IntegrationReconciliationPlan>;
+	applyReconciliation(
+		projectId: ProjectId,
+		input: ReconcileIntegrationInput,
+		expected: IntegrationPrecondition,
+		actor: UserId,
+	): Promise<IntegrationReconciliationResult>;
 	listKinds(): KindDescriptor[];
 	secretSources(): IntegrationSecretSources;
 	list(projectId: ProjectId, options?: IntegrationListOptions): Promise<IntegrationEntry[]>;

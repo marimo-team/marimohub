@@ -128,3 +128,5 @@ Service accounts are restricted to deployment resources, regardless of their gra
 Human memberships, default roles, and super-admin standing cannot expand those grants. Human authentication and PAT rules remain unchanged.
 These are static credentials, without OAuth exchange or refresh tokens.
 The Node configuration root supports `MARIMOHUB_SERVICE_ACCOUNTS`. The custom Cloudflare Worker entrypoint requires explicit library wiring.
+
+For typed project provisioning scripts, see [Integrations as code](./integration-iac.md).

@@ -1,0 +1,44 @@
+{
+	"name": "@marimo-hub/iac",
+	"version": "0.6.4",
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/marimo-team/marimohub.git",
+		"directory": "packages/iac"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs"
+		},
+		"./runner": {
+			"types": "./dist/runner.d.mts",
+			"import": "./dist/runner.mjs"
+		}
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"scripts": {
+		"build": "vp pack",
+		"test": "vp run test:vitest",
+		"check": "vp check",
+		"typecheck": "tsc --noEmit",
+		"generate": "node scripts/generate.mjs && vp fmt src/generated.ts src/samples.ts"
+	},
+	"devDependencies": {
+		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
+		"@types/node": "catalog:",
+		"openapi-typescript": "7.13.0",
+		"typescript": "catalog:",
+		"vite-plus": "catalog:",
+		"vitest": "catalog:"
+	}
+}

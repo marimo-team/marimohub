@@ -99,12 +99,22 @@ run('git', 'checkout', '-b', branch, 'origin/main');
 
 pkg.version = version;
 writeFileSync(pkgPath, `${JSON.stringify(pkg, null, '\t')}\n`);
+run('node', 'scripts/prepare-iac-release.mjs');
 
 writeFileSync(cargoPath, cargoToml.replace(cargoPattern, `version = "${version}"`));
 writeFileSync(cliDocsPath, cliDocs.replace(cliDocsPattern, `$1${version}$2`));
 run('cargo', 'update', '--manifest-path', 'apps/cli/Cargo.toml', '--package', 'mohub');
 
-run('git', 'add', 'package.json', 'apps/cli/Cargo.toml', 'apps/cli/Cargo.lock', 'docs/cli.md');
+run(
+	'git',
+	'add',
+	'package.json',
+	'apps/cli/Cargo.toml',
+	'apps/cli/Cargo.lock',
+	'docs/cli.md',
+	'packages/iac/package.json',
+	'examples/integration-iac/deno/deno.json',
+);
 run('git', 'commit', '-m', `release: ${version}`);
 run('git', 'push', '-u', 'origin', branch);
 execFileSync(
