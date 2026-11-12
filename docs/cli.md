@@ -28,50 +28,19 @@ If you do not use `uv`, download the standalone archive. Extract it and put
 
 ### GitHub Actions
 
-Use [`setup-marimohub-cli`](https://github.com/marimo-team/setup-marimohub-cli)
-to install a pinned CLI version and synchronize a git-backed notebook after a
-push:
+Use [setup-marimohub-cli](https://github.com/marimo-team/setup-marimohub-cli)
+to install `mohub`, then run CLI commands in subsequent steps:
 
 ```yaml
-name: Sync marimohub notebook
-
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: marimohub-sync-${{ github.ref }}
-  cancel-in-progress: true
-
-jobs:
-  sync:
-    runs-on: ubuntu-latest
-    env:
-      MARIMOHUB_URL: ${{ vars.MARIMOHUB_URL }}
-      MARIMOHUB_TOKEN: ${{ secrets.MARIMOHUB_TOKEN }}
-      MARIMOHUB_PROJECT_ID: ${{ vars.MARIMOHUB_PROJECT_ID }}
-      MARIMOHUB_NOTEBOOK_ID: ${{ vars.MARIMOHUB_NOTEBOOK_ID }}
-    steps:
-      - uses: marimo-team/setup-marimohub-cli@15f7152034cdf6728c02be77d39526360ce60ec2 # v1.0.1
-        with:
-          version: '0.6.4'
-
-      - name: Sync notebook
-        run: >-
-          mohub notebooks source sync
-          --pid "$MARIMOHUB_PROJECT_ID"
-          --nid "$MARIMOHUB_NOTEBOOK_ID"
-          --yes
+- uses: marimo-team/setup-marimohub-cli@15f7152034cdf6728c02be77d39526360ce60ec2 # v1.0.1
+  with:
+    version: latest
 ```
 
-Synchronization is server-initiated, so the job does not need to check out the
-repository. It is a no-op when the notebook already matches the configured
-branch head. For production, keep the variables and token in a protected GitHub
-Environment.
+The example installs `latest`. For production, pin `version` to a specific release.
+For publishing, choose [server-side sync or a checkout upload](./syncing.md#choose-a-ci-workflow).
+The separate [PR preview action](./notebook-previews.md#automatic-pr-previews)
+does not need this installer.
 
 ## Sign in
 

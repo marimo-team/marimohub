@@ -56,6 +56,10 @@ jobs:
       - name: Test
         working-directory: apps/cli
         run: cargo test --locked
+      - name: Test archive publishing with filesystem storage
+        env:
+          MARIMOHUB_TEST_CLI: ${{ github.workspace }}/apps/cli/target/debug/mohub
+        run: pnpm --filter @marimo-hub/server exec vp test pushCli.test.ts
 
   cross-platform-check:
     name: Rust CLI (${{ matrix.os }})

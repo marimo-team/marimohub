@@ -801,9 +801,6 @@ Integrations are enabled by default. Set `MARIMOHUB_INTEGRATIONS=off` to
 disable the management routes and session injection. The feature requires only
 the deployment bucket.
 
-Before upgrading, replace the former `true` and `none` aliases with `on`
-and `off`. Those aliases are no longer accepted.
-
 Secret fields use inline encryption or an external resolver. A rendering error
 blocks session creation. Disable or override the integration to restore access.
 See the [secret-source guide](./integration-secrets.md).

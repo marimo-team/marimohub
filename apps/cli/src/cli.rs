@@ -405,7 +405,13 @@ pub fn build(manifest: &Manifest) -> Command {
                 !node.children.contains_key("deploy"),
                 "generated API manifest now defines notebooks deploy"
             );
-            child = child.subcommand(deploy_command());
+            assert!(
+                !node.children.contains_key("push"),
+                "generated API manifest now defines notebooks push"
+            );
+            child = child
+                .subcommand(deploy_command())
+                .subcommand(crate::push::command());
         }
         command = command.subcommand(child);
     }

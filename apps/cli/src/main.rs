@@ -741,6 +741,9 @@ fn run_command(
     if path.first().map(String::as_str) == Some("logout") {
         return handle_logout(matches);
     }
+    if path == ["notebooks", "push"] {
+        return mohub::push::execute(matches, leaf);
+    }
     if path == ["notebooks", "deploy"] {
         if matches.get_flag("raw-envelope") {
             return Err(Error::Usage(
