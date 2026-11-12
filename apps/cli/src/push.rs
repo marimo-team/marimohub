@@ -70,6 +70,15 @@ fn resolve(
 
 fn repository(remote: String) -> String {
     if let Ok(mut url) = url::Url::parse(&remote) {
+        if url.scheme() == "ssh" {
+            if let Some(host) = url.host_str() {
+                // SSH ports describe the transport, not the repository's HTTPS origin.
+                return format!("https://{host}{}", url.path())
+                    .trim_end_matches('/')
+                    .trim_end_matches(".git")
+                    .to_owned();
+            }
+        }
         // Remote URLs can contain credentials; never copy them into headers or dry-run output.
         let _ = url.set_username("");
         let _ = url.set_password(None);
@@ -93,17 +102,20 @@ fn repository(remote: String) -> String {
     remote.trim_end_matches(".git").to_owned()
 }
 
-fn files(root: &Path, include_git: bool) -> Result<Vec<PathBuf>, Error> {
-    let mut builder = ignore::WalkBuilder::new(root);
+fn files(checkout: &Path, root: &Path, include_git: bool) -> Result<Vec<PathBuf>, Error> {
+    // Walk from the checkout so ancestor rules retain their directory-relative meaning.
+    let mut builder = ignore::WalkBuilder::new(checkout);
     builder
         .standard_filters(false)
         .add_custom_ignore_filename(".marimohubignore");
+    let selected = root.to_owned();
     builder.filter_entry(move |entry| {
-        include_git
-            || !entry
-                .file_name()
-                .to_string_lossy()
-                .eq_ignore_ascii_case(".git")
+        (selected.starts_with(entry.path()) || entry.path().starts_with(&selected))
+            && (include_git
+                || !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(".git"))
     });
     let mut paths = Vec::new();
     let mut total = 0;
@@ -112,7 +124,7 @@ fn files(root: &Path, include_git: bool) -> Result<Vec<PathBuf>, Error> {
         let kind = entry
             .file_type()
             .ok_or_else(|| Error::Usage("unknown file type".into()))?;
-        if kind.is_dir() {
+        if kind.is_dir() || !entry.path().starts_with(root) {
             continue;
         }
         if !kind.is_file() {
@@ -289,7 +301,8 @@ fn execute_one(
     let cwd = std::env::current_dir()?;
     let checkout = git(&cwd, &["rev-parse", "--show-toplevel"])
         .map(PathBuf::from)
-        .unwrap_or(cwd);
+        .unwrap_or(cwd)
+        .canonicalize()?;
     let get = |name: &str| args.get_one::<String>(name).cloned();
     let root_path = get("root-path").unwrap_or_default().replace('\\', "/");
     if root_path.split('/').any(|part| part == ".." || part == ".")
@@ -300,7 +313,7 @@ fn execute_one(
         ));
     }
     let root = checkout.join(&root_path).canonicalize()?;
-    if !root.starts_with(checkout.canonicalize()?) {
+    if !root.starts_with(&checkout) {
         return Err(Error::Usage("root-path escapes the checkout".into()));
     }
     let include_git = args.get_flag("include-git");
@@ -379,7 +392,7 @@ fn execute_one(
         ));
     }
     let format = get("format").expect("defaulted by clap");
-    let paths = files(&root, include_git)?;
+    let paths = files(&checkout, &root, include_git)?;
     let headers = [
         ("x-marimohub-repo", repo),
         ("x-marimohub-branch", branch),
@@ -504,6 +517,22 @@ mod tests {
     }
 
     #[test]
+    fn ssh_urls_use_https_coordinates_without_transport_credentials() {
+        for remote in [
+            "ssh://git@github.com/org/repo.git",
+            "ssh://git@github.com:2222/org/repo.git/",
+            "ssh://git:secret@git.example.com:2222/team/repo.git?token=secret#fragment",
+        ] {
+            let host = if remote.contains("git.example.com") {
+                "git.example.com/team"
+            } else {
+                "github.com/org"
+            };
+            assert_eq!(repository(remote.into()), format!("https://{host}/repo"));
+        }
+    }
+
+    #[test]
     fn ignores_and_archives() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join(".git")).unwrap();
@@ -511,7 +540,7 @@ mod tests {
         std::fs::write(dir.path().join("app.py"), "print(1)").unwrap();
         std::fs::write(dir.path().join("secret"), "secret").unwrap();
         std::fs::write(dir.path().join(".marimohubignore"), "secret\n").unwrap();
-        let paths = files(dir.path(), false).unwrap();
+        let paths = files(dir.path(), dir.path(), false).unwrap();
         assert_eq!(
             paths,
             [PathBuf::from(".marimohubignore"), PathBuf::from("app.py")]
@@ -523,7 +552,7 @@ mod tests {
         let tgz = archive(dir.path(), &paths, "tar.gz").unwrap();
         let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(tgz));
         assert_eq!(tar.entries().unwrap().count(), 2);
-        assert!(files(dir.path(), true)
+        assert!(files(dir.path(), dir.path(), true)
             .unwrap()
             .contains(&PathBuf::from(".git/config")));
     }

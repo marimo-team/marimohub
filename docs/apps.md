@@ -100,7 +100,7 @@ for credentials. See [secrets handling](./security.md#secrets-handling).
    - **Git-synced notebooks:** Before stopping the session, save the updated notebook and `studio/` files to the repository.
      Commit and push them to the tracked branch, or
      [publish a pull request](./syncing.md#publishing-edits-back-to-the-repository) and merge it into that branch.
-     Publishing view files requires a synced version that [includes `.git`](./syncing.md#include-git-for-multi-file-publishing).
+     Publishing view files requires a synced version that [includes `.git`](./syncing.md#include-git-metadata-for-proposals).
      Then sync the notebook again. Git-synced sessions discard edits at teardown, even with workspace persistence enabled.
 
 5. Select **Open → Run as app** to serve the saved default view.

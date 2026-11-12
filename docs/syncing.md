@@ -473,12 +473,13 @@ Successful uploads print `version_id` and `synced`. An unchanged commit returns
 Commit local changes before uploading. [Repeated SHAs do not create versions](#idempotency).
 
 Archives default to `tar.gz`. Use `--format zip` for ZIP.
-`.marimohubignore` uses Git ignore patterns, including negation. `.gitignore` does
-not apply. Exclude secrets and build output explicitly: hidden files are included.
+`.marimohubignore` uses Git ignore patterns, including negation. Subtree uploads
+inherit rules from the checkout root through the selected folder. Rules remain
+relative to their own directory. `.gitignore` does not apply. Exclude secrets and build output explicitly: hidden files are included.
 The CLI excludes `.git` and rejects symlinks and special files.
 
 Limits are 1,000 files, 25 MiB per file, and 100 MiB total.
-To [send multi-file edits back to Git](#include-git-for-multi-file-publishing), use `--include-git`
+To [send multi-file edits back to Git](#include-git-metadata-for-proposals), use `--include-git`
 with an empty `root-path` and a shallow checkout without stored credentials.
 Linked worktrees are unsupported.
 
@@ -770,7 +771,7 @@ The web interface uses this endpoint:
 POST /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests
 ```
 
-If the synced version [includes `.git`](#include-git-for-multi-file-publishing),
+If the synced version [includes `.git`](#include-git-metadata-for-proposals),
 the proposal can contain changes from the full working tree. Otherwise, the
 proposal contains only the entry notebook. Each proposal supports 1,000 changes
 and 10 MiB of added or modified content.
