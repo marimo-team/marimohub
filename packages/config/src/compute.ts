@@ -7,6 +7,7 @@ import { CoreWeaveCompute, createKernelIngressPublisher } from '@marimo-hub/comp
 import { createWandbCompute } from '@marimo-hub/compute-coreweave/wandb';
 import { DockerCompute } from '@marimo-hub/compute-container/docker';
 import { PodmanCompute } from '@marimo-hub/compute-container/podman';
+import { BoxdCompute } from '@marimo-hub/compute-boxd';
 import { E2bCompute } from '@marimo-hub/compute-e2b';
 import { FargateCompute, validateFargateTaskDefinition } from '@marimo-hub/compute-fargate';
 import {
@@ -42,6 +43,22 @@ export function computeBackend(env: Env): string | undefined {
 		remediation: `Set it to one of: ${COMPUTE_BACKENDS}.`,
 		docs: 'docs/configuration.md',
 	});
+}
+
+function parseBoxdLabels(value: string | undefined): Record<string, string> | undefined {
+	const pairs = parseList(value);
+	if (!pairs) return undefined;
+	return Object.fromEntries(
+		pairs.map((pair) => {
+			const eq = pair.indexOf('=');
+			if (eq <= 0)
+				throw new ConfigError(`Invalid MARIMOHUB_COMPUTE_BOXD_LABELS entry: ${pair}`, {
+					variable: 'MARIMOHUB_COMPUTE_BOXD_LABELS',
+					remediation: 'Use comma-separated key=value pairs, like team=data,env=prod.',
+				});
+			return [pair.slice(0, eq).trim(), pair.slice(eq + 1).trim()];
+		}),
+	);
 }
 
 /** Parse a `"start-end"` port range (e.g. `2718-2723`); undefined if unset. */
@@ -150,7 +167,7 @@ export interface ComputeOptions {
 	/**
 	 * The marimohub-owned session TTL (seconds) the record-driven lifecycle sweep
 	 * enforces with a graceful save + teardown. Providers with a hard lifetime cap
-	 * (CoreWeave, E2B) default that cap to 2× this — an orphan backstop only — and
+	 * (CoreWeave, E2B, boxd) default that cap to 2× this — an orphan backstop only — and
 	 * reject an explicit cap below it.
 	 */
 	sessionMaxLifetimeSeconds?: Seconds;
@@ -219,6 +236,16 @@ export function resolveSandboxImages(env: Env): string[] {
 				parseList(env.MARIMOHUB_COMPUTE_IMAGE) ?? [],
 			);
 		}
+		case 'boxd': {
+			const snapshots = parseList(env.MARIMOHUB_COMPUTE_BOXD_SNAPSHOT);
+			if (snapshots)
+				return rejectModalImageRefs(backend, 'MARIMOHUB_COMPUTE_BOXD_SNAPSHOT', snapshots);
+			return rejectModalImageRefs(
+				backend,
+				'MARIMOHUB_COMPUTE_IMAGE',
+				parseList(env.MARIMOHUB_COMPUTE_IMAGE) ?? [],
+			);
+		}
 		// Modal resolves `modal://` itself; a library adapter owns its own image syntax.
 		case 'modal':
 		case 'library':
@@ -242,7 +269,9 @@ function rejectModalImageRefs(backend: string, variable: string, images: string[
 				remediation:
 					variable === 'MARIMOHUB_COMPUTE_E2B_TEMPLATE'
 						? 'Replace modal:// entries with E2B template IDs, or set MARIMOHUB_COMPUTE_BACKEND=modal.'
-						: 'Replace modal:// entries with container registry references, or set MARIMOHUB_COMPUTE_BACKEND=modal.',
+						: variable === 'MARIMOHUB_COMPUTE_BOXD_SNAPSHOT'
+							? 'Replace modal:// entries with boxd snapshot names, or set MARIMOHUB_COMPUTE_BACKEND=modal.'
+							: 'Replace modal:// entries with container registry references, or set MARIMOHUB_COMPUTE_BACKEND=modal.',
 				docs: 'docs/configuration.md#compute',
 			},
 		);
@@ -599,6 +628,26 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				maxLifetimeSeconds: resolveLifetimeBackstop(
 					env,
 					'MARIMOHUB_COMPUTE_E2B_MAX_LIFETIME_SECONDS',
+					opts?.sessionMaxLifetimeSeconds,
+				),
+			});
+		case 'boxd':
+			// boxd machines (boxd.sh): one isolated machine per session, served on its own
+			// HTTPS route. The `@boxd-sh/sdk` package is an optional, bring-your-own
+			// dependency. MARIMOHUB_COMPUTE_BOXD_SNAPSHOT names a boxd snapshot, not a
+			// container image; it falls back to MARIMOHUB_COMPUTE_IMAGE.
+			return new BoxdCompute({
+				apiKey: computeVar(env, 'MARIMOHUB_COMPUTE_BOXD_API_KEY', 'boxd'),
+				snapshot: parseList(env.MARIMOHUB_COMPUTE_BOXD_SNAPSHOT)?.[0] ?? defaultImage,
+				org: env.MARIMOHUB_COMPUTE_BOXD_ORG,
+				region: env.MARIMOHUB_COMPUTE_BOXD_REGION,
+				ownerTag: env.MARIMOHUB_COMPUTE_BOXD_OWNER_TAG,
+				namePrefix: env.MARIMOHUB_COMPUTE_BOXD_NAME_PREFIX,
+				labels: parseBoxdLabels(env.MARIMOHUB_COMPUTE_BOXD_LABELS),
+				workdir: env.MARIMOHUB_COMPUTE_WORKDIR,
+				maxLifetimeSeconds: resolveLifetimeBackstop(
+					env,
+					'MARIMOHUB_COMPUTE_BOXD_MAX_LIFETIME_SECONDS',
 					opts?.sessionMaxLifetimeSeconds,
 				),
 			});
