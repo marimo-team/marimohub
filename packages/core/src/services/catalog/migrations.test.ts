@@ -130,6 +130,10 @@ describe('project access background migration', () => {
 		const services = createServices(bucket);
 		expect(await services.migrations.tick()).toBe(false);
 		expect(await bucket.get(paths.catalog)).toBeNull();
+		const row = (await services.migrations.inspect()).rows[0];
+		expect(row.status).toBe('initializing');
+		expect(row.progress).toBeUndefined();
+		expect(row.last_progress_at).toBeUndefined();
 		await services.catalog.initialize(ACTOR);
 		await finish(services);
 	});
@@ -167,6 +171,10 @@ describe('project access background migration', () => {
 		await finish(services);
 		expect(raced).toBe(true);
 		expect(await other.projects.listProjects({ subject })).toEqual([]);
+		expect((await services.migrations.inspect()).rows[0].progress).toEqual({
+			processed: 1,
+			partial: false,
+		});
 	});
 
 	it('handles deletion and insertion between batches without losing pending legacy entries', async () => {
@@ -256,7 +264,7 @@ it('keeps earlier batches committed but publishes none of a batch with corrupt m
 	await bucket.put(broken, '{');
 	await expect(services.migrations.tick()).rejects.toThrow();
 	expect((await services.catalog.getCurrentSnapshot()).snapshot_id).toBe(before.snapshot_id);
-	expect(await (await bucket.get(receipt))!.json()).toEqual({
+	expect(await (await bucket.get(receipt))!.json()).toMatchObject({
 		version: 1,
 		status: 'pending',
 		cursor: checkpoint.cursor,
@@ -304,7 +312,10 @@ it('publishes neither summaries nor progress when cancelled during metadata read
 	});
 	await expect(services.migrations.tick(controller.signal)).rejects.toThrow('shutdown');
 	expect((await services.catalog.getCurrentSnapshot()).snapshot_id).toBe(before.snapshot_id);
-	expect(await (await bucket.get(receipt))!.json()).toEqual({ version: 1, status: 'pending' });
+	expect(await (await bucket.get(receipt))!.json()).toMatchObject({
+		version: 1,
+		status: 'pending',
+	});
 	spy.mockRestore();
 	await finish(createServices(bucket));
 	expect(await services.projects.listProjects({ subject })).toHaveLength(3);

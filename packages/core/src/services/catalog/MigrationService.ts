@@ -5,7 +5,10 @@ import { logEvent } from '../../logs';
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import type { Bucket } from '../../ports/bucket';
-import { readStored } from '../../schema';
+import { mapWithConcurrency } from '../../concurrency';
+import { migrationTelemetry, MigrationProgressSchema } from './migrationInspection';
+import type { MigrationDescriptor, MigrationInspection, MigrationRow } from './migrationInspection';
+import { StoredObjectError, readStored } from '../../schema';
 import { putIfMatch } from './cas';
 
 export interface MigrationContext {
@@ -13,9 +16,12 @@ export interface MigrationContext {
 	signal?: AbortSignal;
 }
 
-export type MigrationBatch = { done: true } | { done: false; cursor?: string };
+export type MigrationBatch = ({ done: true } | { done: false; cursor?: string }) & {
+	progress?: { delta: number; total?: number };
+	waiting_reason?: 'waiting_for_initialization';
+};
 
-export interface BackgroundMigration {
+export interface BackgroundMigration extends MigrationDescriptor {
 	/** Permanent identity: change the ID when changing the migration's meaning. */
 	id: string;
 	/** Earlier migrations that must complete first. Defaults to every earlier registered migration. */
@@ -25,15 +31,32 @@ export interface BackgroundMigration {
 }
 
 export const MigrationStateSchema = z.discriminatedUnion('status', [
-	z.object({ version: z.literal(1), status: z.literal('complete'), completed_at: utcTimestamp() }),
-	z.object({ version: z.literal(1), status: z.literal('pending'), cursor: z.string().optional() }),
-	z.object({
-		version: z.literal(1),
-		status: z.literal('running'),
-		cursor: z.string().optional(),
-		lease: z.string().min(1),
-		expires_at: z.number().int().nonnegative(),
-	}),
+	z
+		.object({
+			...migrationTelemetry,
+			version: z.literal(1),
+			status: z.literal('complete'),
+			completed_at: utcTimestamp(),
+		})
+		.loose(),
+	z
+		.object({
+			...migrationTelemetry,
+			version: z.literal(1),
+			status: z.literal('pending'),
+			cursor: z.string().optional(),
+		})
+		.loose(),
+	z
+		.object({
+			...migrationTelemetry,
+			version: z.literal(1),
+			status: z.literal('running'),
+			cursor: z.string().optional(),
+			lease: z.string().min(1),
+			expires_at: z.number().int().nonnegative(),
+		})
+		.loose(),
 ]);
 
 type MigrationState = z.infer<typeof MigrationStateSchema>;
@@ -56,6 +79,7 @@ export class MigrationService {
 	constructor(
 		private bucket: Bucket,
 		migrations: readonly BackgroundMigration[],
+		private readonly retired: readonly MigrationDescriptor[] = [],
 	) {
 		const ids = new Set<string>();
 		for (const migration of migrations) {
@@ -70,7 +94,113 @@ export class MigrationService {
 			this.prerequisites.set(migration.id, after);
 			ids.add(migration.id);
 		}
+		for (const descriptor of retired) {
+			if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(descriptor.id) || ids.has(descriptor.id))
+				throw new Error(`Invalid or duplicate migration ID: ${descriptor.id}`);
+			ids.add(descriptor.id);
+		}
 		this.migrations = [...migrations];
+	}
+
+	async inspect(): Promise<MigrationInspection> {
+		const definitions = [...this.migrations, ...this.retired];
+		const records = await mapWithConcurrency(definitions, 4, async ({ id }) => {
+			try {
+				return { state: (await this.readState(id)).state };
+			} catch (error) {
+				return {
+					error:
+						error instanceof StoredObjectError ? ('blocked' as const) : ('unavailable' as const),
+				};
+			}
+		});
+		const byId = new Map(definitions.map((definition, index) => [definition.id, records[index]]));
+		const readyReceipts = new Set<string>();
+		for (const migration of this.migrations) {
+			if (
+				byId.get(migration.id)?.state?.status === 'complete' &&
+				this.ready(migration.id, readyReceipts)
+			)
+				readyReceipts.add(migration.id);
+		}
+		const now = Date.now();
+		const rows: MigrationRow[] = definitions.map((definition, index) => {
+			const { state, error } = records[index];
+			const retired = index >= this.migrations.length;
+			const dependencies = (this.prerequisites.get(definition.id) ?? []).filter(
+				(id) => !readyReceipts.has(id),
+			);
+			const status: MigrationRow['status'] =
+				error ??
+				(state?.status === 'complete'
+					? 'completed'
+					: retired
+						? 'not_recorded'
+						: state?.status === 'running' && state.expires_at > now
+							? 'running'
+							: dependencies.length > 0
+								? 'dependency'
+								: state?.waiting_reason
+									? 'initializing'
+									: state?.failure
+										? 'retrying'
+										: state?.status === 'running'
+											? 'resuming'
+											: 'waiting');
+			return {
+				id: definition.id,
+				title: definition.title ?? definition.id,
+				description: definition.description ?? '',
+				impact: definition.impact ?? '',
+				progress_unit: definition.progressUnit,
+				retired,
+				status,
+				dependencies,
+				started_at: state?.started_at,
+				last_attempt_at: state?.last_attempt_at,
+				last_progress_at: state?.last_progress_at,
+				attempts: state?.attempts,
+				completed_at: state?.status === 'complete' ? state.completed_at : undefined,
+				progress: state?.progress,
+				failure: state?.failure
+					? {
+							...state.failure,
+							message:
+								state.failure.code === 'timeout'
+									? 'The attempt timed out. It will retry automatically.'
+									: 'The attempt failed. Check server logs; it will retry automatically.',
+						}
+					: undefined,
+			};
+		});
+		const active = rows.filter((row) => !row.retired);
+		const counts = { waiting: 0, running: 0, completed: 0, needs_attention: 0 };
+		for (const row of active) {
+			if (row.status === 'unavailable') continue;
+			if (row.status === 'completed') counts.completed++;
+			else if (row.status === 'running') counts.running++;
+			else if (row.status === 'retrying' || row.status === 'blocked') counts.needs_attention++;
+			else counts.waiting++;
+		}
+		const candidates = active.filter(
+			(row) => !['completed', 'blocked', 'unavailable', 'dependency'].includes(row.status),
+		);
+		const incomplete = rows.some((row) => row.status === 'unavailable');
+		const activeUnavailable = active.some((row) => row.status === 'unavailable');
+		return {
+			rows,
+			counts,
+			observed_at: new Date(now).toISOString(),
+			incomplete,
+			action: active.every((row) => row.status === 'completed')
+				? 'already_complete'
+				: candidates.length > 0
+					? 'ready'
+					: activeUnavailable
+						? 'unavailable'
+						: 'blocked',
+			poll: candidates.length > 0 || activeUnavailable,
+		};
 	}
 
 	/** Readiness checks never perform storage I/O. */
@@ -95,8 +225,8 @@ export class MigrationService {
 		return this.refreshInFlight;
 	}
 
-	private ready(id: string): boolean {
-		return this.prerequisites.get(id)!.every((dependency) => this.completed.has(dependency));
+	private ready(id: string, completed = this.completed): boolean {
+		return this.prerequisites.get(id)!.every((dependency) => completed.has(dependency));
 	}
 
 	private async readCompleted(): Promise<void> {
@@ -166,7 +296,17 @@ export class MigrationService {
 		if (state?.status === 'running' && state.expires_at > Date.now()) return false;
 		signal?.throwIfAborted();
 		const expiresAt = Date.now() + LEASE_MS;
-		const pending: MigrationState = { version: 1, status: 'pending', cursor: state?.cursor };
+		const pending: MigrationState = {
+			...state,
+			version: 1,
+			status: 'pending',
+			cursor: state?.cursor,
+			started_at: state ? state.started_at : new Date().toISOString(),
+			last_attempt_at: new Date().toISOString(),
+			attempts: (state?.attempts ?? 0) + 1,
+		};
+		delete pending.lease;
+		delete pending.expires_at;
 		const etag = await this.writeState(
 			key,
 			{
@@ -184,12 +324,33 @@ export class MigrationService {
 			const result = await migration.runBatch({ cursor: state?.cursor, signal });
 			signal?.throwIfAborted();
 			if (Date.now() >= expiresAt) return false;
+			if (result.waiting_reason && result.progress)
+				throw new Error('Waiting batches cannot publish progress');
+			const progress = result.progress
+				? MigrationProgressSchema.parse({
+						processed:
+							(state?.progress?.processed ?? 0) +
+							z.number().int().nonnegative().parse(result.progress.delta),
+						total: result.progress.total,
+						partial: state?.progress?.partial ?? state?.cursor !== undefined,
+					})
+				: state?.progress;
+			const checkpoint = {
+				...pending,
+				progress,
+				waiting_reason: result.waiting_reason,
+				failure: undefined,
+				last_progress_at: result.waiting_reason
+					? state?.last_progress_at
+					: new Date().toISOString(),
+			};
+			if (result.done) delete checkpoint.cursor;
 			published =
 				(await this.writeState(
 					key,
 					result.done
-						? { version: 1, status: 'complete', completed_at: new Date().toISOString() }
-						: { ...pending, cursor: result.cursor },
+						? { ...checkpoint, status: 'complete', completed_at: new Date().toISOString() }
+						: { ...checkpoint, cursor: result.cursor },
 					etag,
 				)) !== undefined;
 			if (!published) return false;
@@ -201,6 +362,15 @@ export class MigrationService {
 					migration: migration.id,
 				});
 			return true;
+		} catch (error) {
+			if (!signal?.aborted || ['TimeoutError', 'LoopDeadlineError'].includes(signal.reason?.name)) {
+				pending.waiting_reason = undefined;
+				pending.failure = {
+					code: signal?.aborted ? 'timeout' : 'migration_failed',
+					at: new Date().toISOString(),
+				};
+			}
+			throw error;
 		} finally {
 			// The acquisition ETag prevents a late worker from rewinding a successor's cursor.
 			if (!published) {

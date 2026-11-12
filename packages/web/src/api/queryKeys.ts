@@ -190,6 +190,7 @@ export const adminKeys = {
 	all: ['admin'] as const,
 	users: () => [...adminKeys.all, 'users'] as const,
 	runtime: () => [...adminKeys.all, 'runtime'] as const,
+	migrations: () => [...adminKeys.all, 'migrations'] as const,
 	config: () => [...adminKeys.all, 'config'] as const,
 	policyAnalyzer: () => [...adminKeys.all, 'policy-analyzer'] as const,
 };

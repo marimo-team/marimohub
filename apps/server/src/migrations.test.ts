@@ -149,3 +149,27 @@ it('lets both replica loops stop after one completes the migration', async () =>
 		await Promise.all(loops.map((loop) => loop.drain()));
 	}
 });
+
+it('holds manual work until it settles after deadline and shares the runner guard', async () => {
+	const { runMigrationAttempt } = await import('./migrationControl');
+	const { MigrationService } = await import('@marimo-hub/core');
+	const bucket = await createInitializedBucket();
+	const deps = makeTestDeps(bucket);
+	const gate = Promise.withResolvers<void>();
+	const batch = vi.fn(async () => {
+		await gate.promise;
+		return { done: true as const };
+	});
+	deps.services.migrations = new MigrationService(bucket, [{ id: 'manual-v1', runBatch: batch }]);
+	const first = runMigrationAttempt(deps, new AbortController().signal);
+	const rejected = expect(first).rejects.toMatchObject({ name: 'TimeoutError' });
+	await vi.advanceTimersByTimeAsync(55_000);
+	const scheduled = deps.services.migrations.tick();
+	const scheduledRejected = expect(scheduled).rejects.toMatchObject({ name: 'TimeoutError' });
+	expect(batch).toHaveBeenCalledOnce();
+	gate.resolve();
+	await rejected;
+	await scheduledRejected;
+	expect(deps.services.migrations.isComplete('manual-v1')).toBe(false);
+	expect(await deps.services.migrations.tick()).toBe(true);
+});

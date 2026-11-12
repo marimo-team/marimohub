@@ -1,6 +1,10 @@
 export { SourceControlAccountService } from './identity/SourceControlAccountService';
 import { MigrationService } from './catalog/MigrationService';
-import { backgroundMigrations, SESSION_INDEX_MIGRATION } from './catalog/migrations';
+import {
+	backgroundMigrations,
+	retiredMigrations,
+	SESSION_INDEX_MIGRATION,
+} from './catalog/migrations';
 export { MigrationService } from './catalog/MigrationService';
 export type {
 	BackgroundMigration,
@@ -729,7 +733,11 @@ export function createServices(
 
 	const migrations = wrap(
 		'MigrationService',
-		new MigrationService(bucket, backgroundMigrations(bucket, projects, sessions)),
+		new MigrationService(
+			bucket,
+			backgroundMigrations(bucket, projects, sessions),
+			retiredMigrations,
+		),
 	);
 
 	return {
@@ -899,3 +907,5 @@ export {
 	WorkingBranchChangeRequestSchema,
 } from './content/workingBranchRecords';
 export type { WorkingBranchSave, WorkingBranchRecord } from './content/workingBranchRecords';
+
+export { MigrationInspectionSchema } from './catalog/migrationInspection';

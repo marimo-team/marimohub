@@ -56,6 +56,35 @@ Node reports failures through its background-loop logs and, on maintenance
 replicas, the loop health endpoint. Worker failures reject the scheduled handler
 after the other scheduled work finishes.
 
+### Admin progress and manual attempts
+
+Session-authenticated super admins can open **Admin → Migrations**. The page shows
+saved progress, completion receipts, dependencies, and safe failure messages.
+It reads known checkpoint keys without listing storage or running domain scans.
+Unknown historical IDs remain untouched. Retired descriptors appear separately.
+
+**Request attempt** registers one bounded attempt with the host. It preserves
+active leases, dependencies, and retry backoff. It does not target a specific row.
+Registration is best effort; process death can lose a request. Startup and scheduled
+attempts resume from saved checkpoints. Closing the browser does not cancel registered work.
+
+Node uses its shutdown-aware queue and a 55-second deadline. A full queue or shutdown
+returns unavailable without inline execution. Worker requests use invocation-local
+`waitUntil` with a 20-second cancellation budget. Worker deployments require the
+configured cron for automatic continuation; the page does not verify live cron health.
+Hosts without registration support expose inspection but disable manual attempts.
+
+Progress counts committed batch visits, including skipped or already-current entries.
+Concurrent changes can revisit entries, so counts do not establish unique coverage.
+A legacy cursor without telemetry starts a partial counter: “visited since tracking began”.
+Missing telemetry means unavailable, not zero. Older writers can discard optional
+telemetry during rolling deployments without changing execution semantics.
+
+Failures use fixed messages and timestamps. Check server logs for diagnosis.
+Invalid checkpoints block their dependents; independent migrations can continue.
+Inspection never repairs or overwrites corrupt records. Shutdown cancellation is
+not an operator failure. Failed attempts preserve the last saved progress.
+
 ### Project access v1
 
 `ProjectService.migrateAccessSummaries` processes up to 25 projects in stable ID
@@ -151,8 +180,35 @@ node dist/session-index-rebuild.mjs
    all earlier supported data shapes, or retain its prerequisites in registry order.
    Set `after` to the IDs it needs; omitting it waits for every earlier migration.
 7. Remove obsolete definitions when supported upgrades no longer need them.
-   Retain their receipts; the runner ignores removed IDs without listing storage.
+   Retain their receipts and move display metadata to `retiredMigrations`.
+   Remove stale dependency declarations. The viewer reads retained descriptors
+   without listing storage. Missing historical receipts display “Not recorded”.
    Update readiness consumers to use the replacement migration or the current format.
+
+A registry entry supplies execution and display metadata:
+
+```ts
+{
+	id: 'widget-index-v1',
+	title: 'Index widgets',
+	description: 'Build widget summaries in bounded batches.',
+	impact: 'The app stays available. Reads use existing data until the index is ready.',
+	progressUnit: 'widgets',
+	after: [],
+	runBatch: async ({ cursor, signal }) => {
+		signal?.throwIfAborted();
+		return widgets.migrateIndex({ cursor, signal });
+	},
+}
+```
+
+The owner-service batch returns `{ done, cursor?, progress: { delta } }`.
+Compute `delta` inside each successful domain CAS attempt, including the final batch.
+Do not increment a counter outside a retry callback. Return
+`waiting_reason: 'waiting_for_initialization'` without progress when initialization is required.
+A fixed work set can also return `progress.total`; it must cover all committed visits.
+Test replay, competing replicas, cancellation, lost responses, and retirement before registration.
+The page and API require no migration-specific code.
 
 This runner is unsuitable for non-idempotent external effects or destructive work
 that requires exclusive writers.

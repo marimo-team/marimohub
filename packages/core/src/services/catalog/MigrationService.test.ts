@@ -300,7 +300,7 @@ it('does not checkpoint over a successor that takes over during the completion w
 	});
 	expect(await new MigrationService(bucket, [definition()]).tick()).toBe(false);
 	expect(raced).toBe(true);
-	expect(await (await bucket.get(key))!.json()).toEqual({
+	expect(await (await bucket.get(key))!.json()).toMatchObject({
 		version: 1,
 		status: 'pending',
 		cursor: 'successor',
@@ -321,7 +321,7 @@ it('releases an acquired lease without running work when shutdown arrives during
 	const service = new MigrationService(bucket, [definition(runBatch)]);
 	await expect(service.tick(controller.signal)).rejects.toThrow('shutdown');
 	expect(runBatch).not.toHaveBeenCalled();
-	expect(await (await bucket.get(key))!.json()).toEqual({
+	expect(await (await bucket.get(key))!.json()).toMatchObject({
 		version: 1,
 		status: 'pending',
 		cursor: 'saved',

@@ -1,3 +1,4 @@
+import { runMigrationAttempt } from './migrationControl';
 import { serveMarimoAssets } from './marimoAssets';
 import { serve } from '@hono/node-server';
 import type { ServerType } from '@hono/node-server';
@@ -109,6 +110,20 @@ export async function bootstrap(
 		) * 1000;
 	deps.sandbox.thumbnailDeadline = () => thumbnailDeadline;
 	deps.backgroundWork = backgroundWork;
+	const migrationShutdown = new AbortController();
+	deps.requestMigrationTick = async () => {
+		if (
+			migrationShutdown.signal.aborted ||
+			!backgroundWork.tryDefer('migration.attempt', async () => {
+				try {
+					await runMigrationAttempt(deps, migrationShutdown.signal);
+				} catch {
+					logEvent({ level: 'error', event: 'migration_attempt_failed' });
+				}
+			})
+		)
+			throw new Error('Migration registration unavailable');
+	};
 	// Installed for metrics-only mode too: RED metrics still record, spans don't.
 	const tracing = otel ? safeHttpInstrumentation({ disableTracing: !otel.tracing }) : undefined;
 	deps.tracingMiddleware = (c, next) =>
@@ -264,6 +279,7 @@ export async function bootstrap(
 			for (const unregisterSignal of unregisterSignals.splice(0)) unregisterSignal();
 			// Cancel future ticks first. An in-flight sweep still has the remaining drain
 			// window to release its lease; the lease TTL is the fallback if it outlives it.
+			migrationShutdown.abort();
 			for (const stopLoop of stops) stopLoop();
 
 			const closed = new Promise<void>((resolve) => {

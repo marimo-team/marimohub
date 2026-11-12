@@ -1,3 +1,4 @@
+import { MIGRATION_DEADLINE_MS, runMigrationAttempt } from './migrationControl';
 import { searchPaths } from '@marimo-hub/core/search/paths';
 import {
 	resolveJobSandboxEnv,
@@ -37,9 +38,9 @@ export function startMigrations(deps: ApiDeps, loops = new BackgroundLoops()): (
 	const loop = loops.start({
 		name: 'migrations',
 		intervalMs: 5_000,
-		deadlineMs: 55_000,
+		deadlineMs: MIGRATION_DEADLINE_MS,
 		abortOnStop: true,
-		run: ({ signal }) => deps.services.migrations.tick(signal),
+		run: ({ signal }) => runMigrationAttempt(deps, signal),
 		onSuccess: (complete) => {
 			if (complete) loop.stop();
 		},

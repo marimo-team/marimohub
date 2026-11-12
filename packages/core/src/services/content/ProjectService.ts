@@ -848,8 +848,8 @@ export class ProjectService {
 			signal?.throwIfAborted();
 			result =
 				remaining.length > batch.length
-					? { done: false, cursor: batch[batch.length - 1].id }
-					: { done: true };
+					? { done: false, cursor: batch[batch.length - 1].id, progress: { delta: batch.length } }
+					: { done: true, progress: { delta: batch.length } };
 			return snapshot;
 		});
 		return result;

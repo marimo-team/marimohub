@@ -445,6 +445,8 @@ export interface LoopHealthReport {
  * context (`c.get('deps')`) instead of instantiating adapters from `c.env`.
  */
 export interface ApiDeps {
+	/** Resolves after host registration, without waiting for migration work. */
+	requestMigrationTick?: () => Promise<void>;
 	/** Owned by one request or explicit operation. */
 	readMemo?: PromiseMemo;
 	search?: { service: SearchService; indexer: SearchIndexer };

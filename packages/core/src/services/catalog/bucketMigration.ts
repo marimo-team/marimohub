@@ -27,7 +27,9 @@ export function bucketMigration(options: {
 				page.objects.map(({ key }) => semaphore.run(() => options.migrate(key, signal), signal)),
 			);
 			signal?.throwIfAborted();
-			return page.truncated ? { done: false, cursor: page.cursor } : { done: true };
+			return page.truncated
+				? { done: false, cursor: page.cursor, progress: { delta: page.objects.length } }
+				: { done: true, progress: { delta: page.objects.length } };
 		},
 	};
 }

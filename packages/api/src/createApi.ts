@@ -27,6 +27,7 @@ import {
 import type { ApiDeps, HonoEnv, ResolvedApiDeps } from './context';
 import { describeError, errorMetadata, logEvent } from './log';
 import adminApp from './routes/admin';
+import migrationsApp from './routes/migrations';
 import policyAnalyzerApp from './routes/policyAnalyzer';
 import { createAiProxy } from './routes/ai';
 import { createWifCredentials, WIF_CREDENTIALS_PREFIX } from './routes/wifCredentials';
@@ -122,7 +123,12 @@ function isDeepLinkPath(path: string): boolean {
 const AI_PROXY_PREFIX = '/api/ai/v1';
 
 /** `/api/v1/*` paths that skip the catalog auto-init — metadata that must render before any catalog exists. */
-const SKIP_INIT_PATHS = new Set([`${API_PREFIX}/version`, `${API_PREFIX}/capabilities`]);
+const SKIP_INIT_PATHS = new Set([
+	`${API_PREFIX}/version`,
+	`${API_PREFIX}/capabilities`,
+	`${API_PREFIX}/admin/migrations`,
+	`${API_PREFIX}/admin/migrations/run`,
+]);
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -618,6 +624,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, projectAlertsApp);
 	app.route(API_PREFIX, eventsApp);
 	app.route(API_PREFIX, adminApp);
+	app.route(API_PREFIX, migrationsApp);
 	app.route(API_PREFIX, policyAnalyzerApp);
 	app.route(API_PREFIX, notebooksApp);
 	app.route(API_PREFIX, notebookMovesApp);

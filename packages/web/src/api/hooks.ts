@@ -2432,3 +2432,25 @@ export function useTakeoverEditorSession(projectId: string, notebookId: string) 
 		() => [sessionKeys.editor(projectId, notebookId), sessionKeys.listByProject(projectId)],
 	);
 }
+
+export function useAdminMigrationsQuery() {
+	return useQuery({
+		queryKey: adminKeys.migrations(),
+		queryFn: () => apiData(apiClient.GET('/api/v1/admin/migrations')),
+		staleTime: 5_000,
+		refetchInterval: (query) =>
+			query.state.status === 'error' ? false : query.state.data?.poll ? 5_000 : false,
+		refetchIntervalInBackground: false,
+		refetchOnWindowFocus: true,
+		refetchOnReconnect: true,
+		retry: 2,
+	});
+}
+
+export function useRequestMigrationAttempt() {
+	return useApiMutation(
+		() => apiData(apiClient.POST('/api/v1/admin/migrations/run', { body: {} })),
+		() => [adminKeys.migrations()],
+		{ suppressErrorToast: true },
+	);
+}
