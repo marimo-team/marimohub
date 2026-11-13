@@ -672,14 +672,21 @@ export async function readSessionArtifacts(
 	listing: WorkspaceListing = sharedWorkspaceListing(sandbox, mountPath),
 	entryNotebook = DEFAULT_LOCAL_ENTRY_NOTEBOOK,
 	hints?: { sizes: ReadonlyMap<string, number>; reusable: CommitSessionInput },
+	strict = false,
 ): Promise<CommitSessionInput> {
 	if (!supportsBoundedReads(sandbox)) return {};
 	const sizes = hints?.sizes ?? (await fileSizes(listing));
 	const files = sessionArtifactPaths(mountPath, entryNotebook);
 	const read = (field: keyof CommitSessionInput) => {
 		if (hints && Object.hasOwn(hints.reusable, field)) return hints.reusable[field];
-		return field === 'code'
-			? readNotebookCode(sandbox, files[field], sizes, entryNotebook)
+		return field === 'code' || (strict && field !== 'html')
+			? readNotebookCode(
+					sandbox,
+					files[field],
+					sizes,
+					field === 'code' ? entryNotebook : field,
+					field === 'code',
+				)
 			: readCappedFile(sandbox, files[field], sizes);
 	};
 	const [code, deps, html, session] = await Promise.all([
@@ -696,20 +703,24 @@ async function readNotebookCode(
 	absolutePath: string,
 	sizes: ReadonlyMap<string, number>,
 	entryNotebook: string,
+	required = true,
 ): Promise<string | undefined> {
 	const result = await readCappedBytes(sandbox, absolutePath, sizes);
 	if (result?.success) return decodeUtf8PreservingBom(result.bytes);
 	const code = result?.error.code ?? 'READ_FAILED';
 	const error = Object.assign(new Error(`Could not read ${entryNotebook}: ${code}`), {
 		code,
-		reason: result?.error.reason,
+		reason:
+			result?.error.reason ??
+			((sizes.get(absolutePath) ?? 0) > MAX_ARTIFACT_BYTES ? 'size_limit' : undefined),
 		exec_code: result?.error.exec_code,
 		stdout_bytes: result?.error.stdout_bytes,
 		operation: 'sandbox.read_session_artifacts',
 		object: entryNotebook,
 	});
 	if (code !== 'NOT_FOUND') throw error;
-	logOperationalError('session_notebook_missing', { operation: error.operation }, error);
+	if (required)
+		logOperationalError('session_notebook_missing', { operation: error.operation }, error);
 	return undefined;
 }
 

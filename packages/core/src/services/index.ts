@@ -909,3 +909,4 @@ export {
 export type { WorkingBranchSave, WorkingBranchRecord } from './content/workingBranchRecords';
 
 export { MigrationInspectionSchema } from './catalog/migrationInspection';
+export { SessionCaptureCoordinator } from './runtime/SessionCaptureCoordinator';

@@ -101,8 +101,8 @@ it('registers core audits with waitUntil while awaiting session teardown', async
 	});
 	const gate = Promise.withResolvers<void>();
 	const entered = Promise.withResolvers<void>();
-	const original = SessionRetirer.prototype.retire;
-	vi.spyOn(SessionRetirer.prototype, 'retire').mockImplementation(
+	const original = SessionRetirer.prototype.stop;
+	vi.spyOn(SessionRetirer.prototype, 'stop').mockImplementation(
 		async function (this: SessionRetirer, value, options) {
 			entered.resolve();
 			await gate.promise;

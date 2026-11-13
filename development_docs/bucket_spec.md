@@ -1944,3 +1944,23 @@ After backup restore, [operators must revoke and reconnect](../docs/operations.m
 Publication owners retain the actor and verification policy in working-branch receipts and proposal publication records.
 Their signed preparation checkpoints contain the temporary ref, repository, account ID, parent, tree, message, dispatch state, result SHA, and cleanup state.
 Source-control adapters never write bucket records.
+
+### Local notebook publication
+
+NotebookService owns the local `source.json` publication head. Its optional
+`publication` field records a unique generation and the committed versions'
+latest artifact references. Capture acquires the source ETag before reading the
+runtime, stages immutable version and capture objects, then publishes them with
+one source ETag CAS. A rejected CAS requires a fresh capture; retries must not
+attach old bytes to a new generation. Current source, dependencies, native
+session outputs and HTML resolve through this head. Workspace copies are
+projections, not publication authority.
+
+The head retains artifact references for protected versions as well as ordinary
+retained history. New version metadata is immutable; artifact descriptors in
+legacy version metadata are adopted once when the publication head is first
+written. Subsequent reads use the head's committed membership and descriptors,
+so an unfinished staged version is not visible history. NotebookService must
+fence this generation before successor editor restore and before deleting
+unreferenced capture candidates. GC lists candidates before the fencing CAS and
+preserves every reference retained by that CAS result.

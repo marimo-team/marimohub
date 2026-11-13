@@ -22,6 +22,7 @@ export const DOMAIN_ERROR_CODES = [
 	'SYNC_NOT_CONFIGURED',
 	'NOT_INITIALIZED',
 	'SERVICE_UNAVAILABLE',
+	'SESSION_PERSISTENCE_REQUIRED',
 	'PYTHON_ENV_SETUP_FAILED',
 	'RESOURCE_EXHAUSTED',
 	'SURFACE_NOT_ENABLED',
@@ -44,6 +45,17 @@ export abstract class DomainError extends Error {
 		// Default; concrete subclasses override with their own name. Guarantees a
 		// non-`Error` name even if a subclass forgets to set one.
 		this.name = 'DomainError';
+	}
+}
+
+export class SessionPersistenceRequiredError extends DomainError {
+	readonly code = 'SESSION_PERSISTENCE_REQUIRED';
+	readonly status = 409;
+	constructor() {
+		super(
+			'The session has not been safely stopped. Retry saving, keep it running, or explicitly force stop.',
+		);
+		this.name = 'SessionPersistenceRequiredError';
 	}
 }
 

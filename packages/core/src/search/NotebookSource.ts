@@ -1,3 +1,4 @@
+import { publicationArtifactKey } from '../services/content/localPublication';
 import { MAX_SEARCH_TEXT_LENGTH } from './limits';
 import { NotFoundError } from '../errors';
 import { htmlText } from './text';
@@ -19,7 +20,7 @@ import type { SearchDocument, SearchSnapshot, SearchSource } from './contracts';
 const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
 const MAX_HTML_LENGTH = 32 * 1024;
 export class NotebookSource implements SearchSource {
-	readonly revision = 3;
+	readonly revision = 4;
 	readonly id = 'notebooks';
 	readonly embeddable = true;
 	readonly incremental = true;
@@ -57,18 +58,43 @@ export class NotebookSource implements SearchSource {
 			? source.current_version_id
 				? nb.version(source.current_version_id).workspaceFile(remote)
 				: undefined
-			: nb.workspaceFile(workspaceSourcePolicy(source).entryNotebook);
-		const outputKey = source.current_version_id
-			? nb.version(source.current_version_id).session
-			: undefined;
+			: source.type === 'local' && source.publication
+				? nb.version(source.current_version_id).code
+				: nb.workspaceFile(workspaceSourcePolicy(source).entryNotebook);
+		const publication =
+			source.type === 'local'
+				? source.publication?.versions.find(
+						(version) => version.version_id === source.current_version_id,
+					)
+				: undefined;
+		const outputKey =
+			source.current_version_id &&
+			(!(source.type === 'local' && source.publication) || publication?.session_snapshot)
+				? publicationArtifactKey(
+						project.id,
+						notebookId,
+						source.current_version_id,
+						'session',
+						publication?.session_snapshot,
+					)
+				: undefined;
 		const [code, session] = await Promise.all([
 			codeKey ? this.bucket.head(codeKey) : null,
 			outputKey ? this.bucket.head(outputKey) : null,
 		]);
 		const output =
 			session ??
-			(source.current_version_id
-				? await this.bucket.head(nb.version(source.current_version_id).html)
+			(source.current_version_id &&
+			(!(source.type === 'local' && source.publication) || publication?.html_snapshot)
+				? await this.bucket.head(
+						publicationArtifactKey(
+							project.id,
+							notebookId,
+							source.current_version_id,
+							'html',
+							publication?.html_snapshot,
+						),
+					)
 				: null);
 		return {
 			meta,
@@ -78,7 +104,9 @@ export class NotebookSource implements SearchSource {
 			fingerprint: await sha256Hex(
 				JSON.stringify([
 					metaObject.etag,
-					sourceObject.etag,
+					source.type === 'local' && source.publication
+						? { ...source, publication: undefined }
+						: sourceObject.etag,
 					code?.key,
 					code?.etag,
 					output?.key,

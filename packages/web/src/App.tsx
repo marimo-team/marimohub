@@ -1,3 +1,4 @@
+import { SessionStopDialog } from '@/components/ui/SessionStopDialog';
 import type { InitialRoutes } from '@/lib/initialRoute';
 import { useSearchAccess } from '@/hooks/useSearchAccess';
 import { SEARCH_ROUTE, PROJECT_SEARCH_ROUTE } from '@/lib/workspaceSearch';
@@ -283,6 +284,7 @@ function AppContent({ initialRoutes }: { initialRoutes: InitialRoutes }) {
 			</AppErrorBoundary>
 
 			<Toaster />
+			<SessionStopDialog />
 		</>
 	);
 }

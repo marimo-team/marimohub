@@ -29,10 +29,7 @@ Losing or corrupting the bucket is total data loss.
 Recommended posture (all at the storage layer, no app involvement):
 
 - **Enable native object versioning** (S3 Versioning / R2 object versions). This
-  is the cheap safety net _beneath_ the snapshot layer. It specifically rescues
-  the one mutable-in-place content object — `workspace/notebook.py`, overwritten
-  on every save (§7.3 of the spec) — which the snapshot chain does **not**
-  version. (Resolves the "object-store versioning" open question in the spec.)
+  is the cheap safety net _beneath_ the snapshot layer. It protects mutable publication heads and workspace files. Local notebook source, dependencies, and native outputs use immutable version payloads referenced by `source.json`.
 - **Lifecycle/expiry on noncurrent versions** so versioning cost stays bounded
   (e.g. expire noncurrent versions after 30–90 days). The app's own retention
   (§5 below) prunes _current_ objects; lifecycle handles the version tail.
@@ -335,41 +332,42 @@ wide-event emitter is the batteries-included default.
 
 ## 7. Session lifetime & durability (the lifecycle sweep)
 
-Sandbox providers hard-kill at their lifetime cap (SIGKILL, no shutdown hook),
-and on CoreWeave the reconciler is a no-op (no `listActive`), so nothing used to
-save an unsaved session before the kill. `SessionLifecycleService`
-(`packages/core/src/services/runtime/sessionLifecycle.ts`) closes this: a
-**record-driven** sweep that needs no provider enumeration, run by
-`startSessionLifecycle` (`apps/server/src/cron.ts`) every
-`MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS` (60s) on the maintenance replica,
-beside (not inside) the 5-minute maintenance cycle. Three mechanisms compose:
+Persistent editor Stop saves a coherent runtime checkpoint before stopping its writers.
+A failed or uncertain critical save retains the runtime, editor claim, and capacity.
+The UI offers Retry save, Keep running, and a separately confirmed Force stop.
+Apps and disposable sessions do not publish edits.
 
-- **marimohub owns the lifetime.** `expires_at` is stamped on the session record
-  when the kernel goes `running` (now + `MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS`,
-  default 4h). The sweep also detects a stale heartbeat with no active connections.
-  `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` sets this idle period. Apps can override
-  it with `MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS`. At either deadline, the
-  sweep tears down the session. It saves persistent edit sessions first. App
-  sessions stop without persistence.
-  The provider-side cap (CoreWeave/E2B `*_MAX_LIFETIME_SECONDS`) is demoted to an
-  **orphan backstop**: unset it and it defaults to 2× the session lifetime;
-  setting it below the session lifetime fails boot.
-- **Connection-aware reaping.** Before a lifetime/idle teardown the sweep asks
-  the kernel for its live websocket count (`kernelActiveConnections`: an `exec`
-  inside the sandbox against `/api/status/connections` — exposure-mode-
-  independent, no auth). Editors connected → slide `expires_at` by
-  `MARIMOHUB_SESSION_LIFETIME_EXTENSION_SECONDS` instead of killing. A **null**
-  probe is "unknown": with a fresh heartbeat the deadline extends (never reap on
-  a probe hiccup); only null + stale heartbeat (kernel dead) reaps. Disable with
-  `MARIMOHUB_SESSION_CONNECTION_AWARE=false`.
-- **Periodic snapshot floor.** Live sessions are saved every
-  `MARIMOHUB_SESSION_SNAPSHOT_INTERVAL_SECONDS` (2m; `0` disables) via
-  `SandboxProvisioner.captureSession` — **source-only** (`includeWorkspace:
-false`): `commitSession` dedupes unchanged content so idle notebooks cost no
-  writes, and the runtime `workspace/` mirror is only captured at teardown (a
-  full mirror re-upload per interval would be prohibitive in
-  `MARIMOHUB_PERSIST_WORKSPACE=workspace` mode). Any residual hard kill (the
-  backstop, node loss, OOM) loses at most one interval of notebook edits.
+`SessionLifecycleService` runs every `MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS`
+(default 60 seconds). It checks idle and lifetime eligibility before each automatic
+stop. Active connections extend lifetime when connection-aware reaping is enabled.
+Automatic failed stops back off from one minute to one hour. A new heartbeat or
+changed expiry cancels a pending automatic attempt. Keep running ends the interactive
+attempt; independent idle, lifetime, and security policy still applies. Expired
+authorization blocks access immediately and can require teardown without a save.
+
+Successful proxied native saves schedule a coalesced capture without buffering their
+HTTP response. Host saves await durable publication. Direct exposure bypasses the
+proxy observation, so `MARIMOHUB_SESSION_SNAPSHOT_INTERVAL_SECONDS` (default two
+minutes; zero disables) remains the periodic floor. Periodic captures include source,
+dependencies, and native outputs; full workspace mirroring runs on retirement.
+Unchanged captures reuse immutable payloads but still CAS the publication head.
+
+The owned Linux launcher supports marimo 0.24.x. It drains admitted native and host
+mutations, freezes owned writers, and creates a bounded checkpoint. A token-fenced
+commit-stop prevents a delayed destroy after watchdog resume. Unsupported runtimes
+(including native macOS and uv-sandbox launches) remain editable, but safe capture
+retains them with an actionable unsupported result. Active secondary editors defer
+periodic capture; final Stop shuts them down before capture. Unsaved browser buffers
+and arbitrary application-level filesystem transactions are outside the native-save
+acknowledgement contract.
+
+Provider hard caps, node loss, and external kills can still lose changes after the
+last **successful** durable capture. Storage outages can make that interval longer
+than the configured cadence. Monitor capture failures and retained-session age;
+do not infer a maximum loss window from the timer alone.
+
+See [safe session stops](./safe-session-stops.md) for API retry identities, runtime
+recovery, and coordinated deployment requirements.
 
 Terminal sessions hold their editor claim until sandbox destruction succeeds or a
 recorded provider lifetime cap expires. Completed provisions record this cap as
@@ -415,8 +413,7 @@ The lifecycle loop uses its own bucket-CAS lease at
 `_system/_session_lifecycle.lock`; like every loop, the runner's in-flight guard
 keeps a hung sweep from overlapping the next one. Its separate lease prevents
 maintenance from releasing its hold.
-The `beginTerminating` CAS coordinates explicit Stop requests; teardown is
-idempotent. Each non-empty sweep emits a `session_lifecycle_sweep` event with
+SessionService CAS records coordinate Stop attempts and preserve receipts for replay. Each non-empty sweep emits a `session_lifecycle_sweep` event with
 `snapshotted`, `extended`, `reapedExpired`, `reapedIdle`, and `reclaimed` counts.
 Monitor missing events as described for `maintenance_cycle` in §6.
 

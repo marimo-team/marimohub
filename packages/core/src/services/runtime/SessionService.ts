@@ -41,7 +41,7 @@ import {
 	SessionSchema,
 	VersionPruneCutoffSchema,
 } from '../../schema';
-import type { EditorClaim, Session, Source, SurfaceState } from '../../schema';
+import type { EditorClaim, Session, SessionStopAttempt, Source, SurfaceState } from '../../schema';
 import type { SurfaceId } from './surfaces/types';
 import { assertValidKernelAuthToken } from './kernelAuth';
 import {
@@ -187,6 +187,7 @@ function countsTowardCap(session: Session, scope: CapScope): boolean {
 	return (
 		sessionModePolicy(session).capScope === scope &&
 		((ACTIVE_STATUSES as readonly Session['status'][]).includes(session.status) ||
+			(!!session.stop && hasUnreclaimedSandbox(session)) ||
 			(scope === 'project' && hasUnreclaimedSandbox(session)))
 	);
 }
@@ -578,6 +579,222 @@ export class SessionService {
 	 * whose sandbox is still being snapshotted while editors remain connected. */
 	async markSnapshotted(projectId: ProjectId, id: SessionId, at: string): Promise<Session> {
 		return this.mutate(projectId, id, (session) => ({ ...session, last_snapshot_at: at }));
+	}
+
+	async recordCaptureAttempt(session: Session): Promise<void> {
+		await this.mutate(session.project_id, session.session_id, (current) => {
+			if (current.sandbox_id !== session.sandbox_id || current.sandbox_reclaimed_at) return null;
+			return { ...current, last_capture_attempt_at: new Date().toISOString() };
+		});
+	}
+
+	async recordDurableCapture(session: Session, at: string, versionId: VersionId): Promise<Session> {
+		return this.mutate(session.project_id, session.session_id, (current) => {
+			if (current.sandbox_id !== session.sandbox_id || current.sandbox_reclaimed_at)
+				throw new ConflictError('The captured runtime is no longer current');
+			if (current.last_durable_capture && current.last_durable_capture.at > at) return null;
+			return {
+				...current,
+				last_snapshot_at: at,
+				last_durable_capture: { at, version_id: versionId },
+				save_dirty:
+					current.save_dirty?.id === session.save_dirty?.id ? undefined : current.save_dirty,
+			};
+		});
+	}
+
+	async acknowledgeRuntimeSave(projectId: ProjectId, id: SessionId): Promise<Session> {
+		const dirty = { id: crypto.randomUUID(), acknowledged_at: new Date().toISOString() };
+		return this.mutate(projectId, id, (session) => {
+			if (!sessionPersistsEdits(session) || session.sandbox_reclaimed_at) return null;
+			return { ...session, save_dirty: dirty };
+		});
+	}
+
+	async requestStop(
+		projectId: ProjectId,
+		id: SessionId,
+		request: {
+			key?: string;
+			requestedBy?: UserId;
+			previousId?: string;
+			force?: boolean;
+			trigger?: SessionStopAttempt['trigger'];
+		} = {},
+	): Promise<Session> {
+		const attemptId = crypto.randomUUID();
+		return this.mutate(projectId, id, (current) => {
+			const previous = current.stop;
+			const security =
+				request.trigger === 'security' &&
+				request.force === true &&
+				isPastAuthorizationDeadline(current, Date.now());
+			if (request.trigger === 'security' && !security)
+				throw new ConflictError('Security retirement requires expired authorization');
+			if (security && previous?.trigger === 'security' && previous.force) return null;
+			if (request.key) {
+				const replay = [previous, ...(current.stop_receipts ?? [])].find(
+					(stop) => stop?.request_key === request.key,
+				);
+				if (replay) {
+					if (replay.force !== !!request.force || replay.previous_id !== request.previousId)
+						throw new ConflictError('The stop request key was already used with different options');
+					if (replay.id !== previous?.id)
+						throw new ConflictError('This stop attempt has been superseded');
+					return null;
+				}
+			}
+			if (current.sandbox_reclaimed_at || previous?.outcome === 'stopped') return null;
+			if (!security && previous && !['retained', 'uncertain'].includes(previous.outcome)) {
+				if (!request.key && !request.force && !request.previousId) return null;
+				throw new ConflictError('A stop attempt is already in progress');
+			}
+			// Replays remain fenced after their receipt leaves the bounded ring.
+			if (!security && previous?.id !== request.previousId)
+				throw new ConflictError('The previous stop attempt must be acknowledged before retrying');
+			if (!security && previous && !request.key)
+				throw new ConflictError('Retry requires a new stop request key');
+			const now = new Date().toISOString();
+			return {
+				...current,
+				status: isTerminal(current.status) ? current.status : 'terminating',
+				terminating_at: now,
+				stop: {
+					id: attemptId,
+					request_key: request.key,
+					requested_by: request.requestedBy,
+					previous_id: request.previousId,
+					trigger: request.trigger ?? 'interactive',
+					force: !!request.force,
+					eligible_heartbeat: current.last_heartbeat,
+					eligible_expires_at: current.expires_at,
+					requested_at: now,
+					updated_at: now,
+					outcome: 'pending',
+				},
+				stop_receipts: previous
+					? [...(current.stop_receipts ?? []), previous].slice(-16)
+					: current.stop_receipts,
+			};
+		});
+	}
+
+	async finalizeStop(session: Session): Promise<Session> {
+		return this.mutate(session.project_id, session.session_id, (current) => {
+			if (
+				current.stop?.id !== session.stop?.id ||
+				current.stop?.outcome !== 'stopped' ||
+				current.stop.finalized_at
+			)
+				return null;
+			return { ...current, stop: { ...current.stop, finalized_at: new Date().toISOString() } };
+		});
+	}
+
+	async claimStop(session: Session, leaseId: string): Promise<Session | null> {
+		let acquired = false;
+		const updated = await this.mutate(session.project_id, session.session_id, (current) => {
+			acquired = false;
+			const stop = current.stop;
+			if (
+				!stop ||
+				stop.id !== session.stop?.id ||
+				['stopped', 'retained', 'uncertain'].includes(stop.outcome)
+			)
+				return null;
+			if (
+				stop.lease_id &&
+				stop.lease_id !== leaseId &&
+				Date.parse(stop.lease_expires_at ?? '') > Date.now()
+			)
+				return null;
+			acquired = true;
+			return {
+				...current,
+				stop: {
+					...stop,
+					lease_id: leaseId,
+					lease_expires_at: new Date(Date.now() + Millis.minutes(3)).toISOString(),
+				},
+			};
+		});
+		return acquired ? updated : null;
+	}
+
+	async confirmRetainedRuntimeResumed(session: Session): Promise<Session> {
+		return this.mutate(session.project_id, session.session_id, (current) => {
+			if (
+				current.stop?.id !== session.stop?.id ||
+				!current.stop ||
+				!['retained', 'uncertain'].includes(current.stop.outcome) ||
+				current.sandbox_reclaimed_at
+			)
+				return null;
+			return {
+				...current,
+				status: isTerminal(current.status) ? current.status : 'running',
+				terminating_at: undefined,
+				stop: { ...current.stop, runtime_state: 'running' },
+			};
+		});
+	}
+
+	async releaseStopLease(session: Session, leaseId: string): Promise<void> {
+		await this.mutate(session.project_id, session.session_id, (current) => {
+			if (current.stop?.id !== session.stop?.id || current.stop?.lease_id !== leaseId) return null;
+			return {
+				...current,
+				stop: { ...current.stop, lease_id: undefined, lease_expires_at: undefined },
+			};
+		});
+	}
+
+	async updateStop(
+		session: Session,
+		leaseId: string,
+		update: Partial<
+			Pick<
+				SessionStopAttempt,
+				| 'outcome'
+				| 'runtime_token'
+				| 'runtime_directory'
+				| 'runtime_state'
+				| 'failure'
+				| 'captured_at'
+				| 'version_id'
+			>
+		>,
+	): Promise<Session> {
+		return this.mutate(session.project_id, session.session_id, (current) => {
+			const stop = current.stop;
+			if (
+				!stop ||
+				stop.id !== session.stop?.id ||
+				stop.lease_id !== leaseId ||
+				Date.parse(stop.lease_expires_at ?? '') <= Date.now()
+			)
+				throw new ConflictError('The stop attempt lease is no longer owned by this request');
+			const ended = update.outcome && ['stopped', 'retained', 'uncertain'].includes(update.outcome);
+			const resumed = ended && update.outcome !== 'stopped' && update.runtime_state === 'running';
+			return {
+				...current,
+				...(resumed
+					? {
+							status: isTerminal(current.status) ? current.status : ('running' as const),
+							terminating_at: undefined,
+						}
+					: {}),
+				stop: {
+					...stop,
+					...update,
+					updated_at: new Date().toISOString(),
+					lease_id: ended ? undefined : leaseId,
+					lease_expires_at: ended
+						? undefined
+						: new Date(Date.now() + Millis.minutes(3)).toISOString(),
+				},
+			};
+		});
 	}
 
 	async beginSurfaceStart(
@@ -1639,6 +1856,26 @@ export class SessionService {
 		);
 	}
 
+	async assertCaptureOwnership(
+		session: Session,
+		stopLease?: { attemptId: string; leaseId: string },
+	): Promise<void> {
+		const current = await this.getSession(session.project_id, session.session_id);
+		const activeStop =
+			current.stop && !['retained', 'uncertain', 'stopped'].includes(current.stop.outcome);
+		if (
+			(activeStop &&
+				(!stopLease ||
+					current.stop?.id !== stopLease.attemptId ||
+					current.stop.lease_id !== stopLease.leaseId ||
+					Date.parse(current.stop.lease_expires_at ?? '') <= Date.now())) ||
+			current.sandbox_id !== session.sandbox_id ||
+			current.sandbox_reclaimed_at ||
+			!(await this.ownsEditorClaim(current))
+		)
+			throw new ConflictError('The session no longer owns notebook capture');
+	}
+
 	async ownsEditorClaim(session: Session): Promise<boolean> {
 		const claim = await this.getEditorClaim(session.project_id, session.notebook_id);
 		if (claim?.session_id) return claim.session_id === session.session_id;
@@ -2167,6 +2404,8 @@ export class SessionService {
 		// PUTs are independent (each keyed by its own ETag), so the reaper pass no
 		// longer scales linearly with the session count.
 		const results = await this.scanSessions(async (session, obj, etag) => {
+			if (session.stop && session.sandbox_id && !session.sandbox_reclaimed_at)
+				return { expired: 0, live: 1 };
 			if (isTerminal(session.status)) return { expired: 0, live: 0 };
 			// Pool reconciliation owns idle and startup expiry for managed apps.
 			if (sessionMode(session) === 'app' && session.status !== 'terminating') {

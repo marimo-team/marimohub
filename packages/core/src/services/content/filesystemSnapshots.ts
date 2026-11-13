@@ -143,6 +143,17 @@ export async function captureFilesystemSnapshot(
 			);
 		}
 	} catch (err) {
+		const { previous } = await notebooks
+			.setFsSnapshot(projectId, notebookId, null)
+			.catch(() => ({ previous: null }));
+		if (previous)
+			await deferOrAwait(
+				backgroundWork,
+				'filesystem_snapshot.delete',
+				() => fs.deleteSnapshot(previous.snapshot_id),
+				metrics,
+				{ project_id: projectId, notebook_id: notebookId },
+			).catch(() => {});
 		logOperationalError(
 			'filesystem_snapshot_capture_failed',
 			{ operation: 'filesystem_snapshot.capture', project_id: projectId, notebook_id: notebookId },

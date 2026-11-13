@@ -378,14 +378,16 @@ describe('catalog recovery', () => {
 		const job = await services.jobs.createJob(project.id, notebook.id, { name: 'Missing' }, ACTOR);
 		const current = await services.catalog.getCurrentSnapshot();
 		const nb = paths.project(project.id).notebook(notebook.id);
-		await bucket.delete([nb.workspaceFile('notebook.py'), nb.job(job.id).head]);
+		const source = await services.notebooks.getNotebookSource(project.id, notebook.id);
+		const code = nb.version(source.current_version_id!).code;
+		await bucket.delete([code, nb.job(job.id).head]);
 		const report = await services.catalog.planRecovery({
 			mode: 'snapshot',
 			snapshotId: current.snapshot_id,
 		});
 		expect(report.issues).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ key: nb.workspaceFile('notebook.py'), severity: 'error' }),
+				expect.objectContaining({ key: code, severity: 'error' }),
 				expect.objectContaining({ key: nb.job(job.id).head, severity: 'error' }),
 			]),
 		);

@@ -2962,6 +2962,7 @@ export interface components {
 					| 'SYNC_NOT_CONFIGURED'
 					| 'NOT_INITIALIZED'
 					| 'SERVICE_UNAVAILABLE'
+					| 'SESSION_PERSISTENCE_REQUIRED'
 					| 'PYTHON_ENV_SETUP_FAILED'
 					| 'RESOURCE_EXHAUSTED'
 					| 'SURFACE_NOT_ENABLED'
@@ -3528,6 +3529,8 @@ export interface components {
 					| 'kernel_unreachable'
 					| 'destroy_failed'
 					| 'timeout'
+					| 'persistence_required'
+					| 'stop_pending'
 					| null;
 			}[];
 			incomplete: boolean;
@@ -4506,6 +4509,43 @@ export interface components {
 			last_error?: string;
 		};
 		Session: {
+			stop?: {
+				/** Format: uuid */
+				id: string;
+				/** @enum {string} */
+				outcome:
+					| 'pending'
+					| 'capturing'
+					| 'durable'
+					| 'stopping'
+					| 'stopped'
+					| 'retained'
+					| 'uncertain';
+				force: boolean;
+				/** @enum {string} */
+				trigger: 'interactive' | 'idle' | 'lifetime' | 'reconcile' | 'takeover' | 'security';
+				/** Format: date-time */
+				requested_at: string;
+				/** Format: date-time */
+				updated_at: string;
+				/** @enum {string} */
+				runtime_state?: 'running' | 'paused' | 'stopped' | 'unknown';
+				failure?: {
+					code: string;
+					retryable: boolean;
+				};
+				/** Format: date-time */
+				captured_at?: string;
+				version_id?: string;
+			};
+			last_durable_capture?: {
+				/**
+				 * Format: date-time
+				 * @example 2025-03-05T14:00:00Z
+				 */
+				at: string;
+				version_id: string;
+			};
 			origin?: {
 				/** @enum {string} */
 				type: 'preview';
@@ -18707,10 +18747,16 @@ export interface operations {
 	'sessions.terminate': {
 		parameters: {
 			query?: {
+				/** @description Explicitly discard changes that have not been saved durably. */
+				force?: 'true' | 'false';
+				request_key?: string;
+				previous_attempt_id?: string;
 				/** @description Wait for teardown to finish before responding. Use for restart. */
 				wait?: 'true' | 'false';
 			};
-			header?: never;
+			header?: {
+				'idempotency-key'?: string;
+			};
 			path: {
 				pid: string;
 				nid: string;
@@ -18758,6 +18804,15 @@ export interface operations {
 			};
 			/** @description Not found */
 			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
 				headers: {
 					[name: string]: unknown;
 				};

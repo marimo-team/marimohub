@@ -1,3 +1,4 @@
+import { publicationArtifactKey } from './localPublication';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { MemoryBucket } from '../../testing';
 import {
@@ -67,6 +68,36 @@ describe('NotebookService', () => {
 		);
 		projectId = project.id;
 	});
+
+	async function currentFile(notebookId: NotebookId, field: 'code' | 'deps') {
+		const source = await notebooks.getNotebookSource(projectId, notebookId);
+		return bucket.get(
+			paths.project(projectId).notebook(notebookId).version(source.current_version_id!)[field],
+		);
+	}
+	async function captureState(notebookId: NotebookId) {
+		const token = await notebooks.beginSessionCapture(projectId, notebookId);
+		const descriptor = token.versions.find(
+			(item) => item.version_id === token.source.current_version_id,
+		)!;
+		return {
+			descriptor,
+			html: publicationArtifactKey(
+				projectId,
+				notebookId,
+				token.source.current_version_id,
+				'html',
+				descriptor.html_snapshot,
+			),
+			session: publicationArtifactKey(
+				projectId,
+				notebookId,
+				token.source.current_version_id,
+				'session',
+				descriptor.session_snapshot,
+			),
+		};
+	}
 
 	it('rejects notebook listing for an unknown project', async () => {
 		await expect(notebooks.listNotebooks('proj-missing' as ProjectId)).rejects.toThrow(
@@ -190,7 +221,7 @@ describe('NotebookService', () => {
 					);
 				};
 				await expect(update()).rejects.toThrow(session.session_id);
-				const storedDeps = await bucket.get(paths.project(projectId).notebook(notebook.id).deps);
+				const storedDeps = await currentFile(notebook.id, 'deps');
 				expect(await storedDeps?.text()).toBe('');
 				expect((await notebooks.getNotebook(projectId, notebook.id)).meta).toEqual(notebook);
 				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
@@ -202,7 +233,7 @@ describe('NotebookService', () => {
 					operation === 'update' ? '' : operation === 'notebook.py' ? 'replacement' : 'original',
 				);
 				if (operation === 'deps') {
-					const deps = await bucket.get(paths.project(projectId).notebook(notebook.id).deps);
+					const deps = await currentFile(notebook.id, 'deps');
 					expect(await deps?.text()).toBe('replacement');
 				}
 			},
@@ -295,7 +326,7 @@ describe('NotebookService', () => {
 						ACTOR,
 					),
 				).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
-				const storedDeps = await bucket.get(paths.project(projectId).notebook(notebook.id).deps);
+				const storedDeps = await currentFile(notebook.id, 'deps');
 				expect(await storedDeps?.text()).toBe('');
 				expect((await notebooks.getNotebook(projectId, notebook.id)).meta).toEqual(notebook);
 				expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
@@ -324,7 +355,7 @@ describe('NotebookService', () => {
 							ACTOR,
 						),
 					).rejects.toThrow('session storage unavailable');
-					const storedDeps = await bucket.get(paths.project(projectId).notebook(notebook.id).deps);
+					const storedDeps = await currentFile(notebook.id, 'deps');
 					expect(await storedDeps?.text()).toBe('');
 					expect(await notebooks.getNotebook(projectId, notebook.id)).toEqual(before);
 					expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('original');
@@ -472,7 +503,7 @@ describe('NotebookService', () => {
 
 			const nb = paths.project(projectId).notebook(copy.id);
 			expect(await (await bucket.get(nb.code))!.text()).toBe('x = 1');
-			expect(await (await bucket.get(nb.deps))!.text()).toBe('[project]\nname = "a"\n');
+			expect(await (await currentFile(copy.id, 'deps'))!.text()).toBe('[project]\nname = "a"\n');
 
 			const snap = await catalog.getCurrentSnapshot();
 			const proj = snap.projects.find((p) => p.id === projectId);
@@ -911,9 +942,8 @@ describe('NotebookService', () => {
 				),
 			]);
 
-			const nb = paths.project(projectId).notebook(created.id);
 			expect(await notebooks.getNotebookContent(projectId, created.id)).toBe('new code');
-			expect(await (await bucket.get(nb.deps))?.text()).toBe('new deps');
+			expect(await (await currentFile(created.id, 'deps'))?.text()).toBe('new deps');
 			expect(await notebooks.listVersions(projectId, created.id)).toHaveLength(3);
 		});
 
@@ -1327,7 +1357,7 @@ describe('NotebookService', () => {
 			const nb = paths.project(projectId).notebook(created.id);
 
 			// Live pyproject.toml must still hold the original deps, not ''.
-			const depsObj = await bucket.get(nb.deps);
+			const depsObj = await currentFile(created.id, 'deps');
 			expect(await depsObj!.text()).toBe(originalDeps);
 
 			// The new version snapshot must record the preserved deps too.
@@ -1355,7 +1385,7 @@ describe('NotebookService', () => {
 
 			const nb = paths.project(projectId).notebook(created.id);
 
-			const depsObj = await bucket.get(nb.deps);
+			const depsObj = await currentFile(created.id, 'deps');
 			expect(await depsObj!.text()).toBe(newDeps);
 
 			const versions = await notebooks.listVersions(projectId, created.id);
@@ -1378,7 +1408,7 @@ describe('NotebookService', () => {
 
 			const codeObj = await bucket.get(nb.code);
 			expect(await codeObj!.text()).toBe('v1');
-			const depsObj = await bucket.get(nb.deps);
+			const depsObj = await currentFile(created.id, 'deps');
 			expect(await depsObj!.text()).toBe(originalDeps);
 
 			const versions = await notebooks.listVersions(projectId, created.id);
@@ -1490,7 +1520,11 @@ describe('NotebookService', () => {
 			const originalList = bucket.list.bind(bucket);
 			let overlappingSession: Promise<unknown> | undefined;
 			bucket.list = async (options) => {
-				if (!overlappingSession && options?.prefix === oldestPrefix && !options.delimiter) {
+				if (
+					!overlappingSession &&
+					options?.prefix === `${paths.project(projectId).notebook(created.id).base}/versions/` &&
+					!options.delimiter
+				) {
 					overlappingSession = sessions.createSession({
 						project_id: projectId,
 						notebook_id: created.id,
@@ -2120,8 +2154,7 @@ describe('NotebookService', () => {
 				{ code: 'v2', html: '<html>x</html>' },
 				ACTOR,
 			);
-			const ver = paths.project(projectId).notebook(created.id).version(committed!.versionId);
-			await bucket.delete(ver.html);
+			await bucket.delete((await captureState(created.id)).html);
 			expect(
 				await notebooks.getVersionHtmlSnapshot(projectId, created.id, committed!.versionId),
 			).toBeNull();
@@ -2220,7 +2253,11 @@ describe('NotebookService', () => {
 				await Promise.all(
 					targets.map(({ id }) => notebooks.commitSession(projectId, id, { code: 'v2' }, ACTOR)),
 				);
-				expect(put).not.toHaveBeenCalled();
+				expect(
+					put.mock.calls.every(
+						([key, , options]) => key.endsWith('/source.json') && !!options?.onlyIfEtagMatches,
+					),
+				).toBe(true);
 				const entries = (await catalog.getCurrentSnapshot()).projects[0].notebooks;
 				for (const { id } of targets) {
 					const { meta } = await notebooks.getNotebook(projectId, id);
@@ -2257,11 +2294,19 @@ describe('NotebookService', () => {
 					service.commitSession(projectId, created.id, { code: 'v2' }, ACTOR),
 				).resolves.toMatchObject({ newVersion: false });
 				await expectCatalogMatches(meta);
-				expect((await service.getNotebook(projectId, created.id)).source).toEqual(source);
+				expect((await service.getNotebook(projectId, created.id)).source).toMatchObject({
+					...source,
+					publication:
+						source.type === 'local'
+							? { ...source.publication, generation: expect.any(String) }
+							: undefined,
+				});
 				expect(await countVersionFolders(bucket, projectId, created.id)).toBe(2);
 				const afterRepair = vi.spyOn(bucket, 'put');
 				await service.commitSession(projectId, created.id, { code: 'v2' }, ACTOR);
-				expect(afterRepair).not.toHaveBeenCalled();
+				expect(afterRepair.mock.calls.map(([key]) => key)).toEqual([
+					paths.project(projectId).notebook(created.id).source,
+				]);
 			},
 		);
 
@@ -2289,7 +2334,13 @@ describe('NotebookService', () => {
 				).resolves.toMatchObject({ newVersion: false });
 				await expectCatalogMatches(meta);
 				expect(put.mock.calls.filter(([key]) => key === paths.catalog)).toHaveLength(1);
-				expect((await notebooks.getNotebook(projectId, created.id)).source).toEqual(source);
+				expect((await notebooks.getNotebook(projectId, created.id)).source).toMatchObject({
+					...source,
+					publication:
+						source.type === 'local'
+							? { ...source.publication, generation: expect.any(String) }
+							: undefined,
+				});
 				expect(await countVersionFolders(bucket, projectId, created.id)).toBe(
 					kind === 'code' ? 2 : 1,
 				);
@@ -2398,7 +2449,13 @@ describe('NotebookService', () => {
 				expect(writes.mock.calls.filter(([key]) => key === paths.catalog)).toHaveLength(
 					failure === 'lost response' ? 0 : 1,
 				);
-				expect((await service.getNotebook(projectId, created.id)).source).toEqual(source);
+				expect((await service.getNotebook(projectId, created.id)).source).toMatchObject({
+					...source,
+					publication:
+						source.type === 'local'
+							? { ...source.publication, generation: expect.any(String) }
+							: undefined,
+				});
 				expect(await service.getNotebookContent(projectId, created.id)).toBe('v2');
 				expect(await countVersionFolders(bucket, projectId, created.id)).toBe(2);
 			},
@@ -2499,7 +2556,10 @@ describe('NotebookService', () => {
 				const created = await createNotebook();
 				const put = bucket.put.bind(bucket);
 				vi.spyOn(bucket, 'put').mockImplementation((key, value, options) => {
-					if (key === paths.project(projectId).notebook(created.id).meta)
+					if (
+						key ===
+						paths.project(projectId).notebook(created.id)[kind === 'session' ? 'source' : 'meta']
+					)
 						throw new Error('meta unavailable');
 					return put(key, value, options);
 				});
@@ -2522,7 +2582,7 @@ describe('NotebookService', () => {
 		}
 
 		it('distinguishes empty artifacts from omitted artifacts and deduplicates empty bytes', async () => {
-			const { created, ver } = await artifactFixture();
+			const { created } = await artifactFixture();
 			await expect(
 				notebooks.commitSession(
 					projectId,
@@ -2531,8 +2591,8 @@ describe('NotebookService', () => {
 					ACTOR,
 				),
 			).resolves.toMatchObject({ capturedHtml: true, capturedSession: true, newVersion: false });
-			expect(await (await bucket.get(ver.html))!.text()).toBe('');
-			expect(await (await bucket.get(ver.session))!.text()).toBe('');
+			expect(await (await bucket.get((await captureState(created.id)).html))!.text()).toBe('');
+			expect(await (await bucket.get((await captureState(created.id)).session))!.text()).toBe('');
 			const put = vi.spyOn(bucket, 'put');
 			await notebooks.commitSession(
 				projectId,
@@ -2541,118 +2601,135 @@ describe('NotebookService', () => {
 				ACTOR,
 			);
 			await notebooks.commitSession(projectId, created.id, { code: 'v1' }, ACTOR);
-			expect(put).not.toHaveBeenCalled();
+			expect(
+				put.mock.calls.every(
+					([key, , options]) => key.endsWith('/source.json') && !!options?.onlyIfEtagMatches,
+				),
+			).toBe(true);
 		});
 
 		it.each(['head', 'legacy read'] as const)(
 			'fails closed when the artifact %s fails',
 			async (stage) => {
-				const { created, input, ver } = await artifactFixture();
-				const before = await (await bucket.get(ver.meta))!.text();
+				const { created, input } = await artifactFixture();
+				const before = await captureState(created.id);
+				if (stage === 'legacy read') {
+					const token = await notebooks.beginSessionCapture(projectId, created.id);
+					delete token.source.publication!.versions[0].session_snapshot!.sha256;
+					await bucket.put(
+						paths.project(projectId).notebook(created.id).source,
+						JSON.stringify(token.source),
+					);
+				}
 				if (stage === 'head') {
 					const head = bucket.head.bind(bucket);
 					vi.spyOn(bucket, 'head').mockImplementation((key) =>
-						key === ver.html ? Promise.reject(new Error('unavailable')) : head(key),
+						key === before.session ? Promise.reject(new Error('unavailable')) : head(key),
 					);
 				} else {
-					await bucket.put(ver.html, input.html);
 					const get = bucket.get.bind(bucket);
 					vi.spyOn(bucket, 'get').mockImplementation((key) =>
-						key === ver.html ? Promise.reject(new Error('unavailable')) : get(key),
+						key === before.session ? Promise.reject(new Error('unavailable')) : get(key),
 					);
 				}
 				const put = vi.spyOn(bucket, 'put');
 				await expect(notebooks.commitSession(projectId, created.id, input, ACTOR)).rejects.toThrow(
 					'unavailable',
 				);
-				expect(put).not.toHaveBeenCalled();
-				expect(await (await bucket.get(ver.meta))!.text()).toBe(before);
+				expect(
+					put.mock.calls.every(
+						([key, , options]) => key.endsWith('/source.json') && !!options?.onlyIfEtagMatches,
+					),
+				).toBe(true);
+				expect((await captureState(created.id)).session).toBe(before.session);
 			},
 		);
 
-		it.each(['artifact', 'descriptor'] as const)(
-			'repairs a partial %s failure without reuploading completed artifacts',
+		it.each(['artifact', 'publication'] as const)(
+			'keeps a failed %s attempt invisible and publishes a fresh retry',
 			async (stage) => {
-				const { created, input, ver } = await artifactFixture();
-				const original = await (await bucket.get(ver.meta))!.json<Record<string, unknown>>();
-				const oldCapture = '2000-01-01T00:00:00.000Z';
-				await bucket.put(
-					ver.meta,
-					JSON.stringify({
-						...original,
-						html_snapshot: { captured_at: oldCapture, size_bytes: input.html.length },
-						session_snapshot: { captured_at: oldCapture, size_bytes: input.session.length },
-					}),
-				);
+				const { created, input } = await artifactFixture();
+				const before = await captureState(created.id);
 				const next = { ...input, html: '<p>2</p>', session: '{"value":2}' };
 				const realPut = bucket.put.bind(bucket);
-				const put = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
-					if (key === (stage === 'artifact' ? ver.session : ver.meta))
+				const sourceKey = paths.project(projectId).notebook(created.id).source;
+				const put = vi.spyOn(bucket, 'put').mockImplementation((key, value, options) => {
+					if (
+						stage === 'publication'
+							? key === sourceKey
+							: key.includes('/captures/') && key.endsWith('/session.json')
+					)
 						throw new Error('unavailable');
 					return realPut(key, value, options);
 				});
 				await expect(notebooks.commitSession(projectId, created.id, next, ACTOR)).rejects.toThrow(
 					'unavailable',
 				);
-				expect(await (await bucket.get(ver.html))!.text()).toBe(next.html);
+				expect(await captureState(created.id)).toEqual(before);
 				put.mockImplementation(realPut).mockClear();
 				await notebooks.commitSession(projectId, created.id, next, ACTOR);
-				expect(put.mock.calls.map(([key]) => key)).toEqual(
-					stage === 'artifact' ? [ver.session, ver.meta] : [ver.meta],
-				);
-				const repaired = await (await bucket.get(ver.meta))!.json<{
-					html_snapshot: { captured_at: string };
-					session_snapshot: { captured_at: string };
-				}>();
-				expect(repaired.html_snapshot.captured_at).not.toBe(oldCapture);
-				expect(repaired.session_snapshot.captured_at).not.toBe(oldCapture);
+				const repaired = await captureState(created.id);
+				expect(await (await bucket.get(repaired.html))!.text()).toBe(next.html);
+				expect(await (await bucket.get(repaired.session))!.text()).toBe(next.session);
 				put.mockClear();
 				await notebooks.commitSession(projectId, created.id, next, ACTOR);
-				expect(put).not.toHaveBeenCalled();
+				expect(
+					put.mock.calls.every(
+						([key, , options]) => key.endsWith('/source.json') && !!options?.onlyIfEtagMatches,
+					),
+				).toBe(true);
 			},
 		);
 
 		it('advances capture timestamps for same-millisecond changes and then deduplicates', async () => {
 			vi.useFakeTimers({ toFake: ['Date'] });
 			try {
-				const { created, input, ver } = await artifactFixture();
-				const initial = await (await bucket.get(ver.meta))!.json<{
-					html_snapshot: { captured_at: string };
-				}>();
+				const { created, input } = await artifactFixture();
+				const initial = (await captureState(created.id)).descriptor;
 				const next = { ...input, html: '<p>2</p>' };
 				await notebooks.commitSession(projectId, created.id, next, ACTOR);
-				const updated = await (await bucket.get(ver.meta))!.json<{
-					html_snapshot: { captured_at: string };
-				}>();
-				expect(updated.html_snapshot.captured_at).toBe(
-					new Date(Date.parse(initial.html_snapshot.captured_at) + 1).toISOString(),
+				const updated = (await captureState(created.id)).descriptor;
+				expect(updated.html_snapshot!.captured_at).toBe(
+					new Date(Date.parse(initial.html_snapshot!.captured_at) + 1).toISOString(),
 				);
 				const put = vi.spyOn(bucket, 'put');
 				await notebooks.commitSession(projectId, created.id, next, ACTOR);
-				expect(put).not.toHaveBeenCalled();
+				expect(
+					put.mock.calls.every(
+						([key, , options]) => key.endsWith('/source.json') && !!options?.onlyIfEtagMatches,
+					),
+				).toBe(true);
 			} finally {
 				vi.useRealTimers();
 			}
 		});
 
-		it('repairs a missing descriptor without reuploading the matching artifact', async () => {
+		it('does not let a delayed legacy metadata write replace committed capture descriptors', async () => {
 			const { created, input, ver } = await artifactFixture();
-			const original = await (await bucket.get(ver.meta))!.json<Record<string, unknown>>();
-			delete original.html_snapshot;
-			await bucket.put(ver.meta, JSON.stringify(original));
+			const before = await captureState(created.id);
+			const metadata = await (await bucket.get(ver.meta))!.json<Record<string, unknown>>();
+			await bucket.put(
+				ver.meta,
+				JSON.stringify({
+					...metadata,
+					html_snapshot: { captured_at: '2000-01-01T00:00:00Z', size_bytes: 999 },
+				}),
+			);
 			const put = vi.spyOn(bucket, 'put');
 			await notebooks.commitSession(projectId, created.id, input, ACTOR);
-			expect(put.mock.calls.map(([key]) => key)).toEqual([ver.meta]);
-			expect(await (await bucket.get(ver.meta))!.json()).toMatchObject({
-				html_snapshot: { size_bytes: input.html.length },
-			});
+			expect(await captureState(created.id)).toEqual(before);
+			expect(
+				put.mock.calls.every(
+					([key, , options]) => key.endsWith('/source.json') && !!options?.onlyIfEtagMatches,
+				),
+			).toBe(true);
 		});
 
 		it.each([
 			{ legacy: false, notebookCount: 10_000 },
 			{ legacy: true, notebookCount: 1 },
 		])(
-			'unchanged autosave has zero PUTs ($notebookCount notebooks, legacy metadata=$legacy)',
+			'unchanged autosave writes only its publication fence ($notebookCount notebooks, legacy metadata=$legacy)',
 			async ({ legacy, notebookCount }) => {
 				const created = await notebooks.createNotebook(
 					projectId,
@@ -2689,7 +2766,11 @@ describe('NotebookService', () => {
 					capturedHtml: true,
 					capturedSession: true,
 				});
-				expect(put).not.toHaveBeenCalled();
+				expect(
+					put.mock.calls.every(
+						([key, , options]) => key.endsWith('/source.json') && !!options?.onlyIfEtagMatches,
+					),
+				).toBe(true);
 				if (!legacy) {
 					expect(get.mock.calls.map(([key]) => key)).not.toContain(ver.html);
 					expect(get.mock.calls.map(([key]) => key)).not.toContain(ver.session);
@@ -2711,12 +2792,14 @@ describe('NotebookService', () => {
 				ACTOR,
 			);
 			const input = { code: 'v1', html: '<p>1</p>', session: '{"value":1}' };
-			const first = (await notebooks.commitSession(projectId, created.id, input, ACTOR))!;
-			const ver = paths.project(projectId).notebook(created.id).version(first.versionId);
+			await notebooks.commitSession(projectId, created.id, input, ACTOR);
 			const put = vi.spyOn(bucket, 'put');
 			await notebooks.commitSession(projectId, created.id, { ...input, html: '<p>2</p>' }, ACTOR);
-			expect(put.mock.calls.map(([key]) => key)).toEqual([ver.html, ver.meta]);
-			await bucket.delete(ver.session);
+			expect(put.mock.calls.map(([key]) => key)).toEqual([
+				(await captureState(created.id)).html,
+				paths.project(projectId).notebook(created.id).source,
+			]);
+			await bucket.delete((await captureState(created.id)).session);
 			put.mockClear();
 			await notebooks.commitSession(
 				projectId,
@@ -2724,7 +2807,10 @@ describe('NotebookService', () => {
 				{ code: input.code, session: input.session },
 				ACTOR,
 			);
-			expect(put.mock.calls.map(([key]) => key)).toEqual([ver.session, ver.meta]);
+			expect(put.mock.calls.map(([key]) => key)).toEqual([
+				(await captureState(created.id)).session,
+				paths.project(projectId).notebook(created.id).source,
+			]);
 		});
 
 		it.each([
@@ -2767,9 +2853,7 @@ describe('NotebookService', () => {
 			expect(result!.newVersion).toBe(changed);
 			expect(result!.versionId === initial.version_id).toBe(!changed);
 			const nb = paths.project(projectId).notebook(created.id);
-			expect(await (await bucket.get(nb.workspaceFile('notebook.py')))!.bytes()).toEqual(
-				enc(after),
-			);
+			expect(await (await currentFile(created.id, 'code'))!.bytes()).toEqual(enc(after));
 			expect(await (await bucket.get(nb.version(result!.versionId).code))!.bytes()).toEqual(
 				enc(after),
 			);
@@ -2813,7 +2897,6 @@ describe('NotebookService', () => {
 				ACTOR,
 			);
 			const before = await notebooks.getNotebook(projectId, created.id);
-
 			const result = await notebooks.commitSession(
 				projectId,
 				created.id,
@@ -2826,8 +2909,7 @@ describe('NotebookService', () => {
 
 			// Two versions now; live code/source advanced to the new one.
 			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(2);
-			const nb = paths.project(projectId).notebook(created.id);
-			expect(await (await bucket.get(nb.code))!.text()).toBe('v2 # edited');
+			expect(await notebooks.getNotebookContent(projectId, created.id)).toBe('v2 # edited');
 			const after = await notebooks.getNotebook(projectId, created.id);
 			expect(after.source.type).toBe('local');
 			expect((after.source as { current_version_id: string }).current_version_id).not.toBe(
@@ -2850,7 +2932,6 @@ describe('NotebookService', () => {
 				ACTOR,
 			);
 			const before = await notebooks.getNotebook(projectId, created.id);
-
 			const result = await notebooks.commitSession(
 				projectId,
 				created.id,
@@ -2880,19 +2961,20 @@ describe('NotebookService', () => {
 				ACTOR,
 			);
 
-			const nb = paths.project(projectId).notebook(created.id);
-			const ver = nb.version(result!.versionId as any);
-
 			// Sidecar artifacts written with the right content.
-			expect(await (await bucket.get(ver.html))!.text()).toBe('<html>out</html>');
-			expect(await (await bucket.get(ver.session))!.text()).toBe('{"v":1}');
+			expect(await (await bucket.get((await captureState(created.id)).html))!.text()).toBe(
+				'<html>out</html>',
+			);
+			expect(await (await bucket.get((await captureState(created.id)).session))!.text()).toBe(
+				'{"v":1}',
+			);
 
 			// version.json carries presence + size descriptors (no storage path).
-			const version = (await (await bucket.get(ver.meta))!.json()) as any;
-			expect(version.html_snapshot.size_bytes).toBe(
+			const version = (await captureState(created.id)).descriptor;
+			expect(version.html_snapshot!.size_bytes).toBe(
 				new TextEncoder().encode('<html>out</html>').length,
 			);
-			expect(version.session_snapshot.size_bytes).toBeGreaterThan(0);
+			expect(version.session_snapshot!.size_bytes).toBeGreaterThan(0);
 			expect(result!.capturedHtml).toBe(true);
 			expect(result!.capturedSession).toBe(true);
 		});
@@ -2903,8 +2985,6 @@ describe('NotebookService', () => {
 				{ title: 'NB', description: 'D', code: 'v1' },
 				ACTOR,
 			);
-			const before = await notebooks.getNotebook(projectId, created.id);
-			const currentVid = (before.source as { current_version_id: string }).current_version_id;
 
 			await notebooks.commitSession(
 				projectId,
@@ -2913,62 +2993,34 @@ describe('NotebookService', () => {
 				ACTOR,
 			);
 
-			// No new version, but the HTML landed in the current version's folder and
-			// its version.json was patched with the descriptor.
 			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(1);
-			const ver = paths
-				.project(projectId)
-				.notebook(created.id)
-				.version(currentVid as any);
-			expect(await (await bucket.get(ver.html))!.text()).toBe('<html>rendered</html>');
-			const version = (await (await bucket.get(ver.meta))!.json()) as any;
+			expect(await (await bucket.get((await captureState(created.id)).html))!.text()).toBe(
+				'<html>rendered</html>',
+			);
+			const version = (await captureState(created.id)).descriptor;
 			expect(version.html_snapshot).toBeTruthy();
 		});
 
-		it('retries the descriptor attach on a losing CAS race instead of dropping the winner', async () => {
-			const created = await notebooks.createNotebook(
-				projectId,
-				{ title: 'NB', description: 'D', code: 'v1' },
-				ACTOR,
-			);
-			const before = await notebooks.getNotebook(projectId, created.id);
-			const currentVid = (before.source as { current_version_id: string }).current_version_id;
-			const ver = paths
-				.project(projectId)
-				.notebook(created.id)
-				.version(currentVid as any);
-
-			// Between the CAS read of version.json and its conditional write, a
-			// competing teardown attaches a session descriptor. The stale write must
-			// lose (ETag mismatch) and retry against the fresh value, so BOTH
-			// descriptors survive.
-			const competing = { captured_at: new Date().toISOString(), size_bytes: 42 };
-			const realGet = bucket.get.bind(bucket);
-			let metaGets = 0;
-			const spy = vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
-				const obj = await realGet(key);
-				if (key === ver.meta && obj && ++metaGets === 2) {
-					const current = (await obj.json()) as Record<string, unknown>;
-					await bucket.put(ver.meta, JSON.stringify({ ...current, session_snapshot: competing }));
-				}
-				return obj; // etag captured before the competing put — stale for the CAS
-			});
-
-			const result = await notebooks.commitSession(
+		it('rejects a stale descriptor publication without rebasing captured bytes', async () => {
+			const { created } = await artifactFixture();
+			const token = await notebooks.beginSessionCapture(projectId, created.id);
+			await notebooks.commitSession(
 				projectId,
 				created.id,
-				{ code: 'v1', html: '<html>x</html>' },
+				{ code: 'v1', session: '{"new":true}' },
 				ACTOR,
 			);
-			spy.mockRestore();
-
-			expect(result!.newVersion).toBe(false);
-			// Three reads of version.json: the existence check, the losing CAS
-			// attempt, and the retry — proving the conflict was actually exercised.
-			expect(metaGets).toBe(3);
-			const version = (await (await bucket.get(ver.meta))!.json()) as any;
-			expect(version.html_snapshot).toBeTruthy();
-			expect(version.session_snapshot).toEqual(competing);
+			await expect(
+				notebooks.commitSession(
+					projectId,
+					created.id,
+					{ code: 'v1', html: '<p>old</p>' },
+					ACTOR,
+					token,
+				),
+			).rejects.toThrow(ConflictError);
+			const current = await captureState(created.id);
+			expect(await (await bucket.get(current.session))!.text()).toBe('{"new":true}');
 		});
 
 		it('returns null when no code is read back (nothing to commit)', async () => {
@@ -2993,8 +3045,7 @@ describe('NotebookService', () => {
 
 			await notebooks.commitSession(projectId, created.id, { code: 'v2' }, ACTOR);
 
-			const nb = paths.project(projectId).notebook(created.id);
-			expect(await (await bucket.get(nb.deps))!.text()).toBe('keep-me');
+			expect(await (await currentFile(created.id, 'deps'))!.text()).toBe('keep-me');
 		});
 
 		it('cuts a new version on a deps-only change', async () => {
@@ -3014,8 +3065,7 @@ describe('NotebookService', () => {
 
 			expect(result!.newVersion).toBe(true);
 			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(2);
-			const nb = paths.project(projectId).notebook(created.id);
-			expect(await (await bucket.get(nb.deps))!.text()).toBe('new-deps');
+			expect(await (await currentFile(created.id, 'deps'))!.text()).toBe('new-deps');
 		});
 
 		it('compares against the version snapshot, not the live notebook (mounted-bucket case)', async () => {
@@ -3118,14 +3168,10 @@ describe('NotebookService', () => {
 				ACTOR,
 			);
 
-			const ver = paths
-				.project(projectId)
-				.notebook(created.id)
-				.version(result!.versionId as any);
-			const version = (await (await bucket.get(ver.meta))!.json()) as any;
+			const version = (await captureState(created.id)).descriptor;
 			expect(version.html_snapshot).toBeTruthy();
 			expect(version.session_snapshot).toBeUndefined();
-			expect(await bucket.get(ver.session)).toBeNull();
+			expect(await bucket.get((await captureState(created.id)).session)).toBeNull();
 			expect(result!.capturedSession).toBe(false);
 		});
 
@@ -3169,101 +3215,23 @@ describe('NotebookService', () => {
 			);
 
 			const html = '<p>café 🚀</p>'; // multibyte: é = 2 bytes, 🚀 = 4 bytes
-			const result = await notebooks.commitSession(
-				projectId,
-				created.id,
-				{ code: 'v2', html },
-				ACTOR,
-			);
+			await notebooks.commitSession(projectId, created.id, { code: 'v2', html }, ACTOR);
 
-			const ver = paths
-				.project(projectId)
-				.notebook(created.id)
-				.version(result!.versionId as any);
-			const version = (await (await bucket.get(ver.meta))!.json()) as any;
-			expect(version.html_snapshot.size_bytes).toBe(new TextEncoder().encode(html).length);
-			expect(version.html_snapshot.size_bytes).toBeGreaterThan(html.length);
+			const version = (await captureState(created.id)).descriptor;
+			expect(version.html_snapshot!.size_bytes).toBe(new TextEncoder().encode(html).length);
+			expect(version.html_snapshot!.size_bytes).toBeGreaterThan(html.length);
 		});
 
-		it('swallows a NotFoundError when version.json is deleted mid-CAS', async () => {
-			const created = await notebooks.createNotebook(
-				projectId,
-				{ title: 'NB', description: 'D', code: 'v1' },
-				ACTOR,
-			);
-			const before = await notebooks.getNotebook(projectId, created.id);
-			const currentVid = (before.source as { current_version_id: string }).current_version_id;
-			const ver = paths
-				.project(projectId)
-				.notebook(created.id)
-				.version(currentVid as any);
-
-			// Unchanged code + a fresh html snapshot takes the "attach to existing version"
-			// path. The existence check reads version.json (present); then between that
-			// read and the CAS re-read (inside mutateObject), a concurrent purge deletes
-			// version.json. mutateObject throws NotFoundError, which commitSession must
-			// swallow rather than surface.
-			const realGet = bucket.get.bind(bucket);
-			let metaGets = 0;
-			const spy = vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
-				if (key === ver.meta) {
-					metaGets++;
-					// First read (existence check) returns the object; the CAS re-read sees
-					// it deleted.
-					if (metaGets >= 2) return null;
-				}
-				return realGet(key);
-			});
-
-			let result: Awaited<ReturnType<typeof notebooks.commitSession>>;
-			try {
-				result = await notebooks.commitSession(
-					projectId,
-					created.id,
-					{ code: 'v1', html: '<html>x</html>' },
-					ACTOR,
-				);
-			} finally {
-				// Restore in finally so a failed assertion/throw can't leak the forced-null
-				// get spy into later tests.
-				spy.mockRestore();
-			}
-
-			expect(result).not.toBeNull();
-			expect(result!.newVersion).toBe(false);
-			// The whole attach was skipped, so no orphan html sidecar was left behind.
-			expect(await bucket.get(ver.html)).toBeNull();
-		});
-
-		it('skips the descriptor attach entirely when version.json is missing', async () => {
-			const created = await notebooks.createNotebook(
-				projectId,
-				{ title: 'NB', description: 'D', code: 'v1' },
-				ACTOR,
-			);
-			const before = await notebooks.getNotebook(projectId, created.id);
-			const currentVid = (before.source as { current_version_id: string }).current_version_id;
-			const ver = paths
-				.project(projectId)
-				.notebook(created.id)
-				.version(currentVid as any);
-
-			// Drop the current version's version.json (keep its code so the session reads
-			// as unchanged). With no version.json to record a descriptor against, the
-			// attach is skipped — no sidecar html is written that we could never track.
+		it('publishes a complete replacement when current version metadata is missing', async () => {
+			const { created, input, ver } = await artifactFixture();
 			await bucket.delete(ver.meta);
-
-			const result = await notebooks.commitSession(
-				projectId,
-				created.id,
-				{ code: 'v1', html: '<html>x</html>' },
-				ACTOR,
-			);
-
-			expect(result).not.toBeNull();
-			expect(result!.newVersion).toBe(false);
-			// The sidecar html was NOT written because the descriptor could not be recorded.
-			expect(await bucket.get(ver.html)).toBeNull();
+			const result = await notebooks.commitSession(projectId, created.id, input, ACTOR);
+			expect(result).toMatchObject({ newVersion: true });
+			const current = await captureState(created.id);
+			expect(await (await bucket.get(current.html))!.text()).toBe(input.html);
+			expect(await notebooks.getVersion(projectId, created.id, result!.versionId)).toMatchObject({
+				code: input.code,
+			});
 		});
 	});
 
@@ -3786,7 +3754,7 @@ describe('NotebookService', () => {
 			);
 			expect(rejected).toBe(true);
 			put.mockRestore();
-			expect(await (await bucket.get(nb.code))!.text()).toBe('v2');
+			expect(await notebooks.getNotebookContent(projectId, meta.id)).toBe('v1');
 			const updated = await notebooks.updateNotebook(projectId, meta.id, input, ACTOR);
 			const source = await notebooks.getNotebookSource(projectId, meta.id);
 			const version = nb.version(source.current_version_id!);
@@ -3876,9 +3844,7 @@ describe('NotebookService', () => {
 		);
 		await notebooks.updateNotebook(projectId, meta.id, { code: 'v1', deps: 'new' }, ACTOR);
 		expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(2);
-		expect(await (await bucket.get(paths.project(projectId).notebook(meta.id).deps))!.text()).toBe(
-			'new',
-		);
+		expect(await (await currentFile(meta.id, 'deps'))!.text()).toBe('new');
 	});
 
 	it.each(['old-deps', ''])('preserves the version for unchanged deps %j', async (deps) => {
@@ -3913,7 +3879,7 @@ describe('NotebookService', () => {
 
 		await notebooks.updateNotebook(projectId, meta.id, { deps: 'new-deps' }, ACTOR);
 
-		expect(await (await bucket.get(nb.deps))!.text()).toBe('new-deps');
+		expect(await (await currentFile(meta.id, 'deps'))!.text()).toBe('new-deps');
 		expect(await notebooks.getNotebookContent(projectId, meta.id)).toBe('v1');
 		expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(2);
 		const { source } = await notebooks.getNotebook(projectId, meta.id);

@@ -1,6 +1,8 @@
+import { SessionCaptureCoordinator } from './SessionCaptureCoordinator';
+import { RuntimeCaptureClient } from './runtimeCapture';
 import type { SandboxProvider, SandboxInstance } from '../../ports/sandbox';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
+import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
 import { paths } from '../../paths';
 import { MAX_ARTIFACT_BYTES } from '../../constants';
 import { NotFoundError } from '../../errors';
@@ -17,7 +19,6 @@ import {
 import type { SandboxCalls } from '../../testing';
 import { CatalogService } from '../catalog/CatalogService';
 import { NotebookService } from '../content/NotebookService';
-import { SandboxProvisioner } from './SandboxProvisioner';
 import { kernelActiveConnections } from './kernelActiveConnections';
 import { SessionLifecycleService } from './sessionLifecycle';
 import type { SessionLifecycleConfig } from './sessionLifecycle';
@@ -52,6 +53,14 @@ describe('SessionLifecycleService', () => {
 	const iso = (offsetMs: number) => new Date(now + offsetMs).toISOString();
 
 	beforeEach(() => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(now);
+		vi.spyOn(RuntimeCaptureClient.prototype, 'prepare').mockResolvedValue({
+			token: crypto.randomUUID(),
+			directory: '/workspace',
+		});
+		vi.spyOn(RuntimeCaptureClient.prototype, 'resume').mockResolvedValue();
+		vi.spyOn(RuntimeCaptureClient.prototype, 'commitStop').mockResolvedValue();
 		bucket = new MemoryBucket();
 		sessions = new SessionService(bucket);
 		notebooks = new NotebookService(bucket, new CatalogService(bucket));
@@ -60,8 +69,14 @@ describe('SessionLifecycleService', () => {
 		// tests don't need a populated catalog (the save wiring itself is covered
 		// by the SandboxProvisioner tests).
 		vi.spyOn(notebooks, 'getNotebook').mockResolvedValue({ source: makeLocalSource() } as never);
-		vi.spyOn(notebooks, 'commitSession').mockResolvedValue(null);
-		const fake = makeFakeSandbox();
+		vi.spyOn(notebooks, 'beginSessionCapture').mockResolvedValue({} as never);
+		vi.spyOn(notebooks, 'commitSession').mockResolvedValue({
+			versionId: createVersionId(),
+			newVersion: true,
+			capturedHtml: false,
+			capturedSession: false,
+		});
+		const fake = makeFakeSandbox({ files: { '/workspace/notebook.py': 'print(1)' } });
 		sandboxCalls = fake.calls;
 		compute = fakeComputeFrom(fake.instance);
 		probe = vi.fn(async () => 0);
@@ -71,6 +86,7 @@ describe('SessionLifecycleService', () => {
 		// Restore prototype spies (e.g. SandboxProvisioner.teardown) so a per-test
 		// mock never leaks into a sibling; beforeEach re-establishes the fixtures.
 		vi.restoreAllMocks();
+		vi.useRealTimers();
 	});
 
 	const makeService = (overrides: Partial<SessionLifecycleConfig> = {}) =>
@@ -101,6 +117,37 @@ describe('SessionLifecycleService', () => {
 	}
 
 	const getStored = (s: Session) => sessions.getSession(s.project_id, s.session_id);
+
+	it('captures later edits without replaying a retained interactive stop', async () => {
+		const session = await putSession({
+			expires_at: iso(60 * 60_000),
+			last_snapshot_at: iso(-SNAPSHOT_INTERVAL_MS),
+			last_heartbeat: iso(0),
+		});
+		await sessions.claimEditor(projectId, notebookId, session.session_id, 'shared');
+		const requested = await sessions.requestStop(projectId, session.session_id, {
+			key: 'interactive',
+		});
+		const lease = crypto.randomUUID();
+		await sessions.claimStop(requested, lease);
+		const retained = await sessions.updateStop(requested, lease, {
+			outcome: 'retained',
+			runtime_state: 'running',
+			failure: { code: 'SOURCE_UNAVAILABLE', retryable: true },
+		});
+		const stop = vi.spyOn(SessionRetirer.prototype, 'stop');
+		const sweep = await makeService().sweep(now);
+		const current = await getStored(session);
+		expect(sweep.snapshotted).toBe(1);
+		expect(current.last_durable_capture?.at).toBe(iso(0));
+		expect(current.stop).toEqual(retained.stop);
+		expect(current.status).toBe('running');
+		expect(await sessions.ownsEditorClaim(current)).toBe(true);
+		expect(stop).not.toHaveBeenCalled();
+		expect(RuntimeCaptureClient.prototype.commitStop).not.toHaveBeenCalled();
+		expect(RuntimeCaptureClient.prototype.resume).toHaveBeenCalledOnce();
+		expect(sandboxCalls.destroy).toBe(0);
+	});
 
 	it('shares one short thumbnail deadline across a lifecycle sweep', async () => {
 		await putSession({ status: 'expired' });
@@ -161,7 +208,7 @@ describe('SessionLifecycleService', () => {
 
 			const result = await makeService().sweep(now);
 
-			expect(probe).toHaveBeenCalled();
+			expect(probe).not.toHaveBeenCalled();
 			expect(result.extended).toBe(0);
 			expect(result.reapedExpired).toBe(1);
 			expect(sandboxCalls.destroy).toBe(1);
@@ -208,12 +255,10 @@ describe('SessionLifecycleService', () => {
 			expect(sandboxCalls.destroy).toBe(1);
 		});
 
-		it('no-ops when an explicit stop wins the beginTerminating race', async () => {
+		it('no-ops when an explicit stop owns the stop lease', async () => {
 			const s = await putSession({ expires_at: iso(-1000), last_snapshot_at: iso(0) });
-			vi.spyOn(sessions, 'beginTerminating').mockResolvedValue({
-				session: { ...s, status: 'terminated' },
-				transitioned: false,
-			});
+			const requested = await sessions.requestStop(s.project_id, s.session_id);
+			await sessions.claimStop(requested, crypto.randomUUID());
 
 			const result = await makeService().sweep(now);
 
@@ -231,19 +276,28 @@ describe('SessionLifecycleService', () => {
 			expect(sandboxCalls.destroy).toBe(1);
 		});
 
-		it('destroys and still marks terminated when the live save throws', async () => {
-			// A failed save must not prevent the destruction attempt.
+		it('retains the runtime when the live save fails', async () => {
+			// Persistence failure must leave the only live copy intact.
 			const captureSpy = vi
-				.spyOn(SandboxProvisioner.prototype, 'captureSession')
-				.mockRejectedValue(new Error('save failed'));
+				.spyOn(SessionCaptureCoordinator.prototype, 'capture')
+				.mockResolvedValue({
+					critical: {
+						status: 'failed',
+						code: 'SOURCE_UNAVAILABLE',
+						retryable: true,
+						cause: new Error('save failed'),
+					},
+					workspace: { status: 'skipped' },
+					runtimeState: 'running',
+				});
 			const s = await putSession({ expires_at: iso(-1000), last_snapshot_at: iso(0) });
 
 			const result = await makeService().sweep(now);
 
 			expect(captureSpy).toHaveBeenCalled();
-			expect(result.reapedExpired).toBe(1);
-			expect(sandboxCalls.destroy).toBe(1);
-			expect((await getStored(s)).status).toBe('terminated');
+			expect(result.reapedExpired).toBe(0);
+			expect(sandboxCalls.destroy).toBe(0);
+			expect((await getStored(s)).status).toBe('running');
 		});
 	});
 
@@ -593,7 +647,7 @@ describe('SessionLifecycleService', () => {
 
 			const result = await makeService().sweep(now);
 
-			expect(result.reclaimed).toBe(1);
+			expect(result.reapedExpired).toBe(1);
 			expect(sandboxCalls.destroy).toBe(1);
 			expect(notebooks.commitSession).not.toHaveBeenCalled();
 			expect((await getStored(s)).sandbox_reclaimed_at).toBeDefined();
@@ -709,7 +763,7 @@ describe('SessionLifecycleService', () => {
 
 	describe('periodic snapshots', () => {
 		it.each(['adapter error', 'oversized payload', 'malformed base64'])(
-			'retries a notebook read after %s on the next sweep without advancing the cadence',
+			'retries a notebook read after %s after bounded backoff without advancing the durable timestamp',
 			async (failure) => {
 				const { instance, calls } = makeFakeSandbox({
 					files: { '/workspace/notebook.py': 'edited' },
@@ -732,13 +786,17 @@ describe('SessionLifecycleService', () => {
 				expect(notebooks.commitSession).not.toHaveBeenCalled();
 
 				read.mockRestore();
-				expect((await service.sweep(now + 1000)).snapshotted).toBe(1);
-				expect((await getStored(s)).last_snapshot_at).toBe(iso(1000));
+				vi.setSystemTime(now + 1000);
+				expect((await service.sweep(now + 1000)).snapshotted).toBe(0);
+				vi.setSystemTime(now + 60_000);
+				expect((await service.sweep(now + 60_000)).snapshotted).toBe(1);
+				expect((await getStored(s)).last_snapshot_at).toBe(iso(60_000));
 				expect(notebooks.commitSession).toHaveBeenCalledWith(
 					projectId,
 					notebookId,
 					expect.objectContaining({ code: 'edited' }),
 					s.user_id,
+					expect.anything(),
 				);
 				expect(calls.destroy).toBe(0);
 			},
@@ -746,7 +804,7 @@ describe('SessionLifecycleService', () => {
 
 		it('saves a due session source-only and advances last_snapshot_at', async () => {
 			const render = vi.spyOn(thumbnailCapture, 'captureThumbnail');
-			const captureSpy = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
+			const captureSpy = vi.spyOn(SessionCaptureCoordinator.prototype, 'capture');
 			const s = await putSession({
 				expires_at: iso(60 * 60 * 1000),
 				last_snapshot_at: iso(-SNAPSHOT_INTERVAL_MS - 1000),
@@ -758,17 +816,7 @@ describe('SessionLifecycleService', () => {
 			expect(render).not.toHaveBeenCalled();
 			expect(notebooks.commitSession).toHaveBeenCalledTimes(1);
 			// Source-only: the workspace mirror is refreshed at teardown, not per snapshot.
-			expect(captureSpy).toHaveBeenCalledWith(
-				expect.anything(),
-				expect.anything(),
-				expect.anything(),
-				s.project_id,
-				s.notebook_id,
-				s.user_id,
-				'source',
-				undefined,
-				{ includeWorkspace: false, sandboxId: s.sandbox_id },
-			);
+			expect(captureSpy).toHaveBeenCalledWith(s, expect.anything(), { includeWorkspace: false });
 			expect((await getStored(s)).last_snapshot_at).toBe(iso(0));
 			expect(sandboxCalls.destroy).toBe(0);
 		});
@@ -928,12 +976,12 @@ describe('SessionLifecycleService', () => {
 			);
 
 			await expect(svc.sweep(now)).resolves.toMatchObject({
-				reclaimed: failure === 'sandbox handle' ? 1 : 2,
+				reclaimed: 1,
 			});
 			expect(good.calls.destroy).toBe(1);
 			if (failure === 'surface stop') {
 				expect(bad.calls.exec.length).toBeGreaterThan(0);
-				expect(bad.calls.destroy).toBe(1);
+				expect(bad.calls.destroy).toBe(0);
 			}
 			expect(
 				(await sessions.getSession(projectId, healthy.session_id)).sandbox_reclaimed_at,

@@ -1,5 +1,7 @@
+import { SessionCaptureCoordinator } from './SessionCaptureCoordinator';
+import { RuntimeCaptureClient } from './runtimeCapture';
 import { WarmPoolStore } from './WarmPoolStore';
-import { execResult } from '../../ports/sandbox';
+import { execResult, readFileFailure } from '../../ports/sandbox';
 import {
 	makeFakeSandbox,
 	ACTOR,
@@ -58,12 +60,27 @@ describe('ReconciliationService', () => {
 		sessions = new SessionService(bucket);
 		notebooks = new NotebookService(bucket, new CatalogService(bucket));
 		compute = new RecordingCompute();
+		const attach = compute.connectExisting.bind(compute);
+		vi.spyOn(compute, 'connectExisting').mockImplementation((id) => ({
+			...attach(id),
+			readFileBounded: async (path) =>
+				path === '/workspace/notebook.py'
+					? { success: true, content: 'print(1)' }
+					: readFileFailure('NOT_FOUND'),
+		}));
 		reconciler = new ReconciliationService(sessions, notebooks, compute, bucket, 'source');
+		vi.spyOn(RuntimeCaptureClient.prototype, 'prepare').mockResolvedValue({
+			token: crypto.randomUUID(),
+			directory: '/workspace',
+		});
+		vi.spyOn(RuntimeCaptureClient.prototype, 'resume').mockResolvedValue();
+		vi.spyOn(RuntimeCaptureClient.prototype, 'commitStop').mockResolvedValue();
 		// Rule 1 commits the session's edits before destroying the sandbox; stub the
 		// notebook metadata (local source → edits persist) and commitSession so the
 		// cases that don't assert it don't need a populated catalog. The teardown
 		// wiring itself is asserted in its own test below.
 		vi.spyOn(notebooks, 'getNotebook').mockResolvedValue({ source: makeLocalSource() } as never);
+		vi.spyOn(notebooks, 'beginSessionCapture').mockResolvedValue({} as never);
 		vi.spyOn(notebooks, 'commitSession').mockResolvedValue({
 			versionId: createVersionId(),
 			newVersion: false,
@@ -892,6 +909,7 @@ describe('ReconciliationService', () => {
 			notebookId,
 			expect.anything(),
 			ACTOR,
+			expect.anything(),
 		);
 		expect(compute.destroyed).toContain(terminalId);
 	});
@@ -1270,24 +1288,30 @@ describe('ReconciliationService', () => {
 		expect(line).not.toContain('do-not-log');
 	});
 
-	it('Rule 1: force-destroys and still counts reclaimed when teardown throws', async () => {
-		const session = await createSession(terminalId);
-		await sessions.terminate(projectId, session.session_id);
+	it('Rule 1: retains an expired editor when the capture fails', async () => {
+		const session = await putSession({
+			status: 'expired',
+			sandbox_url: 'https://kernel.example',
+			sandbox_id: terminalId,
+			started_at: iso(-60 * 60_000),
+		});
 		compute.active = [{ id: terminalId }];
-
-		// Save-on-reap can reject (bucket/sandbox RPC failure); the reconciler must
-		// still guarantee the sandbox dies and count it reclaimed.
-		const provisioner = (
-			reconciler as unknown as {
-				retirer: { provisioner: { teardown: () => Promise<void> } };
-			}
-		).retirer.provisioner;
-		vi.spyOn(provisioner, 'teardown').mockRejectedValue(new Error('teardown boom'));
-
-		const result = await reconciler.reconcile();
-
-		expect(result.reclaimed).toBe(1);
-		expect(compute.destroyed).toContain(terminalId);
+		vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockResolvedValue({
+			critical: {
+				status: 'failed',
+				code: 'SOURCE_UNAVAILABLE',
+				retryable: true,
+				cause: new Error('unavailable'),
+			},
+			workspace: { status: 'skipped' },
+			runtimeState: 'running',
+		});
+		expect((await reconciler.reconcile()).reclaimed).toBe(0);
+		expect(compute.destroyed).toEqual([]);
+		expect((await sessions.getSession(projectId, session.session_id)).stop).toMatchObject({
+			outcome: 'retained',
+			runtime_state: 'running',
+		});
 	});
 
 	it('Rule 1: reclaims a lingering sandbox behind a terminating record', async () => {
@@ -1443,15 +1467,9 @@ describe('ReconciliationService', () => {
 			const reconciler = new ReconciliationService(sessions, notebooks, compute, bucket, 'source');
 
 			await expect(reconciler.reconcile()).resolves.toMatchObject({ orphansReaped: 1 });
-			expect(destroyed.toSorted()).toEqual(
-				(failure === 'surface stop' ? [badId, goodId, orphanId] : [goodId, orphanId]).toSorted(),
-			);
+			expect(destroyed.toSorted()).toEqual([goodId, orphanId].toSorted());
 			const failedSession = await sessions.getSession(projectId, failing.session_id);
-			if (failure === 'surface stop') {
-				expect(failedSession.sandbox_reclaimed_at).toEqual(expect.any(String));
-			} else {
-				expect(failedSession.sandbox_reclaimed_at).toBeUndefined();
-			}
+			expect(failedSession.sandbox_reclaimed_at).toBeUndefined();
 			expect(
 				(await sessions.getSession(projectId, healthy.session_id)).sandbox_reclaimed_at,
 			).toBeDefined();

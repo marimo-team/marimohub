@@ -493,13 +493,21 @@ export class JobRunner {
 				: undefined;
 		const entryNotebook = pinned?.entry_notebook ?? policy.entryNotebook;
 		const localVersion =
-			policy.persistSessionEdits && run.source_version_id
-				? nb.version(run.source_version_id)
+			policy.persistSessionEdits && notebook.source.current_version_id
+				? nb.version(run.source_version_id ?? notebook.source.current_version_id)
 				: undefined;
 		const launchSource = resolveNotebookLaunchSource({
 			entryNotebook,
 			workspacePrefix: syncedPaths?.workspacePrefix ?? nb.workspacePrefix,
 			localVersion,
+			localCapture:
+				notebook.source.type === 'local'
+					? notebook.source.publication?.versions.find(
+							(version) =>
+								version.version_id ===
+								(run.source_version_id ?? notebook.source.current_version_id),
+						)
+					: undefined,
 		});
 		const launchStrategy = await resolveLaunchStrategyForSession({
 			entryNotebookKey: launchSource.entryNotebookKey,
@@ -537,6 +545,7 @@ export class JobRunner {
 			workspaceLoadMode: 'copy-only' as const,
 			workspacePrefix: syncedPaths?.workspacePrefix,
 			workspaceOverlay: launchSource.workspaceOverlay,
+			workspaceRemovePaths: launchSource.workspaceRemovePaths,
 			...pullSourceGitOptions(notebook.source, syncedPaths, pinned?.root_path),
 			workspaceArchive: syncedPaths?.workspaceArchive,
 		};

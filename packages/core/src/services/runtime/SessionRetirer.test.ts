@@ -1,14 +1,15 @@
+import { RuntimeCaptureClient } from './runtimeCapture';
 import { execResult, readFileFailure } from '../../ports/sandbox';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
-import { NotFoundError } from '../../errors';
+import { NotFoundError, SessionPersistenceRequiredError } from '../../errors';
 import { paths } from '../../paths';
 import type { FilesystemSnapshots, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
 import type { Session } from '../../schema';
 import {
 	ACTOR,
 	fakeComputeFrom,
-	makeFakeSandbox,
+	makeFakeSandbox as makeEmptySandbox,
 	makeLocalSource,
 	makeNotebookMeta,
 	makeSession,
@@ -19,7 +20,32 @@ import {
 import { CatalogService } from '../catalog/CatalogService';
 import { resolveRestoreSnapshot } from '../content/filesystemSnapshots';
 import { NotebookService } from '../content/NotebookService';
-import { SandboxProvisioner } from './SandboxProvisioner';
+import { SessionCaptureCoordinator } from './SessionCaptureCoordinator';
+import type { SessionCaptureResult } from './sessionCapture';
+
+function captured(saved = true): SessionCaptureResult {
+	return saved
+		? {
+				critical: {
+					status: 'durable',
+					capturedAt: new Date().toISOString(),
+					publication: {
+						versionId: createVersionId(),
+						newVersion: true,
+						capturedHtml: false,
+						capturedSession: false,
+					},
+				},
+				workspace: { status: 'skipped' },
+				runtime: { token: crypto.randomUUID(), directory: '/workspace' },
+				runtimeState: 'paused',
+			}
+		: {
+				critical: { status: 'not_required', reason: 'remote_source' },
+				workspace: { status: 'skipped' },
+			};
+}
+
 import { SessionRetirer } from './SessionRetirer';
 import { SessionService } from './SessionService';
 import * as thumbnailCapture from './captureThumbnail';
@@ -27,6 +53,14 @@ import { marimoSurface } from './surfaces/marimo';
 import { SurfaceManager } from './surfaces/SurfaceManager';
 import { SurfaceRegistry } from './surfaces/registry';
 import { vscodeSurface } from './surfaces/vscode';
+
+function makeFakeSandbox(
+	options: Parameters<typeof makeEmptySandbox>[0] = {
+		files: { '/workspace/notebook.py': 'print(1)' },
+	},
+) {
+	return makeEmptySandbox(options);
+}
 
 function snapshotProvider(
 	instance: SandboxInstance,
@@ -53,6 +87,18 @@ describe('SessionRetirer', () => {
 	const notebookId = createNotebookId();
 
 	beforeEach(async () => {
+		vi.spyOn(RuntimeCaptureClient.prototype, 'prepare').mockResolvedValue({
+			token: crypto.randomUUID(),
+			directory: '/workspace',
+		});
+		vi.spyOn(RuntimeCaptureClient.prototype, 'resume').mockResolvedValue();
+		vi.spyOn(RuntimeCaptureClient.prototype, 'commitStop').mockResolvedValue();
+		vi.spyOn(RuntimeCaptureClient.prototype, 'status').mockImplementation(async () => ({
+			ok: true,
+			state: 'stopped',
+			token: (await sessions.listSessions()).find((item) => item.stop?.runtime_token)?.stop
+				?.runtime_token,
+		}));
 		bucket = new MemoryBucket();
 		sessions = new SessionService(bucket);
 		notebooks = new NotebookService(bucket, new CatalogService(bucket));
@@ -63,7 +109,13 @@ describe('SessionRetirer', () => {
 			source: makeLocalSource(),
 			readme: null,
 		});
-		vi.spyOn(notebooks, 'commitSession').mockResolvedValue(null);
+		vi.spyOn(notebooks, 'beginSessionCapture').mockResolvedValue({} as never);
+		vi.spyOn(notebooks, 'commitSession').mockResolvedValue({
+			versionId: createVersionId(),
+			newVersion: true,
+			capturedHtml: false,
+			capturedSession: false,
+		});
 	});
 
 	afterEach(() => {
@@ -132,7 +184,7 @@ describe('SessionRetirer', () => {
 		'applies the %s thumbnail policy before destruction',
 		async (thumbnail) => {
 			const { instance } = makeFakeSandbox();
-			vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(true);
+			vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockResolvedValue(captured());
 			const capture = vi.spyOn(thumbnailCapture, 'captureThumbnail').mockResolvedValue();
 			const destroy = vi.spyOn(instance, 'destroy');
 			const session = await persistentSession();
@@ -143,10 +195,10 @@ describe('SessionRetirer', () => {
 			else {
 				expect(capture).toHaveBeenCalledOnce();
 				const deadline = capture.mock.calls[0][6]!;
-				if (thumbnail === 'bounded') {
+				{
 					expect(deadline).toBeGreaterThanOrEqual(started + 3_000);
 					expect(deadline).toBeLessThanOrEqual(Date.now() + 3_000);
-				} else expect(deadline).toBe(Infinity);
+				}
 				expect(capture.mock.invocationCallOrder[0]).toBeLessThan(
 					destroy.mock.invocationCallOrder[0],
 				);
@@ -156,13 +208,13 @@ describe('SessionRetirer', () => {
 	);
 
 	it.each([true, false])(
-		'captures a thumbnail only after save and before destruction (enabled=%s)',
+		'captures a bounded thumbnail before pausing writers (enabled=%s)',
 		async (enabled) => {
 			const { instance } = makeFakeSandbox();
 			const order: string[] = [];
-			vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockImplementation(async () => {
+			vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockImplementation(async () => {
 				order.push('save');
-				return true;
+				return captured();
 			});
 			vi.spyOn(thumbnailCapture, 'captureThumbnail').mockImplementation(async () => {
 				order.push('thumbnail');
@@ -180,7 +232,7 @@ describe('SessionRetirer', () => {
 				persistWorkspace: 'source',
 				automaticThumbnails: enabled,
 			}).retire(session);
-			expect(order).toEqual(enabled ? ['save', 'thumbnail', 'destroy'] : ['save', 'destroy']);
+			expect(order).toEqual(enabled ? ['thumbnail', 'save', 'destroy'] : ['save', 'destroy']);
 		},
 	);
 
@@ -194,7 +246,7 @@ describe('SessionRetirer', () => {
 		'captures thumbnails from the $source workspace dir ($version version)',
 		async ({ source, version, expected }) => {
 			const { instance } = makeFakeSandbox();
-			vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(true);
+			vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockResolvedValue(captured());
 			const capture = vi.spyOn(thumbnailCapture, 'captureThumbnail').mockResolvedValue();
 			const getSource = vi.spyOn(notebooks, 'getNotebookSource');
 			if (source === 'subtree') {
@@ -256,14 +308,14 @@ describe('SessionRetirer', () => {
 	);
 
 	it.each(['ineligible', 'failed'] as const)(
-		'skips thumbnails after an %s save',
+		'skips requested thumbnails and retains a failed %s save',
 		async (result) => {
 			const { instance } = makeFakeSandbox();
 			const order: string[] = [];
-			vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockImplementation(async () => {
+			vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockImplementation(async () => {
 				order.push('save');
 				if (result === 'failed') throw new Error('save failed');
-				return false;
+				return captured(false);
 			});
 			vi.spyOn(thumbnailCapture, 'captureThumbnail').mockImplementation(async () => {
 				order.push('thumbnail');
@@ -273,8 +325,11 @@ describe('SessionRetirer', () => {
 			});
 			const session = await persistentSession();
 			await sessions.beginTerminating(projectId, session.session_id);
-			await retirer(fakeComputeFrom(instance)).retire(session);
-			expect(order).toEqual(['save', 'destroy']);
+			const stopping = retirer(fakeComputeFrom(instance)).retire(session, { thumbnail: 'skip' });
+			if (result === 'failed')
+				await expect(stopping).rejects.toBeInstanceOf(SessionPersistenceRequiredError);
+			else await stopping;
+			expect(order).toEqual(result === 'failed' ? ['save'] : ['save', 'destroy']);
 		},
 	);
 
@@ -319,7 +374,7 @@ describe('SessionRetirer', () => {
 		'applies the %s thumbnail policy when reclaiming an expired editor',
 		async (thumbnail) => {
 			const { instance } = makeFakeSandbox();
-			vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(true);
+			vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockResolvedValue(captured());
 			const capture = vi.spyOn(thumbnailCapture, 'captureThumbnail').mockResolvedValue();
 			const session = await expiredEditor();
 			const started = Date.now();
@@ -346,10 +401,10 @@ describe('SessionRetirer', () => {
 		await sessions.beginTerminating(projectId, session.session_id);
 		const service = retirer({ create: () => instance, proxy: async () => null });
 
-		await service.retire(session);
+		await expect(service.retire(session)).rejects.toBeInstanceOf(SessionPersistenceRequiredError);
 
 		const terminated = await sessions.getSession(projectId, session.session_id);
-		expect(terminated.status).toBe('terminated');
+		expect(terminated.status).toBe('terminating');
 		expect(terminated.sandbox_reclaimed_at).toBeUndefined();
 		expect(await sessions.getEditorClaim(projectId, notebookId)).toMatchObject({
 			session_id: session.session_id,
@@ -358,7 +413,7 @@ describe('SessionRetirer', () => {
 		destroyFails = false;
 		expect(await service.reclaim(terminated, { save: false })).toEqual({
 			reclaimed: true,
-			saved: false,
+			saved: true,
 		});
 		expect(await sessions.getEditorClaim(projectId, notebookId)).toMatchObject({
 			session_id: null,
@@ -692,17 +747,19 @@ describe('SessionRetirer', () => {
 		expect(calls.destroy).toBe(1);
 	});
 
-	it('destroys after a capture failure without publishing a saved-artifact snapshot', async () => {
+	it('retains after a capture failure without publishing a saved-artifact snapshot', async () => {
 		const session = await expiredEditor();
 		const { instance, calls } = makeFakeSandbox();
 		const provider = { ...snapshotProvider(instance), connectExisting: () => instance };
 		const capture = vi.spyOn(provider, 'captureSnapshot');
 		vi.spyOn(notebooks, 'commitSession').mockRejectedValueOnce(new Error('commit unavailable'));
-		expect(await retirer(provider).reclaim(session)).toEqual({ reclaimed: true, saved: false });
+		expect(await retirer(provider).reclaim(session)).toMatchObject({ reclaimed: false });
 		expect(notebooks.commitSession).toHaveBeenCalledOnce();
 		expect(capture).not.toHaveBeenCalled();
-		expect(calls.destroy).toBe(1);
-		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBeNull();
+		expect(calls.destroy).toBe(0);
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
+			session.session_id,
+		);
 	});
 
 	it('can destroy immediately without capturing after an authorization deadline', async () => {
@@ -744,7 +801,7 @@ describe('SessionRetirer', () => {
 		expect(calls.destroy).toBe(1);
 	});
 
-	it('waits for every secondary stop before destroying after a stop failure', async () => {
+	it('waits for every secondary stop and retains after a stop failure', async () => {
 		vi.useFakeTimers();
 		const { instance, calls } = makeFakeSandbox();
 		const session = await persistentSession({
@@ -763,10 +820,12 @@ describe('SessionRetirer', () => {
 			stopped = true;
 			return execResult(true, '', '');
 		};
-		const capture = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
+		const capture = vi.spyOn(SessionCaptureCoordinator.prototype, 'capture');
 		vi.spyOn(console, 'error').mockImplementation(() => {});
 
-		const retiring = retirer(fakeComputeFrom(instance)).retire(session);
+		const retiring = expect(
+			retirer(fakeComputeFrom(instance)).retire(session),
+		).rejects.toBeInstanceOf(SessionPersistenceRequiredError);
 		await vi.advanceTimersByTimeAsync(0);
 		expect(calls.destroy).toBe(0);
 		expect(stopped).toBe(false);
@@ -774,7 +833,7 @@ describe('SessionRetirer', () => {
 		await retiring;
 
 		expect(stopped).toBe(true);
-		expect(calls.destroy).toBe(1);
+		expect(calls.destroy).toBe(0);
 		expect(capture).not.toHaveBeenCalled();
 	});
 
@@ -802,7 +861,7 @@ describe('SessionRetirer', () => {
 					},
 				});
 			} else {
-				vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockRejectedValue(
+				vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockRejectedValue(
 					new Error('bucket unavailable'),
 				);
 			}
@@ -810,7 +869,9 @@ describe('SessionRetirer', () => {
 			const session = await persistentSession();
 			await sessions.beginTerminating(projectId, session.session_id);
 
-			await retirer(compute).retire(session);
+			await expect(retirer(compute).retire(session)).rejects.toBeInstanceOf(
+				SessionPersistenceRequiredError,
+			);
 
 			if (failure === 'read') {
 				expect(error.mock.calls.map(([line]) => JSON.parse(line))).toContainEqual(
@@ -832,8 +893,10 @@ describe('SessionRetirer', () => {
 			expect(await notebooks.getFsSnapshot(projectId, notebookId)).toMatchObject({
 				snapshot_id: 'known-good',
 			});
-			expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
-			expect(calls.destroy).toBe(1);
+			expect((await sessions.getSession(projectId, session.session_id)).status).toBe(
+				failure === 'read' ? 'running' : 'terminating',
+			);
+			expect(calls.destroy).toBe(0);
 		},
 	);
 
@@ -845,7 +908,7 @@ describe('SessionRetirer', () => {
 			snapshot_id: 'previous',
 			captured_at: new Date().toISOString(),
 		});
-		vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(true);
+		vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockResolvedValue(captured());
 		const session = await persistentSession();
 		await sessions.beginTerminating(projectId, session.session_id);
 
@@ -861,7 +924,7 @@ describe('SessionRetirer', () => {
 		const { instance } = makeFakeSandbox();
 		const compute = snapshotProvider(instance);
 		const captureSnapshot = vi.spyOn(compute, 'captureSnapshot');
-		vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(false);
+		vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockResolvedValue(captured(false));
 		const session = await persistentSession();
 		await sessions.beginTerminating(projectId, session.session_id);
 
@@ -905,11 +968,11 @@ describe('SessionRetirer', () => {
 		});
 		await probing;
 		await sessions.beginTerminating(projectId, session.session_id);
-		vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockImplementation(async () => {
+		vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockImplementation(async () => {
 			expect(
 				(await sessions.getSession(projectId, session.session_id)).surfaces?.vscode?.status,
 			).toBe('stopping');
-			return false;
+			return captured(false);
 		});
 
 		await retirer(fakeComputeFrom(instance)).retire(session);
@@ -967,10 +1030,10 @@ describe('SessionRetirer', () => {
 		const captureGate = new Promise<void>((resolve) => {
 			releaseCapture = resolve;
 		});
-		vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockImplementation(async () => {
+		vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockImplementation(async () => {
 			enteredCapture();
 			await captureGate;
-			return false;
+			return captured(false);
 		});
 
 		const retirement = retirer(fakeComputeFrom(instance)).retire(session);
@@ -985,13 +1048,13 @@ describe('SessionRetirer', () => {
 		await retirement;
 	});
 
-	it('captures sessions without secondary surfaces without rereading their stop fences', async () => {
+	it('finalizes a captured session despite a transient final status read failure', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const session = await persistentSession();
 		await sessions.beginTerminating(projectId, session.session_id);
 		const capture = vi
-			.spyOn(SandboxProvisioner.prototype, 'captureSession')
-			.mockResolvedValue(false);
+			.spyOn(SessionCaptureCoordinator.prototype, 'capture')
+			.mockResolvedValue(captured(false));
 		const getSession = vi
 			.spyOn(sessions, 'getSession')
 			.mockResolvedValueOnce(session)
@@ -999,7 +1062,7 @@ describe('SessionRetirer', () => {
 
 		await retirer(fakeComputeFrom(instance)).retire(session);
 
-		expect(getSession).toHaveBeenCalledTimes(1);
+		expect(getSession).toHaveBeenCalled();
 		expect(capture).toHaveBeenCalledOnce();
 		expect(calls.destroy).toBe(1);
 	});
@@ -1026,9 +1089,11 @@ describe('SessionRetirer', () => {
 				if (failure === 'fenced read') read.mockResolvedValueOnce(session);
 				read.mockRejectedValueOnce(error);
 			}
-			const capture = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
+			const capture = vi.spyOn(SessionCaptureCoordinator.prototype, 'capture');
 
-			await expect(retirer(fakeComputeFrom(instance)).retire(session)).rejects.toThrow(error);
+			await expect(retirer(fakeComputeFrom(instance)).retire(session)).rejects.toBeInstanceOf(
+				SessionPersistenceRequiredError,
+			);
 
 			expect(capture).not.toHaveBeenCalled();
 			expect(calls.destroy).toBe(0);
@@ -1057,13 +1122,15 @@ describe('SessionRetirer', () => {
 			stderr: 'sandbox unavailable',
 			error: { code: 'BACKEND_ERROR' },
 		});
-		const capture = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
+		const capture = vi.spyOn(SessionCaptureCoordinator.prototype, 'capture');
 
-		await expect(retirer(fakeComputeFrom(instance)).retire(session)).resolves.toBeUndefined();
+		await expect(retirer(fakeComputeFrom(instance)).retire(session)).rejects.toBeInstanceOf(
+			SessionPersistenceRequiredError,
+		);
 
 		expect(capture).not.toHaveBeenCalled();
-		expect(calls.destroy).toBe(1);
-		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
+		expect(calls.destroy).toBe(0);
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminating');
 	});
 
 	it('captures an owner-scoped filesystem snapshot during takeover', async () => {
@@ -1102,7 +1169,7 @@ describe('SessionRetirer', () => {
 		const compute = snapshotProvider(instance);
 		const captureSnapshot = vi.spyOn(compute, 'captureSnapshot');
 		const session = await persistentSession();
-		vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(false);
+		vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockResolvedValue(captured(false));
 
 		await retirer(compute).retireForTakeover(session, uid('user_01HXY00000000000000000001'));
 
@@ -1148,7 +1215,7 @@ describe('SessionRetirer', () => {
 			const { instance, calls } = makeFakeSandbox();
 			const session = await persistentSession();
 			await reserveTakeover(session, 'capture-retry');
-			const capture = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
+			const capture = vi.spyOn(SessionCaptureCoordinator.prototype, 'capture');
 			const read = vi.spyOn(instance, 'readFileBounded');
 			if (failure === 'read') {
 				read.mockResolvedValue(readFileFailure('READ_FAILED'));
@@ -1159,15 +1226,15 @@ describe('SessionRetirer', () => {
 
 			await expect(
 				service.retireForTakeover(session, uid('user_01HXY00000000000000000001')),
-			).rejects.toThrow(
-				failure === 'read' ? 'Could not read notebook.py: READ_FAILED' : 'final save failed',
+			).rejects.toThrow('The editor could not be saved and remains retained');
+			expect((await sessions.getSession(projectId, session.session_id)).stop?.outcome).toMatch(
+				/retained|uncertain/,
 			);
-			expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminating');
 			expect(calls.destroy).toBe(0);
 
 			await sessions.setTakeoverPhase(projectId, notebookId, 'capture-retry', 'draining');
 			if (failure === 'read') read.mockRestore();
-			else capture.mockResolvedValueOnce(true);
+			else capture.mockResolvedValueOnce(captured());
 			expect(await service.completeTakeoverDrain(session, 'capture-retry', 'lease-retry')).toBe(
 				true,
 			);
@@ -1180,10 +1247,10 @@ describe('SessionRetirer', () => {
 		const { instance, calls } = makeFakeSandbox();
 		const session = await persistentSession();
 		await reserveTakeover(session, 'terminal-retry');
-		const capture = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
-		vi.spyOn(sessions, 'markTerminated').mockRejectedValueOnce(
-			new Error('session record unavailable'),
-		);
+		const capture = vi.spyOn(SessionCaptureCoordinator.prototype, 'capture');
+		vi.spyOn(sessions, 'markTerminated')
+			.mockRejectedValueOnce(new Error('session record unavailable'))
+			.mockRejectedValueOnce(new Error('session record unavailable'));
 		const service = retirer({ create: () => instance, proxy: async () => null });
 
 		await expect(
@@ -1192,7 +1259,7 @@ describe('SessionRetirer', () => {
 		const draining = await sessions.getSession(projectId, session.session_id);
 		expect(draining).toMatchObject({
 			status: 'terminating',
-			takeover_capture_completed_at: expect.any(String),
+			stop: expect.objectContaining({ outcome: 'stopped' }),
 			sandbox_reclaimed_at: expect.any(String),
 		});
 
@@ -1206,7 +1273,7 @@ describe('SessionRetirer', () => {
 		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
 	});
 
-	it('repeats capture safely when the capture-complete marker write is interrupted', async () => {
+	it('repeats capture safely when the durable runtime receipt write is interrupted', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const session = await persistentSession();
 		await reserveTakeover(session, 'capture-marker-retry');
@@ -1216,16 +1283,22 @@ describe('SessionRetirer', () => {
 			by: uid('user_01HXY00000000000000000001'),
 		});
 		const capture = vi
-			.spyOn(SandboxProvisioner.prototype, 'captureSession')
-			.mockResolvedValue(true);
-		vi.spyOn(sessions, 'markTakeoverCaptureCompleted').mockRejectedValueOnce(
-			new Error('capture marker unavailable'),
-		);
+			.spyOn(SessionCaptureCoordinator.prototype, 'capture')
+			.mockResolvedValue(captured());
+		const updateStop = sessions.updateStop.bind(sessions);
+		let fail = true;
+		vi.spyOn(sessions, 'updateStop').mockImplementation(async (...args) => {
+			if (args[2].outcome === 'durable' && fail) {
+				fail = false;
+				throw new Error('capture marker unavailable');
+			}
+			return updateStop(...args);
+		});
 		const service = retirer({ create: () => instance, proxy: async () => null });
 
 		await expect(
 			service.completeTakeoverDrain(session, 'capture-marker-retry', 'lease-first'),
-		).rejects.toThrow('capture marker unavailable');
+		).rejects.toThrow('The editor could not be saved and remains retained');
 		expect(calls.destroy).toBe(0);
 		await expect(
 			service.completeTakeoverDrain(session, 'capture-marker-retry', 'lease-second'),
@@ -1245,8 +1318,8 @@ describe('SessionRetirer', () => {
 			by: uid('user_01HXY00000000000000000001'),
 		});
 		const capture = vi
-			.spyOn(SandboxProvisioner.prototype, 'captureSession')
-			.mockResolvedValue(true);
+			.spyOn(SessionCaptureCoordinator.prototype, 'capture')
+			.mockResolvedValue(captured());
 		vi.spyOn(sessions, 'markSandboxReclaimed').mockRejectedValueOnce(
 			new Error('reclaimed marker unavailable'),
 		);
@@ -1254,7 +1327,7 @@ describe('SessionRetirer', () => {
 
 		await expect(
 			service.completeTakeoverDrain(session, 'destroy-marker-retry', 'lease-first'),
-		).rejects.toThrow('reclaimed marker unavailable');
+		).rejects.toThrow('The editor could not be saved and remains retained');
 		expect(calls.destroy).toBe(1);
 		await expect(
 			service.completeTakeoverDrain(session, 'destroy-marker-retry', 'lease-second'),
@@ -1282,11 +1355,11 @@ describe('SessionRetirer', () => {
 			captureStarted = resolve;
 		});
 		const capture = vi
-			.spyOn(SandboxProvisioner.prototype, 'captureSession')
+			.spyOn(SessionCaptureCoordinator.prototype, 'capture')
 			.mockImplementation(async () => {
 				captureStarted();
 				await captureGate;
-				return true;
+				return captured();
 			});
 		const service = retirer({ create: () => instance, proxy: async () => null });
 
@@ -1321,11 +1394,11 @@ describe('SessionRetirer', () => {
 			captureStarted = resolve;
 		});
 		const capture = vi
-			.spyOn(SandboxProvisioner.prototype, 'captureSession')
+			.spyOn(SessionCaptureCoordinator.prototype, 'capture')
 			.mockImplementation(async () => {
 				captureStarted();
 				await captureGate;
-				return true;
+				return captured();
 			});
 		const renew = vi.spyOn(sessions, 'renewTakeoverDrainLease');
 		const service = retirer({ create: () => instance, proxy: async () => null });
@@ -1404,10 +1477,10 @@ describe('SessionRetirer', () => {
 		const started = new Promise<void>((resolve) => {
 			captureStarted = resolve;
 		});
-		vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockImplementation(async () => {
+		vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockImplementation(async () => {
 			captureStarted();
 			await captureGate;
-			return true;
+			return captured();
 		});
 		const service = retirer({ create: () => instance, proxy: async () => null });
 
@@ -1426,7 +1499,7 @@ describe('SessionRetirer', () => {
 		});
 	});
 
-	it('still destroys the sandbox when a secondary surface refuses to stop', async () => {
+	it('retains the sandbox when a secondary surface refuses to stop', async () => {
 		const { instance, calls } = makeFakeSandbox({
 			execResult: execResult(false, '', 'sandbox unavailable', 'BACKEND_ERROR'),
 		});
@@ -1443,9 +1516,9 @@ describe('SessionRetirer', () => {
 		});
 		const service = retirer(fakeComputeFrom(instance));
 
-		await expect(service.retire(session)).resolves.toBeUndefined();
+		await expect(service.retire(session)).rejects.toBeInstanceOf(SessionPersistenceRequiredError);
 
-		expect(calls.destroy).toBe(1);
-		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
+		expect(calls.destroy).toBe(0);
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminating');
 	});
 });

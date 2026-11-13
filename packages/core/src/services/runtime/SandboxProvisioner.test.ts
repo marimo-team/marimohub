@@ -1,3 +1,8 @@
+import { SessionRetirer } from './SessionRetirer';
+import { SessionService } from './SessionService';
+import { RuntimeCaptureClient } from './runtimeCapture';
+import type { Bucket } from '../../ports/bucket';
+import type { NotebookId, ProjectId } from '../../ids';
 import { WORKSPACE_LIMITS } from '../../integrations/remoteWorkspace';
 import { describe, it, expect, vi } from 'vitest';
 import { ByteBudget } from './byteBudget';
@@ -9,7 +14,7 @@ import {
 	createVersionId,
 	UserId,
 } from '../../ids';
-import { UnavailableError } from '../../errors';
+import { UnavailableError, SessionPersistenceRequiredError } from '../../errors';
 import { paths } from '../../paths';
 import { readFileFailure } from '../../ports/sandbox';
 import { expectFileResult } from '../../testing/resultAssertions';
@@ -37,6 +42,55 @@ import { EMPTY_PYPROJECT } from './marimoLaunch';
 import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { sandboxContextPath } from './sandboxContext';
 import { captureWorkspace } from './sandboxFiles';
+
+async function retireSandbox(
+	provisioner: SandboxProvisioner,
+	sandbox: SandboxInstance,
+	notebooks: NotebookService,
+	bucket: Bucket,
+	projectId: ProjectId,
+	notebookId: NotebookId,
+	actor: UserId,
+	persistWorkspace: 'source' | 'workspace',
+	workdir = '/workspace',
+	opts?: {
+		persistEdits?: boolean;
+		computeProfile?: string;
+		computeResources?: { cpu?: number; memory_bytes?: number };
+	},
+) {
+	const sessions = new SessionService(bucket);
+	const session = await sessions.createSession({
+		project_id: projectId,
+		notebook_id: notebookId,
+		user_id: actor,
+		sandbox_id: createSandboxId(),
+		ephemeral: opts?.persistEdits === false,
+		compute_profile: opts?.computeProfile,
+		compute_resources: opts?.computeResources,
+	});
+	if (!session.ephemeral)
+		await sessions.claimEditor(projectId, notebookId, session.session_id, 'shared');
+	const prepare = vi
+		.spyOn(RuntimeCaptureClient.prototype, 'prepare')
+		.mockResolvedValue({ token: crypto.randomUUID(), directory: workdir });
+	const resume = vi.spyOn(RuntimeCaptureClient.prototype, 'resume').mockResolvedValue();
+	const commit = vi.spyOn(RuntimeCaptureClient.prototype, 'commitStop').mockResolvedValue();
+	try {
+		await new SessionRetirer({
+			sessions,
+			notebooks,
+			bucket,
+			compute: (provisioner as unknown as { provider: SandboxProvider }).provider,
+			persistWorkspace,
+			workdir,
+		}).retire(session, { thumbnail: 'skip' });
+	} finally {
+		prepare.mockRestore();
+		resume.mockRestore();
+		commit.mockRestore();
+	}
+}
 
 const MOUNT_PATH = '/workspace';
 
@@ -1401,6 +1455,34 @@ describe('SandboxProvisioner', () => {
 			expect(calls.setEnvVars).not.toContainEqual(
 				expect.objectContaining({ MARIMOHUB_BRIDGE_PARENT_ORIGIN: expect.any(String) }),
 			);
+		});
+		it('installs capture coordination without a UI bridge origin', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...options,
+				bridgeParentOrigin: undefined,
+				runtimeCapture: true,
+			});
+			expect(calls.writeFiles.flat()).toContainEqual({
+				path: `/tmp/marimohub-bridge/${sandboxId}/marimo-bridge.py`,
+				content: 'launcher',
+			});
+			expect(calls.setEnvVars).toContainEqual(
+				expect.objectContaining({
+					MARIMOHUB_LIFECYCLE_DIR: `/tmp/marimohub-bridge/${sandboxId}/lifecycle`,
+				}),
+			);
+			expect(calls.startProcess[0].cmd).toContain('marimo-bridge.py');
+		});
+		it('does not claim a capture launcher for uv-sandbox sessions', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...options,
+				runtimeCapture: true,
+				launchStrategy: 'uv-sandbox',
+			});
+			expect(calls.startProcess[0].cmd).not.toContain('marimo-bridge.py');
+			expect(calls.setEnvVars.some((vars) => 'MARIMOHUB_LIFECYCLE_DIR' in vars)).toBe(false);
 		});
 		it.each([
 			{ bridgeParentOrigin: undefined },
@@ -4097,7 +4179,8 @@ describe('SandboxProvisioner', () => {
 			});
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 
-			await provisioner.teardown(
+			await retireSandbox(
+				provisioner,
 				instance,
 				env.notebooks,
 				env.bucket,
@@ -4112,7 +4195,9 @@ describe('SandboxProvisioner', () => {
 			expect(calls.readFile).toContain(`${MOUNT_PATH}/__marimo__/notebook.html`);
 			expect(calls.readFile).toContain(`${MOUNT_PATH}/__marimo__/session/notebook.py.json`);
 
-			expect(await (await env.bucket.get(nb.code))?.text()).toBe('print(2)  # edited');
+			expect(await env.notebooks.getNotebookContent(project.id, created.id)).toBe(
+				'print(2)  # edited',
+			);
 
 			// A new version was cut (initial + this one) and source points at it.
 			expect(await env.notebooks.listVersions(project.id, created.id)).toHaveLength(2);
@@ -4120,16 +4205,28 @@ describe('SandboxProvisioner', () => {
 			const ver = nb.version(source.current_version_id);
 
 			// HTML + session snapshots landed in that version's folder, with descriptors.
-			expect(await (await env.bucket.get(ver.html))?.text()).toBe('<html>output</html>');
-			expect(await (await env.bucket.get(ver.session))?.text()).toBe('{"version":"1"}');
-			const verMeta = await (await env.bucket.get(ver.meta))!.json<any>();
+			expect(
+				await (
+					await env.bucket.get(
+						ver.capture(source.publication.versions[0].html_snapshot.capture_id).html,
+					)
+				)?.text(),
+			).toBe('<html>output</html>');
+			expect(
+				await (
+					await env.bucket.get(
+						ver.capture(source.publication.versions[0].session_snapshot.capture_id).session,
+					)
+				)?.text(),
+			).toBe('{"version":"1"}');
+			const verMeta = source.publication.versions[0];
 			expect(verMeta.html_snapshot.size_bytes).toBeGreaterThan(0);
 			expect(verMeta.session_snapshot.size_bytes).toBeGreaterThan(0);
 
 			expect(calls.destroy).toBe(1);
 		});
 
-		it('with no edited files read back, cuts no version but still destroys', async () => {
+		it('missing required source retains the sandbox without cutting a version', async () => {
 			const env = await setupTestEnv();
 			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
 			const created = await env.notebooks.createNotebook(
@@ -4140,45 +4237,52 @@ describe('SandboxProvisioner', () => {
 			const { instance, calls } = makeFakeSandbox(); // sandbox reports no files
 
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
-			await provisioner.teardown(
-				instance,
-				env.notebooks,
-				env.bucket,
-				project.id,
-				created.id,
-				ACTOR,
-				'source',
-			);
+			await expect(
+				retireSandbox(
+					provisioner,
+					instance,
+					env.notebooks,
+					env.bucket,
+					project.id,
+					created.id,
+					ACTOR,
+					'source',
+				),
+			).rejects.toBeInstanceOf(SessionPersistenceRequiredError);
 
-			// Nothing read back → no new version, but the sandbox is still destroyed.
+			// The last reachable runtime is retained when the required source is missing.
 			expect(await env.notebooks.listVersions(project.id, created.id)).toHaveLength(1);
-			expect(calls.destroy).toBe(1);
+			expect(calls.destroy).toBe(0);
 		});
 
-		it('still destroys the sandbox when commitSession throws (best-effort)', async () => {
-			const { instance, calls } = makeFakeSandbox();
-			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
-
-			// A NotebookService whose commit fails must not block teardown.
-			const failingNotebooks = {
-				workspace: { limits: WORKSPACE_LIMITS },
-				getNotebook: async () => ({ source: makeLocalSource() }),
-				commitSession: async () => {
-					throw new Error('commit boom');
-				},
-			} as unknown as NotebookService;
-
-			await provisioner.teardown(
-				instance,
-				failingNotebooks,
-				new MemoryBucket(),
-				projectId,
-				notebookId,
+		it('retains the sandbox when critical publication fails', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: '' }, ACTOR);
+			const notebook = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'N', description: '', code: '# original' },
 				ACTOR,
-				'source',
 			);
-
-			expect(calls.destroy).toBe(1);
+			const { instance, calls } = makeFakeSandbox({
+				files: { '/workspace/notebook.py': '# edited' },
+			});
+			const commit = vi
+				.spyOn(env.notebooks, 'commitSession')
+				.mockRejectedValue(new Error('bucket down'));
+			await expect(
+				retireSandbox(
+					new SandboxProvisioner(fakeComputeFrom(instance)),
+					instance,
+					env.notebooks,
+					env.bucket,
+					project.id,
+					notebook.id,
+					ACTOR,
+					'source',
+				),
+			).rejects.toBeInstanceOf(SessionPersistenceRequiredError);
+			expect(commit).toHaveBeenCalledOnce();
+			expect(calls.destroy).toBe(0);
 		});
 
 		it('persistEdits: false destroys without reading back, committing, or snapshotting', async () => {
@@ -4198,7 +4302,8 @@ describe('SandboxProvisioner', () => {
 			const compute = makeSnapshotCompute(instance, { captureId: 'snap_new' });
 			const provisioner = new SandboxProvisioner(compute);
 
-			await provisioner.teardown(
+			await retireSandbox(
+				provisioner,
 				instance,
 				env.notebooks,
 				env.bucket,
@@ -4243,7 +4348,8 @@ describe('SandboxProvisioner', () => {
 			});
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 
-			await provisioner.teardown(
+			await retireSandbox(
+				provisioner,
 				instance,
 				env.notebooks,
 				env.bucket,
@@ -4259,29 +4365,29 @@ describe('SandboxProvisioner', () => {
 			expect(calls.destroy).toBe(1);
 		});
 
-		it('still destroys the sandbox when captureWorkspace throws (best-effort)', async () => {
-			const { instance: base, calls } = makeFakeSandbox();
-			const instance = {
-				...base,
-				listFiles: async () => {
-					throw new Error('list boom');
-				},
-			} as unknown as SandboxInstance;
-			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
-
-			await provisioner.teardown(
+		it('stops after critical persistence when optional workspace capture fails', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: '' }, ACTOR);
+			const notebook = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'N', description: '', code: '# original' },
+				ACTOR,
+			);
+			const { instance, calls } = makeFakeSandbox({
+				files: { '/workspace/notebook.py': '# edited' },
+			});
+			vi.spyOn(instance, 'listFiles').mockRejectedValue(new Error('workspace unavailable'));
+			await retireSandbox(
+				new SandboxProvisioner(fakeComputeFrom(instance)),
 				instance,
-				{
-					getNotebook: async () => ({ source: makeLocalSource() }),
-					commitSession: async () => null,
-				} as unknown as NotebookService,
-				new MemoryBucket(),
-				projectId,
-				notebookId,
+				env.notebooks,
+				env.bucket,
+				project.id,
+				notebook.id,
 				ACTOR,
 				'workspace',
 			);
-
+			expect(await env.notebooks.getNotebookContent(project.id, notebook.id)).toBe('# edited');
 			expect(calls.destroy).toBe(1);
 		});
 
@@ -4300,7 +4406,8 @@ describe('SandboxProvisioner', () => {
 			const compute = makeSnapshotCompute(instance, { failCapture: true });
 			const provisioner = new SandboxProvisioner(compute);
 
-			await provisioner.teardown(
+			await retireSandbox(
+				provisioner,
 				instance,
 				env.notebooks,
 				env.bucket,
@@ -4339,7 +4446,8 @@ describe('SandboxProvisioner', () => {
 			});
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 
-			await provisioner.teardown(
+			await retireSandbox(
+				provisioner,
 				instance,
 				env.notebooks,
 				env.bucket,
@@ -4548,11 +4656,14 @@ describe('SandboxProvisioner', () => {
 		});
 
 		it('rethrows a commit failure (after the workspace capture) so callers retry', async () => {
-			const { instance, calls } = makeFakeSandbox();
+			const { instance, calls } = makeFakeSandbox({
+				files: { '/workspace/notebook.py': 'print(1)' },
+			});
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 			const failingNotebooks = {
 				workspace: { limits: WORKSPACE_LIMITS },
 				getNotebook: async () => ({ source: makeLocalSource() }),
+				beginSessionCapture: async () => ({}),
 				commitSession: async () => {
 					throw new Error('commit boom');
 				},
@@ -4599,8 +4710,10 @@ describe('SandboxProvisioner', () => {
 			expect(calls.destroy).toBe(0);
 		});
 
-		it('throws the workspace error and logs the commit error when both reject', async () => {
-			const { instance: base, calls } = makeFakeSandbox();
+		it('preserves the critical commit error when workspace capture also fails', async () => {
+			const { instance: base, calls } = makeFakeSandbox({
+				files: { '/workspace/notebook.py': 'print(1)' },
+			});
 			const instance = {
 				...base,
 				listFiles: async () => {
@@ -4611,13 +4724,13 @@ describe('SandboxProvisioner', () => {
 			const failingNotebooks = {
 				workspace: { limits: WORKSPACE_LIMITS },
 				getNotebook: async () => ({ source: makeLocalSource() }),
+				beginSessionCapture: async () => ({}),
 				commitSession: async () => {
 					throw new Error('commit boom');
 				},
 			} as unknown as NotebookService;
 			const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-			// The workspace error is surfaced to the caller...
 			await expect(
 				provisioner.captureSession(
 					instance,
@@ -4628,17 +4741,8 @@ describe('SandboxProvisioner', () => {
 					ACTOR,
 					'workspace',
 				),
-			).rejects.toThrow('workspace list boom');
+			).rejects.toThrow('commit boom');
 
-			// ...and the otherwise-masked commit failure is logged, not dropped.
-			expect(
-				errorSpy.mock.calls.some(([line]) => {
-					if (typeof line !== 'string') return false;
-					const event = JSON.parse(line) as Record<string, unknown>;
-					return event.event === 'session_commit_failed';
-				}),
-			).toBe(true);
-			expect(errorSpy.mock.calls.join('\n')).not.toContain('commit boom');
 			expect(calls.destroy).toBe(0);
 			errorSpy.mockRestore();
 		});
@@ -4682,7 +4786,7 @@ describe('SandboxProvisioner', () => {
 	// two lifecycle moments (the module's own logic is unit-tested separately).
 	describe('filesystem snapshots (delegation)', () => {
 		it.each(['read', 'commit'] as const)(
-			'preserves the last good snapshot and destroys after a %s failure',
+			'preserves the last good snapshot and retains the runtime after a %s failure',
 			async (failure) => {
 				const env = await setupTestEnv();
 				const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
@@ -4717,22 +4821,25 @@ describe('SandboxProvisioner', () => {
 				const captureSnapshot = vi.spyOn(compute, 'captureSnapshot');
 				const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 				try {
-					await new SandboxProvisioner(compute).teardown(
-						instance,
-						env.notebooks,
-						env.bucket,
-						project.id,
-						created.id,
-						ACTOR,
-						'source',
-					);
+					await expect(
+						retireSandbox(
+							new SandboxProvisioner(compute),
+							instance,
+							env.notebooks,
+							env.bucket,
+							project.id,
+							created.id,
+							ACTOR,
+							'source',
+						),
+					).rejects.toBeInstanceOf(SessionPersistenceRequiredError);
 
 					expect(captureSnapshot).not.toHaveBeenCalled();
 					expect(compute.deleted).toEqual([]);
 					expect(await env.notebooks.getFsSnapshot(project.id, created.id)).toMatchObject({
 						snapshot_id: 'known-good',
 					});
-					expect(calls.destroy).toBe(1);
+					expect(calls.destroy).toBe(0);
 					expect(JSON.parse(error.mock.calls[0][0])).toMatchObject({
 						event: 'session_capture_failed',
 						...(failure === 'read'
@@ -4768,11 +4875,14 @@ describe('SandboxProvisioner', () => {
 				captured_at: '2020-01-01T00:00:00.000Z',
 			});
 
-			const { instance, calls } = makeFakeSandbox();
+			const { instance, calls } = makeFakeSandbox({
+				files: { '/workspace/notebook.py': 'print(1)' },
+			});
 			const compute = makeSnapshotCompute(instance, { captureId: 'snap_new' });
 			const provisioner = new SandboxProvisioner(compute);
 
-			await provisioner.teardown(
+			await retireSandbox(
+				provisioner,
 				instance,
 				env.notebooks,
 				env.bucket,

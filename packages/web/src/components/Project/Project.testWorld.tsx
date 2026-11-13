@@ -99,6 +99,15 @@ export function makeFetch(
 			return jsonOk({ ...notebook(), compute_profile: body?.compute_profile });
 		if (method === 'PATCH' && url.endsWith(`/projects/${PID}/notebooks/nb-1/source`))
 			return jsonOk({ source: body });
+		if (
+			method === 'GET' &&
+			parsedUrl.pathname.includes(`/projects/${PID}/notebooks/nb-1/sessions/`)
+		) {
+			return jsonOk(
+				sessions.find((session) => parsedUrl.pathname.endsWith(`/${session.session_id}`)) ??
+					runningSession(),
+			);
+		}
 		if (method === 'DELETE' && url.includes(`/projects/${PID}/notebooks/nb-1/sessions/`)) {
 			if (options.sessionDeleteError) return jsonError('INTERNAL_ERROR', 'restart failed');
 			return jsonOk(null);

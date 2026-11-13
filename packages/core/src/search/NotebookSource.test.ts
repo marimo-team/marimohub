@@ -9,7 +9,9 @@ afterEach(() => vi.restoreAllMocks());
 
 async function setup() {
 	const f = await createSearchFixture();
-	const keys = paths.project(f.project.id).notebook(f.notebook.id);
+	const raw = paths.project(f.project.id).notebook(f.notebook.id);
+	const stored = await f.services.notebooks.getNotebookSource(f.project.id, f.notebook.id);
+	const keys = { ...raw, code: raw.version(stored.current_version_id!).code };
 	const signal = new AbortController().signal;
 	const scope = { projectId: f.project.id, source: f.source.id };
 	return {
@@ -20,6 +22,7 @@ async function setup() {
 		snapshot: async () => (await f.index.read(scope)).snapshot!,
 		page: () => f.source.page(f.project, undefined, signal),
 		outputVersion: async () => {
+			keys.code = raw.code;
 			const version = createVersionId();
 			await f.bucket.put(
 				keys.source,

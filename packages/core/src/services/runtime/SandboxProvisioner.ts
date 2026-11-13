@@ -1,4 +1,6 @@
+import type { LocalPublicationToken } from '../content/localPublication';
 import { EmailAddressSchema } from '../../schema';
+import type { CriticalCaptureResult, SessionCaptureResult } from './sessionCapture';
 import {
 	SessionArtifactCache,
 	probeSessionArtifacts,
@@ -49,7 +51,7 @@ import type {
 import { utf8Tail } from '../../text';
 import { Stopwatch } from '../../timing';
 import type { Timings } from '../../timing';
-import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/filesystemSnapshots';
+import { createOrRestoreSandbox } from '../content/filesystemSnapshots';
 import {
 	buildMarimoLaunch,
 	DEFAULT_LAUNCH_STRATEGY,
@@ -283,6 +285,7 @@ export interface ProvisionOptions {
 	 */
 	assetUrl?: string;
 	notebookBridge?: NotebookBridgeRuntime;
+	runtimeCapture?: boolean;
 	bridgeParentOrigin?: string;
 	/**
 	 * Path prefix marimo serves under (`--base-url`), set in `proxy` exposure mode
@@ -356,6 +359,7 @@ export interface ProvisionOptions {
 	workspacePrefix?: string;
 	/** Overrides workspace files. Object restores include these files in the first batch. */
 	workspaceOverlay?: WorkspaceOverlay;
+	workspaceRemovePaths?: readonly string[];
 	/** Pull-source Git metadata restored into `<workdir>/.git`. */
 	gitPrefix?: string;
 	/**
@@ -950,6 +954,11 @@ export class SandboxProvisioner {
 		const bridgeFiles: SandboxFileWrite[] = [];
 		let bridgeUnavailable = false;
 		const setupPrefix: MarimoLaunchPlan['setup'] = [];
+		if (options.workspaceRemovePaths?.length)
+			setupPrefix.push({
+				name: 'clear_stale_capture',
+				command: `rm -f -- ${options.workspaceRemovePaths.map((path) => shellQuote(`${mountPath}/${path}`)).join(' ')}`,
+			});
 		const installers: (() => Promise<void>)[] = [];
 		let extrasReady = false;
 		const writeFiles = sandbox.writeFiles.bind(sandbox);
@@ -1197,7 +1206,7 @@ export class SandboxProvisioner {
 		const payload = options.notebookBridge;
 		if (
 			!payload ||
-			!options.bridgeParentOrigin ||
+			(!options.bridgeParentOrigin && !options.runtimeCapture) ||
 			options.launchMode === 'job' ||
 			launchStrategy === 'uv-sandbox'
 		)
@@ -1241,13 +1250,24 @@ export class SandboxProvisioner {
 		startup: MarimoStartup,
 		launcher: string,
 	): Promise<void> {
-		if (!options.bridgeParentOrigin) return;
+		if (!options.bridgeParentOrigin && !options.runtimeCapture) return;
 		try {
 			const budget = startup.deadline.timeoutMs === 0 ? 10_000 : remainingStartupMs(startup);
 			if (budget <= 0) return;
 			await withDeadline(
 				sandbox.setEnvVars({
-					MARIMOHUB_BRIDGE_PARENT_ORIGIN: options.bridgeParentOrigin,
+					...(options.bridgeParentOrigin
+						? { MARIMOHUB_BRIDGE_PARENT_ORIGIN: options.bridgeParentOrigin }
+						: {}),
+					...(options.runtimeCapture
+						? {
+								MARIMOHUB_LIFECYCLE_DIR:
+									sandbox.resolveProcessPath?.(
+										`${notebookBridgePaths(options.sandboxId, 'marimo-bridge.py').directory}/lifecycle`,
+									) ??
+									`${notebookBridgePaths(options.sandboxId, 'marimo-bridge.py').directory}/lifecycle`,
+							}
+						: {}),
 					MARIMOHUB_BRIDGE_INSTALL_TIMEOUT_MS: String(Math.min(10_000, budget)),
 					...(startup.deadline.timeoutMs > 0
 						? {
@@ -1899,24 +1919,7 @@ export class SandboxProvisioner {
 		}
 	}
 
-	/**
-	 * Save a live session's notebook back to the bucket WITHOUT tearing it down —
-	 * the periodic-snapshot primitive, and the save half of `teardown`. Reads the
-	 * session artifacts back, cuts a version via `commitSession` (which dedupes
-	 * unchanged content, so an idle notebook never accretes spurious versions), and
-	 * — unless `includeWorkspace` is false — mirrors the runtime workspace per
-	 * `persistWorkspace`. The periodic snapshotter passes `includeWorkspace: false`:
-	 * a full workspace re-upload every interval is too expensive, so the mirror is
-	 * only refreshed at teardown, as before.
-	 *
-	 * Returns false when the session is ephemeral (`persistEdits: false` — a
-	 * viewer's throwaway sandbox) or the notebook's source is remote/git-backed
-	 * (owned by its sync path — session edits are never persisted). Throws when
-	 * the source policy cannot be read (committing without it could clobber a
-	 * synced source), or when
-	 * a save step fails; a commit failure does not skip the workspace capture
-	 * (matching the old teardown's independent best-effort steps).
-	 */
+	/** Compatibility adapter for callers that still require every capture step to succeed. */
 	async captureSession(
 		sandbox: SandboxInstance,
 		notebooks: NotebookService,
@@ -1926,13 +1929,75 @@ export class SandboxProvisioner {
 		actor: UserId,
 		persistWorkspace: 'source' | 'workspace',
 		workdir: string = DEFAULT_WORKDIR,
-		opts?: { includeWorkspace?: boolean; persistEdits?: boolean; sandboxId?: SandboxId },
+		opts?: {
+			includeWorkspace?: boolean;
+			persistEdits?: boolean;
+			sandboxId?: SandboxId;
+			assertOwnership?: () => Promise<void>;
+		},
 	): Promise<boolean> {
-		if (opts?.persistEdits === false) return false;
-		const { source } = await notebooks.getNotebook(projectId, notebookId);
+		const result = await this.captureSessionResult(
+			sandbox,
+			notebooks,
+			bucket,
+			projectId,
+			notebookId,
+			actor,
+			persistWorkspace,
+			workdir,
+			opts,
+		);
+		if (result.critical.status === 'failed' || result.critical.status === 'uncertain') {
+			throw result.critical.cause;
+		}
+		if (result.workspace.status === 'failed') throw result.workspace.cause;
+		return result.critical.status === 'durable';
+	}
+
+	async captureSessionResult(
+		sandbox: SandboxInstance,
+		notebooks: NotebookService,
+		bucket: Bucket,
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		actor: UserId,
+		persistWorkspace: 'source' | 'workspace',
+		workdir: string = DEFAULT_WORKDIR,
+		opts?: {
+			includeWorkspace?: boolean;
+			persistEdits?: boolean;
+			sandboxId?: SandboxId;
+			assertOwnership?: () => Promise<void>;
+			publicationToken?: LocalPublicationToken;
+		},
+	): Promise<SessionCaptureResult> {
+		const skipped = { status: 'skipped' as const };
+		if (opts?.persistEdits === false)
+			return { critical: { status: 'not_required', reason: 'discard' }, workspace: skipped };
+		let source;
+		try {
+			({ source } = await notebooks.getNotebook(projectId, notebookId));
+		} catch (cause) {
+			return {
+				critical: { status: 'failed', code: 'SOURCE_UNAVAILABLE', retryable: true, cause },
+				workspace: skipped,
+			};
+		}
 		const policy = workspaceSourcePolicy(source);
 		const captureMode = effectivePersistenceMode({ persistEdits: true, source, persistWorkspace });
-		if (captureMode === 'none') return false;
+		if (captureMode === 'none')
+			return { critical: { status: 'not_required', reason: 'remote_source' }, workspace: skipped };
+
+		if (typeof sandbox.readFileBounded !== 'function')
+			return {
+				critical: {
+					status: 'failed',
+					code: 'CAPTURE_UNSUPPORTED',
+					retryable: false,
+					cause: new Error('The compute provider cannot perform bounded capture reads'),
+				},
+				workspace: skipped,
+			};
 
 		const mountPath = workdir;
 		const listing = sharedWorkspaceListing(sandbox, mountPath);
@@ -1959,16 +2024,20 @@ export class SandboxProvisioner {
 					}
 				: undefined;
 		const cache = this.artifactCache;
-		// The commit chain and the workspace mirror are independent best-effort
-		// steps over disjoint bucket keys, so they run concurrently.
+		let publicationDispatched = false;
+		// The optional workspace projection cannot mask a critical publication result.
 		const { commit, workspace } = await allSettled({
 			async commit() {
+				const token =
+					opts?.publicationToken ?? (await notebooks.beginSessionCapture(projectId, notebookId));
+				await opts?.assertOwnership?.();
 				let artifacts = await readSessionArtifacts(
 					sandbox,
 					mountPath,
 					listing,
 					policy.entryNotebook,
 					hints,
+					true,
 				);
 				let verified = fingerprints;
 				if (fingerprints && reusable && Object.keys(reusable).length > 0) {
@@ -1979,13 +2048,49 @@ export class SandboxProvisioner {
 							mountPath,
 							listing,
 							policy.entryNotebook,
+							undefined,
+							true,
 						);
 						verified = undefined;
 					}
 				}
-				const result = await notebooks.commitSession(projectId, notebookId, artifacts, actor);
-				if (result && cacheKey && verified)
-					await cache.remember(cacheKey, { fingerprints: verified, artifacts });
+				if (artifacts.code === undefined) {
+					return {
+						status: 'failed',
+						code: 'SOURCE_MISSING',
+						retryable: false,
+						cause: new Error('The notebook source is missing; no capture was published'),
+					} satisfies CriticalCaptureResult;
+				}
+				publicationDispatched = true;
+				const result = await notebooks.commitSession(
+					projectId,
+					notebookId,
+					artifacts,
+					actor,
+					token,
+				);
+				if (!result) {
+					return {
+						status: 'failed',
+						code: 'SOURCE_NOT_COMMITTED',
+						retryable: false,
+						cause: new Error('The notebook no longer accepts session captures'),
+					} satisfies CriticalCaptureResult;
+				}
+				if (cacheKey && verified)
+					await cache.remember(cacheKey, { fingerprints: verified, artifacts }).catch((error) => {
+						logOperationalError(
+							'session_capture_cache_failed',
+							{ operation: 'sandbox.capture_cache', notebook_id: notebookId },
+							error,
+						);
+					});
+				return {
+					status: 'durable',
+					publication: result,
+					capturedAt: new Date().toISOString(),
+				} satisfies CriticalCaptureResult;
 			},
 			async workspace() {
 				if (opts?.includeWorkspace === false) return;
@@ -2002,112 +2107,30 @@ export class SandboxProvisioner {
 				);
 			},
 		});
-		const commitError =
-			commit.status === 'rejected'
-				? commit.reason instanceof Error
-					? commit.reason
-					: new Error(String(commit.reason))
-				: undefined;
-		if (workspace.status === 'rejected') {
-			// A workspace failure would otherwise mask the commit failure — surface both.
-			if (commitError) {
-				logOperationalError(
-					'session_commit_failed',
-					{ operation: 'sandbox.commit_session', notebook_id: notebookId },
-					commitError,
-				);
-			}
-			throw workspace.reason;
-		}
-		if (commitError) throw commitError;
-		return true;
-	}
-
-	/**
-	 * Tear down a session: read the notebook back, cut a version carrying the
-	 * session's edits and any HTML/session snapshots marimo produced, capture the
-	 * runtime workspace, capture a filesystem snapshot (when the backend supports
-	 * it), then destroy the sandbox.
-	 *
-	 * The read-back is unconditional for local notebooks: interactive edits still
-	 * need an immutable version, even when the sandbox wrote through a mounted
-	 * bucket. `NotebookService.commitSession` owns the source files
-	 * (the entry notebook and `workspace/pyproject.toml`) and the immutable
-	 * `versions/{vid}/` record; `captureWorkspace` excludes those, so there is no
-	 * double-write. All capture steps are best-effort — failures are logged but
-	 * never block sandbox destruction, since a lingering sandbox is the more
-	 * expensive failure.
-	 *
-	 * `persistWorkspace` controls runtime-file persistence: `source` captures only
-	 * the source files (via `commitSession`); `workspace` also mirrors the rest of
-	 * the working dir into `workspace/`.
-	 */
-	async teardown(
-		sandbox: SandboxInstance,
-		notebooks: NotebookService,
-		bucket: Bucket,
-		projectId: ProjectId,
-		notebookId: NotebookId,
-		actor: UserId,
-		persistWorkspace: 'source' | 'workspace',
-		workdir: string = DEFAULT_WORKDIR,
-		opts?: {
-			persistEdits?: boolean;
-			computeProfile?: string;
-			computeResources?: { cpu?: number; memory_bytes?: number };
-		},
-	): Promise<void> {
-		// `captureSession` owns the persistence checks: false = an ephemeral session
-		// or a synced/remote source, whose edits (and filesystem snapshot) are never
-		// persisted from a session — destroy only.
-		// Failed captures must not replace the last good restore snapshot.
-		let persisted = false;
-		try {
-			persisted = await this.captureSession(
-				sandbox,
-				notebooks,
-				bucket,
-				projectId,
-				notebookId,
-				actor,
-				persistWorkspace,
-				workdir,
-				{ persistEdits: opts?.persistEdits },
-			);
-		} catch (err) {
-			// Non-fatal: still destroy the sandbox so it does not linger and bill.
-			logOperationalError(
-				'session_capture_failed',
-				{ operation: 'sandbox.teardown.capture_session', notebook_id: notebookId },
-				err,
-			);
-		}
-		if (persisted) {
-			// Snapshot before destroy, once the session state above is final. Both are
-			// sandbox RPCs: a transient gRPC stream reset here must not reject teardown,
-			// and destroy must run regardless so the sandbox cannot linger and bill.
-			try {
-				await captureFilesystemSnapshot(this.provider, notebooks, sandbox, projectId, notebookId, {
-					compute_profile: opts?.computeProfile,
-					compute_resources: opts?.computeResources,
-					owner_user_id: actor,
-				});
-			} catch (err) {
-				logOperationalError(
-					'filesystem_snapshot_capture_failed',
-					{ operation: 'sandbox.teardown.capture_snapshot', notebook_id: notebookId },
-					err,
-				);
-			}
-		}
-		try {
-			await sandbox.destroy();
-		} catch (err) {
-			logOperationalError(
-				'sandbox_destroy_failed',
-				{ operation: 'sandbox.teardown.destroy', notebook_id: notebookId },
-				err,
-			);
-		}
+		const exceedsLimit = commit.status === 'rejected' && commit.reason?.reason === 'size_limit';
+		return {
+			critical:
+				commit.status === 'fulfilled'
+					? commit.value
+					: {
+							status: publicationDispatched ? 'uncertain' : 'failed',
+							code: publicationDispatched
+								? 'PUBLICATION_UNCERTAIN'
+								: exceedsLimit
+									? 'ARTIFACT_TOO_LARGE'
+									: 'SOURCE_UNAVAILABLE',
+							retryable: !exceedsLimit,
+							cause: commit.reason,
+						},
+			workspace:
+				workspace.status === 'rejected'
+					? { status: 'failed', cause: workspace.reason }
+					: {
+							status:
+								opts?.includeWorkspace === false || captureMode === 'source'
+									? 'skipped'
+									: 'captured',
+						},
+		};
 	}
 }
