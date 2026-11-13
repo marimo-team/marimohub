@@ -458,8 +458,8 @@ describe('BigQuery token reuse and deadlines', () => {
 		);
 		const aborted = browser.listNamespaces(source, { limit: 1, signal: controller.signal });
 		const assertion = expect(aborted).rejects.toThrow('canceled');
-		const shared = browser.listNamespaces(source, { limit: 1 });
 		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+		const shared = browser.listNamespaces(source, { limit: 1 });
 		controller.abort(new Error('sensitive abort reason'));
 		await assertion;
 		await expect(shared).resolves.toBeDefined();
