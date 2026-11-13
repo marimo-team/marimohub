@@ -77,13 +77,13 @@ jobs:
       - name: Build docs on the runner
         env:
           VERCEL_TOKEN: ${{ steps.secrets.outputs.VERCEL_TOKEN }}
-        run: vercel build --environment="$VERCEL_TARGET_ENV" --token="$VERCEL_TOKEN"
+        run: vercel build --target="$VERCEL_TARGET_ENV" --token="$VERCEL_TOKEN"
 
       - name: Deploy prebuilt docs
         env:
           VERCEL_TOKEN: ${{ steps.secrets.outputs.VERCEL_TOKEN }}
         run: |
-          vercel deploy --prebuilt --yes --environment="$VERCEL_TARGET_ENV" \
+          vercel deploy --prebuilt --yes --target="$VERCEL_TARGET_ENV" \
             --token="$VERCEL_TOKEN" \
             --meta githubCommitRef="$DEPLOY_BRANCH" \
             --meta githubCommitSha="$GITHUB_SHA" > deployment.json
