@@ -377,3 +377,34 @@ describe('credential failure recovery', () => {
 		expect(f.provider.exchange).not.toHaveBeenCalled();
 	});
 });
+
+it('fences a stalled callback before orphan cleanup revokes its credentials', async () => {
+	const f = fixture();
+	const state = await f.begin();
+	const saved = Promise.withResolvers<string>();
+	const resume = Promise.withResolvers<void>();
+	const put = f.bucket.put.bind(f.bucket);
+	vi.spyOn(f.bucket, 'put').mockImplementation(async (key, value, options) => {
+		const result = await put(key, value, options);
+		if (key.startsWith(`_system/source-control-accounts/${uid}/`) && options?.onlyIfNotExists) {
+			saved.resolve(key);
+			await resume.promise;
+		}
+		return result;
+	});
+	const callback = f.service.complete(uid, 'browser', state, 'code');
+	const rejected = expect(callback).rejects.toThrow('Disconnect');
+	const key = await saved.promise;
+	try {
+		await f.service.sweep();
+		expect(f.provider.revoke).not.toHaveBeenCalled();
+		f.advance(16 * 60_000);
+		await f.service.sweep();
+		expect(f.provider.revoke).toHaveBeenCalledExactlyOnceWith('access-secret');
+		expect(await (await f.bucket.get(key))!.json()).not.toHaveProperty('tokens');
+	} finally {
+		resume.resolve();
+	}
+	await rejected;
+	expect(await f.service.status(uid)).toBeNull();
+});
