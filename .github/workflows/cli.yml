@@ -63,7 +63,7 @@ jobs:
 
   cross-platform-check:
     name: Rust CLI (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: "${{ matrix.os == 'windows-latest' && (vars.CI_RUNNER_WINDOWS || 'windows-latest') || (matrix.os) }}"
     timeout-minutes: 15
     strategy:
       fail-fast: false
