@@ -297,7 +297,7 @@ Other Iceberg configurations continue to use the sandbox executor.
 
 Sandbox previews require `MARIMOHUB_DATA_PREVIEW_IMAGE`. The image must contain
 Python, PyIceberg, and PyArrow. The compute backend must support per-sandbox
-OCI image overrides. The `local`, `e2b`, `none`, and `noop` backends do not
+OCI image overrides. The `local`, `e2b`, `boxd`, `none`, and `noop` backends do not
 support them.
 
 At startup, the hub initializes DuckDB-Wasm. The first sandbox preview validates

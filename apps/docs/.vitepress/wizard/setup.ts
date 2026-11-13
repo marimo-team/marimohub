@@ -38,6 +38,7 @@ const DOC_HREFS: Record<string, string> = {
 	'compute/wandb': '/compute#w-b',
 	'compute/modal': '/compute#modal',
 	'compute/e2b': '/compute#e2b',
+	'compute/boxd': '/compute#boxd',
 	'compute/kubernetes': '/compute#kubernetes',
 	'compute/fargate': '/compute#aws-ecs-fargate',
 	'compute/docker': '/compute#docker',

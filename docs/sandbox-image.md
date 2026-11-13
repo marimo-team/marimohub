@@ -16,7 +16,7 @@ MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 ```
 
 Every container-based backend reads this same variable. (`local` runs `uv` on the
-host and needs no image; `e2b` uses an E2B template instead — see
+host and needs no image; `e2b` uses an E2B template and `boxd` a boxd snapshot instead — see
 [Compute](./compute.md).)
 
 The repository image also publishes optional [session surface](./surfaces.md)
@@ -67,7 +67,8 @@ MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest,ghcr.io/orgname/ma
   (`sandbox_images`); `GET /api/v1/version` reports only the default.
 
 For the `e2b` backend the same applies to `MARIMOHUB_COMPUTE_E2B_TEMPLATE`,
-which takes a comma-separated list of template ids.
+which takes a comma-separated list of template ids, and for the `boxd` backend
+to `MARIMOHUB_COMPUTE_BOXD_SNAPSHOT`, which takes a list of snapshot names.
 
 > With CoreWeave filesystem snapshots enabled, a notebook restoring from a
 > snapshot boots the snapshot's image — a base-image change takes effect once no

@@ -210,6 +210,7 @@ function dataPreviewFromEnv(
 		image !== '' &&
 		computeBackendValue !== 'local' &&
 		computeBackendValue !== 'e2b' &&
+		computeBackendValue !== 'boxd' &&
 		computeBackendValue !== 'none' &&
 		computeBackendValue !== 'noop';
 	const maxConcurrent = parsePositiveIntEnv(
@@ -805,7 +806,7 @@ export function createFromEnv(
 		notifier: makeNotifier(env, metrics),
 		projectAlerts,
 		// Provider-side limits trail the graceful lifecycle deadlines: Modal idle by
-		// 1.5× and CoreWeave/E2B lifetime by 2×.
+		// 1.5× and CoreWeave/E2B/boxd lifetime by 2×.
 		compute,
 		authenticator: composeAuthenticators(services.tokens, authenticator, {
 			external: externalAuthenticator,

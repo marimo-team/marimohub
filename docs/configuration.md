@@ -127,7 +127,7 @@ _No environment variables to set here._
 
 ## Compute
 
-Selected by `MARIMOHUB_COMPUTE_BACKEND`; one of `coreweave`, `wandb`, `modal`, `docker`, `podman`, `e2b`, `fargate`, `kubernetes`, `local`, `library`, `none`.
+Selected by `MARIMOHUB_COMPUTE_BACKEND`; one of `coreweave`, `wandb`, `modal`, `docker`, `podman`, `e2b`, `fargate`, `kubernetes`, `boxd`, `local`, `library`, `none`.
 
 Where notebook kernels run. The shared variables apply across compute backends.
 
@@ -301,6 +301,23 @@ Native Kubernetes creates one keep-alive Pod and Service per session through `@k
 | `MARIMOHUB_COMPUTE_KUBERNETES_POD_LABELS` | Comma-separated `key=value` labels added to each kernel Pod, Service, and Ingress. Use for ownership labels that cluster admission policies require on every object. | — | — | `team=data,app.kubernetes.io/part-of=marimohub` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_RUN_AS_USER` | Sets Pod `runAsUser`, matching `fsGroup`, and `runAsNonRoot` (false for UID `0`). Overrides these template fields only. Unset preserves the template security context. The UID needs write access to the image workdir. `fsGroup` affects mounted volumes only. | — | — | `1000` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS` | How long to wait for the kernel Pod to reach `Running`. | — | `120` | — |
+
+### boxd
+
+`MARIMOHUB_COMPUTE_BACKEND=boxd`
+
+boxd machines (boxd.sh). Each session gets an isolated machine, booted from a snapshot with marimo + uv. The `@boxd-sh/sdk` package is an optional, bring-your-own dependency. Install it and bake it into the server image to use this backend.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_COMPUTE_BOXD_API_KEY` 🔒 | boxd API key. | Yes | — | — |
+| `MARIMOHUB_COMPUTE_BOXD_SNAPSHOT` | Snapshot with marimo + uv + python, or a comma-separated list of snapshots (first is the default, the rest are selectable per notebook). Falls back to `MARIMOHUB_COMPUTE_IMAGE`. | — | — | `marimo-sandbox` |
+| `MARIMOHUB_COMPUTE_BOXD_ORG` | Org the machines are created in. Set it when the API key can reach more than one org. | — | — | — |
+| `MARIMOHUB_COMPUTE_BOXD_REGION` | Region the machines are created in, such as `fra` or `nyc`. The snapshot must be in the same region. Unset uses the SDK default (`BOXD_REGION`, else the default region). | — | — | `fra` |
+| `MARIMOHUB_COMPUTE_BOXD_OWNER_TAG` | Label applied to owned machines for discovery and cleanup. | — | `marimohub` | — |
+| `MARIMOHUB_COMPUTE_BOXD_NAME_PREFIX` | Prefix of each machine name; the sandbox id follows it. | — | `marimohub-` | — |
+| `MARIMOHUB_COMPUTE_BOXD_LABELS` | Extra `key=value` labels for every machine, comma-separated. | — | — | `team=data,env=prod` |
+| `MARIMOHUB_COMPUTE_BOXD_MAX_LIFETIME_SECONDS` | Hard provider-side machine lifetime cap (boxd deletes the machine past it, no save), an orphan backstop behind the graceful session lifetime (`MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS`). Must be >= the session lifetime; leave unset to default to 2x it. | — | `2x MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS` | `28800` |
 
 ### Local (dev only)
 
@@ -820,7 +837,7 @@ Integration management and session injection are enabled by default. Project ent
 | `MARIMOHUB_DATA_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS` | Allows Iceberg REST SQL to use the server AWS credential chain within configured read prefixes. Requires HTTPS AWS S3 service endpoints and ordinary bucket names. The control-plane bucket stays blocked. Does not enable standalone S3 SQL, project WIF, or named integration profiles. | — | `false` | — |
 | `MARIMOHUB_POSTGRES_DATA_ACCESS` | Enables PostgreSQL schema browsing. In full data-browser mode, it also enables row previews and Run SQL for every enabled compatible PostgreSQL integration. Disabled by default. | — | `off` | — |
 | `MARIMOHUB_POSTGRES_ALLOW_INSECURE_TRANSPORT` | Allows PostgreSQL TLS modes that do not verify both the CA and hostname: `disable`, `prefer`, and `require`. Gates connection tests as well as browsing and Run SQL. Disabled by default. | — | `off` | — |
-| `MARIMOHUB_DATA_PREVIEW_IMAGE` | OCI image for sandbox previews. It must contain Python, PyIceberg, and PyArrow. The compute backend must support OCI image overrides. The local, E2B, none, and noop backends do not support these overrides. The first sandbox preview validates the image's runtime dependencies; replica startup does not validate the image. | — | — | `ghcr.io/example/marimohub-data-preview:1` |
+| `MARIMOHUB_DATA_PREVIEW_IMAGE` | OCI image for sandbox previews. It must contain Python, PyIceberg, and PyArrow. The compute backend must support OCI image overrides. The local, E2B, boxd, none, and noop backends do not support these overrides. The first sandbox preview validates the image's runtime dependencies; replica startup does not validate the image. | — | — | `ghcr.io/example/marimohub-data-preview:1` |
 | `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT` | Maximum number of runtime-backed previews in this server process. | — | `4` | — |
 | `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT_PER_USER` | Maximum number of runtime-backed previews for one user. | — | `1` | — |
 | `MARIMOHUB_DATA_PREVIEW_STARTUP_TIMEOUT_SECONDS` | Maximum time to start and prepare a preview runtime. | — | `120` | — |

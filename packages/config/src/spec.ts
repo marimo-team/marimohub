@@ -1203,6 +1203,67 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				],
 			},
 			{
+				name: 'boxd',
+				selectorValue: 'boxd',
+				description:
+					'boxd machines (boxd.sh). Each session gets an isolated machine, booted from a snapshot with marimo + uv. The `@boxd-sh/sdk` package is an optional, bring-your-own dependency. Install it and bake it into the server image to use this backend.',
+				vars: [
+					{
+						id: 'MARIMOHUB_COMPUTE_BOXD_API_KEY',
+						name: 'boxd API key',
+						description: 'boxd API key.',
+						required: true,
+						secret: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_BOXD_SNAPSHOT',
+						name: 'boxd snapshot',
+						description:
+							'Snapshot with marimo + uv + python, or a comma-separated list of snapshots (first is the default, the rest are selectable per notebook). Falls back to `MARIMOHUB_COMPUTE_IMAGE`.',
+						example: 'marimo-sandbox',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_BOXD_ORG',
+						name: 'boxd org',
+						description:
+							'Org the machines are created in. Set it when the API key can reach more than one org.',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_BOXD_REGION',
+						name: 'boxd region',
+						description:
+							'Region the machines are created in, such as `fra` or `nyc`. The snapshot must be in the same region. Unset uses the SDK default (`BOXD_REGION`, else the default region).',
+						example: 'fra',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_BOXD_OWNER_TAG',
+						name: 'boxd owner tag',
+						description: 'Label applied to owned machines for discovery and cleanup.',
+						default: 'marimohub',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_BOXD_NAME_PREFIX',
+						name: 'boxd machine name prefix',
+						description: 'Prefix of each machine name; the sandbox id follows it.',
+						default: 'marimohub-',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_BOXD_LABELS',
+						name: 'boxd labels',
+						description: 'Extra `key=value` labels for every machine, comma-separated.',
+						example: 'team=data,env=prod',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_BOXD_MAX_LIFETIME_SECONDS',
+						name: 'boxd max lifetime (seconds)',
+						description:
+							'Hard provider-side machine lifetime cap (boxd deletes the machine past it, no save), an orphan backstop behind the graceful session lifetime (`MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS`). Must be >= the session lifetime; leave unset to default to 2x it.',
+						default: '2x MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS',
+						example: '28800',
+					},
+				],
+			},
+			{
 				name: 'Local (dev only)',
 				selectorValue: 'local',
 				description:
@@ -2745,7 +2806,7 @@ See the [secret-source guide](./integration-secrets.md).`,
 						id: 'MARIMOHUB_DATA_PREVIEW_IMAGE',
 						name: 'Data-preview image',
 						description:
-							"OCI image for sandbox previews. It must contain Python, PyIceberg, and PyArrow. The compute backend must support OCI image overrides. The local, E2B, none, and noop backends do not support these overrides. The first sandbox preview validates the image's runtime dependencies; replica startup does not validate the image.",
+							"OCI image for sandbox previews. It must contain Python, PyIceberg, and PyArrow. The compute backend must support OCI image overrides. The local, E2B, boxd, none, and noop backends do not support these overrides. The first sandbox preview validates the image's runtime dependencies; replica startup does not validate the image.",
 						example: 'ghcr.io/example/marimohub-data-preview:1',
 					},
 					{

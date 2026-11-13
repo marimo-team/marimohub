@@ -110,6 +110,7 @@ Then mount the file in the server image. Node ESM does not use `NODE_PATH`. See
 | ✅     | CoreWeave Sandboxes (cwsandbox) | `compute-coreweave`        | Vendored gRPC SDK                                     |
 | ✅     | Cloudflare Containers           | `compute-cloudflare`       | Durable Object-backed; Workers-only                   |
 | ✅     | E2B                             | `compute-e2b`              | `e2b` SDK is an optional, bring-your-own dependency   |
+| ✅     | boxd                            | `compute-boxd`             | `@boxd-sh/sdk` is an optional, bring-your-own SDK     |
 | ✅     | Local subprocess                | `compute-local`            | Dev only (`uv run marimo edit` on the host)           |
 | 🟡     | Modal                           | `compute-modal`            |                                                       |
 | 🟡     | Docker                          | `compute-container/docker` | Local end-to-end test passed; not run in a deployment |

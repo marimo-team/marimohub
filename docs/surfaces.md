@@ -43,8 +43,8 @@ another surface.
 ## Availability
 
 Secondary surfaces require an adapter with `multiPort: true`. Supported built-in
-adapters are `local`, `docker`, `podman`, `e2b`, `cloudflare`, `coreweave`, and
-`kubernetes`. Compatible external `library` adapters can also support surfaces.
+adapters are `local`, `docker`, `podman`, `e2b`, `cloudflare`, `coreweave`,
+`kubernetes`, and `boxd`. Compatible external `library` adapters can also support surfaces.
 Configuration fails when the adapter does not advertise this capability.
 
 Docker and Podman publish each enabled surface on a separate host port at
