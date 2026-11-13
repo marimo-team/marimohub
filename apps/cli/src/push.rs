@@ -343,7 +343,12 @@ fn execute_one(
     if include_git {
         let remotes = git(
             &root,
-            &["config", "--local", "--get-regexp", "remote\\..*\\.url"],
+            &[
+                "config",
+                "--local",
+                "--get-regexp",
+                "remote\\..*\\.(url|pushurl)",
+            ],
         )
         .unwrap_or_default();
         if remotes
@@ -352,7 +357,7 @@ fn execute_one(
             .any(|(_, value)| {
                 url::Url::parse(value).is_ok_and(|url| {
                     url.password().is_some()
-                        || (url.scheme() == "https" && !url.username().is_empty())
+                        || (matches!(url.scheme(), "http" | "https") && !url.username().is_empty())
                 })
             })
         {

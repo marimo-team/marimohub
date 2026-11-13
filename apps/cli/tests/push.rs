@@ -213,3 +213,47 @@ fn subtree_and_manifest_apply_checkout_ignore_rules_with_relative_paths() {
     let bulk: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(bulk["notebooks"][0]["data"]["files"], expected);
 }
+
+#[test]
+fn include_git_rejects_credentials_in_fetch_and_push_urls() {
+    for (key, remote) in [
+        (
+            "remote.origin.url",
+            "https://token@example.com/org/repo.git",
+        ),
+        ("remote.origin.url", "http://token@example.com/org/repo.git"),
+        (
+            "remote.origin.url",
+            "https://user:token@example.com/org/repo.git",
+        ),
+        (
+            "remote.origin.pushurl",
+            "https://user:token@example.com/org/repo.git",
+        ),
+        (
+            "remote.origin.pushurl",
+            "http://token@example.com/org/repo.git",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["init", "--quiet"],
+            vec!["config", "--local", key, remote],
+        ] {
+            assert!(std::process::Command::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        command(dir.path())
+            .args(["--include-git", "--dry-run"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "remove credentials from Git remote URLs",
+            ))
+            .stderr(predicate::str::contains(remote).not());
+    }
+}

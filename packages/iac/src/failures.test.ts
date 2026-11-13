@@ -25,6 +25,34 @@ const scope = (fetch: typeof globalThis.fetch, options = {}) =>
 afterEach(() => vi.useRealTimers());
 
 describe('transport failures', () => {
+	it('releases rejected response streams before retrying', async () => {
+		const cancel = vi.fn();
+		const fetch = vi
+			.fn<typeof globalThis.fetch>()
+			.mockResolvedValueOnce(new Response(new ReadableStream({ cancel }), { status: 503 }))
+			.mockImplementationOnce(async () => {
+				expect(cancel).toHaveBeenCalledOnce();
+				return ok(planned);
+			});
+		await expect(scope(fetch).plan([spec])).resolves.toMatchObject({ items: [planned] });
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+	it('preserves the HTTP failure when releasing its response stream fails', async () => {
+		const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+			new Response(
+				new ReadableStream({
+					cancel: () => Promise.reject(new Error('private-provider')),
+				}),
+				{ status: 403 },
+			),
+		);
+		await expect(scope(fetch).plan([spec])).rejects.toMatchObject({
+			code: 'FORBIDDEN',
+			status: 403,
+			uncertain: false,
+		});
+		expect(fetch).toHaveBeenCalledOnce();
+	});
 	it.each([401, 403, 422])('never retries HTTP %i or includes provider details', async (status) => {
 		const fetch = vi
 			.fn<typeof globalThis.fetch>()

@@ -352,6 +352,7 @@ export function createHub(options: HubOptions) {
 			);
 		}
 		if (!response.ok) {
+			await response.body?.cancel().catch(() => {});
 			const retryAfterMs = retryDelay(response.headers.get('Retry-After'));
 			const failure = httpErrors[response.status];
 			const rawId = response.headers.get('X-Request-Id');
