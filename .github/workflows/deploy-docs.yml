@@ -41,8 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      VERCEL_ORG_ID: team_4yGeuLcuikFwlD3XEiQDgX0W
-      VERCEL_PROJECT_ID: prj_sXWi3yiwwlNsaNC2S0eFza3b0bkc
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
       VERCEL_TARGET_ENV: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
       DEPLOY_BRANCH: ${{ github.head_ref || github.ref_name }}
     steps:

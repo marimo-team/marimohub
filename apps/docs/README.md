@@ -14,5 +14,5 @@ The workflow summary contains the deployment URL.
 
 The workflow fetches `VERCEL_TOKEN` from the `docs` config in the Doppler project `marimohub-oss`.
 The GitHub secret `DOPPLER_TOKEN_DOCS` grants read-only access to that config.
-Vercel project and team IDs are defined in the workflow.
+The GitHub repository variables `VERCEL_PROJECT_ID` and `VERCEL_ORG_ID` select the Vercel project and team.
 Build commands and Git deployment settings are defined in `vercel.json`.
