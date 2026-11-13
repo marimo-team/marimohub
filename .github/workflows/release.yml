@@ -15,7 +15,7 @@ env:
 jobs:
   validate-tag:
     name: Validate release tag
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -34,7 +34,7 @@ jobs:
 
   cli-assets:
     name: Test and generate CLI assets
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 10
     needs: validate-tag
     permissions:
@@ -55,7 +55,7 @@ jobs:
 
   cli:
     name: Build CLI (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
+    runs-on: "${{ matrix.os == 'windows-latest' && (vars.CI_RUNNER_WINDOWS || 'windows-latest') || (matrix.os) }}"
     timeout-minutes: 25
     needs: cli-assets
     permissions:
@@ -123,7 +123,7 @@ jobs:
 
   cli-linux-x64:
     name: Build CLI (x86_64-unknown-linux-gnu, glibc 2.28)
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     container: quay.io/pypa/manylinux_2_28_x86_64:latest@sha256:7e41b1c7fd64dfc69703a1124b43c404382973ee06ec5d764b85c34d2221fded
     timeout-minutes: 25
     needs: cli-assets
@@ -176,7 +176,7 @@ jobs:
 
   cli-installers:
     name: Build CLI installers
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 10
     needs: [cli-assets, cli, cli-linux-x64]
     permissions:
@@ -287,7 +287,7 @@ jobs:
   image:
     name: Publish multi-platform image
     needs: image-build
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 10
     # Serialize floating-tag moves across releases. The latest check runs
     # inside this lock, so a run that waited still sees any newer release tag.
@@ -343,7 +343,7 @@ jobs:
 
   chart:
     name: Package & push Helm chart
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 10
     needs: [validate-tag, image]
     permissions:
@@ -382,7 +382,7 @@ jobs:
 
   publish-cli-release:
     name: Publish CLI release
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 10
     needs: [cli, cli-linux-x64, cli-installers]
     permissions:
@@ -439,7 +439,7 @@ jobs:
 
   publish-server-binary:
     name: Attach server binaries
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 10
     # The CLI job creates the release; this adds the server binaries to it.
     needs: [server-binary, publish-cli-release]
@@ -478,7 +478,7 @@ jobs:
 
   cli-release-metadata:
     name: Publish CLI release metadata
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 10
     needs: [publish-cli-release]
     permissions:
@@ -522,7 +522,7 @@ jobs:
 
   notify:
     name: Notify Slack
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 5
     # Report the overall outcome once every release job has finished.
     needs:

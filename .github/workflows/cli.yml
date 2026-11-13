@@ -15,7 +15,7 @@ concurrency:
 jobs:
   test:
     name: Rust CLI
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -63,7 +63,7 @@ jobs:
 
   cross-platform-check:
     name: Rust CLI (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: "${{ matrix.os == 'windows-latest' && (vars.CI_RUNNER_WINDOWS || 'windows-latest') || (matrix.os) }}"
     timeout-minutes: 15
     strategy:
       fail-fast: false

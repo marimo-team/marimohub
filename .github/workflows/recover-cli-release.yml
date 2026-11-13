@@ -21,7 +21,7 @@ concurrency:
 jobs:
   recover:
     name: Recover ${{ inputs.tag }}
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 15
     permissions:
       actions: read

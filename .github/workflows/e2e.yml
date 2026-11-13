@@ -17,7 +17,7 @@ concurrency:
 jobs:
   browser-tests:
     name: ${{ matrix.suite }} (${{ matrix.browser }})
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 30
     container:
       # Match @playwright/test in pnpm-lock.yaml; includes browsers and OS dependencies.
@@ -107,7 +107,7 @@ jobs:
 
   bridge-runtime:
     name: Notebook bridge runtime compatibility
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 15
     container:
       # Match @playwright/test in pnpm-lock.yaml; includes browsers and OS dependencies.
@@ -155,7 +155,7 @@ jobs:
     name: e2e (${{ matrix.browser }})
     needs: [browser-tests, bridge-runtime]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
