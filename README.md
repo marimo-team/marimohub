@@ -5,7 +5,7 @@ marimohub is a self-hostable platform for storing, managing, and running
 notebooks on their own infrastructure while choosing their own storage, compute,
 and identity providers.
 
-The hub has no separate database. Notebook metadata, versions, snapshots, and
+marimohub has no separate database. Notebook metadata, versions, snapshots, and
 system records live in an object store, so the object store is the source of
 truth you back up and recover. External systems sit behind TypeScript ports, so
 operators can swap providers without changing the domain logic.
