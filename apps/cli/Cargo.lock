@@ -1265,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "mohub"
-version = "0.6.4"
+version = "0.7.0"
 dependencies = [
  "assert_cmd",
  "base64 0.22.1",

@@ -1,5 +1,6 @@
 import { beforeAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { exportPKCS8, generateKeyPair, jwtVerify } from 'jose';
+import { StaleWhileRevalidateCache } from '@marimo-hub/core/cache';
 import type { BigQueryConnectionCapability } from '@marimo-hub/core/ports/database-browser';
 import type { IntegrationProbe } from '@marimo-hub/core/ports/integrations';
 import { browseContract } from '@marimo-hub/core/testing/browse-contract';
@@ -41,7 +42,10 @@ beforeAll(async () => {
 		}),
 	};
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+	vi.useRealTimers();
+	vi.restoreAllMocks();
+});
 
 function world(body: (url: URL) => unknown = () => ({}), status = 200) {
 	const fetch = vi.fn<IntegrationProbe['fetch']>(async (url) => ({
@@ -446,6 +450,7 @@ describe('BigQuery token reuse and deadlines', () => {
 	});
 
 	it('refetches a token for a caller whose shared fetch another caller aborted', async () => {
+		const cacheGet = vi.spyOn(StaleWhileRevalidateCache.prototype, 'get');
 		const { browser, fetch } = world(() => ({ datasets: [] }));
 		const controller = new AbortController();
 		fetch.mockImplementationOnce(
@@ -458,8 +463,10 @@ describe('BigQuery token reuse and deadlines', () => {
 		);
 		const aborted = browser.listNamespaces(source, { limit: 1, signal: controller.signal });
 		const assertion = expect(aborted).rejects.toThrow('canceled');
-		const shared = browser.listNamespaces(source, { limit: 1 });
 		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+		const shared = browser.listNamespaces(source, { limit: 1 });
+		// Both credential hashes must finish so the second caller joins the pending fetch.
+		await vi.waitFor(() => expect(cacheGet).toHaveBeenCalledTimes(2));
 		controller.abort(new Error('sensitive abort reason'));
 		await assertion;
 		await expect(shared).resolves.toBeDefined();
