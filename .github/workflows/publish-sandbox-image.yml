@@ -184,7 +184,7 @@ jobs:
     name: Publish multi-platform manifests
     if: github.event_name == 'push'
     needs: image
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-p-small
     timeout-minutes: 10
     permissions:
       contents: read
