@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   minio:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-p-small
     timeout-minutes: 15
     env:
       MARIMOHUB_TEST_OBJECT_WRITES: 'true'
@@ -53,7 +53,7 @@ jobs:
         run: vp test packages/config/src/objectBrowser.minio.live.test.ts
 
   azurite:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-p-small
     timeout-minutes: 15
     env:
       MARIMOHUB_TEST_OBJECT_WRITES: 'true'
