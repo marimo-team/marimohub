@@ -354,7 +354,7 @@ printf '%s\n' \
 printf '{"name":"release-test","version":"1.2.3"}\n' >"$release_repo/package.json"
 printf '[package]\nname = "mohub"\nversion = "1.2.3"\n' >"$release_repo/apps/cli/Cargo.toml"
 touch "$release_repo/apps/cli/Cargo.lock"
-printf "setup:\n  version: '1.2.3'\n" >"$release_repo/docs/cli.md"
+printf "setup:\n  version: latest\n" >"$release_repo/docs/cli.md"
 printf '%s\n' \
 	'#!/usr/bin/env bash' \
 	'root="$(cd "$(dirname "$0")/.." && pwd)"' \
@@ -379,7 +379,7 @@ done
 )
 grep -q '"version": "1.2.4"' "$release_repo/package.json" || fail 'package version was not updated'
 grep -q 'version = "1.2.4"' "$release_repo/apps/cli/Cargo.toml" || fail 'Cargo version was not updated'
-grep -q "version: '1.2.4'" "$release_repo/docs/cli.md" || fail 'CLI docs version was not updated'
+grep -q "version: latest" "$release_repo/docs/cli.md" || fail 'CLI docs example was changed'
 grep -q '"version": "1.2.4"' "$release_repo/packages/iac/package.json" || fail 'IaC package version was not updated'
 grep -q '"@marimo-hub/iac": "npm:@marimo-hub/iac@1.2.4"' "$release_repo/examples/integration-iac/deno/deno.json" || \
 	fail 'Deno IaC import version was not updated'
