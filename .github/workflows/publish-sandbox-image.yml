@@ -184,7 +184,7 @@ jobs:
     name: Publish multi-platform manifests
     if: github.event_name == 'push'
     needs: image
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read

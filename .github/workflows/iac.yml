@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   compatibility:
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     strategy:
       matrix:
         include:
@@ -60,7 +60,7 @@ jobs:
   package:
     if: github.event_name == 'workflow_dispatch' && inputs.publish
     needs: compatibility
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -92,7 +92,7 @@ jobs:
   publish:
     if: github.event_name == 'workflow_dispatch' && inputs.publish
     needs: package
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     environment: npm
     permissions:
       contents: read

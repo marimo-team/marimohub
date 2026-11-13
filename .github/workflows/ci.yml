@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         suite: [backend, web]
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -79,7 +79,7 @@ jobs:
   runtime-integrations:
     name: Runtime integrations
     # The Chromium AppArmor profile and Playwright install-deps target Ubuntu 24.04.
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -169,7 +169,7 @@ jobs:
   test:
     needs: [test-suites, runtime-integrations]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     steps:
       - run: test "$SUITES" = success && test "$RUNTIME" = success
         env:
@@ -177,7 +177,7 @@ jobs:
           RUNTIME: ${{ needs.runtime-integrations.result }}
 
   verify:
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -300,7 +300,7 @@ jobs:
 
   dependency-review:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-p-small
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
