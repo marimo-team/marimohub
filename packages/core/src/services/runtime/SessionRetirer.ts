@@ -12,12 +12,13 @@ import { readStored, VersionSchema } from '../../schema';
 import type { GitSource, Session } from '../../schema';
 import { paths } from '../../paths';
 import { Millis } from '../../duration';
-import { ConflictError, NotFoundError } from '../../errors';
+import { ConflictError, NotFoundError, SessionPersistenceRequiredError } from '../../errors';
 import { logOperationalError } from '../../operationalLog';
 import { logEvent } from '../../logs';
 import { captureFilesystemSnapshot } from '../content/filesystemSnapshots';
 import type { NotebookService } from '../content/NotebookService';
-import { SandboxProvisioner } from './SandboxProvisioner';
+import { SessionCaptureCoordinator } from './SessionCaptureCoordinator';
+import { RuntimeCaptureClient } from './runtimeCapture';
 import { isTerminal, sessionPersistsEdits } from './sessionState';
 import { isPastAuthorizationDeadline } from './SessionService';
 import { pullSourceRootPath, sandboxWorkspaceLayout } from './workspaceLayout';
@@ -39,6 +40,8 @@ export const RECLAIM_BLOCKED_REASONS = [
 	'kernel_unreachable',
 	'destroy_failed',
 	'timeout',
+	'persistence_required',
+	'stop_pending',
 ] as const;
 
 export type ReclaimBlockedReason = (typeof RECLAIM_BLOCKED_REASONS)[number];
@@ -156,6 +159,7 @@ export interface SessionRetirerDeps {
 	thumbnailDeadline?: () => number | undefined;
 	workdir?: string;
 	probe?: ConnectionProbe;
+	connectionAware?: boolean;
 }
 
 export class TakeoverRetirementError extends Error {
@@ -172,23 +176,322 @@ export class TakeoverRetirementError extends Error {
 
 /** Centralizes capture, destruction, and claim release for session teardown. */
 export class SessionRetirer {
-	private readonly provisioner: SandboxProvisioner;
+	constructor(private deps: SessionRetirerDeps) {}
 
-	constructor(private deps: SessionRetirerDeps) {
-		this.provisioner = new SandboxProvisioner(deps.compute);
+	async reconcileRetained(session: Session): Promise<Session> {
+		if (
+			!session.sandbox_id ||
+			!session.stop ||
+			!['retained', 'uncertain'].includes(session.stop.outcome) ||
+			session.stop.runtime_state === 'running'
+		)
+			return session;
+		const sandbox = reconnectSessionSandbox(
+			this.deps.compute,
+			session,
+			this.deps.metrics,
+			'teardown',
+		);
+		if (!sandbox) return session;
+		const runtime = new RuntimeCaptureClient(sandbox, session.sandbox_id);
+		try {
+			if (session.stop.runtime_token)
+				await runtime.resume({
+					token: session.stop.runtime_token,
+					directory: session.stop.runtime_directory!,
+				});
+			if ((await runtime.status()).state === 'running')
+				return await this.deps.sessions.confirmRetainedRuntimeResumed(session);
+		} catch {
+			/* The runtime watchdog remains responsible for an unconfirmed pause. */
+		}
+		return session;
 	}
 
-	/**
-	 * End a session: best-effort save-and-destroy of its sandbox, mark the
-	 * record terminated, and release claims whose sandbox is confirmed gone.
-	 *
-	 * `teardown: false` skips the sandbox work (a concurrent stop already owns
-	 * the teardown — the caller lost the `beginTerminating` race). The terminal
-	 * mark is best-effort: a lost CAS leaves the record `terminating` for the
-	 * stale reaper to expire, which beats failing a stop whose sandbox is
-	 * already gone. `markTerminated: false` is for callers whose record is
-	 * already terminal (reconciliation).
-	 */
+	async stop(
+		selected: Session,
+		options: {
+			preserveEditorClaim?: boolean;
+			assertOwnership?: () => Promise<void>;
+			thumbnail?: ThumbnailPolicy;
+			thumbnailDeadlineAt?: number;
+			existing?: ReturnType<SandboxProvider['create']>;
+		} = {},
+	): Promise<Session> {
+		const sessions = this.deps.sessions;
+		const finalize = async (current: Session) => {
+			await sessions.markTerminated(current.project_id, current.session_id);
+			await sessions.releaseAppFor(current);
+			if (!options.preserveEditorClaim) await sessions.releaseEditorFor(current);
+			return sessions.finalizeStop(current);
+		};
+		if (selected.stop?.outcome === 'stopped') return finalize(selected);
+		const fencePublication = async () => {
+			const source = await this.deps.notebooks
+				.getNotebookSource(selected.project_id, selected.notebook_id)
+				.catch((error) => {
+					if (error instanceof NotFoundError) return null;
+					throw error;
+				});
+			if (source?.type === 'local')
+				await this.deps.notebooks.fenceSessionPublications(
+					selected.project_id,
+					selected.notebook_id,
+				);
+		};
+		const leaseId = crypto.randomUUID();
+		let session = await sessions.claimStop(selected, leaseId);
+		if (!session) return sessions.getSession(selected.project_id, selected.session_id);
+		let leaseLost = false;
+		let failedCaptureReceipt: 'running' | 'unknown' | undefined;
+		let missingRuntimeConfirmed = false;
+		let renewal: Promise<void> | undefined;
+		const renew = async () => {
+			if (!(await sessions.claimStop(session!, leaseId))) leaseLost = true;
+		};
+		const timer = setInterval(() => {
+			renewal ??= renew()
+				.catch(() => {
+					leaseLost = true;
+				})
+				.finally(() => {
+					renewal = undefined;
+				});
+		}, Millis.seconds(30));
+		const update = async (patch: Parameters<SessionService['updateStop']>[2]) => {
+			if (leaseLost) throw new ConflictError('The stop attempt lease was lost');
+			await options.assertOwnership?.();
+			session = await sessions.updateStop(session!, leaseId, patch);
+		};
+		const finishMissingRuntime = async () => {
+			// Storage uncertainty must resume confirmed-absence cleanup, not abandon it.
+			missingRuntimeConfirmed = true;
+			await update({ outcome: 'stopping', runtime_state: 'stopped' });
+			await fencePublication();
+			await sessions.markSandboxReclaimed(
+				session!.project_id,
+				session!.session_id,
+				new Date().toISOString(),
+			);
+			await update({ outcome: 'stopped', runtime_state: 'stopped' });
+			return finalize(session!);
+		};
+		try {
+			if (!session.sandbox_reclaimed_at && session.sandbox_id) {
+				let sandbox: ReturnType<SandboxProvider['create']>;
+				try {
+					sandbox =
+						options.existing ??
+						reconnectSessionSandbox(this.deps.compute, session, this.deps.metrics, 'teardown') ??
+						sessionSandbox(this.deps.compute, session, this.deps.metrics, 'teardown');
+				} catch (error) {
+					if (error instanceof NotFoundError) return await finishMissingRuntime();
+					throw error;
+				}
+				const runtime = new RuntimeCaptureClient(sandbox, session.sandbox_id);
+				if (!session.stop!.runtime_token && ['idle', 'lifetime'].includes(session.stop!.trigger)) {
+					const current = await sessions.getSession(session.project_id, session.session_id);
+					const eligibilityChanged =
+						current.last_heartbeat !== session.stop!.eligible_heartbeat ||
+						current.expires_at !== session.stop!.eligible_expires_at;
+					let active: number | null = null;
+					if (!eligibilityChanged && this.deps.connectionAware !== false) {
+						try {
+							active = await (this.deps.probe ?? kernelActiveConnections)(
+								sandbox,
+								localKernelBasePath(current),
+							);
+						} catch (error) {
+							if (!(error instanceof NotFoundError)) throw error;
+							return await finishMissingRuntime();
+						}
+					}
+					if (eligibilityChanged || (active ?? 0) > 0) {
+						await update({
+							outcome: 'retained',
+							runtime_state: 'running',
+							failure: { code: 'STOP_NO_LONGER_ELIGIBLE', retryable: true },
+						});
+						return session;
+					}
+				}
+
+				if (session.stop!.force) {
+					try {
+						this.deps.metrics?.increment('sessions.stop.forced', 1, {
+							trigger: session.stop!.trigger,
+						});
+					} catch {}
+					logEvent({
+						level: 'warn',
+						event: 'session_force_stop',
+						session_id: session.session_id,
+						requested_by: session.stop!.requested_by,
+						trigger: session.stop!.trigger,
+						attempt_id: session.stop!.id,
+					});
+					await fencePublication();
+					await update({ outcome: 'stopping' });
+				} else if (session.stop!.runtime_token) {
+					// Recovery uses the token recorded before commit-stop was dispatched.
+					let state: Awaited<ReturnType<RuntimeCaptureClient['status']>>;
+					try {
+						state = await runtime.status();
+					} catch (error) {
+						if (error instanceof NotFoundError) return await finishMissingRuntime();
+						throw error;
+					}
+					if (
+						state.token !== session.stop!.runtime_token ||
+						!['paused', 'stopped'].includes(state.state ?? '')
+					) {
+						await update({
+							outcome: 'retained',
+							runtime_state: state.state === 'running' ? 'running' : 'unknown',
+							failure: { code: 'CAPTURE_EXPIRED', retryable: true },
+						});
+						return session;
+					}
+					await runtime.commitStop({
+						token: session.stop!.runtime_token,
+						directory: session.stop!.runtime_directory!,
+					});
+					await update({ outcome: 'stopping', runtime_state: 'stopped' });
+				} else if (sessionPersistsEdits(session)) {
+					await update({ outcome: 'capturing' });
+					await fencePublication();
+					await this.stopSecondarySurfaces(sandbox, session);
+					if (
+						options.thumbnail &&
+						options.thumbnail !== 'skip' &&
+						this.deps.automaticThumbnails !== false
+					) {
+						await captureThumbnail(
+							sandbox,
+							this.deps.notebooks,
+							session.project_id,
+							session.notebook_id,
+							session.sandbox_id,
+							await this.workspaceDir(session),
+							thumbnailDeadline('bounded', options.thumbnailDeadlineAt),
+						).catch(() => {});
+					}
+					const result = await new SessionCaptureCoordinator(this.deps).capture(session, sandbox, {
+						retainRuntime: true,
+						assertOwnership: async () => {
+							await update({});
+							if (options.assertOwnership) await options.assertOwnership();
+							else
+								await sessions.assertCaptureOwnership(session!, {
+									attemptId: session!.stop!.id,
+									leaseId,
+								});
+						},
+					});
+					if (options.preserveEditorClaim && result.workspace.status === 'failed') {
+						const resumed = result.runtime
+							? await runtime.resume(result.runtime).then(
+									() => true,
+									() => false,
+								)
+							: result.runtimeState === 'running';
+						await update({
+							outcome: 'retained',
+							runtime_state: resumed ? 'running' : 'unknown',
+							failure: { code: 'WORKSPACE_CAPTURE_FAILED', retryable: true },
+						});
+						return session;
+					}
+					if (result.critical.status === 'failed' || result.critical.status === 'uncertain') {
+						try {
+							this.deps.metrics?.increment('sessions.stop.retained', 1, {
+								code: result.critical.code,
+								trigger: session.stop!.trigger,
+							});
+						} catch {}
+						logOperationalError(
+							'session_capture_failed',
+							{
+								operation: 'session.stop',
+								session_id: session.session_id,
+								code: result.critical.code,
+							},
+							result.critical.cause,
+						);
+						await update({
+							outcome: result.critical.status === 'uncertain' ? 'uncertain' : 'retained',
+							runtime_state: result.runtimeState === 'running' ? 'running' : 'unknown',
+							failure: { code: result.critical.code, retryable: result.critical.retryable },
+						});
+						return session;
+					}
+					if (result.critical.status === 'durable') {
+						if (!result.runtime) throw new Error('Capture did not retain its runtime checkpoint');
+						try {
+							await update({
+								outcome: 'durable',
+								runtime_token: result.runtime.token,
+								runtime_directory: result.runtime.directory,
+								runtime_state: 'paused',
+								captured_at: result.critical.capturedAt,
+								version_id: result.critical.publication.versionId,
+							});
+						} catch (error) {
+							failedCaptureReceipt = 'unknown';
+							await runtime.resume(result.runtime);
+							failedCaptureReceipt = 'running';
+							throw error;
+						}
+						await runtime.commitStop(result.runtime);
+						await update({ outcome: 'stopping', runtime_state: 'stopped' });
+						await this.captureSavedArtifacts(sandbox, session, SKIP_THUMBNAIL).catch(() => {});
+					}
+				}
+				await update({ outcome: 'stopping' });
+				try {
+					await sandbox.destroy();
+				} catch (error) {
+					if (error instanceof NotFoundError) return await finishMissingRuntime();
+					throw error;
+				}
+				await sessions.markSandboxReclaimed(
+					session.project_id,
+					session.session_id,
+					new Date().toISOString(),
+				);
+			}
+			await update({ outcome: 'stopped', runtime_state: 'stopped' });
+			return await finalize(session);
+		} catch (error) {
+			logOperationalError(
+				'session_stop_incomplete',
+				{ operation: 'session.stop', session_id: selected.session_id },
+				error,
+			);
+			// A recorded checkpoint/stop may already be committed. Leave its intent resumable.
+			if (
+				!missingRuntimeConfirmed &&
+				!session.stop?.runtime_token &&
+				session.stop?.outcome !== 'stopping'
+			) {
+				await update({
+					outcome: 'uncertain',
+					runtime_state: failedCaptureReceipt ?? 'unknown',
+					failure: {
+						code: failedCaptureReceipt ? 'CAPTURE_RECEIPT_FAILED' : 'CAPTURE_UNAVAILABLE',
+						retryable: true,
+					},
+				}).catch(() => {});
+			}
+			return await sessions.getSession(selected.project_id, selected.session_id);
+		} finally {
+			clearInterval(timer);
+			await renewal;
+			await sessions.releaseStopLease(session, leaseId).catch(() => {});
+		}
+	}
+
+	/** Persistent editors use durable stop attempts; discard and security cleanup skip capture. */
 	async retire(
 		session: Session,
 		opts: {
@@ -199,17 +502,28 @@ export class SessionRetirer {
 			thumbnail?: ThumbnailPolicy;
 		} = {},
 	): Promise<void> {
-		if (opts.teardown === false && session.status === 'terminating') return;
-		const sandboxDestroyed =
-			opts.teardown === false
-				? !session.sandbox_id
-				: (
-						await this.teardownSandbox(
-							session,
-							opts.captureBeforeDestroy ?? true,
-							thumbnailDeadline(opts.thumbnail, opts.thumbnailDeadlineAt),
-						)
-					).destroyed;
+		if (opts.teardown === false) return;
+		if (sessionPersistsEdits(session) && opts.captureBeforeDestroy !== false) {
+			const requested = await this.deps.sessions.requestStop(
+				session.project_id,
+				session.session_id,
+				{ trigger: 'reconcile' },
+			);
+			const result = await this.stop(requested, {
+				thumbnail: opts.thumbnail ?? 'bounded',
+				thumbnailDeadlineAt: opts.thumbnailDeadlineAt,
+			});
+			if (result.stop?.outcome !== 'stopped' && !result.sandbox_reclaimed_at)
+				throw new SessionPersistenceRequiredError();
+			return;
+		}
+		const sandboxDestroyed = (
+			await this.teardownSandbox(
+				session,
+				opts.captureBeforeDestroy ?? true,
+				thumbnailDeadline(opts.thumbnail, opts.thumbnailDeadlineAt),
+			)
+		).destroyed;
 		if (opts.markTerminated !== false) {
 			await this.deps.sessions
 				.markTerminated(session.project_id, session.session_id)
@@ -217,7 +531,7 @@ export class SessionRetirer {
 		}
 		await this.deps.sessions.releaseAppFor(session);
 		if (sandboxDestroyed) {
-			if (opts.teardown !== false && session.sandbox_id) {
+			if (session.sandbox_id) {
 				await this.deps.sessions
 					.markSandboxReclaimed(session.project_id, session.session_id, new Date().toISOString())
 					.catch(() => {});
@@ -346,43 +660,21 @@ export class SessionRetirer {
 		thumbnail: ThumbnailPolicy = 'skip',
 	): Promise<void> {
 		if (!session.sandbox_id || session.sandbox_reclaimed_at) return;
-		const sandbox = sessionSandbox(this.deps.compute, session, this.deps.metrics, 'teardown');
-		await this.stopSecondarySurfaces(sandbox, session);
-		if (!session.takeover_capture_completed_at) {
-			const persisted = await this.provisioner.captureSession(
-				sandbox,
-				this.deps.notebooks,
-				this.deps.bucket,
-				session.project_id,
-				session.notebook_id,
-				session.user_id,
-				this.deps.persistWorkspace,
-				this.deps.workdir,
-				{ persistEdits: true },
-			);
-			await lease.assertLease();
-			if (persisted) {
-				await lease.advanceLease('snapshotting');
-				await this.captureSavedArtifacts(sandbox, session, thumbnailDeadline(thumbnail));
-				await lease.assertLease();
-			}
-			await this.deps.sessions.markTakeoverCaptureCompleted(
-				session.project_id,
-				session.session_id,
-				new Date().toISOString(),
-			);
-			await lease.advanceLease('destroying');
-		} else {
-			await lease.advanceLease('destroying');
-		}
 		await lease.assertLease();
-		await sandbox.destroy();
+		const requested = await this.deps.sessions.requestStop(session.project_id, session.session_id, {
+			trigger: 'takeover',
+			...(session.stop && ['retained', 'uncertain'].includes(session.stop.outcome)
+				? { key: crypto.randomUUID(), previousId: session.stop.id }
+				: {}),
+		});
+		const result = await this.stop(requested, {
+			preserveEditorClaim: true,
+			thumbnail,
+			assertOwnership: lease.assertLease,
+		});
 		await lease.assertLease();
-		await this.deps.sessions.markSandboxReclaimed(
-			session.project_id,
-			session.session_id,
-			new Date().toISOString(),
-		);
+		if (result.stop?.outcome !== 'stopped')
+			throw new ConflictError('The editor could not be saved and remains retained');
 		await lease.advanceLease('finalizing');
 	}
 
@@ -406,6 +698,16 @@ export class SessionRetirer {
 		} = {},
 	): Promise<ReclaimOutcome> {
 		const session = await this.deps.sessions.getSession(selected.project_id, selected.session_id);
+		if (session.stop && !session.sandbox_reclaimed_at) {
+			if (['retained', 'uncertain'].includes(session.stop.outcome)) {
+				await this.reconcileRetained(session);
+				return this.skipReclaim(session, 'persistence_required');
+			}
+			const result = await this.stop(session);
+			return result.stop?.outcome === 'stopped'
+				? { reclaimed: true, saved: !!result.stop.captured_at }
+				: this.skipReclaim(session, 'stop_pending');
+		}
 		const now = Date.now();
 		const options: ReclaimPlanOptions = {
 			attachmentSupported: !!this.deps.compute.connectExisting,
@@ -537,55 +839,20 @@ export class SessionRetirer {
 		existing?: ReturnType<SandboxProvider['create']>,
 	): Promise<{ destroyed: boolean; saved: boolean }> {
 		if (!session.sandbox_id) return { destroyed: true, saved: false };
-		const sandbox =
-			existing ?? sessionSandbox(this.deps.compute, session, this.deps.metrics, 'teardown');
-		let canCapture = captureBeforeDestroy;
-		try {
-			await this.stopSecondarySurfaces(sandbox, session);
-		} catch (error) {
-			if (!(error instanceof SecondarySurfaceStopError)) throw error;
-			// A live secondary writer makes a consistent capture unsafe.
-			canCapture = false;
-			logOperationalError(
-				'session_surface_stop_failed',
-				{ operation: 'session_retire.stop_surfaces', session_id: session.session_id },
-				error,
+		if (captureBeforeDestroy && sessionPersistsEdits(session)) {
+			const requested = await this.deps.sessions.requestStop(
+				session.project_id,
+				session.session_id,
+				{ trigger: 'reconcile' },
 			);
+			const result = await this.stop(requested, {
+				existing,
+				thumbnail: thumbnailDeadlineAt === SKIP_THUMBNAIL ? 'skip' : 'bounded',
+				thumbnailDeadlineAt,
+			});
+			return { destroyed: result.stop?.outcome === 'stopped', saved: !!result.stop?.captured_at };
 		}
-		let persisted = false;
-		if (canCapture) {
-			try {
-				const persistEdits =
-					sessionPersistsEdits(session) && (await this.deps.sessions.ownsEditorClaim(session));
-				persisted = await this.provisioner.captureSession(
-					sandbox,
-					this.deps.notebooks,
-					this.deps.bucket,
-					session.project_id,
-					session.notebook_id,
-					session.user_id,
-					this.deps.persistWorkspace,
-					this.deps.workdir,
-					{ persistEdits },
-				);
-			} catch (err) {
-				// A failed capture means this sandbox's state was not committed as a version.
-				// Snapshotting it would point restores at unsaved state and delete the last good snapshot.
-				logOperationalError(
-					'session_capture_failed',
-					{
-						operation: 'session_retire.capture_session',
-						project_id: session.project_id,
-						notebook_id: sessionResourceNotebookId(session),
-						origin: session.origin,
-						session_id: session.session_id,
-					},
-					err,
-				);
-			}
-		}
-		if (persisted) await this.captureSavedArtifacts(sandbox, session, thumbnailDeadlineAt);
-		return { destroyed: await this.destroySandbox(session, sandbox), saved: persisted };
+		return { destroyed: await this.destroySandbox(session, existing), saved: false };
 	}
 
 	private async destroySandbox(

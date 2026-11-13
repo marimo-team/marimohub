@@ -33,6 +33,7 @@ export interface VersionPaths {
 	html: string;
 	/** Optional marimo session-state snapshot captured on teardown (`session.json`). */
 	session: string;
+	capture: (id: string) => { html: string; session: string };
 }
 
 export interface NotebookPaths {
@@ -188,6 +189,10 @@ function versionPaths(base: string, vid: VersionId): VersionPaths {
 		gitFile: (rel: string) => `${git}/${rel}`,
 		html: `${prefix}/notebook.html`,
 		session: `${prefix}/session.json`,
+		capture: (id) => ({
+			html: `${prefix}/captures/${id}/notebook.html`,
+			session: `${prefix}/captures/${id}/session.json`,
+		}),
 	};
 }
 

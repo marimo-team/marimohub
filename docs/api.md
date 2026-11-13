@@ -90,11 +90,15 @@ Resource groups:
 
 - **Sessions** — list, create, inspect, heartbeat, and stop kernel sessions.
   The session routes also expose editor ownership and exclusive takeover.
-  `DELETE …/sessions/{sid}` returns `202` unless the request sets `wait=true`.
-  With `wait=true`, it returns `200` after teardown finishes.
-  If another request owns the teardown, `wait=true` returns a retryable `503`.
-  For where teardown runs and how it drains, see
-  [Session stop and recovery](./operations.md#session-stop-and-recovery).
+  `DELETE …/sessions/{sid}` defaults to a non-forced stop. Send an `Idempotency-Key`
+  header for transport retries. Without `wait=true`, an accepted attempt returns `202`.
+  With `wait=true`, `200` confirms stop, `202` means pending, and
+  `409 SESSION_PERSISTENCE_REQUIRED` means saving failed or remains uncertain.
+  Read the session's `stop` field before choosing an action. A deliberate retry uses
+  a new key and `previous_attempt_id` from the ended attempt. Force also requires
+  `force=true` and can discard unsaved changes. An active attempt cannot be forced;
+  poll GET until it ends. Keep running sends no new stop request.
+  See [Session stop and recovery](./operations.md#session-stop-and-recovery).
   [Secondary surfaces](/surfaces) provide VS Code and OpenCode access within edit sessions.
 - **Notebook imports** — [import a local folder](/importing-notebooks) as
   notebooks with their supporting files:

@@ -73,6 +73,7 @@ export type ApiRequestErrorCode = ServerErrorCode | 'NETWORK_ERROR' | 'PARSE_ERR
 // forces this list back in sync whenever the generated union grows.
 const KNOWN_SERVER_ERROR_CODES = {
 	MOVE_IN_PROGRESS: true,
+	SESSION_PERSISTENCE_REQUIRED: true,
 	BAD_REQUEST: true,
 	UNAUTHORIZED: true,
 	USER_SUSPENDED: true,

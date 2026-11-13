@@ -601,6 +601,31 @@ export function toPublicNotebookMeta(meta: NotebookMeta): PublicNotebookMeta {
 
 // --- Source ---
 
+export const PublicationArtifactSchema = z.object({
+	captured_at: utcTimestamp(),
+	size_bytes: z.number().int().nonnegative(),
+	// Absent for legacy sidecars adopted when the publication head is initialized.
+	capture_id: z.uuid().optional(),
+	sha256: z
+		.string()
+		.regex(/^[a-f0-9]{64}$/)
+		.optional(),
+});
+
+export const LocalPublicationVersionSchema = z.object({
+	version_id: VersionIdSchema,
+	html_snapshot: PublicationArtifactSchema.optional(),
+	session_snapshot: PublicationArtifactSchema.optional(),
+});
+
+export const LocalPublicationSchema = z.object({
+	generation: z.uuid(),
+	versions: z.array(LocalPublicationVersionSchema).max(1000),
+});
+export type LocalPublication = z.infer<typeof LocalPublicationSchema>;
+export type LocalPublicationVersion = z.infer<typeof LocalPublicationVersionSchema>;
+export type PublicationArtifact = z.infer<typeof PublicationArtifactSchema>;
+
 export const LocalSourceSchema = z.object({
 	// NOTE: SourceSchema discriminates on `type` (below), NOT on schema_version,
 	// so loosening schema_version here does not weaken the discriminated union.
@@ -608,6 +633,7 @@ export const LocalSourceSchema = z.object({
 	type: z.literal('local'),
 	entry_notebook: z.string().optional(),
 	current_version_id: VersionIdSchema,
+	publication: LocalPublicationSchema.optional(),
 });
 
 // A Git repository mirrored into the store by CI push or a configured provider
@@ -660,8 +686,14 @@ export type Source = z.infer<typeof SourceSchema>;
 export type LocalSource = z.infer<typeof LocalSourceSchema>;
 export type GitSource = z.infer<typeof GitSourceSchema>;
 
-export type PublicSource = Omit<LocalSource, 'schema_version'> | Omit<GitSource, 'schema_version'>;
+export type PublicSource =
+	| Omit<LocalSource, 'schema_version' | 'publication'>
+	| Omit<GitSource, 'schema_version'>;
 export function toPublicSource(source: Source): PublicSource {
+	if (source.type === 'local') {
+		const { schema_version: _schema_version, publication: _publication, ...rest } = source;
+		return rest;
+	}
 	const { schema_version: _schema_version, ...rest } = source;
 	return rest;
 }
@@ -909,7 +941,44 @@ export const SandboxReconnectReferenceSchema = z.string().min(1).max(4096);
 // audit pin) and silently rewrite the record without them on the next heartbeat.
 // The API projection (`toSessionResponse` in routes/sessions.ts) is an explicit
 // pick, so preserved unknown keys never leak into a response.
+export const SessionStopAttemptSchema = z.object({
+	id: z.uuid(),
+	request_key: z.string().max(128).optional(),
+	requested_by: UserIdSchema.optional(),
+	previous_id: z.uuid().optional(),
+	trigger: z.enum(['interactive', 'idle', 'lifetime', 'reconcile', 'takeover', 'security']),
+	force: z.boolean(),
+	requested_at: utcTimestamp(),
+	finalized_at: utcTimestamp().optional(),
+	eligible_heartbeat: utcTimestamp().optional(),
+	eligible_expires_at: utcTimestamp().optional(),
+	updated_at: utcTimestamp(),
+	outcome: z.enum([
+		'pending',
+		'capturing',
+		'durable',
+		'stopping',
+		'stopped',
+		'retained',
+		'uncertain',
+	]),
+	lease_id: z.uuid().optional(),
+	lease_expires_at: utcTimestamp().optional(),
+	runtime_token: z.uuid().optional(),
+	runtime_directory: z.string().optional(),
+	runtime_state: z.enum(['running', 'paused', 'stopped', 'unknown']).optional(),
+	failure: z.object({ code: z.string(), retryable: z.boolean() }).optional(),
+	captured_at: utcTimestamp().optional(),
+	version_id: VersionIdSchema.optional(),
+});
+export type SessionStopAttempt = z.infer<typeof SessionStopAttemptSchema>;
+
 export const SessionSchema = z.looseObject({
+	stop: SessionStopAttemptSchema.optional(),
+	stop_receipts: z.array(SessionStopAttemptSchema).max(16).optional(),
+	last_durable_capture: z.object({ at: utcTimestamp(), version_id: VersionIdSchema }).optional(),
+	last_capture_attempt_at: utcTimestamp().optional(),
+	save_dirty: z.object({ id: z.uuid(), acknowledged_at: utcTimestamp() }).optional(),
 	/** Immutable resource attribution; survives runtime artifact cleanup. */
 	origin: PreviewSessionOriginSchema.optional(),
 	idle_timeout_ms: z.number().int().positive().optional(),

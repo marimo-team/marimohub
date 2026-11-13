@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+beforeEach(mockRuntimeCapture);
+import { mockRuntimeCapture } from '../testing/runtimeCapture';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	ConflictError,
 	createServices,
@@ -44,7 +46,9 @@ async function setup(policy: ApiDeps['policy'] = {}) {
 	let principal: AuthenticatedPrincipal | null = user;
 	const deps = makeTestDeps(bucket, {
 		authenticator: { authenticate: async () => principal },
-		compute: makeFakeCompute(),
+		compute: makeFakeCompute({
+			files: { '/workspace/notebook.py': 'import marimo\napp = marimo.App()\n' },
+		}),
 		policy,
 		host: { pollIntervalMs: POLL_INTERVAL_MS },
 	});

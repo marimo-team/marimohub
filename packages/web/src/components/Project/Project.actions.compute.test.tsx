@@ -98,7 +98,9 @@ describe('Project — Notebook Actions: configuration', () => {
 		await waitFor(() =>
 			expect(
 				calls.some(
-					(call) => call.method === 'DELETE' && call.url.endsWith('/sessions/sess-edit?wait=true'),
+					(call) =>
+						call.method === 'DELETE' &&
+						call.url.endsWith('/sessions/sess-edit?wait=true&force=false'),
 				),
 			).toBe(true),
 		);
@@ -211,11 +213,19 @@ describe('Project — Notebook Actions: configuration', () => {
 		await user.click(within(dialog).getByRole('button', { name: 'Stop App' }));
 		await waitFor(() =>
 			expect(
-				calls.some((call) => call.method === 'DELETE' && call.url.endsWith('/sessions/sess-app-b')),
+				calls.some(
+					(call) =>
+						call.method === 'DELETE' &&
+						call.url.endsWith('/sessions/sess-app-b?wait=true&force=false'),
+				),
 			).toBe(true),
 		);
 		expect(
-			calls.some((call) => call.method === 'DELETE' && call.url.endsWith('/sessions/sess-app-a')),
+			calls.some(
+				(call) =>
+					call.method === 'DELETE' &&
+					call.url.endsWith('/sessions/sess-app-a?wait=true&force=false'),
+			),
 		).toBe(false);
 	});
 
@@ -315,7 +325,8 @@ describe('Project — Notebook Actions: configuration', () => {
 		await waitFor(() => {
 			expect(
 				calls.some(
-					(call) => call.method === 'DELETE' && call.url.endsWith('/sessions/sess-1?wait=true'),
+					(call) =>
+						call.method === 'DELETE' && call.url.endsWith('/sessions/sess-1?wait=true&force=false'),
 				),
 			).toBe(true);
 			expect(toastError).toHaveBeenCalledWith('restart failed');

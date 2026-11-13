@@ -1,3 +1,4 @@
+import { publicationArtifactKey } from '../content/localPublication';
 import { assertNoPendingNotebookMoves } from '../content/notebookMoveRecord';
 import type { z } from 'zod';
 import type { Bucket, BucketObjectBody } from '../../ports/bucket';
@@ -365,7 +366,34 @@ async function planProject({
 			try {
 				const policy = workspaceSourcePolicy(notebookSource);
 				if (notebookSource.type === 'local') {
-					requiredKeys.push(nb.workspaceFile(policy.entryNotebook));
+					if (notebookSource.publication) {
+						const current = nb.version(notebookSource.current_version_id);
+						requiredKeys.push(current.code, current.deps);
+						const capture = notebookSource.publication.versions.find(
+							(item) => item.version_id === notebookSource.current_version_id,
+						);
+						if (!capture) issue(nb.source, 'error', 'Current notebook version is not published.');
+						if (capture?.session_snapshot)
+							requiredKeys.push(
+								publicationArtifactKey(
+									projectId,
+									notebookId,
+									capture.version_id,
+									'session',
+									capture.session_snapshot,
+								),
+							);
+						if (capture?.html_snapshot)
+							requiredKeys.push(
+								publicationArtifactKey(
+									projectId,
+									notebookId,
+									capture.version_id,
+									'html',
+									capture.html_snapshot,
+								),
+							);
+					} else requiredKeys.push(nb.workspaceFile(policy.entryNotebook));
 				} else if (notebookSource.current_version_id) {
 					requiredKeys.push(
 						nb.version(notebookSource.current_version_id).workspaceFile(policy.entryNotebook),

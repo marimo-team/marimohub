@@ -1,3 +1,4 @@
+import { SessionKeptRunningError } from '@/api/sessionStop';
 import { NOTEBOOK_STATUS_FILTERS } from '@/api/routePrefetch';
 import { MoveNotebookDialog } from '@/components/Notebook/MoveNotebookDialog';
 import { TagFieldValue } from '@/lib/tagFieldValue';
@@ -451,6 +452,9 @@ function useProjectContent() {
 			onSuccess: () => {
 				toast.success(`Stopped "${stop.notebook.title}"`);
 				stopModal.close();
+			},
+			onError: (error) => {
+				if (error instanceof SessionKeptRunningError) stopModal.close();
 			},
 		});
 	};

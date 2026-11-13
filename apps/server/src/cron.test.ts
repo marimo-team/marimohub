@@ -1,3 +1,4 @@
+import { RuntimeCaptureClient } from '@marimo-hub/core/runtime-capture';
 import { configureLogLevel } from '@marimo-hub/core/logs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInitializedBucket, makeTestDeps, stubSourceControl } from '@marimo-hub/api/testing';
@@ -15,7 +16,8 @@ import {
 	reapFilesystemSnapshots,
 	ReconciliationService,
 	SessionLifecycleService,
-	SandboxProvisioner,
+	SessionCaptureCoordinator,
+	createVersionId,
 } from '@marimo-hub/core';
 import { JobScheduler } from '@marimo-hub/core/jobs';
 import { SearchIndexer, SearchService } from '@marimo-hub/core/search';
@@ -278,7 +280,22 @@ describe('startMaintenance', () => {
 				}),
 			};
 			deps.compute = compute;
-			vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(true);
+			vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockResolvedValue({
+				critical: {
+					status: 'durable',
+					capturedAt: new Date().toISOString(),
+					publication: {
+						versionId: createVersionId(),
+						newVersion: false,
+						capturedHtml: false,
+						capturedSession: false,
+					},
+				},
+				workspace: { status: 'skipped' },
+				runtime: { token: crypto.randomUUID(), directory: '/checkpoint' },
+				runtimeState: 'paused',
+			});
+			vi.spyOn(RuntimeCaptureClient.prototype, 'commitStop').mockResolvedValue();
 			const session = makeSession({
 				status: 'terminating',
 				terminating_at: new Date(Date.now() - 20 * 60_000).toISOString(),

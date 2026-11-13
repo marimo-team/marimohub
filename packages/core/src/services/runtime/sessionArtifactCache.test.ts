@@ -101,19 +101,20 @@ describe('incremental autosave artifacts', () => {
 			.project(f.projectId)
 			.notebook(f.notebookId)
 			.version(source.current_version_id!);
-		await f.bucket.delete(version.html);
-		const descriptor = await (await f.bucket.get(version.meta))!.json<Record<string, unknown>>();
-		delete descriptor.html_snapshot;
-		await f.bucket.put(version.meta, JSON.stringify(descriptor));
+		const before = await f.notebooks.beginSessionCapture(f.projectId, f.notebookId);
+		await f.bucket.delete(version.capture(before.versions[0].html_snapshot!.capture_id!).html);
 		f.read.mockClear();
 		await f.capture();
 		expect(f.read).not.toHaveBeenCalled();
-		expect(await (await f.bucket.get(version.html))!.text()).toBe('<p>result</p>');
-		expect(await (await f.bucket.get(version.meta))!.json()).toMatchObject({
-			html_snapshot: {
-				captured_at: expect.any(String),
-				size_bytes: new TextEncoder().encode('<p>result</p>').byteLength,
-			},
+		const current = await f.notebooks.beginSessionCapture(f.projectId, f.notebookId);
+		expect(
+			await (await f.bucket.get(
+				version.capture(current.versions[0].html_snapshot!.capture_id!).html,
+			))!.text(),
+		).toBe('<p>result</p>');
+		expect(current.versions[0].html_snapshot).toMatchObject({
+			captured_at: expect.any(String),
+			size_bytes: new TextEncoder().encode('<p>result</p>').byteLength,
 		});
 		expect(
 			(await f.notebooks.getNotebook(f.projectId, f.notebookId)).source.current_version_id,
@@ -138,9 +139,14 @@ describe('incremental autosave artifacts', () => {
 			if (race === 'probe-failed')
 				f.probe.mockResolvedValueOnce(execResult(false, '', 'unavailable'));
 			f.commit.mockClear();
+			if (race === 'deleted') {
+				await expect(f.capture()).rejects.toThrow('source is missing');
+				expect(f.commit).not.toHaveBeenCalled();
+				return;
+			}
 			await f.capture();
 			expect(f.commit.mock.calls[0][2].code).toBe(
-				race === 'changed' ? 'edited after probe' : race === 'deleted' ? undefined : 'edited',
+				race === 'changed' ? 'edited after probe' : 'edited',
 			);
 			if (race === 'optional-appeared') expect(f.commit.mock.calls[0][2].deps).toBe('[project]');
 		},
@@ -159,6 +165,7 @@ describe('incremental autosave artifacts', () => {
 			f.notebookId,
 			expect.objectContaining({ code: 'edited' }),
 			ACTOR,
+			expect.objectContaining({ projectId: f.projectId, notebookId: f.notebookId }),
 		);
 	});
 
@@ -167,7 +174,7 @@ describe('incremental autosave artifacts', () => {
 		await f.capture();
 		await f.notebooks.deleteNotebook(f.projectId, f.notebookId, ACTOR);
 		f.commit.mockClear();
-		await f.capture();
+		await expect(f.capture()).rejects.toThrow('no longer accepts');
 		expect(f.commit).toHaveBeenCalledOnce();
 		expect(await f.commit.mock.results[0].value).toBeNull();
 	});
@@ -229,8 +236,8 @@ describe('incremental autosave artifacts', () => {
 		delete f.files[f.paths.code];
 		f.read.mockResolvedValueOnce(readFileFailure('NOT_FOUND'));
 		f.commit.mockClear();
-		await f.capture();
-		expect(f.commit.mock.calls[0][2].code).toBeUndefined();
+		await expect(f.capture()).rejects.toThrow('source is missing');
+		expect(f.commit).not.toHaveBeenCalled();
 	});
 });
 

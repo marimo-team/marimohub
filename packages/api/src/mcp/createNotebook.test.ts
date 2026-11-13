@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+beforeEach(mockRuntimeCapture);
+import { mockRuntimeCapture } from '../testing/runtimeCapture';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	AppPoolService,
 	WarmPoolStore,
@@ -117,7 +119,7 @@ describe('create_notebook MCP tool', () => {
 				});
 			}
 			expect(response.isError).not.toBe(true);
-			const setupCommand = calls.exec.find((command) => command.includes('uv sync --inexact'))!;
+			const setupCommand = calls.exec.find((command) => command.includes('uv export'))!;
 			expect(setupCommand).toContain("uv export --script 'notebook.py'");
 			expect(setupCommand).toContain('uv pip install');
 			expect(calls.startProcess).toHaveLength(1);

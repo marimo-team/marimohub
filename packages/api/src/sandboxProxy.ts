@@ -12,9 +12,13 @@ import {
 	NotFoundError,
 	ProxyExposure,
 	UnavailableError,
+	SessionCaptureCoordinator,
+	SessionId,
+	reconnectSessionSandbox,
+	sessionPersistsEdits,
 	verifyProxyToken,
 } from '@marimo-hub/core';
-import type { AuthenticatedPrincipal, ProjectId, SessionId } from '@marimo-hub/core';
+import type { AuthenticatedPrincipal, ProjectId } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
 import { SANDBOX_PROXY_PREFIXES } from './proxyRoutes';
@@ -44,6 +48,7 @@ export type ProxyDecision =
 			kind: 'forward';
 			targetUrl: string;
 			sessionId: string;
+			projectId?: ProjectId;
 			kernelAuthToken?: string;
 			authorizationDeadline?: number;
 	  };
@@ -366,6 +371,7 @@ async function loadAdmission(
 		proxyPath,
 		cacheable: sessionMode(session) !== 'app' && session.origin?.type !== 'preview',
 		sessionId,
+		projectId: session.project_id,
 		...(!surfaceId && session.kernel_auth_token
 			? { kernelAuthToken: session.kernel_auth_token }
 			: {}),
@@ -525,6 +531,79 @@ export async function forwardHttp(
 }
 
 /** Mount before API and SPA routes so proxy requests cannot fall through to them. */
+const pendingSaveCaptures = deploymentState(() => new Map<string, { again: boolean }>());
+
+export async function observeRuntimeSave(
+	deps: ApiDeps,
+	request: Request,
+	response: Response,
+	decision: Extract<ProxyDecision, { kind: 'forward' }>,
+): Promise<void> {
+	if (
+		request.method !== 'POST' ||
+		!response.ok ||
+		!decision.projectId ||
+		!new URL(decision.targetUrl).pathname.endsWith('/api/kernel/save')
+	)
+		return;
+	const metric = (name: string) => {
+		try {
+			deps.metrics?.increment(name);
+		} catch {}
+	};
+	metric('sessions.save.acknowledged');
+	if (!deps.backgroundWork) return;
+	const pending = pendingSaveCaptures(deps);
+	const existing = pending.get(decision.sessionId);
+	if (existing) {
+		existing.again = true;
+		return;
+	}
+	if (pending.size >= 64) return;
+	const queued = { again: false };
+	pending.set(decision.sessionId, queued);
+	try {
+		void Promise.resolve(
+			deps.backgroundWork.defer('session.save_capture', async () => {
+				try {
+					const current = await deps.services.sessions.acknowledgeRuntimeSave(
+						decision.projectId!,
+						SessionId.parse(decision.sessionId),
+					);
+					if (!current.save_dirty || current.status !== 'running' || !sessionPersistsEdits(current))
+						return;
+					const sandbox = reconnectSessionSandbox(deps.compute, current, deps.metrics, 'poll');
+					if (sandbox)
+						await new SessionCaptureCoordinator({
+							compute: deps.compute,
+							bucket: deps.bucket,
+							notebooks: deps.services.notebooks,
+							sessions: deps.services.sessions,
+							persistWorkspace: deps.sandbox.persistWorkspace,
+							workdir: deps.sandbox.workdir,
+							metrics: deps.metrics,
+						}).capture(current, sandbox, { includeWorkspace: false });
+					if (queued.again)
+						await deps.services.sessions.acknowledgeRuntimeSave(
+							current.project_id,
+							current.session_id,
+						);
+				} catch {
+					metric('sessions.save.hint_failed');
+				} finally {
+					pending.delete(decision.sessionId);
+				}
+			}),
+		).catch(() => {
+			pending.delete(decision.sessionId);
+			metric('sessions.save.hint_failed');
+		});
+	} catch {
+		pending.delete(decision.sessionId);
+		metric('sessions.save.hint_failed');
+	}
+}
+
 export function sandboxProxyMiddleware(deps: ApiDeps): MiddlewareHandler<HonoEnv> {
 	return async (c, next) => {
 		if (deps.sandbox.exposure?.mode !== 'proxy') return next();
@@ -533,12 +612,14 @@ export function sandboxProxyMiddleware(deps: ApiDeps): MiddlewareHandler<HonoEnv
 		if (decision.kind === 'reject') {
 			return fail(c, decision.code, decision.message, decision.status);
 		}
-		return forwardHttp(
+		const response = await forwardHttp(
 			c.req.raw,
 			decision.targetUrl,
 			decision.sessionId,
 			decision.kernelAuthToken,
 			deps.sandbox.credentialHeaders,
 		);
+		await observeRuntimeSave(deps, c.req.raw, response, decision);
+		return response;
 	};
 }

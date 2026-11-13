@@ -266,7 +266,9 @@ describe('Project — Notebook Actions: files and sessions', () => {
 		await waitFor(() =>
 			expect(
 				calls.some(
-					(c) => c.method === 'DELETE' && c.url.endsWith('/notebooks/nb-1/sessions/sess-1'),
+					(c) =>
+						c.method === 'DELETE' &&
+						c.url.endsWith('/notebooks/nb-1/sessions/sess-1?wait=true&force=false'),
 				),
 			).toBe(true),
 		);
@@ -283,7 +285,9 @@ describe('Project — Notebook Actions: files and sessions', () => {
 		await waitFor(() =>
 			expect(
 				calls.some(
-					(c) => c.method === 'DELETE' && c.url.endsWith('/notebooks/nb-1/sessions/sess-1'),
+					(c) =>
+						c.method === 'DELETE' &&
+						c.url.endsWith('/notebooks/nb-1/sessions/sess-1?wait=true&force=false'),
 				),
 			).toBe(true),
 		);

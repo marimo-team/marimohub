@@ -15,7 +15,7 @@ import { reconnectSessionSandbox, sessionSandbox } from './sessionSandbox';
 import { createSlidingWindowBudget } from '../../rateLimit';
 import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
-import { SandboxProvisioner } from './SandboxProvisioner';
+import { SessionCaptureCoordinator } from './SessionCaptureCoordinator';
 import { isLivePersistingEditor, SessionRetirer } from './SessionRetirer';
 import { isTerminal, sessionMode, sessionModePolicy, sessionPersistsEdits } from './sessionState';
 import { isPastAuthorizationDeadline } from './SessionService';
@@ -69,7 +69,7 @@ export interface SweepResult {
  * (2× the session TTL) against sandboxes this sweep can no longer see.
  */
 export class SessionLifecycleService {
-	private readonly provisioner: SandboxProvisioner;
+	private readonly capture: SessionCaptureCoordinator;
 	private readonly retirer: SessionRetirer;
 	private readonly connectionProbeBudget = createSlidingWindowBudget<SessionId>({
 		limit: 1,
@@ -84,7 +84,14 @@ export class SessionLifecycleService {
 		private cfg: SessionLifecycleConfig,
 		private probe: ConnectionProbe = kernelActiveConnections,
 	) {
-		this.provisioner = new SandboxProvisioner(compute);
+		this.capture = new SessionCaptureCoordinator({
+			compute,
+			bucket,
+			notebooks,
+			sessions,
+			persistWorkspace: cfg.persistWorkspace,
+			workdir: cfg.workdir,
+		});
 		this.retirer = new SessionRetirer({
 			sessions,
 			notebooks,
@@ -97,12 +104,33 @@ export class SessionLifecycleService {
 			thumbnailDeadline: cfg.thumbnailDeadline,
 			workdir: cfg.workdir,
 			probe,
+			connectionAware: cfg.connectionAware,
 		});
 	}
 
 	async sweep(now = Date.now()): Promise<SweepResult> {
 		const thumbnailDeadlineAt = Date.now() + THUMBNAIL_MAINTENANCE_BUDGET_MS;
 		const sessions = await this.sessions.listSessions();
+		try {
+			for (const outcome of ['pending', 'retained'] as const) {
+				const matching = sessions.filter(
+					(session) =>
+						session.stop &&
+						(outcome === 'retained'
+							? ['retained', 'uncertain'].includes(session.stop.outcome)
+							: !['stopped', 'retained', 'uncertain'].includes(session.stop.outcome)),
+				);
+				this.cfg.metrics?.gauge(
+					`sessions.stop.${outcome}_age_ms`,
+					matching.reduce(
+						(oldest, session) => Math.max(oldest, now - Date.parse(session.stop!.requested_at)),
+						0,
+					),
+				);
+				this.cfg.metrics?.gauge(`sessions.stop.${outcome}_count`, matching.length);
+			}
+		} catch {}
+
 		await this.sessions.reconcileSessionIndexes(sessions);
 		const readPool = new AppPoolStore(this.bucket).reader();
 		// Candidates: `running` sessions, plus any terminal record still holding a
@@ -117,7 +145,10 @@ export class SessionLifecycleService {
 		const candidates = sessions.filter(
 			(s) =>
 				s.sandbox_id &&
-				(s.status === 'running' || (isTerminal(s.status) && !s.sandbox_reclaimed_at)),
+				((s.stop?.outcome === 'stopped' && !s.stop.finalized_at) ||
+					s.status === 'running' ||
+					(!!s.stop && !s.sandbox_reclaimed_at) ||
+					(isTerminal(s.status) && !s.sandbox_reclaimed_at)),
 		);
 		const liveEditorNotebooks = new Set<NotebookId>(
 			sessions.filter(isLivePersistingEditor).map((s) => s.notebook_id),
@@ -132,6 +163,23 @@ export class SessionLifecycleService {
 
 		await mapWithConcurrency(candidates, SESSION_SWEEP_CONCURRENCY, async (s) => {
 			try {
+				if (isPastAuthorizationDeadline(s, now)) {
+					const requested = await this.sessions.requestStop(s.project_id, s.session_id, {
+						trigger: 'security',
+						force: true,
+					});
+					if ((await this.retirer.stop(requested)).stop?.outcome === 'stopped')
+						result.reapedExpired++;
+					return;
+				}
+				if (s.stop && s.stop.outcome !== 'retained' && s.stop.outcome !== 'uncertain') {
+					await this.retirer.stop(s);
+					return;
+				}
+				if (s.stop?.runtime_state === 'unknown') {
+					await this.retirer.reconcileRetained(s);
+					return;
+				}
 				const sandbox =
 					s.status === 'running'
 						? sessionSandbox(this.compute, s, this.cfg.metrics, 'poll')
@@ -247,38 +295,29 @@ export class SessionLifecycleService {
 					}
 				}
 
-				// Periodic snapshot floor: even a residual hard kill (the provider
-				// backstop, node loss, OOM) loses at most one interval of notebook edits.
+				// Failed captures retain the last confirmed version; provider loss can
+				// still lose edits newer than that version.
 				// Source-only (`includeWorkspace: false`): a full workspace mirror every
 				// interval is too expensive; the mirror still refreshes at teardown.
 				const snapshotDueByCadence =
 					sessionPersistsEdits(s) &&
 					this.cfg.snapshotIntervalMs > 0 &&
-					now - Date.parse(s.last_snapshot_at ?? s.started_at) >= this.cfg.snapshotIntervalMs;
+					(!s.last_capture_attempt_at ||
+						now - Date.parse(s.last_capture_attempt_at) >=
+							Math.min(this.cfg.snapshotIntervalMs, Millis.minutes(1))) &&
+					(!!s.save_dirty ||
+						now - Date.parse(s.last_snapshot_at ?? s.started_at) >= this.cfg.snapshotIntervalMs);
 				const snapshotDue =
 					snapshotDueByCadence && (await this.sessions.ownsEditorClaim(s).catch(() => false));
 				if (snapshotDue && sandbox && !sandboxGone) {
-					const saved = await this.provisioner
-						.captureSession(
-							sandbox,
-							this.notebooks,
-							this.bucket,
+					const captured = await this.capture.capture(s, sandbox, { includeWorkspace: false });
+					if (captured.critical.status === 'durable') result.snapshotted++;
+					else if (captured.critical.status === 'not_required')
+						await this.sessions.markSnapshotted(
 							s.project_id,
-							s.notebook_id,
-							s.user_id,
-							this.cfg.persistWorkspace,
-							this.cfg.workdir,
-							{ includeWorkspace: false, sandboxId: s.sandbox_id },
-						)
-						.catch(() => null); // failed save: retry next sweep
-					if (saved !== null) {
-						// Also advances for remote sources (saved === false, nothing to
-						// persist), so they are re-checked per interval, not per sweep.
-						await this.sessions
-							.markSnapshotted(s.project_id, s.session_id, new Date(now).toISOString())
-							.catch(() => {});
-						if (saved) result.snapshotted++;
-					}
+							s.session_id,
+							new Date(now).toISOString(),
+						);
 				}
 			} catch (error) {
 				logOperationalError(
@@ -292,23 +331,37 @@ export class SessionLifecycleService {
 		return result;
 	}
 
-	/**
-	 * Reap one LIVE session: CAS-claim via `beginTerminating` (an explicit stop or
-	 * concurrent sweep wins the race and this no-ops), then retire through the
-	 * one seam (save + destroy + terminal mark + claim release). If the destroy
-	 * inside teardown silently failed, the terminal record re-enters the sweep
-	 * as a reclaim candidate, so nothing is leaked.
-	 */
+	// Automatic attempts use fresh eligibility and bounded backoff; retained user intent is not replayed.
 	private async gracefulTeardown(
 		s: Session,
 		captureBeforeDestroy = true,
 		thumbnailDeadlineAt?: number,
 	): Promise<boolean> {
+		if (captureBeforeDestroy && sessionPersistsEdits(s)) {
+			if (
+				s.stop?.failure?.retryable === false &&
+				(!s.last_durable_capture ||
+					Date.parse(s.last_durable_capture.at) <= Date.parse(s.stop.updated_at))
+			)
+				return false;
+			const failures = [...(s.stop_receipts ?? []), ...(s.stop ? [s.stop] : [])].reverse();
+			const consecutive = failures.findIndex(
+				(attempt) => !['idle', 'lifetime'].includes(attempt.trigger),
+			);
+			const count = consecutive === -1 ? failures.length : consecutive;
+			const backoff = Math.min(Millis.hours(1), Millis.minutes(1) * 2 ** Math.min(count, 6));
+			if (s.stop && Date.now() - Date.parse(s.stop.updated_at) < backoff) return false;
+			const requested = await this.sessions.requestStop(s.project_id, s.session_id, {
+				trigger: s.expires_at && Date.now() >= Date.parse(s.expires_at) ? 'lifetime' : 'idle',
+				...(s.stop ? { key: crypto.randomUUID(), previousId: s.stop.id } : {}),
+			});
+			return (await this.retirer.stop(requested)).stop?.outcome === 'stopped';
+		}
 		const claimed = await this.sessions
 			.beginTerminating(s.project_id, s.session_id)
 			.catch(() => null);
 		if (!claimed?.transitioned) return false;
 		await this.retirer.retire(s, { captureBeforeDestroy, thumbnailDeadlineAt });
-		return true;
+		return !!(await this.sessions.getSession(s.project_id, s.session_id)).sandbox_reclaimed_at;
 	}
 }

@@ -34,6 +34,8 @@ const reclaimBlockedLabels: Record<ReclaimBlockedReason, string> = {
 	kernel_unreachable: 'Kernel is unreachable',
 	destroy_failed: 'Sandbox destroy failed',
 	timeout: 'Reclaim timed out',
+	persistence_required: 'Save failed; retry or explicitly discard edits',
+	stop_pending: 'A stop attempt is still in progress',
 };
 
 const versionLabels = {

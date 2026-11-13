@@ -270,12 +270,19 @@ describe('folder notebook import', () => {
 		);
 		const source = (await notebooks.getNotebook(projectId, notebook.id)).source;
 		expect(source.entry_notebook).toBe(input.entry_notebook);
-		expect(await (await bucket.get(nb.version(source.current_version_id!).html))?.text()).toBe(
-			'<html>Revenue</html>',
-		);
-		expect(await (await bucket.get(nb.version(source.current_version_id!).session))?.text()).toBe(
-			'{"cells": []}',
-		);
+		expect(await notebooks.getLatestHtmlSnapshot(projectId, notebook.id)).toMatchObject({
+			html: '<html>Revenue</html>',
+		});
+		const publication = await notebooks.beginSessionCapture(projectId, notebook.id);
+		expect(
+			await (
+				await bucket.get(
+					nb
+						.version(source.current_version_id!)
+						.capture(publication.versions[0].session_snapshot!.capture_id!).session,
+				)
+			)?.text(),
+		).toBe('{"cells": []}');
 	});
 
 	it('retains supporting files for a root notebook.py import under source-only defaults', async () => {

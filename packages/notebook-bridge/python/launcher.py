@@ -59,6 +59,23 @@ def main():
         print('{"event":"notebook_bridge_unavailable","reason":"install_failed"}', file=sys.stderr)
     if install_only:
         return
+    lifecycle = os.environ.get("MARIMOHUB_LIFECYCLE_DIR")
+    if lifecycle:
+        directory = Path(lifecycle)
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if sys.platform == "linux" and os.environ.get("MARIMOHUB_LIFECYCLE_CHILD") != "1":
+            from lifecycle_supervisor import supervise
+            raise SystemExit(supervise([str(Path(__file__).resolve()), *sys.argv[1:]]))
+        try:
+            if sys.platform != "linux":
+                raise RuntimeError("CAPTURE_PLATFORM_UNSUPPORTED")
+            from lifecycle import install as install_lifecycle
+            install_lifecycle()
+            (directory / "capability.json").write_text(json.dumps({"supported": True, "protocol": 1}))
+        except Exception:
+            from lifecycle import install_status_only
+            install_status_only(directory)
+            (directory / "capability.json").write_text(json.dumps({"supported": False, "protocol": 1}))
     entry = next(
         entry for entry in importlib.metadata.distribution("marimo").entry_points
         if entry.group == "console_scripts" and entry.name == "marimo"
