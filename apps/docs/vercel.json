@@ -15,5 +15,9 @@
 				{ "key": "Access-Control-Allow-Origin", "value": "*" }
 			]
 		}
-	]
+	],
+	"buildCommand": "pnpm run build",
+	"installCommand": "pnpm install --frozen-lockfile",
+	"outputDirectory": ".vitepress/dist",
+	"git": { "deploymentEnabled": false }
 }
