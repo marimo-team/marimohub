@@ -161,9 +161,13 @@ jobs:
       # validates the remaining resources against Kubernetes schemas.
       - name: Render & validate manifests
         run: |
-          for values in "" "-f charts/marimohub/ci/example-values.yaml" "-f charts/marimohub/ci/kubernetes-secrets-values.yaml" "-f charts/marimohub/ci/sandbox-prepuller-values.yaml" "-f charts/marimohub/ci/kernel-compression-values.yaml"; do
+          for values in "" "charts/marimohub/ci/example-values.yaml" "charts/marimohub/ci/kubernetes-secrets-values.yaml" "charts/marimohub/ci/sandbox-prepuller-values.yaml" "charts/marimohub/ci/kernel-compression-values.yaml"; do
+            args=()
+            if [[ -n "$values" ]]; then
+              args=(-f "$values")
+            fi
             echo "::group::helm template ${values:-(defaults)}"
-            helm template test charts/marimohub $values \
+            helm template test charts/marimohub "${args[@]}" \
               | kubeconform -strict -summary -verbose -skip Middleware \
                   -kubernetes-version 1.29.0 \
                   -schema-location default
