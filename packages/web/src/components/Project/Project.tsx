@@ -154,7 +154,8 @@ function groupedMenuOptions(groups: DropdownMenuOption[][]): DropdownMenuOption[
 }
 
 const projectSchema = z.object({
-	tags: z.instanceof(TagFieldValue),
+	// Resolve the live binding at validation time: production chunks can evaluate cyclically.
+	tags: z.custom<TagFieldValue>((value) => value instanceof TagFieldValue),
 	name: requiredText('Project name'),
 	description: optionalText(),
 });
