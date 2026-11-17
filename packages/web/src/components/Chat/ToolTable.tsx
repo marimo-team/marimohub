@@ -1,4 +1,3 @@
-/* oxlint-disable react/no-array-index-key -- Query results can contain duplicate rows and column names and have no stable IDs. */
 import { z } from 'zod';
 
 const TableResult = z.object({
@@ -18,8 +17,8 @@ export function ToolTable({ output }: { output?: string }) {
 	const parsed = TableResult.safeParse(value);
 	if (!parsed.success || parsed.data.columns.length === 0) return null;
 	const { columns, rows, truncated } = parsed.data;
-	const visibleColumns = columns.slice(0, 50);
-	const visibleRows = rows.slice(0, 100);
+	const visibleColumns = keyedItems(columns.slice(0, 50), (name) => name);
+	const visibleRows = keyedItems(rows.slice(0, 100), (row) => JSON.stringify(row));
 	const limited =
 		truncated || columns.length > visibleColumns.length || rows.length > visibleRows.length;
 	return (
@@ -35,9 +34,9 @@ export function ToolTable({ output }: { output?: string }) {
 				</caption>
 				<thead>
 					<tr>
-						{visibleColumns.map((name, index) => (
+						{visibleColumns.map(({ key, value: name }) => (
 							<th
-								key={index}
+								key={key}
 								scope="col"
 								className="sticky top-0 border-b bg-muted px-3 py-2 font-medium"
 							>
@@ -47,10 +46,10 @@ export function ToolTable({ output }: { output?: string }) {
 					</tr>
 				</thead>
 				<tbody>
-					{visibleRows.map((row, index) => (
-						<tr key={index}>
-							{visibleColumns.map((_, column) => (
-								<td key={column} className="max-w-80 truncate border-b px-3 py-1.5">
+					{visibleRows.map(({ key, value: row }) => (
+						<tr key={key}>
+							{visibleColumns.map(({ key: columnKey }, column) => (
+								<td key={columnKey} className="max-w-80 truncate border-b px-3 py-1.5">
 									{cellText(row[column])}
 								</td>
 							))}
@@ -66,4 +65,15 @@ function cellText(value: unknown): string {
 	if (value === null || value === undefined) return 'null';
 	const text = typeof value === 'string' ? value : JSON.stringify(value);
 	return text.length > 1000 ? `${text.slice(0, 1000)}…` : text;
+}
+
+function keyedItems<T>(items: T[], identity: (item: T) => string) {
+	const occurrences = new Map<string, number>();
+	return items.map((value) => {
+		const id = identity(value);
+		// Equal query rows and repeated column names have no upstream IDs.
+		const occurrence = occurrences.get(id) ?? 0;
+		occurrences.set(id, occurrence + 1);
+		return { key: JSON.stringify([id, occurrence]), value };
+	});
 }
