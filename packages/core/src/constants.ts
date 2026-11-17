@@ -28,6 +28,10 @@ export const SESSION_STATUSES = [
 ] as const;
 export type SessionStatus = (typeof SESSION_STATUSES)[number];
 
+export const SANDBOX_STARTUP_PHASES = ['allocating', 'workspace', 'starting'] as const;
+export type SandboxStartupPhase = (typeof SANDBOX_STARTUP_PHASES)[number];
+export const STARTUP_DETAIL_MAX_LENGTH = 240;
+
 /**
  * How a session's kernel serves the notebook. `edit` is the marimo editor
  * (shared, exclusive, or discard-only according to its policy); `app` serves it read-only via

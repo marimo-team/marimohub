@@ -1,4 +1,5 @@
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../ids';
+import type { SandboxStartupPhase } from '../constants';
 import type { Millis } from '../duration';
 import type { Timings } from '../timing';
 
@@ -329,7 +330,21 @@ export interface SandboxNotebook {
 	title: string;
 }
 
+export interface SandboxStartupProgress {
+	phase: SandboxStartupPhase;
+	/** Public-facing text: no credentials, infrastructure identifiers, or raw logs. */
+	detail?: string;
+}
+
+export interface SandboxStartupSnapshot extends SandboxStartupProgress {
+	attempt: number;
+	started_at: string;
+	observed: SandboxStartupPhase[];
+}
+
 export interface CreateSandboxOptions {
+	/** Best-effort startup updates; adapters may ignore this hook. */
+	onProgress?: (progress: SandboxStartupProgress) => void;
 	notebook?: SandboxNotebook;
 	/**
 	 * May the adapter reconnect to an existing sandbox with this id instead of

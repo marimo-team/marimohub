@@ -1,5 +1,7 @@
 import { stopSessionSafely } from './sessionStop';
 import { retrySessionAdmission } from './sessionRetry';
+import { readSessionStart } from './sessionStartupStream';
+import type { SandboxStartupSnapshot } from '@marimo-hub/core/ports/sandbox';
 import type { MemberSelector } from '@marimo-hub/core/identity-match';
 import { MAX_RESOLVED_USERS } from '@marimo-hub/core/constants';
 import {
@@ -2242,33 +2244,46 @@ export function useProjectSessionsQuery(projectId: string, enabled = true) {
  */
 export const SESSION_LIFECYCLE_TIMEOUT_MS = 150_000; // 2.5 minutes
 
-/**
- * Plain edit creates have no body for compatibility. App mode, profile fallback,
- * and temporary intent add only their explicit fields.
- */
+interface StartSessionOptions {
+	visitId?: string;
+	signal?: AbortSignal;
+	onProgress?: (progress: SandboxStartupSnapshot) => void;
+	timeoutMs?: number;
+}
+
 function startSessionRequest(
 	projectId: string,
 	notebookId: string,
 	mode: 'edit' | 'app',
-	computeProfile?: 'default',
-	editIntent?: 'temporary',
-	appVisitId?: string,
-	signal?: AbortSignal,
+	{
+		computeProfile,
+		editIntent,
+		visitId,
+		signal,
+		onProgress,
+		timeoutMs = SESSION_LIFECYCLE_TIMEOUT_MS,
+	}: StartSessionOptions & {
+		computeProfile?: 'default';
+		editIntent?: 'temporary';
+	} = {},
 ) {
 	const params = { path: { pid: projectId, nid: notebookId } };
 	const body = {
-		...(mode === 'app' ? { mode, ...(appVisitId ? { app_visit_id: appVisitId } : {}) } : {}),
+		...(mode === 'app' ? { mode, ...(visitId ? { app_visit_id: visitId } : {}) } : {}),
 		...(computeProfile ? { compute_profile: computeProfile } : {}),
 		...(editIntent ? { edit_intent: editIntent } : {}),
 	};
-	return apiData(
+	return readSessionStart(
 		apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions', {
 			params,
+			parseAs: 'stream',
+			...(onProgress ? { headers: { Accept: 'text/event-stream' } } : {}),
 			...(Object.keys(body).length > 0 ? { body } : {}),
 			// A late app response supplies the assignment needed to release an abandoned visit.
 			signal: mode === 'app' ? undefined : signal,
-			timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
+			timeout: timeoutMs,
 		}),
+		onProgress,
 	);
 }
 
@@ -2289,18 +2304,14 @@ function useStartSessionRequest(
 	editIntent?: 'temporary',
 ) {
 	return useApiMutation(
-		(options: { visitId?: string; signal?: AbortSignal } | void) =>
+		(options: StartSessionOptions | void) =>
 			retrySessionAdmission(
 				() =>
-					startSessionRequest(
-						projectId,
-						notebookId,
-						mode,
+					startSessionRequest(projectId, notebookId, mode, {
+						...options,
 						computeProfile,
 						editIntent,
-						options?.visitId,
-						options?.signal,
-					),
+					}),
 				options?.signal,
 			),
 		() => (mode === 'app' ? [] : [sessionKeys.listByProject(projectId)]),

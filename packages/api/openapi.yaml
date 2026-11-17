@@ -21549,6 +21549,15 @@ paths:
                 required:
                   - success
                   - data
+            text/event-stream:
+              schema:
+                type: string
+                description: 'Opt in with Accept: text/event-stream. Only edit starts emit
+                  progress: { phase, detail?, started_at, attempt, observed }.
+                  App starts omit progress for all callers. result carries the
+                  JSON success envelope. error carries { success: false, error:
+                  { code, message, status } }. No replay or automatic reconnect.
+                  Disconnect ends observation, not provisioning.'
         '400':
           description: Bad request
           content:

@@ -147,6 +147,9 @@ import {
 	toComputeResourcesResponse,
 } from '../shared';
 import type { AuthzDeps } from '../shared';
+import { sessionStartupReporter } from './sessionStartup';
+import { sessionStartupStream } from './sessionStartupStream';
+import type { SandboxStartupSnapshot } from '@marimo-hub/core/ports/sandbox';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
 import {
 	beginSessionSurface,
@@ -254,10 +257,21 @@ const createSession = createRoute({
 		},
 	},
 	responses: {
-		200: jsonContent(
-			z.object({ success: z.literal(true), data: SessionCreateResponseSchema }),
-			'Session created or reused',
-		),
+		200: {
+			description: 'Session created or reused',
+			content: {
+				'application/json': {
+					schema: z.object({ success: z.literal(true), data: SessionCreateResponseSchema }),
+				},
+				'text/event-stream': {
+					schema: z
+						.string()
+						.describe(
+							'Opt in with Accept: text/event-stream. Only edit starts emit progress: { phase, detail?, started_at, attempt, observed }. App starts omit progress for all callers. result carries the JSON success envelope. error carries { success: false, error: { code, message, status } }. No replay or automatic reconnect. Disconnect ends observation, not provisioning.',
+						),
+				},
+			},
+		},
 		...commonErrors(),
 		...errorResponses(400, 403, 404, 409, 429),
 	},
@@ -1424,6 +1438,8 @@ export type SessionCreateResult = z.infer<typeof SessionCreateResponseSchema>;
 const EDITOR_STOP_WAIT_MS = 10_000;
 
 export async function startNotebookSession(input: {
+	onProgress?: (progress: SandboxStartupSnapshot) => void;
+	onAuthorized?: () => void;
 	deps: ResolvedApiDeps;
 	user: AuthenticatedPrincipal;
 	pid: ProjectId;
@@ -1533,6 +1549,7 @@ async function startNotebookSessionOnce(
 	const { deps, user, pid, nid, body, request } = input;
 	const { sessions, projects, notebooks } = deps.services;
 	const mode: SessionMode = body?.mode ?? 'edit';
+	const onProgress = mode === 'edit' ? input.onProgress : undefined;
 	if ((body?.app_visit_id || body?.replace_app_session_id) && mode !== 'app')
 		throw new BadRequestError('App visit and replacement options are only valid for app sessions');
 
@@ -1589,6 +1606,7 @@ async function startNotebookSessionOnce(
 		: undefined;
 	if (previewRecord && !previewAvailable(previewRecord))
 		throw new NotFoundError('Preview not found');
+	input.onAuthorized?.();
 	// Sessions must end before their credentials, security context, or preview expires.
 	const authorizationExpiresAt = earliestDeadline(
 		entitlementAuthorizationDeadline(user),
@@ -1949,8 +1967,9 @@ async function startNotebookSessionOnce(
 	let publicationReady = mode !== 'edit' || ephemeral || notebook.source.type !== 'local';
 	const kernelAuthToken = sandbox.auth === 'on' ? createKernelAuthToken() : undefined;
 
-	let session: Session | undefined;
+	const startup = sessionStartupReporter(onProgress);
 	let createdSession: KnownObject<Session> | undefined;
+	let session: Session | undefined;
 	let sessionRecordAttempted = false;
 	let sandboxMayExist = false;
 	let workspaceStarted = false;
@@ -2161,6 +2180,7 @@ async function startNotebookSessionOnce(
 			runtimeCapture: mode === 'edit' && !ephemeral && notebook.source.type === 'local',
 			bridgeParentOrigin: new URL(appBaseUrl).origin,
 			startupTimeoutMs: sandbox.startupTimeoutMs,
+			onProgress: onProgress ? startup.forSandbox(sandboxId) : undefined,
 			kernelAuthToken,
 			// A second editor writes the notebook file, so marimo must reload it.
 			marimoWatch: mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
@@ -2553,6 +2573,7 @@ async function startNotebookSessionOnce(
 				});
 			})
 			.step('mark_running', async () => {
+				startup.close();
 				if (isPastAuthorizationDeadline(session!, Date.now())) {
 					throw new ForbiddenError('Group authorization expired while starting the session');
 				}
@@ -2620,6 +2641,7 @@ async function startNotebookSessionOnce(
 			})
 			.run();
 	} catch (err) {
+		startup.close();
 		await contextPublication;
 		await warmProbe?.catch(() => {});
 		await workspacePrefetch?.cancel();
@@ -2807,7 +2829,7 @@ async function startNotebookSessionOnce(
 app.openapi(createSession, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid } = c.req.valid('param');
-	const data = await startNotebookSession({
+	const input: Parameters<typeof startNotebookSession>[0] = {
 		deps,
 		user: c.get('user'),
 		pid,
@@ -2821,7 +2843,35 @@ app.openapi(createSession, async (c) => {
 			appBaseUrl: resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl),
 			signal: c.req.raw.signal,
 		},
-	});
+	};
+	if (
+		c.req
+			.header('Accept')
+			?.split(',')
+			.some((type) => type.trim().split(';')[0] === 'text/event-stream')
+	) {
+		const stream = sessionStartupStream(
+			(callbacks) =>
+				startNotebookSession({
+					...input,
+					...callbacks,
+					request: { ...input.request, signal: undefined },
+				}),
+			(error) =>
+				error instanceof DomainError
+					? { code: error.code, message: error.message, status: error.status }
+					: { code: 'INTERNAL_ERROR', message: 'The session could not start.', status: 500 },
+			c.req.raw.signal,
+		);
+		// Register provisioning so the host can drain it after a disconnect.
+		void deferOrAwait(deps.backgroundWork, 'session.start', () => stream.done, deps.metrics, {
+			project_id: pid,
+			notebook_id: nid,
+		});
+		await stream.started;
+		return stream.response;
+	}
+	const data = await startNotebookSession(input);
 	return c.json({ success: true as const, data }, 200);
 });
 

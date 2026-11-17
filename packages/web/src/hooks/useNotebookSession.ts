@@ -18,6 +18,7 @@ import {
 import { isNotFoundError } from '@/api/request';
 import { useGeneration } from '@/hooks/useGeneration';
 import type { Session } from '@/types';
+import type { SandboxStartupSnapshot } from '@marimo-hub/core/ports/sandbox';
 import {
 	EDITOR_HEARTBEAT_INTERVAL_MS,
 	sessionStartPollDelayMs,
@@ -49,6 +50,7 @@ function toSessionError(err: Error): SessionError {
 export type SessionEnded = Session['status'] | 'gone' | 'access_lost' | 'takeover';
 
 export interface NotebookSession {
+	startup: SandboxStartupSnapshot | undefined;
 	session: Session | null;
 	diagnosticSession: Session | null;
 	error: SessionError | null;
@@ -117,6 +119,7 @@ export function useNotebookSession(
 	// StrictMode can orphan the mutation observer during its mount/remount cycle,
 	// leaving `startSession.isPending` stuck. Track this request independently.
 	const [starting, setStarting] = useState(false);
+	const [startup, setStartup] = useState<SandboxStartupSnapshot>();
 	// Keep the loading panel visible while teardown or replacement precedes admission.
 	const [restarting, setRestarting] = useState(false);
 	const sessionRef = useRef<Session | null>(null);
@@ -193,11 +196,17 @@ export function useNotebookSession(
 			setEnded(null);
 			setEndedByUserId(null);
 			setStarting(true);
+			setStartup(undefined);
 			void prefetchMarimoAssets(marimoAssetUrl);
 			// Separate attempts need separate visits so late cleanup cannot release the winner.
 			void mutation
 				.mutateAsync({
 					visitId: mode === 'app' ? crypto.randomUUID() : undefined,
+					onProgress: (progress) => {
+						if (mountedRef.current && generation.isCurrent(gen) && !controller.signal.aborted)
+							setStartup(progress);
+					},
+					timeoutMs: sessionStartupDeadlineMs(startupTimeoutSeconds ?? DEFAULT_STARTUP_TIMEOUT_S),
 					signal: controller.signal,
 				})
 				.then(
@@ -264,8 +273,10 @@ export function useNotebookSession(
 			notebookId,
 			mode,
 			marimoAssetUrl,
+			startupTimeoutSeconds,
 		],
 	);
+
 	const start = useCallback(() => {
 		startWithMutation(startSession);
 	}, [startWithMutation, startSession]);
@@ -609,6 +620,7 @@ export function useNotebookSession(
 
 	return {
 		acknowledgeWorkingBranchSave,
+		startup: starting ? startup : undefined,
 		session,
 		diagnosticSession,
 		error,

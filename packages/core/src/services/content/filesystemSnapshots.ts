@@ -16,7 +16,7 @@ import type { NotebookService } from './NotebookService';
 
 type CreateOrRestoreSandboxOptions = Pick<
 	CreateSandboxOptions,
-	'image' | 'resources' | 'userHome' | 'sessionIdleTimeoutMs' | 'owner' | 'notebook'
+	'image' | 'resources' | 'userHome' | 'sessionIdleTimeoutMs' | 'owner' | 'notebook' | 'onProgress'
 >;
 
 /**
@@ -70,6 +70,7 @@ export function createOrRestoreSandbox(
 			: optionsOrImage;
 	const fs = asFilesystemSnapshots(provider);
 	const common: CreateSandboxOptions = {
+		...(options.onProgress ? { onProgress: options.onProgress } : {}),
 		reuse: false,
 		...(options.resources ? { resources: options.resources } : {}),
 		...(options.userHome ? { userHome: options.userHome } : {}),
