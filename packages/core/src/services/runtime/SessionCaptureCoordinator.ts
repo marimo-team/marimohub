@@ -10,6 +10,7 @@ import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
 import { captureWorkspace } from './sandboxFiles';
 import type { SessionCaptureResult } from './sessionCapture';
 import { logOperationalError } from '../../operationalLog';
+import { logEvent } from '../../logs';
 import type { Metrics } from '../../ports/metrics';
 
 export class SessionCaptureCoordinator {
@@ -159,6 +160,25 @@ export class SessionCaptureCoordinator {
 			};
 			return outcome;
 		} finally {
+			const critical = outcome?.critical;
+			const failure =
+				critical?.status === 'failed' || critical?.status === 'uncertain' ? critical : undefined;
+			if (outcome && (failure || outcome.workspace.status === 'failed')) {
+				logEvent({
+					level: 'warn',
+					event: 'session_capture_incomplete',
+					session_id: session.session_id,
+					project_id: session.project_id,
+					notebook_id: session.notebook_id,
+					critical_status: outcome.critical.status,
+					workspace_status: outcome.workspace.status,
+					...(failure ? { code: failure.code, retryable: failure.retryable } : {}),
+					last_durable_capture_at: session.last_durable_capture?.at ?? null,
+					durable_capture_age_ms: session.last_durable_capture
+						? Math.max(0, Date.now() - Date.parse(session.last_durable_capture.at))
+						: null,
+				});
+			}
 			if (runtime && checkpoint && !retain) {
 				try {
 					await runtime.resume(checkpoint);
