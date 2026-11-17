@@ -34,6 +34,7 @@
 		"clsx": "catalog:",
 		"codemirror": "catalog:",
 		"colorjs.io": "catalog:",
+		"eventsource-parser": "catalog:",
 		"fflate": "catalog:",
 		"lucide-react": "catalog:",
 		"react": "^19.1.1",

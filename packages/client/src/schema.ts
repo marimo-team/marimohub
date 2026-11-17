@@ -19104,6 +19104,7 @@ export interface operations {
 						success: true;
 						data: components['schemas']['SessionCreateResult'];
 					};
+					'text/event-stream': string;
 				};
 			};
 			/** @description Bad request */

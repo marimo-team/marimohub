@@ -47,6 +47,7 @@ import type {
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
+	SandboxStartupProgress,
 } from '../../ports/sandbox';
 import { utf8Tail } from '../../text';
 import { Stopwatch } from '../../timing';
@@ -228,6 +229,7 @@ export interface BucketConfig {
 
 export type BootOptions = Pick<
 	ProvisionOptions,
+	| 'onProgress'
 	| 'sandboxId'
 	| 'projectId'
 	| 'notebook'
@@ -254,6 +256,7 @@ export interface WorkspacePrefetch {
 }
 
 export interface ProvisionOptions {
+	onProgress?: (progress: SandboxStartupProgress) => void;
 	workspaceLimits?: WorkspaceLimits;
 	existingSandbox?: SandboxInstance;
 	bootedSandbox?: BootedSandbox;
@@ -763,6 +766,17 @@ async function writeSessionFiles(
  */
 const DEFAULT_PREFETCH_BUDGET = new ByteBudget(64 * 1024 * 1024);
 
+function reportStartup(
+	options: Pick<ProvisionOptions, 'onProgress'>,
+	progress: SandboxStartupProgress,
+): void {
+	try {
+		options.onProgress?.(progress);
+	} catch {
+		/* Progress must not interrupt provisioning. */
+	}
+}
+
 export class SandboxProvisioner {
 	private readonly prefetchBudget: ByteBudget;
 	private readonly artifactCache = new SessionArtifactCache();
@@ -875,11 +889,15 @@ export class SandboxProvisioner {
 	}
 
 	private createSandbox(options: BootOptions): SandboxInstance {
+		reportStartup(options, { phase: 'allocating' });
 		return createOrRestoreSandbox(
 			this.provider,
 			options.sandboxId,
 			options.restoreFilesystemSnapshotId,
 			{
+				...(options.onProgress
+					? { onProgress: (progress: SandboxStartupProgress) => reportStartup(options, progress) }
+					: {}),
 				image: options.image,
 				resources: options.resources,
 				userHome: options.userHome,
@@ -1042,6 +1060,7 @@ export class SandboxProvisioner {
 				Object.assign(sw.timings, options.bootedSandbox.timings);
 			} else await this.ensureReachable(sandbox, sw);
 			await options.beforePrepare;
+			reportStartup(options, { phase: 'workspace' });
 		};
 		// Git and workspace restores may wait concurrently; record one shared readiness wait.
 		let workspaceReadiness: Promise<void> | undefined;
@@ -1168,6 +1187,7 @@ export class SandboxProvisioner {
 				extrasReady = true;
 				await this.$.load;
 				if (combineWrites) await flush([]);
+				reportStartup(options, { phase: 'starting' });
 				for (const install of installers) await install();
 			},
 			async setup(): Promise<MarimoStartup> {

@@ -2316,3 +2316,86 @@ describe('retained stop recovery', () => {
 		expect(result.current.error).toBeNull();
 	});
 });
+
+it('receives progress on the start POST without issuing discovery requests', async () => {
+	let stream!: ReadableStreamDefaultController<Uint8Array>;
+	const fetchMock = vi.fn(
+		async () =>
+			new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						stream = controller;
+					},
+				}),
+				{ headers: { 'Content-Type': 'text/event-stream' } },
+			),
+	);
+	vi.stubGlobal('fetch', fetchMock);
+	const { result, unmount } = renderHookWithClient(() => useNotebookSession(PID, NID), {
+		toaster: false,
+	});
+	await settleHook();
+	const progress = {
+		phase: 'allocating',
+		detail: 'Waiting in queue',
+		started_at: new Date().toISOString(),
+		attempt: 1,
+		observed: ['allocating'],
+	};
+	await act(async () => {
+		stream.enqueue(
+			new TextEncoder().encode(`event: progress\ndata: ${JSON.stringify(progress)}\n\n`),
+		);
+	});
+	expect(result.current.startup).toEqual(progress);
+	expect(result.current.session).toBeNull();
+	expect(fetchMock).toHaveBeenCalledOnce();
+	await act(async () => {
+		stream.enqueue(
+			new TextEncoder().encode(
+				`event: result\ndata: ${JSON.stringify({ success: true, data: makeSession() })}\n\n`,
+			),
+		);
+	});
+	expect(result.current.isRunning).toBe(true);
+	expect(result.current.startup).toBeUndefined();
+	unmount();
+});
+
+it('ignores progress from a replaced start and never replays a truncated POST', async () => {
+	const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+	const fetchMock = vi.fn(
+		async () =>
+			new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						streams.push(controller);
+					},
+				}),
+				{ headers: { 'Content-Type': 'text/event-stream' } },
+			),
+	);
+	vi.stubGlobal('fetch', fetchMock);
+	const { result, unmount } = renderHookWithClient(() => useNotebookSession(PID, NID), {
+		toaster: false,
+	});
+	await settleHook();
+	act(() => result.current.start());
+	await settleHook();
+	const progress = (detail: string) =>
+		new TextEncoder().encode(
+			`event: progress\ndata: ${JSON.stringify({ phase: 'allocating', detail, started_at: new Date().toISOString(), attempt: 1, observed: ['allocating'] })}\n\n`,
+		);
+	await act(async () => {
+		streams[1].enqueue(progress('Current start'));
+		streams[0].enqueue(progress('Obsolete start'));
+	});
+	expect(result.current.startup?.detail).toBe('Current start');
+	await act(async () => {
+		streams[0].close();
+		streams[1].close();
+	});
+	expect(result.current.error).toMatchObject({ kind: 'request', code: 'NETWORK_ERROR' });
+	expect(fetchMock).toHaveBeenCalledTimes(2);
+	unmount();
+});

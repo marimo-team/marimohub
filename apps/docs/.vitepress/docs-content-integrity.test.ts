@@ -90,6 +90,7 @@ describe('docs content integrity', () => {
 
 	it('all local Markdown links resolve to a target and heading', () => {
 		const failures: string[] = [];
+		const headingsByFile = new Map<string, Set<string>>();
 
 		for (const sourceFile of files) {
 			const source = readFileSync(sourceFile, 'utf8').replaceAll(/```[\s\S]*?```/g, '');
@@ -105,8 +106,11 @@ describe('docs content integrity', () => {
 				}
 
 				const fragment = href.split('#')[1]?.split('?')[0];
-				if (fragment && target.endsWith('.md') && !anchors(target).has(fragment)) {
-					failures.push(`${relSource}: missing heading #${fragment} in ${href}`);
+				if (fragment && target.endsWith('.md')) {
+					const headings = headingsByFile.get(target) ?? anchors(target);
+					headingsByFile.set(target, headings);
+					if (!headings.has(fragment))
+						failures.push(`${relSource}: missing heading #${fragment} in ${href}`);
 				}
 			}
 		}

@@ -126,6 +126,36 @@ Then mount the file in the server image. Node ESM does not use `NODE_PATH`. See
 | ⬜     | Daytona                         | —                          | Sandbox SDK (exec/files/preview URLs)                 |
 | ⬜     | Runpod / Lambda / Beam          | —                          | For GPU kernels                                       |
 
+### Startup progress
+
+Startup progress stays in memory and adds no bucket operations.
+Adapters can report queue and image-pull details through the optional, synchronous `CreateSandboxOptions.onProgress` callback:
+
+```typescript
+options?.onProgress?.({ phase: 'allocating', detail: 'Waiting in queue' });
+```
+
+Detail text is public and limited to 240 characters. It must exclude credentials, infrastructure identifiers, and raw logs.
+The provisioner reports `allocating`, `workspace`, and `starting`. The last phase includes dependency installation and notebook launch.
+
+With `Accept: text/event-stream`, the session-creation POST opens a stream after initial authorization:
+
+- `progress`: `{ phase, detail?, started_at, attempt, observed }`.
+- `result`: the normal `{ success: true, data }` response, including app assignments.
+- `error`: `{ success: false, error: { code, message, status } }` with a public error message.
+
+`started_at` records phase entry at callback receipt. Sandbox replacement increments `attempt` and discards late callbacks from the previous sandbox.
+The UI marks only `observed` phases complete and shows elapsed time for the current phase.
+
+The stream retains one pending snapshot and coalesces updates within a phase once per second. Slow readers cannot delay provisioning.
+When the reader can receive data, comment heartbeats arrive every 15 seconds.
+Observation expires after 30 minutes. Disconnects and expiry leave provisioning active.
+Existing authorization and publication checks apply without extra authorization reads.
+
+JSON callers retain the synchronous response, and the browser accepts JSON fallback responses.
+Reused sessions return a result without progress. A broken stream does not trigger an automatic POST retry.
+Progress has no replay or cross-replica subscription. Startup still depends on the server lifetime and hard proxy request limits.
+
 ### Warm-pool support
 
 Pooling is optional on `SandboxProvider`. Built-in compute wiring advertises it for CoreWeave and Kubernetes.

@@ -2,6 +2,7 @@ import { ReportProblemAction } from '@/components/Support/ReportProblemDialog';
 import { HelpMenu } from '@/components/Header/HelpMenu';
 import { AnnouncementBanner } from '@/components/Shell/AnnouncementBanner';
 import { hasNotebookPreviews } from '@/api/previews';
+import { StartupProgress } from './StartupProgress';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { useMemo, useState } from 'react';
 import { NOTEBOOK_IFRAME_SANDBOX } from '@marimo-hub/notebook-bridge/host';
@@ -183,6 +184,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		acknowledgeWorkingBranchSave,
 		session,
 		diagnosticSession,
+		startup,
 		error,
 		isProvisioning,
 		isRunning,
@@ -469,6 +471,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		selectedComputeProfile,
 		session,
 		diagnosticSession,
+		startup,
 		setEditIntent,
 		setSelectedApplicationKey,
 		setSplitApplicationKey,
@@ -554,6 +557,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		selectedComputeProfile,
 		session,
 		diagnosticSession,
+		startup,
 		setEditIntent,
 		setSelectedApplicationKey,
 		setSplitApplicationKey,
@@ -789,16 +793,22 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 				!showEditorStateFailure &&
 				!showIdentityStateFailure &&
 				!showEditorChoice && (
-					<div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-						<div
-							className={cn(
-								'size-8 rounded-full border-[3px] border-border border-t-primary',
-								'animate-spin',
-							)}
-						/>
-						<p>
-							{resolvingMode ? 'Loading...' : isApp ? 'Starting app...' : 'Starting sandbox...'}
-						</p>
+					<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-sm text-muted-foreground">
+						{startup && !resolvingMode ? (
+							<StartupProgress progress={startup} isApp={isApp} />
+						) : (
+							<>
+								<div
+									className={cn(
+										'size-8 rounded-full border-[3px] border-border border-t-primary',
+										'animate-spin',
+									)}
+								/>
+								<p>
+									{resolvingMode ? 'Loading...' : isApp ? 'Starting app...' : 'Starting sandbox...'}
+								</p>
+							</>
+						)}
 					</div>
 				)}
 

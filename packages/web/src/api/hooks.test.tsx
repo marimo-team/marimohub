@@ -569,7 +569,7 @@ describe('useStartSession', () => {
 	});
 
 	it('creates an edit session with no body at all', async () => {
-		const fetchMock = stubFetch(async () => jsonOk({ session_id: 'sess-1' }));
+		const fetchMock = stubFetch(async () => jsonOk({ session_id: 'sess-1', status: 'running' }));
 
 		const { result } = renderHookWithClient(() => useStartSession(PID, NID), { toaster: false });
 		await act(async () => {
@@ -583,7 +583,9 @@ describe('useStartSession', () => {
 	});
 
 	it('creates an app session with a JSON mode body', async () => {
-		const fetchMock = stubFetch(async () => jsonOk({ session_id: 'sess-1', mode: 'app' }));
+		const fetchMock = stubFetch(async () =>
+			jsonOk({ session_id: 'sess-1', mode: 'app', status: 'running' }),
+		);
 
 		const { result, client } = renderHookWithClient(() => useStartSession(PID, NID, 'app'), {
 			toaster: false,
@@ -648,7 +650,7 @@ describe('edit session restart', () => {
 			if (method === 'GET' && String(url) === `${sessionsPath}/sess-1`)
 				return jsonOk({ session_id: 'sess-1', status: 'running' });
 			if (method === 'POST' && String(url) === sessionsPath) {
-				return jsonOk({ session_id: 'sess-2', mode: 'app' });
+				return jsonOk({ session_id: 'sess-2', mode: 'app', status: 'running' });
 			}
 			throw new Error(`unexpected fetch: ${method} ${String(url)}`);
 		});
