@@ -78,3 +78,10 @@ Review and commit the report changes with the implementation. Explain increases
 and check both scales for new fan-out. Avoid updating snapshots automatically in CI.
 Add endpoint scenarios to `ENDPOINTS` in `endpointCosts.test.ts`; assert successful
 responses so an error path cannot silently become a cheaper baseline.
+
+Safe captures deliberately add three completeness HEADs and one publication CAS to
+an unchanged save (warm total: 6 to 10 calls). They do not upload unchanged artifacts
+or list the workspace. Persisting editor admission adds one fence CAS and bounded
+source reads. Changed-save cleanup uses five deferred calls in these fixtures; it
+does not scan sessions unless committed versions need pruning. Reuse and heartbeat
+costs remain unchanged.

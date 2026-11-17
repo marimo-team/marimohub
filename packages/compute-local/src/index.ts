@@ -184,7 +184,12 @@ function tcpReady(port: number, host: string): Promise<boolean> {
 
 /** Rewrite `/workspace` references in a shell command to a sandbox's real root. */
 export function rewriteWorkspace(cmd: string, root: string): string {
-	return cmd.replaceAll(WORKSPACE, path.join(root, WORKSPACE));
+	const resolved = path.join(root, WORKSPACE);
+	// Callers can already supply process paths through resolveProcessPath.
+	return cmd
+		.split(resolved)
+		.map((part) => part.replaceAll(WORKSPACE, resolved))
+		.join(resolved);
 }
 
 export function rewriteSandboxPaths(cmd: string, root: string): string {

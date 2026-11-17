@@ -13,6 +13,7 @@ import {
 	AuthorizationService,
 	BUCKET_SCAN_CONCURRENCY,
 	DOMAIN_ERROR_CODES,
+	SessionStopAttemptSchema,
 	MAX_SECURITY_COMPARTMENTS,
 	mapWithConcurrency,
 	SECURITY_LABEL_TOKEN,
@@ -1451,6 +1452,19 @@ export function toComputeResourcesResponse(
 
 export const SessionResponseSchema = z
 	.object({
+		stop: SessionStopAttemptSchema.pick({
+			id: true,
+			outcome: true,
+			force: true,
+			trigger: true,
+			requested_at: true,
+			updated_at: true,
+			runtime_state: true,
+			failure: true,
+			captured_at: true,
+			version_id: true,
+		}).optional(),
+		last_durable_capture: z.object({ at: dt(), version_id: z.string() }).optional(),
 		origin: PreviewSessionOriginSchema.optional(),
 		resource_path: z.string().optional(),
 		app_assignment: z.object({ visit_id: z.string(), generation: z.string() }).optional(),

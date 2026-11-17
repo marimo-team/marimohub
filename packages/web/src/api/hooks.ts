@@ -1,3 +1,4 @@
+import { stopSessionSafely } from './sessionStop';
 import { retrySessionAdmission } from './sessionRetry';
 import type { MemberSelector } from '@marimo-hub/core/identity-match';
 import { MAX_RESOLVED_USERS } from '@marimo-hub/core/constants';
@@ -2271,23 +2272,13 @@ function startSessionRequest(
 	);
 }
 
-// An abort surfaces as a failed stop, which halts a restart half-done (app
-// stopped, never restarted) while the server tears down anyway.
 function stopSessionRequest(
 	projectId: string,
 	notebookId: string,
 	sessionId: string,
-	wait = false,
+	_wait = true,
 ) {
-	return apiData(
-		apiClient.DELETE('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}', {
-			params: {
-				path: { pid: projectId, nid: notebookId, sid: sessionId },
-				...(wait ? { query: { wait: 'true' as const } } : {}),
-			},
-			timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
-		}),
-	);
+	return stopSessionSafely(projectId, notebookId, sessionId);
 }
 
 function useStartSessionRequest(
@@ -2381,9 +2372,14 @@ export function useStopSession(
 	notebookId: string,
 	opts?: { suppressErrorToast?: boolean },
 ) {
+	const invalidate = useInvalidate();
 	return useApiMutation(
-		(sessionId: string) => stopSessionRequest(projectId, notebookId, sessionId),
-		() => [sessionKeys.listByProject(projectId)],
+		async (sessionId: string) => {
+			await stopSessionRequest(projectId, notebookId, sessionId).finally(() =>
+				invalidate(sessionKeys.listByProject(projectId), sessionKeys.editor(projectId, notebookId)),
+			);
+		},
+		undefined,
 		opts?.suppressErrorToast ? { suppressErrorToast: true } : undefined,
 	);
 }

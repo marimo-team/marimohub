@@ -86,7 +86,7 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 	instance: SandboxInstance;
 	calls: SandboxCalls;
 } {
-	const writtenFiles = new Set<string>();
+	const writtenFiles = new Map<string, string | Uint8Array>();
 	const calls: SandboxCalls = {
 		exec: [],
 		execOptions: [],
@@ -136,7 +136,9 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 		},
 		readFile: async (path: string): Promise<ReadFileResult> => {
 			calls.readFile.push(path);
-			const content = opts.files?.[path];
+			const value = opts.files?.[path] ?? writtenFiles.get(path);
+			const content =
+				typeof value === 'string' || value === undefined ? value : new TextDecoder().decode(value);
 			if (content === undefined) {
 				return readFileFailure('NOT_FOUND');
 			}
@@ -150,7 +152,7 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 			calls.writeFiles.push([...files]);
 			calls.writeFile.push(...files);
 			calls.sequence.push('writeFiles');
-			for (const file of files) writtenFiles.add(file.path);
+			for (const file of files) writtenFiles.set(file.path, file.content);
 		},
 		gitCheckout: async () => {},
 		setEnvVars: async (vars: Record<string, string>, options?: SetEnvVarsOptions) => {
@@ -285,7 +287,8 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 			if (!validReadBudget(options)) return readFileFailure();
 			calls.readFile.push(path);
 			const bytes = fs.get(toRel(path));
-			if (bytes === undefined || bytes.length > options.maxBytes) return readFileFailure();
+			if (bytes === undefined) return readFileFailure('NOT_FOUND');
+			if (bytes.length > options.maxBytes) return readFileFailure();
 			return { success: true, content: fsBase64Encode(bytes), encoding: 'base64' };
 		},
 		async readFile(path: string): Promise<ReadFileResult> {

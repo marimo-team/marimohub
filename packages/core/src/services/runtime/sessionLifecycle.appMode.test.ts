@@ -1,3 +1,4 @@
+import { RuntimeCaptureClient } from './runtimeCapture';
 import { AppPoolService } from './AppPoolService';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
@@ -43,12 +44,24 @@ describe('SessionLifecycleService (app sessions)', () => {
 	const iso = (offsetMs: number) => new Date(now + offsetMs).toISOString();
 
 	beforeEach(() => {
+		vi.spyOn(RuntimeCaptureClient.prototype, 'prepare').mockResolvedValue({
+			token: crypto.randomUUID(),
+			directory: '/workspace',
+		});
+		vi.spyOn(RuntimeCaptureClient.prototype, 'resume').mockResolvedValue();
+		vi.spyOn(RuntimeCaptureClient.prototype, 'commitStop').mockResolvedValue();
 		bucket = new MemoryBucket();
 		sessions = new SessionService(bucket);
 		notebooks = new NotebookService(bucket, new CatalogService(bucket));
 		vi.spyOn(notebooks, 'getNotebook').mockResolvedValue({ source: makeLocalSource() } as never);
-		vi.spyOn(notebooks, 'commitSession').mockResolvedValue(null);
-		const fake = makeFakeSandbox();
+		vi.spyOn(notebooks, 'beginSessionCapture').mockResolvedValue({} as never);
+		vi.spyOn(notebooks, 'commitSession').mockResolvedValue({
+			versionId: createVersionId(),
+			newVersion: true,
+			capturedHtml: false,
+			capturedSession: false,
+		});
+		const fake = makeFakeSandbox({ files: { '/workspace/notebook.py': 'print(1)' } });
 		sandboxCalls = fake.calls;
 		compute = fakeComputeFrom(fake.instance);
 		probe = vi.fn(async () => 0);
@@ -252,7 +265,7 @@ describe('SessionLifecycleService (app sessions)', () => {
 	});
 
 	it('kernelActiveConnections requests the status endpoint under the base path', async () => {
-		const fake = makeFakeSandbox();
+		const fake = makeFakeSandbox({ files: { '/workspace/notebook.py': 'print(1)' } });
 		await kernelActiveConnections(fake.instance, '/proxy/tok-abc');
 		await kernelActiveConnections(fake.instance);
 

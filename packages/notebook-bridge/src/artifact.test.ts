@@ -42,12 +42,16 @@ describe('runtime artifact', () => {
 	});
 	it('keeps runtime discovery, installation and fallback isolated', () => {
 		expect(() =>
-			execFileSync('python3', ['-B', 'python/test_runtime.py'], {
-				stdio: 'pipe',
-				cwd: new URL('../', import.meta.url),
-			}),
+			execFileSync(
+				'python3',
+				['-B', '-m', 'unittest', 'discover', '-s', 'python', '-p', 'test_*.py'],
+				{
+					stdio: 'pipe',
+					cwd: new URL('../', import.meta.url),
+				},
+			),
 		).not.toThrow();
-	});
+	}, 120_000);
 	it('matches the browser and Python sources', () => {
 		expect(() =>
 			execFileSync(process.execPath, ['scripts/generate.mjs', '--check'], {

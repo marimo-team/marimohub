@@ -163,6 +163,7 @@ jobs:
                   print(f"Sandboxed Chromium {browser.version} started")
           PY
           PATH="$RUNNER_TEMP/uv-python/bin:$PATH" MARIMO_INTEGRATION_PYTHON="$RUNNER_TEMP/thumbnail-python/bin/python" MARIMOHUB_TEST_LOGGING_ENV_MISSING="$RUNNER_TEMP/logging-env-missing" MARIMOHUB_TEST_LOGGING_ENV_CONFLICTING="$RUNNER_TEMP/logging-env-conflicting" MARIMOHUB_TEST_LOGGING_SANDBOX_WHEELS="$RUNNER_TEMP/logging-sandbox-wheels" vp test packages/core/src/services/runtime/kernelBootstrap.integration.test.ts packages/core/src/services/runtime/presentation.integration.test.ts packages/core/src/services/runtime/logging.integration.test.ts packages/core/src/services/runtime/loggingSandbox.integration.test.ts --configLoader=runner --pool=threads
+          (cd packages/notebook-bridge/python && "$RUNNER_TEMP/thumbnail-python/bin/python" -m unittest test_lifecycle test_lifecycle_linux)
           MARIMOHUB_THUMBNAIL_TEST_PYTHON="$RUNNER_TEMP/thumbnail-python/bin/python" vp test packages/core/src/services/runtime/thumbnailProgram.live.test.ts --configLoader=runner --pool=threads
 
   # Preserve the required check name and propagate suite failures.

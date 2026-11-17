@@ -34,9 +34,20 @@ export function SessionControl({
 	onStop,
 	onRestart,
 }: SessionControlProps) {
-	const status = sessionStatusPresentation(
+	const retained = session?.stop && ['retained', 'uncertain'].includes(session.stop.outcome);
+	const presentation = sessionStatusPresentation(
 		error ? 'failed' : (session?.status ?? (isProvisioning ? 'starting' : 'terminated')),
 	);
+	const status = retained
+		? {
+				...presentation,
+				label:
+					session.stop?.runtime_state === 'running'
+						? 'Running · save failed'
+						: 'Retained · check status',
+				pulse: false,
+			}
+		: presentation;
 	const sharing = session?.ephemeral
 		? 'Temporary'
 		: session?.mode === 'edit' && session.editor_sandbox_sharing === 'shared'

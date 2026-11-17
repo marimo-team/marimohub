@@ -170,7 +170,16 @@ describe('authorized search', () => {
 	});
 	it('checks current code ETags even when source metadata does not change', async () => {
 		const f = await setup();
-		await f.bucket.put(paths.project(f.project.id).notebook(f.notebook.id).code, 'profit = 9');
+		await f.bucket.put(
+			paths
+				.project(f.project.id)
+				.notebook(f.notebook.id)
+				.version(
+					(await f.services.notebooks.getNotebookSource(f.project.id, f.notebook.id))
+						.current_version_id!,
+				).code,
+			'profit = 9',
+		);
 		expect((await f.search.search(owner, f.query)).items).toEqual([]);
 		await f.indexer.step(f.project.id, f.source, signal());
 		const updated = await f.search.search(owner, { ...f.query, q: 'profit' });
@@ -917,7 +926,16 @@ describe('resumable search indexing', () => {
 		expect(embed).toHaveBeenCalledTimes(1);
 		await indexer.step(f.project.id, f.source, signal());
 		expect(embed).toHaveBeenCalledTimes(1);
-		await f.bucket.put(paths.project(f.project.id).notebook(f.notebook.id).code, 'profit = 10');
+		await f.bucket.put(
+			paths
+				.project(f.project.id)
+				.notebook(f.notebook.id)
+				.version(
+					(await f.services.notebooks.getNotebookSource(f.project.id, f.notebook.id))
+						.current_version_id!,
+				).code,
+			'profit = 10',
+		);
 		embed.mockRejectedValueOnce(new Error('offline'));
 		await indexer.step(f.project.id, f.source, signal());
 		const result = await f.search.search(owner, { ...f.query, q: 'profit' });
@@ -951,7 +969,16 @@ describe('resumable search indexing', () => {
 			const start = Date.now() + 60_000;
 			vi.useFakeTimers({ now: start, toFake: ['Date'] });
 			if (event === 'publication')
-				await f.bucket.put(paths.project(f.project.id).notebook(f.notebook.id).code, 'profit = 9');
+				await f.bucket.put(
+					paths
+						.project(f.project.id)
+						.notebook(f.notebook.id)
+						.version(
+							(await f.services.notebooks.getNotebookSource(f.project.id, f.notebook.id))
+								.current_version_id!,
+						).code,
+					'profit = 9',
+				);
 			const publish = vi.spyOn(f.index, 'publish');
 			await f.indexer.step(f.project.id, f.source, signal());
 			expect(publish).toHaveBeenCalledTimes(event === 'publication' ? 1 : 0);
@@ -994,7 +1021,16 @@ describe('resumable search indexing', () => {
 		expect(result.coverage).toEqual([
 			{ source: f.source.id, project_id: f.project.id, status: 'complete' },
 		]);
-		await f.bucket.put(paths.project(f.project.id).notebook(f.notebook.id).code, 'profit = 9');
+		await f.bucket.put(
+			paths
+				.project(f.project.id)
+				.notebook(f.notebook.id)
+				.version(
+					(await f.services.notebooks.getNotebookSource(f.project.id, f.notebook.id))
+						.current_version_id!,
+				).code,
+			'profit = 9',
+		);
 		expect(await f.indexer.step(f.project.id, f.source, signal())).toBe(true);
 		expect(publish).toHaveBeenCalledOnce();
 		expect((await f.index.read(scope)).snapshot?.documents.map((d) => d.text)).toContain(

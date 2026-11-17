@@ -168,7 +168,7 @@ describe('useNotebookSession', () => {
 			expect(fetch).toHaveBeenCalledOnce();
 			act(() => {
 				if (action === 'unmount') unmount();
-				else if (action === 'stop') result.current.stop();
+				else if (action === 'stop') void result.current.stop();
 				else if (action === 'restart') result.current.restart();
 				else if (action === 'persistent') result.current.startPersistent();
 				else result.current.startWithDefault();
@@ -453,7 +453,9 @@ describe('useNotebookSession', () => {
 			});
 			await settleHook();
 			await act(() => vi.advanceTimersByTimeAsync(SESSION_START_SLOW_POLL_AFTER_MS + 1_000));
-			act(() => result.current.stop());
+			act(() => {
+				void result.current.stop();
+			});
 			await settleHook();
 			act(() => result.current.start());
 			await settleHook();
@@ -675,7 +677,9 @@ describe('useNotebookSession', () => {
 		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
 		await waitFor(() => expect(result.current.session).not.toBeNull());
 
-		act(() => result.current.stop());
+		act(() => {
+			void result.current.stop();
+		});
 
 		await waitFor(() => expect(result.current.session).toBeNull());
 		expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true);
@@ -694,10 +698,12 @@ describe('useNotebookSession', () => {
 		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
 		await waitFor(() => expect(result.current.session).not.toBeNull());
 
-		act(() => result.current.stop());
+		act(() => {
+			void result.current.stop();
+		});
 
 		await waitFor(() => expect(result.current.error?.message).toBe('teardown failed'));
-		expect(result.current.session).toBeNull();
+		expect(result.current.session?.session_id).toBe('sess-1');
 	});
 
 	it('stop() treats an already-reaped (404) session as stopped, with no error', async () => {
@@ -711,7 +717,9 @@ describe('useNotebookSession', () => {
 		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
 		await waitFor(() => expect(result.current.session).not.toBeNull());
 
-		act(() => result.current.stop());
+		act(() => {
+			void result.current.stop();
+		});
 		await settleHook();
 
 		expect(result.current.session).toBeNull();
@@ -1733,7 +1741,9 @@ describe('useNotebookSession (app mode)', () => {
 			act(() => result.current.restart());
 			await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
 			expect(result.current.isProvisioning).toBe(true);
-			act(() => result.current.stop());
+			act(() => {
+				void result.current.stop();
+			});
 			expect(result.current.isProvisioning).toBe(false);
 			await act(async () =>
 				replacement.resolve(jsonOk(makeSession({ mode, session_id: 'replacement' }))),
@@ -1767,7 +1777,7 @@ describe('useNotebookSession (app mode)', () => {
 		// A real teardown takes tens of seconds; the page must show a spinner,
 		// not a blank body, until the stop settles and the fresh start begins.
 		await waitFor(() => expect(result.current.isProvisioning).toBe(true));
-		expect(result.current.session).toBeNull();
+		expect(result.current.session?.session_id).toBe('sess-1');
 		expect(result.current.error).toBeNull();
 
 		deletePending.resolve();
@@ -1817,6 +1827,7 @@ describe('useNotebookSession (app mode)', () => {
 					posts += 1;
 					return jsonOk(makeSession({ mode: 'edit' }));
 				}
+				if (method === 'GET') return jsonOk(makeSession({ mode: 'edit' }));
 				if (method === 'DELETE') return jsonError('INTERNAL_ERROR', 'teardown failed', 500);
 				throw new Error(`unexpected fetch: ${method}`);
 			}),
@@ -2171,7 +2182,9 @@ describe('session diagnostic links', () => {
 			await settleHook();
 			await act(() => vi.advanceTimersByTimeAsync(0));
 			expect(fetchMock).toHaveBeenCalledTimes(2);
-			act(() => result.current[action]());
+			act(() => {
+				void result.current[action]();
+			});
 			await settleHook();
 			pending.resolve(jsonOk({ ...starting, status: 'failed' }));
 			await settleHook();
@@ -2205,5 +2218,101 @@ describe('session diagnostic links', () => {
 		expect(result.current.error?.message).toBe('Compute unavailable');
 		expect(result.current.session).toBeNull();
 		expect(result.current.diagnosticSession).toBeNull();
+	});
+});
+
+describe('retained stop recovery', () => {
+	it.each(['stop', 'restart'] as const)(
+		'keeps the iframe after a heartbeat overlaps %s and the user keeps running',
+		async (action) => {
+			const { currentStopDecision, decideStop } = await import('@/api/sessionStop');
+			const pending = deferred<Response>();
+			const stop = {
+				id: crypto.randomUUID(),
+				force: false,
+				trigger: 'interactive' as const,
+				requested_at: new Date().toISOString(),
+				updated_at: new Date().toISOString(),
+				outcome: 'capturing' as const,
+				runtime_state: 'paused' as const,
+			};
+			const retained = makeSession({
+				stop: {
+					...stop,
+					outcome: 'retained',
+					runtime_state: 'running',
+					failure: { code: 'SOURCE_MISSING', retryable: false },
+				},
+			});
+			let starts = 0;
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+					if (String(url).endsWith('/heartbeat'))
+						return jsonOk(makeSession({ status: 'terminating', stop }));
+					if (init?.method === 'DELETE') return pending.promise;
+					if (init?.method === 'POST') {
+						starts++;
+						return jsonOk(makeSession());
+					}
+					return jsonOk(retained);
+				}),
+			);
+			vi.useFakeTimers();
+			const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), {
+				toaster: false,
+			});
+			await settleHook();
+			act(() => {
+				void result.current[action]();
+			});
+			await act(async () => vi.advanceTimersByTimeAsync(EDITOR_HEARTBEAT_INTERVAL_MS));
+			expect(result.current.session?.status).toBe('terminating');
+			expect(result.current.sandboxUrl).toBe('https://sandbox.example/kernel');
+			await act(async () =>
+				pending.resolve(jsonError('SESSION_PERSISTENCE_REQUIRED', 'Retained', 409)),
+			);
+			await settleHook();
+			expect(currentStopDecision()?.session.session_id).toBe('sess-1');
+			act(() => decideStop('keep'));
+			await settleHook();
+			expect(result.current.session?.status).toBe('running');
+			expect(result.current.isRunning).toBe(true);
+			expect(result.current.error).toBeNull();
+			expect(starts).toBe(1);
+		},
+	);
+
+	it('recovers a retained stop after reload when admission is still terminating', async () => {
+		const { currentStopDecision, decideStop } = await import('@/api/sessionStop');
+		const retained = makeSession({
+			notebook_id: NID,
+			can: { attach: true, stop: true },
+			stop: {
+				id: crypto.randomUUID(),
+				outcome: 'retained',
+				force: false,
+				trigger: 'interactive',
+				runtime_state: 'running',
+				requested_at: new Date().toISOString(),
+				updated_at: new Date().toISOString(),
+			},
+		});
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'POST') return jsonError('EDIT_SESSION_RETIRING', 'Pending stop', 409);
+				if (init?.method === 'DELETE')
+					return jsonError('CONFLICT', 'Acknowledge prior attempt', 409);
+				if (String(url).endsWith(`/projects/${PID}/sessions`)) return jsonOk({ items: [retained] });
+				return jsonOk(retained);
+			}),
+		);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		await waitFor(() => expect(currentStopDecision()?.session.session_id).toBe('sess-1'));
+		act(() => decideStop('keep'));
+		await waitFor(() => expect(result.current.isRunning).toBe(true));
+		expect(result.current.session?.session_id).toBe('sess-1');
+		expect(result.current.error).toBeNull();
 	});
 });

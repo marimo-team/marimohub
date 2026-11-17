@@ -6839,6 +6839,14 @@
 			"summary": "Terminate a session and destroy sandbox",
 			"parameters": [
 				{
+					"name": "idempotency-key",
+					"cli_name": "idempotency-key",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
 					"name": "nid",
 					"cli_name": "nid",
 					"in": "path",
@@ -6863,6 +6871,31 @@
 					"repeatable": false
 				},
 				{
+					"name": "force",
+					"cli_name": "force",
+					"in": "query",
+					"required": false,
+					"description": "Explicitly discard changes that have not been saved durably.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "previous_attempt_id",
+					"cli_name": "previous-attempt-id",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "request_key",
+					"cli_name": "request-key",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
 					"name": "wait",
 					"cli_name": "wait",
 					"in": "query",
@@ -6876,7 +6909,7 @@
 			"paginated": false,
 			"response_kind": "json",
 			"accepts_if_match": false,
-			"accepts_idempotency_key": false
+			"accepts_idempotency_key": true
 		},
 		{
 			"id": "startObjectUpload",

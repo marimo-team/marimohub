@@ -165,6 +165,8 @@ These CAS-managed records also have one writer each:
 - `BucketSearchIndex` owns `_system/search/projects/{pid}/{source}/head.json`, immutable search snapshots, and retained deletion tombstones. `SearchIndexer` owns resumable crawl checkpoints, immutable pages, and `_system/search/cursor.json`. A notebook move's publishing `mutateSnapshot` write sets `search_refresh` on both project entries to request fresh crawls.
 - `ProjectService` owns the retention cursor at `_system/project-purge-cursor.json`.
 - `NotebookService` owns the retention cursor at `_system/notebook-purge-cursor.json`.
+- `NotebookService` owns each local notebook `source.json` publication head, immutable version payloads, and capture sidecars. Every accepted capture, including unchanged content, advances that head with ETag CAS. Editor handover and artifact GC use the same publication fence.
+- `SessionService` owns session stop attempts, bounded receipts, save-dirty generations, and durable-capture acknowledgements in each session record.
 - `NotebookService` owns the notebook artifact rotation cursor at
   `_system/notebook-gc-cursor.json`, written by CAS in `sweepNotebookArtifacts`.
 - `MaintenanceService` owns the snapshot-expiry cursor at `_system/snapshot-expiry-cursor.json`,

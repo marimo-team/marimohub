@@ -1,3 +1,4 @@
+import { SessionKeptRunningError } from '@/api/sessionStop';
 import { prefetchMarimoAssets } from '@/lib/marimoAssets';
 import { useSandboxPreconnect } from './useSandboxPreconnect';
 import { leaveAppVisit } from '@/api/sessionVisits';
@@ -72,7 +73,7 @@ export interface NotebookSession {
 	startWithDefault: () => void;
 	defaultRetryAttempted: boolean;
 	/** Stop the current session (saves files, tears down the sandbox). */
-	stop: () => void;
+	stop: () => Promise<boolean>;
 	/** Replace the selected app sandbox or restart the editor, then re-enter through admission. */
 	restart: () => void;
 	acknowledgeWorkingBranchSave: (sessionId: string, versionId: string) => void;
@@ -212,10 +213,43 @@ export function useNotebookSession(
 						}
 						commitSession(data);
 					},
-					(err) => {
+					async (err) => {
 						if (!mountedRef.current || controller.signal.aborted || !generation.isCurrent(gen))
 							return;
 						setStarting(false);
+						if (
+							mode === 'edit' &&
+							err instanceof ApiRequestError &&
+							['CONFLICT', 'EDIT_SESSION_RETIRING'].includes(err.code)
+						) {
+							const page = await apiData(
+								apiClient.GET('/api/v1/projects/{pid}/sessions', {
+									params: { path: { pid: projectId } },
+								}),
+							).catch(() => null);
+							if (!mountedRef.current || !generation.isCurrent(gen)) return;
+							const retained = page?.items.find(
+								(item) =>
+									item.notebook_id === notebookId &&
+									item.stop &&
+									item.stop.outcome !== 'stopped' &&
+									item.can.stop,
+							);
+							if (retained) {
+								commitSession(retained);
+								stopSession.mutate(retained.session_id, {
+									onSuccess: () => {
+										if (generation.isCurrent(gen)) commitSession(null);
+									},
+									onError: (error) => {
+										if (!generation.isCurrent(gen)) return;
+										if (error instanceof SessionKeptRunningError) commitSession(error.session);
+										else setError(toSessionError(error));
+									},
+								});
+								return;
+							}
+						}
 						setError(toSessionError(err));
 					},
 				);
@@ -225,6 +259,7 @@ export function useNotebookSession(
 			commitSession,
 			generation,
 			invalidateSession,
+			stopSession,
 			projectId,
 			notebookId,
 			mode,
@@ -243,25 +278,36 @@ export function useNotebookSession(
 		startWithMutation(startDefaultSession);
 	}, [startWithMutation, startDefaultSession]);
 
-	const stop = useCallback(() => {
+	const stop = useCallback(async (): Promise<boolean> => {
 		const s = sessionRef.current;
 		const gen = invalidateSession();
 		setStarting(false);
 		setRestarting(false);
-		if (s) {
-			// The global toast is suppressed for this mutation, so a failed stop must
-			// surface inline — otherwise the page shows no session AND no error.
-			stopSession.mutate(s.session_id, {
-				onError: (err) => {
-					if (!generation.isCurrent(gen)) return;
-					// Already gone (stopped/reaped underneath us): the stop succeeded in effect.
-					if (isNotFoundError(err)) return;
-					setError(toSessionError(err));
-				},
-			});
+		if (restarting) {
 			commitSession(null);
+			return true;
 		}
-	}, [stopSession, commitSession, generation, invalidateSession]);
+		if (!s) return true;
+		try {
+			await stopSession.mutateAsync(s.session_id);
+			if (!generation.isCurrent(gen)) return false;
+			commitSession(null);
+			return true;
+		} catch (err) {
+			if (!generation.isCurrent(gen)) return false;
+			if (isNotFoundError(err)) {
+				commitSession(null);
+				return true;
+			}
+			if (err instanceof SessionKeptRunningError) {
+				commitSession(err.session);
+				setError(null);
+				return false;
+			}
+			setError(toSessionError(err as Error));
+			return false;
+		}
+	}, [stopSession, commitSession, generation, invalidateSession, restarting]);
 
 	const restart = useCallback(() => {
 		const s = sessionRef.current;
@@ -270,7 +316,7 @@ export function useNotebookSession(
 		setEnded(null);
 		setEndedByUserId(null);
 		if (s) {
-			commitSession(null);
+			if (mode === 'app') commitSession(null);
 			setRestarting(true);
 			const mutation = mode === 'app' ? restartApp : stopSession;
 			mutation.mutate(s.session_id, {
@@ -286,6 +332,11 @@ export function useNotebookSession(
 					// still holds, so start fresh.
 					if (mode !== 'app' && isNotFoundError(err)) {
 						start();
+						return;
+					}
+					if (err instanceof SessionKeptRunningError) {
+						commitSession(err.session);
+						setError(null);
 						return;
 					}
 					setError(toSessionError(err));
@@ -447,7 +498,9 @@ export function useNotebookSession(
 
 	const updateRunningSession = useCallback(
 		(next: Session) => {
-			if (next.status === 'running') {
+			if (next.stop && next.stop.outcome !== 'stopped') {
+				commitSession(next);
+			} else if (next.status === 'running') {
 				if (next.sandbox_url) commitSession(next);
 				else concludeAccessLost(next.can?.attach ?? false);
 			} else if (next.status !== 'starting') {
@@ -462,7 +515,9 @@ export function useNotebookSession(
 	);
 
 	const heartbeatActive =
-		session?.status === 'running' || (mode === 'app' && session?.status === 'starting');
+		session?.status === 'running' ||
+		(!!session?.stop && session.stop.outcome !== 'stopped') ||
+		(mode === 'app' && session?.status === 'starting');
 
 	const sendHeartbeat = async (signal: AbortSignal): Promise<number | null> => {
 		const current = sessionRef.current;
@@ -546,7 +601,9 @@ export function useNotebookSession(
 	useEffect(() => {
 		if (isProvisioning) void prefetchMarimoAssets(marimoAssetUrl);
 	}, [isProvisioning, marimoAssetUrl]);
-	const isRunning = session?.status === 'running' && !!session.sandbox_url;
+	const isRunning =
+		(session?.status === 'running' || (!!session?.stop && session.stop.outcome !== 'stopped')) &&
+		!!session?.sandbox_url;
 	const reportRetentionReady = useContext(RetainedEditorContext);
 	useEffect(() => reportRetentionReady?.(isRunning), [isRunning, reportRetentionReady]);
 

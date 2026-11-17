@@ -109,7 +109,9 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 
 	it.each(omitsSchemaVersion)('%s omits exactly `schema_version`', (_name, api, core) => {
 		const coreKeys = shapeKeys(core);
-		expect(coreKeys.filter((k) => k !== 'schema_version')).toEqual(shapeKeys(api));
+		expect(coreKeys.filter((k) => !['schema_version', 'publication'].includes(k))).toEqual(
+			shapeKeys(api),
+		);
 		expect(coreKeys).toContain('schema_version');
 	});
 
@@ -127,7 +129,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 	it('Project omits `schema_version` and adds `your_role` + `federation_effective`', () => {
 		const coreKeys = shapeKeys(CoreProjectSchema);
 		const expected = [
-			...coreKeys.filter((k) => k !== 'schema_version'),
+			...coreKeys.filter((k) => !['schema_version', 'publication'].includes(k)),
 			'your_role',
 			'federation_effective',
 		].sort();
@@ -188,6 +190,9 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		// `takeover_capture_completed_at`) stays internal until the UI surfaces the
 		// deadline.
 		const internalSessionFields = [
+			'stop_receipts',
+			'save_dirty',
+			'last_capture_attempt_at',
 			'idle_timeout_ms',
 			'restricted_viewer_credentials',
 			'app_pool',
@@ -228,7 +233,8 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 	// (minus the omitted `schema_version`).
 	it('Source union members match the core source members', () => {
 		const apiOptions = (SourceResponseSchema as { _def: { options: unknown[] } })._def.options;
-		const stripSchemaVersion = (keys: string[]) => keys.filter((k) => k !== 'schema_version');
+		const stripSchemaVersion = (keys: string[]) =>
+			keys.filter((k) => !['schema_version', 'publication'].includes(k));
 		expect(apiOptions.map(shapeKeys)).toEqual([
 			stripSchemaVersion(shapeKeys(CoreLocalSourceSchema)),
 			stripSchemaVersion(shapeKeys(CoreGitSourceSchema)),

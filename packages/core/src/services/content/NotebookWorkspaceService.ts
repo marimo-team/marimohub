@@ -202,6 +202,55 @@ export class NotebookWorkspaceService {
 		if (!context.prefix) return { items: [] };
 		const directory = normalizeWorkspaceDirectoryInput(path);
 		const prefix = `${context.prefix}${directory ? `${directory}/` : ''}`;
+		if (context.detail.source.type === 'local' && context.detail.source.publication) {
+			let state: { raw?: string; overlay: number } = { overlay: -1 };
+			if (cursor) {
+				try {
+					state = z
+						.object({ raw: z.string().optional(), overlay: z.number().int().min(-1).max(2) })
+						.parse(JSON.parse(decodeURIComponent(cursor)));
+				} catch {
+					throw new BadRequestError('Invalid workspace cursor');
+				}
+			}
+			const overlays = new Map<string, WorkspaceFileItem>();
+			for (const item of await this.criticalFiles(context, projectId, notebookId)) {
+				if (directory && !item.path.startsWith(`${directory}/`)) continue;
+				const relative = item.path.slice(directory ? directory.length + 1 : 0);
+				const child = relative.split('/')[0];
+				const path = directory ? `${directory}/${child}` : child;
+				overlays.set(path, relative.includes('/') ? directoryItem(path) : item);
+			}
+			const entries = new Map<string, WorkspaceFileItem>();
+			if (state.overlay < 0) {
+				const result = await this.bucket.list({ prefix, delimiter: '/', cursor: state.raw, limit });
+				for (const object of result.objects) {
+					const relative = object.key.slice(context.prefix.length);
+					if (relative && !isWorkspaceDirectoryMarkerPath(relative) && !overlays.has(relative))
+						entries.set(relative, fileItem(relative, object));
+				}
+				for (const child of result.delimitedPrefixes) {
+					const relative = child.slice(context.prefix.length).replace(/\/$/, '');
+					if (relative && !overlays.has(relative)) entries.set(relative, directoryItem(relative));
+				}
+				if (result.truncated && result.cursor)
+					return {
+						items: [...entries.values()],
+						cursor: encodeURIComponent(JSON.stringify({ raw: result.cursor, overlay: -1 })),
+					};
+				state.overlay = 0;
+			}
+			const items = [...entries.values()];
+			const canonical = [...overlays.values()];
+			while (items.length < limit && state.overlay < canonical.length)
+				items.push(canonical[state.overlay++]);
+			return {
+				items,
+				...(state.overlay < canonical.length
+					? { cursor: encodeURIComponent(JSON.stringify({ overlay: state.overlay })) }
+					: {}),
+			};
+		}
 		const result = await this.bucket.list({ prefix, delimiter: '/', cursor, limit });
 		const entries = new Map<string, WorkspaceFileItem>();
 		for (const object of result.objects) {
@@ -219,6 +268,40 @@ export class NotebookWorkspaceService {
 		};
 	}
 
+	private async criticalFiles(
+		context: WorkspaceContext,
+		projectId: ProjectId,
+		notebookId: NotebookId,
+	): Promise<WorkspaceFileItem[]> {
+		const source = context.detail.source;
+		if (source.type !== 'local' || !source.publication) return [];
+		return Promise.all(
+			[workspaceSourcePolicy(source).entryNotebook, 'pyproject.toml'].map(async (relative) => {
+				const object = await this.bucket.head(
+					this.criticalFileKey(context, projectId, notebookId, relative)!,
+				);
+				if (!object) throw new NotFoundError(`Committed workspace entry ${relative} is missing`);
+				return fileItem(relative, object);
+			}),
+		);
+	}
+
+	private criticalFileKey(
+		context: WorkspaceContext,
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		relative: string,
+	): string | undefined {
+		const source = context.detail.source;
+		if (source.type !== 'local' || !source.publication) return;
+		const version = paths
+			.project(projectId)
+			.notebook(notebookId)
+			.version(source.current_version_id);
+		if (relative === workspaceSourcePolicy(source).entryNotebook) return version.code;
+		if (relative === 'pyproject.toml') return version.deps;
+	}
+
 	async stat(
 		projectId: ProjectId,
 		notebookId: NotebookId,
@@ -227,6 +310,12 @@ export class NotebookWorkspaceService {
 		const context = await this.context(projectId, notebookId);
 		if (!context.prefix) throw new NotFoundError('Workspace entry not found');
 		const relative = normalizeWorkspacePathInput(path);
+		const key = this.criticalFileKey(context, projectId, notebookId, relative);
+		if (key) {
+			const object = await this.bucket.head(key);
+			if (!object) throw new NotFoundError(`Committed workspace file ${relative} not found`);
+			return fileItem(relative, object);
+		}
 		return this.statIn(context.prefix, relative);
 	}
 
@@ -238,7 +327,9 @@ export class NotebookWorkspaceService {
 		const context = await this.context(projectId, notebookId);
 		if (!context.prefix) throw new NotFoundError('Workspace file not found');
 		const relative = normalizeWorkspacePathInput(path);
-		const key = `${context.prefix}${relative}`;
+		const key =
+			this.criticalFileKey(context, projectId, notebookId, relative) ??
+			`${context.prefix}${relative}`;
 		const head = await this.bucket.head(key);
 		if (!head || key.endsWith('/')) throw new NotFoundError(`Workspace file ${relative} not found`);
 		if (head.size > this.limits.maxFileBytes) {
@@ -286,9 +377,16 @@ export class NotebookWorkspaceService {
 				}
 			}
 			if (matchesSearch(relative)) {
-				results.set(relative, fileItem(relative, object));
+				const canonical = this.criticalFileKey(context, projectId, notebookId, relative);
+				results.set(
+					relative,
+					fileItem(relative, canonical ? ((await this.bucket.head(canonical)) ?? object) : object),
+				);
 			}
 			if (results.size >= MAX_WORKSPACE_SEARCH_RESULTS) break;
+		}
+		for (const item of await this.criticalFiles(context, projectId, notebookId)) {
+			if (matchesSearch(item.path)) results.set(item.path, item);
 		}
 		return [...results.values()].slice(0, MAX_WORKSPACE_SEARCH_RESULTS);
 	}
@@ -358,7 +456,7 @@ export class NotebookWorkspaceService {
 				throw error;
 			}
 		}
-		return this.statIn(context.prefix, relative);
+		return this.stat(projectId, notebookId, relative);
 	}
 	private uploads(projectId: ProjectId, notebookId: NotebookId) {
 		return new ResumableUploads(

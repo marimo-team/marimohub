@@ -86,10 +86,10 @@ classes behave differently on purpose:
   (the chart ships a dedicated single-replica `Recreate` deployment for this).
   Running it on every replica is wasteful but safe — a bucket-CAS lease guards it.
   The same replica also runs the **session lifecycle sweep**: it saves live
-  notebooks every couple of minutes (so a crash or hard kill loses at most one
-  interval of edits), gracefully saves + stops sessions at their lifetime or
-  idle deadline — extending instead while editors are still connected — and
-  destroys sandboxes left behind by expired sessions. Tune it with the
+  notebooks periodically and attempts safe stops at their lifetime or idle
+  deadline. It extends sessions while editors remain connected. Failed captures
+  retain the runtime and its last confirmed version; provider kills can lose
+  all edits newer than that version. Tune it with the
   `MARIMOHUB_SESSION_*` variables (see [configuration](./configuration.md));
   provider lifetime caps default to 2× the session lifetime as a last-resort
   backstop. With `MARIMOHUB_JOBS=on` it also runs the **job scheduler**: every
@@ -131,18 +131,28 @@ This keeps each drain budget within its pod termination grace.
 
 ## Session stop and recovery
 
-A stop request marks the session `terminating` and invalidates any app-pool entry.
-[The API reference](./api.md#endpoints) defines the stop status codes and `wait=true`.
-On Node, teardown continues in the background after the `202` response, and the drain waits for it.
-Workers and library hosts await teardown before they send the `202`.
-The web restart flow uses `wait=true`, so teardown finishes before the new start.
+Normal stops save persistent local editors before stopping their writers. If saving
+fails, the runtime remains available when resume is confirmed. The editor offers
+**Retry save**, **Keep running**, and a separately confirmed **Force stop**.
+Force can discard changes since the last confirmed capture. Restart waits for a
+successful stop before starting a replacement.
 
-Start waits up to 10 seconds for your previous editor to finish stopping, then reads the latest saved state.
-If cleanup takes longer, Start returns `EDIT_SESSION_RETIRING`. Retry after cleanup finishes.
+[The API reference](./api.md#endpoints) defines the stop status codes and retry keys.
+A pending attempt retains its editor claim and capacity slot. Maintenance reconciles
+unfinished attempts; it does not replay an abandoned interactive failure.
+Automatic idle and lifetime attempts recheck eligibility and back off after failure.
+Authorization expiry still enforces security teardown independently of saving.
 
-A crashed teardown can leave the editor claim held.
-After the 15-minute grace period, maintenance can reclaim the claim.
-New starts stay blocked until the compute backend confirms that the sandbox is destroyed.
+Safe capture requires the Linux lifecycle supervisor and the supported marimo 0.24.x
+adapter. Native macOS runtimes and unsupported launch strategies retain the editor
+when safe capture is unavailable. Users can explicitly force stop them.
+Direct runtime exposure has no proxy save observation and relies on periodic capture.
+Neither mode protects unsaved browser buffers or prevents an external provider kill.
+
+Deploy the publication readers, writers, and runtime support together. Drain old hub
+writers before admitting sessions with this protocol. Mixed workers can bypass the
+publication fence or destroy a runtime after a failed save. Back up each source head
+and its referenced immutable payloads together.
 
 ## Background loops
 

@@ -1,4 +1,11 @@
 import {
+	readLocalPublication,
+	publishLocalSource,
+	publishedVersion,
+	publicationArtifactKey,
+} from './localPublication';
+import type { LocalPublicationToken } from './localPublication';
+import {
 	readRetentionCursor,
 	writeRetentionCursor,
 	retentionBatch,
@@ -25,7 +32,6 @@ import {
 import { previewAvailable, previewKey, PreviewRecordSchema } from './notebookPreviews';
 import type { GitProviderHosts } from '../../integrations/gitRepo';
 import { ThumbnailService } from './ThumbnailService';
-import { all } from 'better-all';
 import type { Bucket } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY, NOTEBOOK_META_CACHE_MAX_ENTRIES } from '../../constants';
@@ -51,7 +57,6 @@ import { logOperationalError } from '../../operationalLog';
 import { compensableWrite, metricsObserver, saga } from '../../saga';
 import {
 	FsSnapshotSchema,
-	SnapshotDescriptorSchema,
 	JobRunMarkerSchema,
 	NotebookMetaSchema,
 	PreviewRuntimeMetaSchema,
@@ -75,7 +80,8 @@ import type {
 	NotebookMeta,
 	PublicNotebookEntry,
 	Snapshot,
-	SnapshotDescriptor,
+	LocalPublicationVersion,
+	PublicationArtifact,
 	SnapshotNotebookEntry,
 	Source,
 	Version,
@@ -115,15 +121,6 @@ export const DEFAULT_DELETED_NOTEBOOK_RETENTION_MS = Millis.days(30);
 
 const NOTEBOOK_GC_CURSOR_KEY = '_system/notebook-gc-cursor.json';
 const GC_CYCLES_PER_DAY = 24;
-
-type SessionArtifact = {
-	key: string;
-	field: 'html_snapshot' | 'session_snapshot';
-	content: string;
-	contentType: string;
-	hash: string;
-	descriptor: SnapshotDescriptor;
-};
 
 export interface CreateNotebookInput {
 	title: string;
@@ -325,20 +322,12 @@ export class NotebookService {
 		assertWritable: () => Promise<void>,
 	): Promise<void> {
 		const detail = await this.getNotebook(projectId, notebookId);
-		const nb = paths.project(projectId).notebook(notebookId);
-		const [code, deps] = await Promise.all([
-			path === workspaceSourcePolicy(detail.source).entryNotebook
-				? content
-				: this.getContentForSource(projectId, notebookId, detail.source),
-			path === 'pyproject.toml'
-				? content
-				: this.bucket.get(nb.deps).then((object) => (object ? object.text() : '')),
-		]);
+		const input = path === 'pyproject.toml' ? { deps: content } : { code: content };
 		await this.updateNotebookFrom(
 			detail,
 			projectId,
 			notebookId,
-			{ code, deps, message: `Edit ${path}` },
+			{ ...input, message: `Edit ${path}` },
 			actor,
 			detail.meta.updated_at,
 			assertWritable,
@@ -554,7 +543,9 @@ export class NotebookService {
 
 		if (!entryNotebook) {
 			const codeObj = await this.bucket.get(
-				nb.workspaceFile(workspaceSourcePolicy(source).entryNotebook),
+				source.type === 'local' && source.publication
+					? nb.version(source.current_version_id).code
+					: nb.workspaceFile(workspaceSourcePolicy(source).entryNotebook),
 			);
 			if (!codeObj) {
 				throw new NotFoundError(`Notebook code for ${notebookId} not found`);
@@ -607,7 +598,23 @@ export class NotebookService {
 			if (!obj) return; // listed-then-deleted race; skip rather than fail.
 			return { path: key.slice(prefix.length), bytes: await obj.bytes() };
 		});
-		return read.filter((f): f is { path: string; bytes: Uint8Array } => f !== undefined);
+		const result = read.filter((f): f is { path: string; bytes: Uint8Array } => f !== undefined);
+		if (source.type === 'local' && source.publication) {
+			const entry = workspaceSourcePolicy(source).entryNotebook;
+			const version = nb.version(source.current_version_id);
+			for (const [path, key] of [
+				[entry, version.code],
+				['pyproject.toml', version.deps],
+			]) {
+				const object = await this.bucket.get(key);
+				if (!object) throw new NotFoundError(`Committed notebook file ${path} not found`);
+				const index = result.findIndex((file) => file.path === path);
+				const file = { path, bytes: await object.bytes() };
+				if (index === -1) result.push(file);
+				else result[index] = file;
+			}
+		}
+		return result;
 	}
 
 	/**
@@ -656,7 +663,10 @@ export class NotebookService {
 			securityLabels,
 		});
 
-		const source = localSource(versionId, input.entry_notebook);
+		const source = {
+			...localSource(versionId, input.entry_notebook),
+			publication: { generation: crypto.randomUUID(), versions: [{ version_id: versionId }] },
+		};
 
 		const version = buildVersion({
 			versionId,
@@ -781,9 +791,14 @@ export class NotebookService {
 		newTitle?: string,
 	): Promise<NotebookMeta> {
 		const { meta, readme, source } = await this.getNotebook(projectId, notebookId);
+		const nb = paths.project(projectId).notebook(notebookId);
 		const [code, depsObj] = await Promise.all([
 			this.getContentForSource(projectId, notebookId, source),
-			this.bucket.get(paths.project(projectId).notebook(notebookId).deps),
+			this.bucket.get(
+				source.type === 'local' && source.publication
+					? nb.version(source.current_version_id).deps
+					: nb.deps,
+			),
 		]);
 		const deps = depsObj ? await depsObj.text() : '';
 
@@ -978,7 +993,13 @@ export class NotebookService {
 		assertWritable?: () => Promise<void>,
 		forceVersion = false,
 	): Promise<NotebookMeta> {
-		const { meta: existing, source } = detail;
+		const { meta: existing } = detail;
+		let { source } = detail;
+		const token =
+			source.type === 'local' && (input.code !== undefined || input.deps !== undefined)
+				? await this.beginSessionCapture(projectId, notebookId)
+				: undefined;
+		if (token) source = token.source;
 		// Preserve stale If-Match precedence for remote-source content updates; the CAS
 		// callback repeats the authoritative check against the latest metadata.
 		assertVersionMatch(existing.updated_at, expectedVersion);
@@ -989,6 +1010,10 @@ export class NotebookService {
 			await this.assertSourceUpdateAllowed(projectId, notebookId);
 
 		const nb = paths.project(projectId).notebook(notebookId);
+		const depsKey =
+			source.type === 'local' && source.publication
+				? nb.version(source.current_version_id).deps
+				: nb.deps;
 		const [codeChanged, depsChanged, readmeChanged] = await Promise.all([
 			input.code !== undefined
 				? this.getContentForSource(projectId, notebookId, source).then(
@@ -996,7 +1021,7 @@ export class NotebookService {
 					)
 				: false,
 			input.deps !== undefined
-				? this.resolveDeps(nb.deps, undefined).then((deps) => input.deps !== deps)
+				? this.resolveDeps(depsKey, undefined).then((deps) => input.deps !== deps)
 				: false,
 			input.readme !== undefined
 				? this.bucket
@@ -1015,7 +1040,7 @@ export class NotebookService {
 				this.readVersionContents(version.code, version.deps),
 				this.bucket.head(version.meta),
 				input.code ?? this.getContentForSource(projectId, notebookId, source),
-				this.resolveDeps(nb.deps, input.deps),
+				this.resolveDeps(depsKey, input.deps),
 			]);
 			// Equal workspace files can survive a partially failed version publication.
 			sourceChanged =
@@ -1066,13 +1091,13 @@ export class NotebookService {
 			await this.bucket.put(nb.readme, input.readme);
 		}
 
-		if (sourceChanged && source.type === 'local') {
+		if (sourceChanged && source.type === 'local' && token) {
 			const code = input.code ?? (await this.getContentForSource(projectId, notebookId, source));
 			const versionId = createVersionId();
 
 			// Read once, before the Promise.all, so the read does not race the write
 			// of the same key inside the batch.
-			const deps = await this.resolveDeps(nb.deps, input.deps);
+			const deps = await this.resolveDeps(depsKey, input.deps);
 
 			const version = buildVersion({
 				versionId,
@@ -1083,17 +1108,16 @@ export class NotebookService {
 				parentId: source.current_version_id,
 			});
 
-			const newSource = localSource(versionId, source.entry_notebook);
-
 			const ver = nb.version(versionId);
 			await assertWritable?.();
 			await Promise.all([
-				this.bucket.put(nb.workspaceFile(workspaceSourcePolicy(source).entryNotebook), code),
-				this.bucket.put(nb.source, JSON.stringify(newSource)),
-				this.bucket.put(nb.deps, deps),
-				this.bucket.put(ver.code, code),
-				this.bucket.put(ver.deps, deps),
-				this.bucket.put(ver.meta, JSON.stringify(version)),
+				this.bucket.put(ver.code, code, { onlyIfNotExists: true }),
+				this.bucket.put(ver.deps, deps, { onlyIfNotExists: true }),
+				this.bucket.put(ver.meta, JSON.stringify(version), { onlyIfNotExists: true }),
+			]);
+			await publishLocalSource(this.bucket, token, versionId, [
+				{ version_id: versionId },
+				...token.versions,
 			]);
 
 			// Prune old versions after the new one is written. This is best-effort
@@ -1124,18 +1148,23 @@ export class NotebookService {
 			throw new ConflictError('Cannot restore a version of a non-local notebook');
 		}
 
+		if (
+			detail.source.publication &&
+			!detail.source.publication.versions.some((item) => item.version_id === versionId)
+		)
+			throw new NotFoundError(`Version ${versionId} is not published`);
 		const ver = paths.project(projectId).notebook(notebookId).version(versionId);
 		const [metaObj, codeObj, depsObj] = await Promise.all([
 			this.bucket.get(ver.meta),
 			this.bucket.get(ver.code),
 			this.bucket.get(ver.deps),
 		]);
-		if (!metaObj) {
-			throw new NotFoundError(`Version ${versionId} not found`);
+		if (!metaObj || !codeObj || !depsObj) {
+			throw new NotFoundError(`Version ${versionId} is incomplete`);
 		}
 
-		const code = codeObj ? decodeUtf8PreservingBom(await codeObj.bytes()) : '';
-		const deps = depsObj ? await depsObj.text() : undefined;
+		const code = decodeUtf8PreservingBom(await codeObj.bytes());
+		const deps = await depsObj.text();
 		return this.workspace.withMutation(projectId, notebookId, {}, (lease) =>
 			this.updateNotebookFrom(
 				detail,
@@ -1150,171 +1179,155 @@ export class NotebookService {
 		);
 	}
 
-	/**
-	 * Commit a session's final state on teardown: cut a new version from the
-	 * notebook files read back out of the sandbox, then attach marimo's optional
-	 * HTML / session snapshots to that version. This is the only path that versions
-	 * interactive kernel edits — those land directly on the live `notebook.py` (via
-	 * mount or copy-back) and never go through `updateNotebook`, so without this an
-	 * editing session would leave no version record.
-	 *
-	 * A new version is cut only when the read-back code/deps differ from the current
-	 * version, so a read-only session creates no spurious version. When unchanged,
-	 * the snapshots attach to the existing current version folder. Returns null when
-	 * the notebook is deleted, is not `local`, or no code could be read back
-	 * (nothing to commit).
-	 */
+	// Acquire before reading runtime bytes or validating editor ownership.
+	async beginSessionCapture(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+	): Promise<LocalPublicationToken> {
+		return readLocalPublication(this.bucket, projectId, notebookId);
+	}
+
+	async fenceSessionPublications(projectId: ProjectId, notebookId: NotebookId): Promise<Source> {
+		const token = await this.beginSessionCapture(projectId, notebookId);
+		return publishLocalSource(this.bucket, token, token.source.current_version_id, token.versions);
+	}
+
 	async commitSession(
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		input: CommitSessionInput,
 		actor: UserId,
+		capture?: LocalPublicationToken,
 	): Promise<CommitSessionResult | null> {
-		const { meta, source } = await this.getNotebook(projectId, notebookId);
+		const { meta, source: configured } = await this.getNotebook(projectId, notebookId);
 		if (meta.preview) throw new ConflictError('Preview sessions cannot persist changes');
-		if (meta.status === 'deleted') {
+		if (meta.status === 'deleted' || configured.type !== 'local' || input.code === undefined)
 			return null;
-		}
-		// Remote-backed notebooks are updated by their integration sync path.
-		if (source.type !== 'local') {
-			return null;
-		}
-		// No code read back (sandbox unreadable / file missing) — nothing to version.
-		if (input.code === undefined) {
-			return null;
-		}
-
+		const token = capture ?? (await this.beginSessionCapture(projectId, notebookId));
+		if (token.projectId !== projectId || token.notebookId !== notebookId)
+			throw new ConflictError('Capture belongs to another notebook');
+		const source = token.source;
 		const nb = paths.project(projectId).notebook(notebookId);
-		const now = new Date().toISOString();
-
-		// Preserve existing deps when none were read back, so a missing pyproject.toml
-		// in the sandbox does not wipe the stored one.
-		const deps = await this.resolveDeps(nb.deps, input.deps);
-
-		// Compare against the CURRENT version's stored code+deps to decide whether the
-		// session actually changed anything. If not, reuse it (no spurious version).
 		const current = nb.version(source.current_version_id);
-		const { code: curCode, deps: curDeps } = await this.readVersionContents(
-			current.code,
-			current.deps,
+		const stored = await this.readVersionContents(current.code, current.deps);
+		const deps = input.deps ?? stored.deps;
+		const existingObjects = await Promise.all(
+			[current.code, current.deps, current.meta].map((key) => this.bucket.head(key)),
 		);
-		const changed = input.code !== curCode || deps !== curDeps;
-
+		const changed =
+			!stored.complete ||
+			existingObjects.some((object) => !object) ||
+			input.code !== stored.code ||
+			deps !== stored.deps;
 		const versionId = changed ? createVersionId() : source.current_version_id;
 		const ver = nb.version(versionId);
-		const artifacts: SessionArtifact[] = await Promise.all(
-			(
-				[
-					{ key: ver.html, field: 'html_snapshot', content: input.html, contentType: 'text/html' },
-					{
-						key: ver.session,
-						field: 'session_snapshot',
-						content: input.session,
-						contentType: 'application/json',
-					},
-				] as const
-			)
-				.flatMap((artifact) =>
-					artifact.content === undefined ? [] : [{ ...artifact, content: artifact.content }],
-				)
-				.map(async (artifact) => ({
-					...artifact,
-					hash: await sha256Hex(artifact.content),
-					descriptor: { captured_at: now, size_bytes: byteLength(artifact.content) },
-				})),
-		);
-
-		if (changed) {
-			const version: Version = {
-				...buildVersion({
-					versionId,
-					notebookId,
-					now,
-					author: actor,
-					message: 'Session edits',
-					parentId: source.current_version_id,
-				}),
-				...artifactDescriptors(artifacts),
-			};
-
-			const newSource = localSource(versionId, source.entry_notebook);
-
-			await Promise.all([
-				// Live notebook files reflect the session's final state.
-				this.bucket.put(nb.workspaceFile(workspaceSourcePolicy(source).entryNotebook), input.code),
-				this.bucket.put(nb.deps, deps),
-				this.bucket.put(nb.source, JSON.stringify(newSource)),
-				// Immutable version snapshot (version.json already carries any descriptors).
-				this.bucket.put(ver.code, input.code),
-				this.bucket.put(ver.deps, deps),
-				this.bucket.put(ver.meta, JSON.stringify(version)),
-				...artifacts.map((artifact) => this.writeArtifact(artifact)),
-			]);
-
-			// Invalidate reads made before the editor's final save, including same-millisecond saves.
-			await mutateObject(
-				this.bucket,
-				nb.meta,
-				(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
-				(current) => {
-					assertNotMoving(current, notebookId);
-					return {
-						...current,
-						updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),
-					};
-				},
-				{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
-			);
-			await this.reconcileSavedNotebook(projectId, notebookId, actor);
-
-			await this.pruneVersions(projectId, notebookId, MAX_VERSIONS, versionId);
-		} else if (artifacts.length > 0) {
-			// A missing descriptor record must not leave untracked sidecars.
-			const metaObj = await this.bucket.get(ver.meta);
-			if (metaObj) {
-				const version = await readStored(VersionSchema, metaObj, ver.meta);
-				const updates = (
-					await Promise.all(
-						artifacts.map((artifact) => this.artifactUpdate(artifact, version[artifact.field])),
-					)
-				).filter((update) => update !== undefined);
-				const uploads = updates.filter((update) => update.write).map((update) => update.artifact);
-				this.metrics.increment(
-					'notebook.artifact_uploads_skipped',
-					artifacts.length - uploads.length,
-				);
-				await Promise.all(uploads.map((artifact) => this.writeArtifact(artifact)));
-				const descriptors = artifactDescriptors(updates.map((update) => update.artifact));
-				// CAS the descriptor patch so two concurrent teardowns of the same
-				// notebook cannot drop each other's descriptor.
-				try {
-					if (updates.length > 0)
-						await mutateObject(
-							this.bucket,
-							ver.meta,
-							(raw) => parseStored(VersionSchema, raw, ver.meta),
-							(current): Version => ({
-								...current,
-								...descriptors,
-							}),
-						);
-				} catch (err) {
-					// Concurrent purge removed version.json; discard only the sidecars this save wrote.
-					if (!(err instanceof NotFoundError)) throw err;
-					const orphans = uploads.map((artifact) => artifact.key);
-					if (orphans.length > 0) await this.bucket.delete(orphans).catch(() => {});
+		const previous = changed
+			? undefined
+			: token.versions.find((version) => version.version_id === versionId);
+		const now = new Date().toISOString();
+		const captureId = crypto.randomUUID();
+		const publication: LocalPublicationVersion = { ...previous, version_id: versionId };
+		let capturedHtml = input.html !== undefined;
+		for (const [field, content] of [
+			['html', input.html],
+			['session', input.session],
+		] as const) {
+			if (content === undefined) continue;
+			try {
+				const descriptorField = field === 'html' ? 'html_snapshot' : 'session_snapshot';
+				const hash = await sha256Hex(content);
+				const old = previous?.[descriptorField];
+				if (old) {
+					const key = publicationArtifactKey(projectId, notebookId, versionId, field, old);
+					const head = await this.bucket.head(key);
+					const same =
+						head &&
+						head.size === byteLength(content) &&
+						(old.sha256 === hash || (!old.sha256 && (await this.artifactMatches(key, hash))));
+					if (same) {
+						this.metrics.increment('notebook.artifact_uploads_skipped');
+						continue;
+					}
 				}
+				await this.bucket.put(ver.capture(captureId)[field], content, {
+					onlyIfNotExists: true,
+					httpMetadata: { contentType: field === 'html' ? 'text/html' : 'application/json' },
+				});
+				publication[descriptorField] = {
+					captured_at: old ? nextIsoTimestamp(old.captured_at, now) : now,
+					size_bytes: byteLength(content),
+					capture_id: captureId,
+					sha256: hash,
+				};
+			} catch (error) {
+				if (field !== 'html') throw error;
+				capturedHtml = false;
+				logOperationalError(
+					'notebook.html_capture_failed',
+					{ operation: 'notebook.capture_html', notebook_id: notebookId },
+					error,
+				);
 			}
 		}
-
-		if (!changed) await this.reconcileSavedNotebook(projectId, notebookId, actor, true);
-
+		if (changed) {
+			await Promise.all([
+				this.bucket.put(ver.code, input.code, { onlyIfNotExists: true }),
+				this.bucket.put(ver.deps, deps, { onlyIfNotExists: true }),
+				this.bucket.put(
+					ver.meta,
+					JSON.stringify(
+						buildVersion({
+							versionId,
+							notebookId,
+							now,
+							author: actor,
+							message: 'Session edits',
+							parentId: source.current_version_id,
+						}),
+					),
+					{ onlyIfNotExists: true },
+				),
+			]);
+		}
+		if (!changed && JSON.stringify(publication) === JSON.stringify(previous)) {
+			// Even equal bytes must fence older, already-dispatched publications.
+			await publishLocalSource(this.bucket, token, versionId, token.versions);
+		} else {
+			const versions = [
+				publication,
+				...token.versions.filter((version) => version.version_id !== versionId),
+			];
+			await publishLocalSource(this.bucket, token, versionId, versions);
+			if (changed)
+				await mutateObject(
+					this.bucket,
+					nb.meta,
+					(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
+					(current) => {
+						assertNotMoving(current, notebookId);
+						return { ...current, updated_at: nextIsoTimestamp(current.updated_at, now) };
+					},
+				).catch((error) =>
+					logOperationalError(
+						'notebook.capture_metadata_failed',
+						{ operation: 'notebook.capture_metadata', notebook_id: notebookId },
+						error,
+					),
+				);
+		}
+		await this.reconcileSavedNotebook(projectId, notebookId, actor, !changed);
+		if (changed) await this.pruneVersions(projectId, notebookId, MAX_VERSIONS, versionId);
 		return {
 			versionId,
 			newVersion: changed,
-			capturedHtml: input.html !== undefined,
+			capturedHtml,
 			capturedSession: input.session !== undefined,
 		};
+	}
+
+	private async artifactMatches(key: string, hash: string): Promise<boolean> {
+		const body = await this.bucket.get(key);
+		return !!body && (await sha256Hex(decodeUtf8PreservingBom(await body.bytes()))) === hash;
 	}
 
 	private async reconcileSavedNotebook(
@@ -1351,53 +1364,6 @@ export class NotebookService {
 				context,
 			);
 		}
-	}
-
-	private writeArtifact(artifact: SessionArtifact) {
-		return this.bucket.put(artifact.key, artifact.content, {
-			httpMetadata: { contentType: artifact.contentType },
-			customMetadata: { sha256: artifact.hash, captured_at: artifact.descriptor.captured_at },
-		});
-	}
-
-	private async artifactUpdate(
-		artifact: SessionArtifact,
-		previous?: SnapshotDescriptor,
-	): Promise<{ write: boolean; artifact: SessionArtifact } | undefined> {
-		const { key, hash } = artifact;
-		const object = await this.bucket.head(key);
-		let matches =
-			object?.size === artifact.descriptor.size_bytes && object.customMetadata?.sha256 === hash;
-		if (object && !object.customMetadata?.sha256) {
-			// Legacy objects and filesystem storage have no custom metadata.
-			const body = await this.bucket.get(key);
-			matches = !!body && (await sha256Hex(decodeUtf8PreservingBom(await body.bytes()))) === hash;
-		}
-		let descriptor = artifact.descriptor;
-		if (matches) {
-			// The upload can succeed before version.json fails. Its capture time lets a retry repair the descriptor.
-			const stored = SnapshotDescriptorSchema.safeParse({
-				captured_at: object?.customMetadata?.captured_at,
-				size_bytes: descriptor.size_bytes,
-			});
-			descriptor = {
-				...descriptor,
-				captured_at: stored.success
-					? stored.data.captured_at
-					: (previous?.captured_at ?? descriptor.captured_at),
-			};
-			if (
-				previous?.captured_at === descriptor.captured_at &&
-				previous.size_bytes === descriptor.size_bytes
-			)
-				return;
-		} else if (previous) {
-			descriptor = {
-				...descriptor,
-				captured_at: nextIsoTimestamp(previous.captured_at, descriptor.captured_at),
-			};
-		}
-		return { write: !matches, artifact: { ...artifact, descriptor } };
 	}
 
 	async deleteNotebook(
@@ -1462,7 +1428,11 @@ export class NotebookService {
 
 	async listVersions(projectId: ProjectId, notebookId: NotebookId): Promise<Version[]> {
 		const nb = paths.project(projectId).notebook(notebookId);
-		const versionPrefixes = await listAllPrefixes(this.bucket, `${nb.base}/versions/`);
+		const source = await this.getNotebookSource(projectId, notebookId);
+		const versionPrefixes =
+			source.type === 'local' && source.publication
+				? source.publication.versions.map((version) => `${nb.base}/versions/${version.version_id}/`)
+				: await listAllPrefixes(this.bucket, `${nb.base}/versions/`);
 
 		const fetched = await mapWithConcurrency(
 			versionPrefixes,
@@ -1472,7 +1442,8 @@ export class NotebookService {
 				const obj = await this.bucket.get(key);
 				if (!obj) return; // listed-then-deleted race; skip rather than fail.
 				try {
-					return await readStored(VersionSchema, obj, key);
+					const version = await readStored(VersionSchema, obj, key);
+					return source.type === 'local' ? publishedVersion(source, version) : version;
 				} catch (err) {
 					logOperationalError(
 						'stored_object_skipped',
@@ -1517,9 +1488,15 @@ export class NotebookService {
 			throw new NotFoundError(`Version ${versionId} not found`);
 		}
 
-		const version = await readStored(VersionSchema, metaObj, ver.meta);
+		const stored = await readStored(VersionSchema, metaObj, ver.meta);
+		if (
+			source.type === 'local' &&
+			source.publication &&
+			!source.publication.versions.some((version) => version.version_id === vid)
+		)
+			throw new NotFoundError(`Version ${versionId} was not published`);
+		const version = source.type === 'local' ? publishedVersion(source, stored) : stored;
 		const code = decodeUtf8PreservingBom(await codeObj.bytes());
-
 		return { version, code };
 	}
 
@@ -1534,25 +1511,24 @@ export class NotebookService {
 		versionId: string,
 	): Promise<{ versionId: string; capturedAt: string; html: string } | null> {
 		const vid = this.parseVersionId(versionId);
+		const source = await this.getNotebookSource(projectId, notebookId);
 		const ver = paths.project(projectId).notebook(notebookId).version(vid);
-		// Both object paths are deterministic, so the reads overlap; a
-		// snapshot-less version wastes one harmless html read.
-		const { version, htmlObj } = await all({
-			version: async () => {
-				const metaObj = await this.bucket.get(ver.meta);
-				if (!metaObj) {
-					throw new NotFoundError(`Version ${versionId} not found`);
-				}
-				return readStored(VersionSchema, metaObj, ver.meta);
-			},
-			htmlObj: async () => this.bucket.get(ver.html),
-		});
-		if (!version.html_snapshot || !htmlObj) return null;
-		return {
-			versionId: vid,
-			capturedAt: version.html_snapshot.captured_at,
-			html: await htmlObj.text(),
-		};
+		let descriptor: PublicationArtifact | undefined;
+		if (source.type === 'local' && source.publication) {
+			const published = source.publication.versions.find((version) => version.version_id === vid);
+			if (!published) throw new NotFoundError(`Version ${versionId} not found`);
+			descriptor = published.html_snapshot;
+		} else {
+			const object = await this.bucket.get(ver.meta);
+			if (!object) throw new NotFoundError(`Version ${versionId} not found`);
+			descriptor = (await readStored(VersionSchema, object, ver.meta)).html_snapshot;
+		}
+		if (!descriptor) return null;
+		const object = await this.bucket.get(
+			publicationArtifactKey(projectId, notebookId, vid, 'html', descriptor),
+		);
+		if (!object) return null;
+		return { versionId: vid, capturedAt: descriptor.captured_at, html: await object.text() };
 	}
 
 	/**
@@ -1567,19 +1543,12 @@ export class NotebookService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 	): Promise<{ versionId: string; capturedAt: string; html: string } | null> {
-		const versions = await this.listVersions(projectId, notebookId);
-		const withSnapshot = versions
-			.filter((v) => v.html_snapshot)
+		const versions = (await this.listVersions(projectId, notebookId))
+			.filter((version) => version.html_snapshot)
 			.sort((a, b) => b.version_id.localeCompare(a.version_id));
-		const nb = paths.project(projectId).notebook(notebookId);
-		for (const v of withSnapshot) {
-			const obj = await this.bucket.get(nb.version(v.version_id).html);
-			if (!obj) continue;
-			return {
-				versionId: v.version_id,
-				capturedAt: v.html_snapshot!.captured_at,
-				html: await obj.text(),
-			};
+		for (const version of versions) {
+			const snapshot = await this.getVersionHtmlSnapshot(projectId, notebookId, version.version_id);
+			if (snapshot) return snapshot;
 		}
 		return null;
 	}
@@ -1610,48 +1579,102 @@ export class NotebookService {
 				// `listAllPrefixes` returns sorted `.../versions/{vid}/` prefixes, so the
 				// newest (largest ULID) come last.
 				const versionPrefixes = await listAllPrefixes(this.bucket, versionsRoot);
-				if (versionPrefixes.length <= max) {
-					return;
+				const source = await this.getNotebookSource(projectId, notebookId);
+				let token =
+					source.type === 'local' && source.publication
+						? await this.beginSessionCapture(projectId, notebookId)
+						: undefined;
+				const committedPrefixes = token
+					? token.versions.map((item) => `${versionsRoot}${item.version_id}/`).sort()
+					: versionPrefixes;
+				const prunable = committedPrefixes.slice(0, Math.max(0, committedPrefixes.length - max));
+				if (prunable.length > 0) {
+					const cutoff = VersionId.parse(prunable.at(-1)!.slice(versionsRoot.length, -1));
+					await this.sessions.advanceVersionPruneCutoff(projectId, notebookId, cutoff);
 				}
-
-				// Keep the newest `max`; the rest are prune candidates.
-				const prunable = versionPrefixes.slice(0, versionPrefixes.length - max);
-				const cutoff = VersionId.parse(prunable.at(-1)!.slice(versionsRoot.length, -1));
-				await this.sessions.advanceVersionPruneCutoff(projectId, notebookId, cutoff);
-				const protectedVersionIds = new Set(
-					await this.sessions.listProtectedVersionIds(projectId, notebookId),
-				);
-				const branchObject = await this.bucket.get(workingBranchPaths(projectId, notebookId).head);
-				if (branchObject) {
-					const branch = await readStored(
-						WorkingBranchRecordSchema,
-						branchObject,
+				const protectedVersionIds = new Set<VersionId>();
+				if (prunable.length > 0) {
+					for (const id of await this.sessions.listProtectedVersionIds(projectId, notebookId))
+						protectedVersionIds.add(id);
+					const branchObject = await this.bucket.get(
 						workingBranchPaths(projectId, notebookId).head,
 					);
-					if (branch.active_save) {
-						const key = workingBranchPaths(projectId, notebookId).save(branch.active_save);
-						const receipt = await this.bucket.get(key);
-						if (receipt)
-							protectedVersionIds.add(
-								(await readStored(WorkingBranchSaveSchema, receipt, key)).base_version_id,
-							);
+					if (branchObject) {
+						const branch = await readStored(
+							WorkingBranchRecordSchema,
+							branchObject,
+							workingBranchPaths(projectId, notebookId).head,
+						);
+						if (branch.active_save) {
+							const key = workingBranchPaths(projectId, notebookId).save(branch.active_save);
+							const receipt = await this.bucket.get(key);
+							if (receipt)
+								protectedVersionIds.add(
+									(await readStored(WorkingBranchSaveSchema, receipt, key)).base_version_id,
+								);
+						}
 					}
 				}
-				const current =
-					keep ?? (await this.getNotebookSource(projectId, notebookId)).current_version_id;
-				if (current) protectedVersionIds.add(current);
+				if (source.current_version_id) protectedVersionIds.add(source.current_version_id);
+				if (keep) protectedVersionIds.add(keep);
 				const protectedPrefixes = new Set(
 					[...protectedVersionIds].map((versionId) => `${versionsRoot}${versionId}/`),
 				);
 
 				const targets = prunable.filter((prefix) => !protectedPrefixes.has(prefix));
-				const keyLists = await mapWithConcurrency(targets, BUCKET_SCAN_CONCURRENCY, (vpfx) =>
-					listAllKeys(this.bucket, vpfx),
-				);
-				const keysToDelete = keyLists.flat();
-
-				if (keysToDelete.length > 0) {
-					await this.bucket.delete(keysToDelete);
+				if (source.type === 'local' && !token) {
+					const removed = new Set(targets);
+					token = await readLocalPublication(
+						this.bucket,
+						projectId,
+						notebookId,
+						new Set(
+							versionPrefixes
+								.filter((prefix) => !removed.has(prefix))
+								.map((prefix) => prefix.slice(versionsRoot.length, -1)),
+						),
+					);
+				}
+				if (token) {
+					// List before the CAS barrier: candidates staged using any older token
+					// cannot publish after this barrier, including a paused upload.
+					const candidates = await listAllKeys(this.bucket, versionsRoot);
+					const removed = new Set(targets.map((prefix) => prefix.slice(versionsRoot.length, -1)));
+					const retained = token.versions.filter((item) => !removed.has(item.version_id));
+					const references = new Set<string>();
+					for (const item of retained) {
+						const version = nb.version(item.version_id);
+						for (const key of [version.code, version.deps, version.meta]) references.add(key);
+						if (item.html_snapshot)
+							references.add(
+								publicationArtifactKey(
+									projectId,
+									notebookId,
+									item.version_id,
+									'html',
+									item.html_snapshot,
+								),
+							);
+						if (item.session_snapshot)
+							references.add(
+								publicationArtifactKey(
+									projectId,
+									notebookId,
+									item.version_id,
+									'session',
+									item.session_snapshot,
+								),
+							);
+					}
+					const garbage = candidates.filter((key) => !references.has(key));
+					if (garbage.length === 0 && removed.size === 0) return;
+					await publishLocalSource(this.bucket, token, token.source.current_version_id, retained);
+					if (garbage.length > 0) await this.bucket.delete(garbage);
+				} else {
+					const keyLists = await mapWithConcurrency(targets, BUCKET_SCAN_CONCURRENCY, (prefix) =>
+						listAllKeys(this.bucket, prefix),
+					);
+					if (keyLists.flat().length > 0) await this.bucket.delete(keyLists.flat());
 				}
 			},
 			this.metrics,
@@ -1785,6 +1808,7 @@ export class NotebookService {
 		);
 		this.metrics.increment('notebook_gc.visited', batch.length);
 		await mapWithConcurrency(batch, BUCKET_SCAN_CONCURRENCY, async ({ projectId, notebookId }) => {
+			await this.pruneVersions(projectId, notebookId, MAX_VERSIONS);
 			await this.workspace.sweepUploads(projectId, notebookId).catch((error) => {
 				logOperationalError(
 					'workspace_uploads.cleanup_failed',
@@ -1907,10 +1931,4 @@ export class NotebookService {
 /** UTF-8 byte length of a string, for snapshot `size_bytes` descriptors. */
 function byteLength(s: string): number {
 	return new TextEncoder().encode(s).length;
-}
-
-function artifactDescriptors(
-	artifacts: SessionArtifact[],
-): Partial<Pick<Version, SessionArtifact['field']>> {
-	return Object.fromEntries(artifacts.map(({ field, descriptor }) => [field, descriptor]));
 }

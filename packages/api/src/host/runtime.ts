@@ -2,11 +2,10 @@ import {
 	EditSessionOwnedError,
 	EditSessionChangedError,
 	NotFoundError,
-	SandboxProvisioner,
+	SessionCaptureCoordinator,
 	SessionId,
 	reconnectSessionSandbox,
 	sessionSandbox,
-	sessionPersistsEdits,
 	sessionWorkspaceDir,
 	UnavailableError,
 	workspaceSourcePolicy,
@@ -235,20 +234,21 @@ export async function callRuntime(
 		if (request.path === '/save' && reply.status < 400) {
 			if (!(await deps.services.sessions.ownsEditorClaim(session)))
 				throw HostProblemError.conflict('The session no longer owns the notebook editor');
-			const saved = await new SandboxProvisioner(deps.compute).captureSession(
-				sandbox,
-				deps.services.notebooks,
-				deps.bucket,
-				project.id,
-				notebook.meta.id,
-				principal.id,
-				deps.sandbox.persistWorkspace,
-				deps.sandbox.workdir,
-				{ persistEdits: sessionPersistsEdits(session) },
-			);
-			if (!saved)
+			const captured = await new SessionCaptureCoordinator({
+				compute: deps.compute,
+				bucket: deps.bucket,
+				notebooks: deps.services.notebooks,
+				sessions: deps.services.sessions,
+				persistWorkspace: deps.sandbox.persistWorkspace,
+				workdir: deps.sandbox.workdir,
+			}).capture(session, sandbox);
+			if (captured.critical.status === 'not_required')
 				throw HostProblemError.unsupportedOperation(
 					'This notebook source cannot be saved by the host',
+				);
+			if (captured.critical.status !== 'durable')
+				throw HostProblemError.conflict(
+					'The runtime save has not been confirmed durable. Keep the session running and retry.',
 				);
 		}
 		return reply;

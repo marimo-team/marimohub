@@ -1,3 +1,4 @@
+import { SessionKeptRunningError } from './sessionStop';
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
 import { ApiRequestError } from './client';
 import { userKeys } from './queryKeys';
@@ -32,7 +33,11 @@ export function createQueryClient(): QueryClient {
 		mutationCache: new MutationCache({
 			onError: (error, _variables, _context, mutation) => {
 				handleError(error);
-				if (mutation.options.meta?.suppressErrorToast !== true) toastError(error);
+				if (
+					!(error instanceof SessionKeptRunningError) &&
+					mutation.options.meta?.suppressErrorToast !== true
+				)
+					toastError(error);
 			},
 		}),
 		defaultOptions: {

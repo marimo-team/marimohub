@@ -618,7 +618,7 @@ describe('app pool HTTP integration', () => {
 		expect(admitted.can.attach).toBe(true);
 	});
 
-	it('admits the actual committed head when saves publish in reverse ID order', async () => {
+	it('keeps app admission on the accepted head when an older publication arrives late', async () => {
 		const notebooks = createServices(bucket).notebooks;
 		const sourceKey = paths.project(pid).notebook(nid).source;
 		const put = bucket.put.bind(bucket);
@@ -645,9 +645,9 @@ describe('app pool HTTP integration', () => {
 			await notebooks.commitSession(pid, nid, { code: 'fast save B' }, ACTOR);
 			const first = await start();
 			release();
-			await slow;
+			await expect(slow).rejects.toMatchObject({ code: 'CONFLICT' });
 			const head = (await notebooks.getNotebook(pid, nid)).source.current_version_id!;
-			expect(head < first.source_version_id).toBe(true);
+			expect(head).toBe(first.source_version_id);
 			const next = await start('bob');
 			expect(next.source_version_id).toBe(head);
 			expect((await start('alice')).session_id).toBe(first.session_id);

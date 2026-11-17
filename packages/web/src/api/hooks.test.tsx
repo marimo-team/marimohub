@@ -643,7 +643,10 @@ describe('edit session restart', () => {
 	function restartFetch(stop: () => Promise<Response>) {
 		return stubFetch(async (url, init) => {
 			const method = init?.method ?? 'GET';
-			if (method === 'DELETE' && String(url) === `${sessionsPath}/sess-1?wait=true`) return stop();
+			if (method === 'DELETE' && String(url) === `${sessionsPath}/sess-1?wait=true&force=false`)
+				return stop();
+			if (method === 'GET' && String(url) === `${sessionsPath}/sess-1`)
+				return jsonOk({ session_id: 'sess-1', status: 'running' });
 			if (method === 'POST' && String(url) === sessionsPath) {
 				return jsonOk({ session_id: 'sess-2', mode: 'app' });
 			}
@@ -664,7 +667,11 @@ describe('edit session restart', () => {
 		});
 
 		const methods = fetchMock.mock.calls.map(([url, init]) => `${init?.method} ${requestUrl(url)}`);
-		expect(methods).toEqual([`DELETE ${sessionsPath}/sess-1?wait=true`, `POST ${sessionsPath}`]);
+		expect(methods).toEqual([
+			`DELETE ${sessionsPath}/sess-1?wait=true&force=false`,
+			`POST ${sessionsPath}`,
+		]);
+		expect(requestOf(fetchMock).headers.get('idempotency-key')).toEqual(expect.any(String));
 		expect(await requestOf(fetchMock, 1).clone().text()).toBe(expectedBody);
 		expect(invalidatedKeys(spy)).toEqual([sessionKeys.listByProject(PID)]);
 	});
@@ -694,8 +701,8 @@ describe('edit session restart', () => {
 			await expect(result.current()).rejects.toThrow('teardown failed');
 		});
 
-		// A restart that half-ran (stopped, never started) is worse than one that failed.
-		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
 		expect(spy).not.toHaveBeenCalled();
 	});
 });

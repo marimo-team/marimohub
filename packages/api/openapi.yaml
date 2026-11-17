@@ -77,6 +77,7 @@ components:
                 - SYNC_NOT_CONFIGURED
                 - NOT_INITIALIZED
                 - SERVICE_UNAVAILABLE
+                - SESSION_PERSISTENCE_REQUIRED
                 - PYTHON_ENV_SETUP_FAILED
                 - RESOURCE_EXHAUSTED
                 - SURFACE_NOT_ENABLED
@@ -1418,6 +1419,8 @@ components:
                   - kernel_unreachable
                   - destroy_failed
                   - timeout
+                  - persistence_required
+                  - stop_pending
                   - null
                 description: Why an admin reclaim would be refused now, from recorded state
                   only; null when reclaimable. Kernel activity and provider
@@ -3690,6 +3693,80 @@ components:
     Session:
       type: object
       properties:
+        stop:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            outcome:
+              type: string
+              enum:
+                - pending
+                - capturing
+                - durable
+                - stopping
+                - stopped
+                - retained
+                - uncertain
+            force:
+              type: boolean
+            trigger:
+              type: string
+              enum:
+                - interactive
+                - idle
+                - lifetime
+                - reconcile
+                - takeover
+                - security
+            requested_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+            runtime_state:
+              type: string
+              enum:
+                - running
+                - paused
+                - stopped
+                - unknown
+            failure:
+              type: object
+              properties:
+                code:
+                  type: string
+                retryable:
+                  type: boolean
+              required:
+                - code
+                - retryable
+            captured_at:
+              type: string
+              format: date-time
+            version_id:
+              type: string
+          required:
+            - id
+            - outcome
+            - force
+            - trigger
+            - requested_at
+            - updated_at
+        last_durable_capture:
+          type: object
+          properties:
+            at:
+              type: string
+              format: date-time
+              example: 2025-03-05T14:00:00Z
+            version_id:
+              type: string
+          required:
+            - at
+            - version_id
         origin:
           type: object
           properties:
@@ -21110,11 +21187,41 @@ paths:
             enum:
               - 'true'
               - 'false'
+            description: Explicitly discard changes that have not been saved durably.
+          required: false
+          description: Explicitly discard changes that have not been saved durably.
+          name: force
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+          required: false
+          name: request_key
+          in: query
+        - schema:
+            type: string
+            format: uuid
+          required: false
+          name: previous_attempt_id
+          in: query
+        - schema:
+            type: string
+            enum:
+              - 'true'
+              - 'false'
             description: Wait for teardown to finish before responding. Use for restart.
           required: false
           description: Wait for teardown to finish before responding. Use for restart.
           name: wait
           in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+          required: false
+          name: idempotency-key
+          in: header
       responses:
         '200':
           description: Session terminated
@@ -21142,6 +21249,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
           content:
             application/json:
               schema:

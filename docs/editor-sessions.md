@@ -194,29 +194,33 @@ does not restore the previous owner's snapshot. Exclusive mode also ignores
 legacy snapshots that do not identify an owner. Shared mode can restore the
 latest snapshot regardless of who created it.
 
+### Save failures and stopping
+
+A normal stop saves the notebook source, dependencies, and native outputs before
+stopping the editor. If saving fails, choose one of these actions:
+
+- **Retry save** tries a new capture. Use this after storage recovers or after fixing
+  a missing or oversized source file.
+- **Keep running** closes the decision dialog and leaves the editor attached.
+- **Force stop** opens a separate confirmation. It discards changes that were not
+  captured successfully.
+
+Restart starts a replacement only after the previous editor stops successfully.
+A retained editor still holds its ownership claim and consumes its capacity slot.
+The session list exposes pending and retained outcomes after a page reload.
+
+Safe capture requires the supported Linux supervisor and marimo 0.24.x adapter.
+Unsupported runtimes remain usable, but a normal stop retains them when capture
+cannot be confirmed. Force stop remains an explicit choice. External provider kills
+and edits that exist only in a browser buffer are outside this guarantee.
+
 ### Session cleanup
 
-If you open a notebook while its previous editor session is still being cleaned
-up, the request returns `409 EDIT_SESSION_RETIRING` and the notebook shows a
-cleanup message with a **Retry** button. The session lifecycle sweep, the
-5-minute maintenance cycle, **Stop**, or an administrator finishes the cleanup.
-Cleanup waits for:
-
-- **Provisioning grace.** A session that expired while provisioning gets
-  15 minutes from creation, unless its kernel is already ready.
-- **Teardown grace.** A fresh Stop or takeover gets 15 minutes to finish.
-- **Idle kernel.** Before the session's authorization deadline, automatic
-  cleanup must confirm that no editors are connected. After the deadline,
-  automatic cleanup does not check. An administrator reclaim never checks.
-- **Attachment.** To save edits, the compute provider must attach to the
-  existing sandbox. If the sandbox is gone, the claim is released; any other
-  attachment error keeps the sandbox and the claim.
-
-Providers that cannot attach (currently Cloudflare) keep sessions that may hold
-unsaved edits until a super admin reclaims them without saving. This applies only
-before the session's authorization deadline. After it, automatic cleanup destroys the
-sandbox without saving. See
-[Reclaim a stuck editor sandbox](./operations.md#reclaim-a-stuck-editor-sandbox).
+Pending cleanup blocks a new persistent editor until the compute provider confirms
+reclamation. Maintenance reconciles interrupted attempts. Failed captures preserve
+runtime ownership; stale heartbeats alone cannot release it. Automatic idle and
+lifetime stops recheck eligibility and back off after failures. Authorization expiry
+can require teardown even when saving fails.
 
 ## Changing the sharing mode
 

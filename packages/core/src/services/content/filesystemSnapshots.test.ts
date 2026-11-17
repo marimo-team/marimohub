@@ -351,7 +351,7 @@ describe('filesystemSnapshots', () => {
 			expect(await env.notebooks.getFsSnapshot(project.id, nb.id)).toBeNull();
 		});
 
-		it('swallows a capture failure and leaves the pointer untouched', async () => {
+		it('clears a stale restore pointer after capture fails', async () => {
 			const env = await setupTestEnv();
 			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
 			const nb = await env.notebooks.createNotebook(
@@ -367,8 +367,8 @@ describe('filesystemSnapshots', () => {
 			const provider = snapshotProvider(instance, { failCapture: true });
 			await captureFilesystemSnapshot(provider, env.notebooks, instance, project.id, nb.id);
 
-			expect((await env.notebooks.getFsSnapshot(project.id, nb.id))?.snapshot_id).toBe('snap_old');
-			expect(provider.deleted).toEqual([]);
+			expect(await env.notebooks.getFsSnapshot(project.id, nb.id)).toBeNull();
+			expect(provider.deleted).toEqual(['snap_old']);
 		});
 
 		it('swallows a setFsSnapshot bucket failure without throwing or GCing', async () => {

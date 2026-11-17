@@ -255,9 +255,25 @@ it.each(
 		expect(remove).not.toHaveBeenCalled();
 		expect(create).not.toHaveBeenCalled();
 		expect(world.created).toHaveLength(1);
-		expect(await deps.services.sessions.getSession(session.project_id, session.session_id)).toEqual(
-			expired,
+		const retained = await deps.services.sessions.getSession(
+			session.project_id,
+			session.session_id,
 		);
+		expect(retained).toMatchObject({
+			status: 'expired',
+			session_id: session.session_id,
+			sandbox_id: session.sandbox_id,
+			reconnect_reference: expired.reconnect_reference,
+		});
+		expect(retained.sandbox_reclaimed_at).toBeUndefined();
+		if (options.save && !('requireIdle' in options)) {
+			expect(retained.stop).toMatchObject({
+				outcome: 'retained',
+				runtime_state: 'unknown',
+				force: false,
+				failure: { code: 'RUNTIME_CAPTURE_UNAVAILABLE' },
+			});
+		}
 		expect(
 			await deps.services.sessions.getEditorClaim(session.project_id, session.notebook_id),
 		).toEqual(claim);

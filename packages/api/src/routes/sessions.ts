@@ -40,6 +40,7 @@ import {
 	jitteredBackoff,
 	BadRequestError,
 	ConflictError,
+	SessionPersistenceRequiredError,
 	PreconditionFailedError,
 	WarmPoolClaimExpiredError,
 	createKernelAuthToken,
@@ -270,7 +271,14 @@ const deleteSession = createRoute({
 	summary: 'Terminate a session and destroy sandbox',
 	request: {
 		params: SessionIdParam,
+		headers: z.object({ 'idempotency-key': z.string().min(1).max(128).optional() }),
 		query: z.object({
+			force: z
+				.enum(['true', 'false'])
+				.optional()
+				.describe('Explicitly discard changes that have not been saved durably.'),
+			request_key: z.string().min(1).max(128).optional(),
+			previous_attempt_id: z.uuid().optional(),
 			wait: z
 				.enum(['true', 'false'])
 				.optional()
@@ -284,7 +292,7 @@ const deleteSession = createRoute({
 			'Session termination accepted; teardown continues in the background',
 		),
 		...commonErrors(),
-		...errorResponses(403, 404),
+		...errorResponses(403, 404, 409),
 	},
 });
 
@@ -563,6 +571,22 @@ export function toSessionResponse(
 		project_id: s.project_id,
 		user_id: appReadOnly ? undefined : s.user_id,
 		status: s.status,
+		stop:
+			!appReadOnly && s.stop
+				? {
+						id: s.stop.id,
+						outcome: s.stop.outcome,
+						force: s.stop.force,
+						trigger: s.stop.trigger,
+						requested_at: s.stop.requested_at,
+						updated_at: s.stop.updated_at,
+						runtime_state: s.stop.runtime_state,
+						failure: s.stop.failure,
+						captured_at: s.stop.captured_at,
+						version_id: s.stop.version_id,
+					}
+				: undefined,
+		last_durable_capture: appReadOnly ? undefined : s.last_durable_capture,
 		sandbox_url: can.attach ? s.sandbox_url : undefined,
 		links:
 			can.attach && !appReadOnly && sessionMode(s) === 'edit' && linkTemplates.length > 0
@@ -867,6 +891,23 @@ async function retireSelectedSession(
 ): Promise<void> {
 	const { sessions } = deps.services;
 	const { project_id: pid, notebook_id: nid, session_id: sid } = selected;
+	if (sessionPersistsEdits(selected)) {
+		const requested = await sessions.requestStop(pid, sid);
+		if (options.wait) {
+			const result = await sessionRetirer(deps).stop(requested);
+			if (result.stop?.outcome !== 'stopped' && !result.sandbox_reclaimed_at)
+				throw new SessionPersistenceRequiredError();
+		} else
+			await deferTeardown(
+				deps,
+				'session.stop',
+				async () => {
+					await sessionRetirer(deps).stop(requested);
+				},
+				{ project_id: pid, session_id: sid },
+			);
+		return;
+	}
 	// Only the winner of the terminating transition performs teardown.
 	const { session, transitioned } = await sessions.beginTerminating(pid, sid, undefined, known);
 	let reclaimed = true;
@@ -1662,12 +1703,19 @@ async function startNotebookSessionOnce(
 				}
 			: undefined;
 	if (isPreview && !origin) throw new ConflictError('Preview revision provenance is unavailable');
-	const launchSource = resolveNotebookLaunchSource({
+	let launchSource = resolveNotebookLaunchSource({
 		entryNotebook: workspacePolicy.entryNotebook,
 		workspacePrefix: workspacePrefix ?? notebookPaths.workspacePrefix,
 		localVersion:
-			mode === 'app' && notebook.source.type === 'local' && sourceVersionId
-				? notebookPaths.version(sourceVersionId)
+			notebook.source.type === 'local'
+				? notebookPaths.version(sourceVersionId ?? notebook.source.current_version_id)
+				: undefined,
+		localCapture:
+			notebook.source.type === 'local'
+				? notebook.source.publication?.versions.find(
+						(version) =>
+							version.version_id === (sourceVersionId ?? notebook.source.current_version_id),
+					)
 				: undefined,
 	});
 	const logStoredConfigFallback = (config: 'base_image' | 'compute_profile') =>
@@ -1898,6 +1946,7 @@ async function startNotebookSessionOnce(
 	let warmProbe: Promise<void> | undefined;
 	let bootedSandbox: ReturnType<SandboxProvisioner['boot']> | undefined;
 	let workspacePrefetch: ReturnType<SandboxProvisioner['prefetchWorkspace']> | undefined;
+	let publicationReady = mode !== 'edit' || ephemeral || notebook.source.type !== 'local';
 	const kernelAuthToken = sandbox.auth === 'on' ? createKernelAuthToken() : undefined;
 
 	let session: Session | undefined;
@@ -2109,6 +2158,7 @@ async function startNotebookSessionOnce(
 			workdir: sandbox.workdir,
 			assetUrl: sandbox.assetUrl,
 			notebookBridge: sandbox.notebookBridge,
+			runtimeCapture: mode === 'edit' && !ephemeral && notebook.source.type === 'local',
 			bridgeParentOrigin: new URL(appBaseUrl).origin,
 			startupTimeoutMs: sandbox.startupTimeoutMs,
 			kernelAuthToken,
@@ -2136,6 +2186,7 @@ async function startNotebookSessionOnce(
 			...pullSourceGit,
 			workspaceArchive,
 			workspaceOverlay: launchSource.workspaceOverlay,
+			workspaceRemovePaths: launchSource.workspaceRemovePaths,
 		});
 		const bootSandbox = () => {
 			bootedSandbox = provisioner.boot(provisionOptions());
@@ -2153,6 +2204,7 @@ async function startNotebookSessionOnce(
 			}
 		};
 		const prefetchWorkspace = () => {
+			if (!publicationReady) return;
 			const sandbox = warmClaim?.sandbox ?? bootedSandbox?.sandbox;
 			if (sandbox) workspacePrefetch ??= provisioner.prefetchWorkspace(sandbox, provisionOptions());
 		};
@@ -2330,6 +2382,25 @@ async function startNotebookSessionOnce(
 								const result = await sessions.claimEditor(pid, nid, sessionId, sharing, user.id);
 								if (!result.claimed && result.claim.session_id)
 									throw new EditorClaimLostError(result.claim.session_id);
+								if (notebook.source.type === 'local') {
+									const fenced = await notebooks.fenceSessionPublications(pid, nid);
+									if (fenced.type !== 'local')
+										throw new ConflictError('Notebook source changed during admission');
+									launchSource = resolveNotebookLaunchSource({
+										entryNotebook: workspacePolicy.entryNotebook,
+										workspacePrefix: notebookPaths.workspacePrefix,
+										localVersion: notebookPaths.version(fenced.current_version_id),
+										localCapture: fenced.publication?.versions.find(
+											(version) => version.version_id === fenced.current_version_id,
+										),
+									});
+									if (envResolution)
+										envResolution.launchStrategy = resolveLaunchStrategyForSession({
+											entryNotebookKey: launchSource.entryNotebookKey,
+											bucket: bucketHandle,
+										}).then((resolved) => resolved.strategy);
+									publicationReady = true;
+								}
 							}),
 					});
 					for (const result of [checks.cap, checks.preview, checks.editor]) {
@@ -2779,10 +2850,48 @@ app.openapi(deleteSession, async (c) => {
 	// their own ephemeral session (role re-checked; see assertSessionControl).
 	await assertSessionControl(project, existing, user, deps, labels);
 
-	const wait = c.req.valid('query').wait === 'true';
-	await retireSelectedSession(deps, existing, { wait, thumbnail: 'skip' }, known);
+	const query = c.req.valid('query');
+	const wait = query.wait === 'true';
+	const headerKey = c.req.valid('header')['idempotency-key'];
+	if (headerKey && query.request_key && headerKey !== query.request_key)
+		throw new BadRequestError('Conflicting stop request keys');
+	const requested = await sessions.requestStop(pid, sid, {
+		key: headerKey ?? query.request_key,
+		requestedBy: user.id,
+		previousId: query.previous_attempt_id,
+		force: query.force === 'true',
+	});
+	let invalidationError: unknown;
+	try {
+		if (sessionMode(existing) === 'app')
+			await new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics).invalidate(
+				pid,
+				existing.notebook_id,
+				sid,
+			);
+	} catch (error) {
+		invalidationError = error;
+	}
+	let pending = !wait;
+	if (wait) {
+		const result = await sessionRetirer(deps).stop(requested);
+		if (result.stop?.outcome === 'retained' || result.stop?.outcome === 'uncertain')
+			throw new SessionPersistenceRequiredError();
+		pending = result.stop?.outcome !== 'stopped' && !result.sandbox_reclaimed_at;
+	} else {
+		await deferTeardown(
+			deps,
+			'session.stop',
+			async () => {
+				await sessionRetirer(deps).stop(requested);
+			},
+			{ project_id: pid, session_id: sid },
+		);
+	}
+	if (invalidationError instanceof Error) throw invalidationError;
+	if (invalidationError !== undefined) throw new Error('App pool invalidation failed');
 
-	return wait ? c.json({ success: true }, 200) : c.json({ success: true }, 202);
+	return pending ? c.json({ success: true }, 202) : c.json({ success: true }, 200);
 });
 
 app.openapi(heartbeatSession, async (c) => {

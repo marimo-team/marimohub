@@ -525,6 +525,9 @@ const RECLAIM_BLOCKED_MESSAGES: Record<ReclaimBlockedReason, string> = {
 		'The sandbox kernel could not be checked for connected editors. Retry shortly.',
 	destroy_failed: 'The sandbox could not be destroyed. Retry shortly.',
 	timeout: 'Reclaiming the sandbox timed out. Retry shortly.',
+	persistence_required:
+		'The runtime was retained because saving was not confirmed. Retry stopping or explicitly force stop.',
+	stop_pending: 'A stop attempt is still in progress. Poll its session status.',
 };
 
 /** Conflicts need a state change or a different request; the rest are transient provider failures. */
@@ -535,11 +538,13 @@ function reclaimBlockedError(reason: ReclaimBlockedReason): Error {
 		case 'teardown_grace':
 		case 'kernel_active':
 		case 'attachment_unsupported':
+		case 'persistence_required':
 			return new ConflictError(RECLAIM_BLOCKED_MESSAGES[reason]);
 		case 'attachment_failed':
 		case 'kernel_unreachable':
 		case 'destroy_failed':
 		case 'timeout':
+		case 'stop_pending':
 			return new UnavailableError(RECLAIM_BLOCKED_MESSAGES[reason]);
 	}
 }

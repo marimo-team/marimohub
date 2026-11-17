@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+beforeEach(mockRuntimeCapture);
+import { mockRuntimeCapture } from '../testing/runtimeCapture';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { CatalogService, UserId, paths } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import { fakeComputeFrom, makeFakeSandbox } from '@marimo-hub/core/testing';
@@ -85,7 +87,11 @@ describe('MCP source replacement and editor admission', () => {
 		const get = bucket.get.bind(bucket);
 		let paused = false;
 		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
-			if (key === paths.project(project.id).notebook(notebook.id).deps && !paused) {
+			if (
+				key.startsWith(`${paths.project(project.id).notebook(notebook.id).base}/versions/`) &&
+				key.endsWith('/pyproject.toml') &&
+				!paused
+			) {
 				paused = true;
 				entered.resolve();
 				await release.promise;
@@ -159,7 +165,13 @@ describe('MCP source replacement and editor admission', () => {
 			let paused = false;
 			vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
 				const object = await get(key);
-				if (key === paths.project(project.id).notebook(notebook.id)[field] && !paused) {
+				if (
+					(field === 'code'
+						? key.startsWith(`${paths.project(project.id).notebook(notebook.id).base}/versions/`) &&
+							key.endsWith('/notebook.py')
+						: key === paths.project(project.id).notebook(notebook.id).readme) &&
+					!paused
+				) {
 					paused = true;
 					entered.resolve();
 					await release.promise;
@@ -261,7 +273,11 @@ describe('MCP source replacement and editor admission', () => {
 		const get = bucket.get.bind(bucket);
 		let paused = false;
 		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
-			if (key === paths.project(project.id).notebook(notebook.id).deps && !paused) {
+			if (
+				key.startsWith(`${paths.project(project.id).notebook(notebook.id).base}/versions/`) &&
+				key.endsWith('/pyproject.toml') &&
+				!paused
+			) {
 				paused = true;
 				enteredWrite.resolve();
 				await releaseWrite.promise;
@@ -384,7 +400,11 @@ describe('MCP source replacement and editor admission', () => {
 		const get = bucket.get.bind(bucket);
 		let paused = false;
 		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
-			if (key === paths.project(project.id).notebook(notebook.id).deps && !paused) {
+			if (
+				key.startsWith(`${paths.project(project.id).notebook(notebook.id).base}/versions/`) &&
+				key.endsWith('/pyproject.toml') &&
+				!paused
+			) {
 				paused = true;
 				entered.resolve();
 				await release.promise;

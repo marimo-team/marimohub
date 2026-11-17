@@ -129,6 +129,7 @@ describe('paths', () => {
 		const ver = paths.project(pid).notebook(nid).version(vid);
 		expect(ver).toMatchInlineSnapshot(`
 			{
+			  "capture": [Function],
 			  "code": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/versions/ver_01HXYZ33333RSTUVWXYZAB/notebook.py",
 			  "deps": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/versions/ver_01HXYZ33333RSTUVWXYZAB/pyproject.toml",
 			  "gitFile": [Function],

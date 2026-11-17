@@ -464,34 +464,45 @@ export function createMcpServer(
 		'stop_session',
 		{
 			description:
-				'Stop a marimohub session and destroy its sandbox. The stop process attempts to save changes from persistent edit sessions.',
+				'Safely stop a session. Failed persistence retains its sandbox; inspect stopped and stop_outcome. Retry or explicit force requires a new request_key and the previous_attempt_id. Force discards unsaved changes.',
 			annotations: { destructiveHint: true, idempotentHint: true },
 			inputSchema: z.object({
 				project: z.string().describe(PROJECT_REFERENCE_DESCRIPTION),
 				session_id: z.string().describe('Session ID returned by start_session or list_catalog.'),
+				request_key: z.string().min(1).max(128).optional(),
+				previous_attempt_id: z.uuid().optional(),
+				force: z.boolean().optional(),
 			}),
 		},
-		async ({ project: projectRef, session_id: sessionId }) => {
+		async ({
+			project: projectRef,
+			session_id: sessionId,
+			request_key,
+			previous_attempt_id,
+			force,
+		}) => {
 			try {
 				const project = await resolveProject(deps, principal, projectRef);
 				if (!SessionId.is(sessionId)) throw new NotFoundError('Session not found');
 				const existing = await deps.services.sessions.getSession(project.id, sessionId);
 				const labels = await assertSessionNotebookVisible(deps, project, existing, principal);
 				await assertSessionControl(project, existing, principal, deps, labels);
-				const { session, transitioned } = await deps.services.sessions.beginTerminating(
-					project.id,
-					sessionId,
-				);
-				await sessionRetirer(deps).retire(session, {
-					teardown: transitioned,
-					thumbnail: 'skip',
+				const requested = await deps.services.sessions.requestStop(project.id, sessionId, {
+					key: request_key,
+					previousId: previous_attempt_id,
+					force,
+					requestedBy: principal.id,
 				});
-				const stopped = await deps.services.sessions.getSession(project.id, sessionId);
+				const stopped = await sessionRetirer(deps).stop(requested);
 				return result({
 					project_id: project.id,
 					notebook_id: stopped.notebook_id,
 					session_id: stopped.session_id,
 					status: stopped.status,
+					stopped: stopped.stop?.outcome === 'stopped',
+					stop_outcome: stopped.stop?.outcome,
+					attempt_id: stopped.stop?.id,
+					failure: stopped.stop?.failure,
 				});
 			} catch (error) {
 				return errorResult('stop_session', error);

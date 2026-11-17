@@ -1,3 +1,5 @@
+beforeEach(mockRuntimeCapture);
+import { mockRuntimeCapture } from '../testing/runtimeCapture';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Mock } from 'vitest';
 import {
@@ -528,7 +530,12 @@ describe('Session routes', () => {
 		async (delayed) => {
 			const release = Promise.withResolvers<void>();
 			const { instance, calls } = makeFakeSandbox();
-			const entryKey = paths.project(pid).notebook(nid).workspaceFile('notebook.py');
+			const entryKey = paths
+				.project(pid)
+				.notebook(nid)
+				.version(
+					(await createServices(bucket).notebooks.getNotebookSource(pid, nid)).current_version_id!,
+				).code;
 			const get = bucket.get.bind(bucket);
 			let entryReadPending = false;
 			vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
@@ -775,7 +782,7 @@ describe('Session routes', () => {
 	}
 
 	it.each(['boot', 'admission'] as const)(
-		'prefetches a cold workspace during admission and boot, waiting for both before writes (%s first)',
+		'waits for publication fencing before cold prefetch and for boot before writes (%s first)',
 		async (first) => {
 			const { fake, api, key, sessions } = await coldWorkspaceFixture();
 			const boot = Promise.withResolvers<void>();
@@ -790,7 +797,8 @@ describe('Session routes', () => {
 			const get = vi.spyOn(bucket, 'get');
 			const request = api.request('POST', sessionsPath());
 			try {
-				await vi.waitFor(() => expect(get).toHaveBeenCalledWith(key));
+				await vi.waitFor(() => expect(claiming).toHaveBeenCalledOnce());
+				expect(get.mock.calls.map(([key]) => key)).not.toContain(key);
 				expect(claiming).toHaveBeenCalledOnce();
 				expect(await sessions.listSessions(nid)).toMatchObject([{ status: 'starting' }]);
 				expect(fake.calls.writeFiles).toEqual([]);
@@ -852,43 +860,16 @@ describe('Session routes', () => {
 		},
 	);
 
-	it('cancels and drains cold prefetch before destroying a rejected startup', async () => {
+	it('does not prefetch a cold workspace before a rejected editor admission', async () => {
 		const { fake, api, key, sessions } = await coldWorkspaceFixture();
-		const read = Promise.withResolvers<void>();
-		const reading = Promise.withResolvers<void>();
-		const get = bucket.get.bind(bucket);
-		vi.spyOn(bucket, 'get').mockImplementation(async (fetched, options) => {
-			const object = await get(fetched, options);
-			if (fetched === key && object && 'bytes' in object) {
-				const bytes = object.bytes.bind(object);
-				vi.spyOn(object, 'bytes').mockImplementation(async () => {
-					reading.resolve();
-					await read.promise;
-					return bytes();
-				});
-			}
-			return object;
-		});
-		vi.spyOn(sessions, 'claimEditor').mockImplementationOnce(async () => {
-			await reading.promise;
-			throw new ResourceExhaustedError('admission rejected');
-		});
-		const request = api.request('POST', sessionsPath());
-		try {
-			await reading.promise;
-			await new Promise((resolve) => setTimeout(resolve, 0));
-			expect(fake.calls.destroy).toBe(0);
-			expect(fake.calls.writeFiles).toEqual([]);
-		} finally {
-			read.resolve();
-		}
-		await expectError(await request, 429, 'RESOURCE_EXHAUSTED');
+		const get = vi.spyOn(bucket, 'get');
+		vi.spyOn(sessions, 'claimEditor').mockRejectedValueOnce(
+			new ResourceExhaustedError('admission rejected'),
+		);
+		await expectError(await api.request('POST', sessionsPath()), 429, 'RESOURCE_EXHAUSTED');
+		expect(get.mock.calls.map(([key]) => key)).not.toContain(key);
 		expect(fake.calls.destroy).toBe(1);
 		expect(fake.calls.writeFiles).toEqual([]);
-		expect(fake.calls.setEnvVars).toEqual([]);
-		expect(await sessions.listSessions(nid)).toMatchObject([
-			{ status: 'failed', sandbox_reclaimed_at: expect.any(String) },
-		]);
 	});
 
 	it('settles concurrent admission and preserves cap precedence without booting a rejected sandbox', async () => {
@@ -1531,18 +1512,20 @@ describe('Session routes', () => {
 			);
 			const { sb, post } = await startSessionApi(local.id as NotebookId);
 			await expectOk<ApiSession>(await post());
-			const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
+			const setup = sb.calls.exec.find((command) => command.includes('uv export'))!;
 			expect(setup).toContain("uv export --script 'notebook.py'");
 			expect(setup).toContain('uv pip install');
-			expect(setup.indexOf('uv sync --inexact')).toBeLessThan(setup.indexOf('uv export'));
+			expect(setup).not.toContain('uv sync --inexact');
 		});
 
 		it('uses the project-managed environment for a local notebook without inline metadata', async () => {
 			const { sb, post } = await startSessionApi(nid);
 			await expectOk<ApiSession>(await post());
-			const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
-			expect(setup).not.toContain('uv export');
-			expect(setup).not.toContain('uv pip install');
+			expect(
+				sb.calls.exec.some(
+					(command) => command.includes('uv sync --inexact') || command.includes('uv export'),
+				),
+			).toBe(false);
 		});
 
 		it.each([
@@ -2327,7 +2310,11 @@ describe('Session routes', () => {
 		const notifier = new MemoryNotifier();
 		notifier.failNext();
 		const exclusiveOwner = exclusiveApi(ACTOR);
-		const exclusiveOther = exclusiveApi(STRANGER, makeFakeCompute(), { notifier });
+		const exclusiveOther = exclusiveApi(
+			STRANGER,
+			makeFakeCompute({ files: { '/workspace/notebook.py': 'import marimo as mo' } }),
+			{ notifier },
+		);
 		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
 		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
 
@@ -2357,15 +2344,19 @@ describe('Session routes', () => {
 					: getIdentity(userId),
 			);
 		const exclusiveOwner = exclusiveApi(ACTOR);
-		const exclusiveOther = exclusiveApi(STRANGER, makeFakeCompute(), {
-			services,
-			notifier,
-			projectAlerts: {
-				store: {} as never,
-				dispatcher: { deliver, test: vi.fn() },
-				maxDestinations: 10,
+		const exclusiveOther = exclusiveApi(
+			STRANGER,
+			makeFakeCompute({ files: { '/workspace/notebook.py': 'import marimo as mo' } }),
+			{
+				services,
+				notifier,
+				projectAlerts: {
+					store: {} as never,
+					dispatcher: { deliver, test: vi.fn() },
+					maxDestinations: 10,
+				},
 			},
-		});
+		);
 		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
 		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
 
@@ -2423,7 +2414,8 @@ describe('Session routes', () => {
 			'SERVICE_UNAVAILABLE',
 		);
 		const old = await createServices(bucket).sessions.getSession(pid, persistent.session_id);
-		expect(old.status).toBe('terminating');
+		expect(old.status).toBe('running');
+		expect(old.stop?.outcome).toBe('retained');
 		expect(failing.calls.destroy).toBe(0);
 		expect((await createServices(bucket).sessions.getEditorClaim(pid, nid))?.transfer?.phase).toBe(
 			'draining',
@@ -2432,7 +2424,7 @@ describe('Session routes', () => {
 
 	it('keeps a failed shutdown claim protected in draining state', async () => {
 		const exclusiveOwner = exclusiveApi(ACTOR);
-		const failing = makeFakeSandbox();
+		const failing = makeFakeSandbox({ files: { '/workspace/notebook.py': 'import marimo as mo' } });
 		failing.instance.destroy = async () => {
 			throw new Error('destroy unavailable');
 		};
@@ -3764,12 +3756,9 @@ describe('Session routes', () => {
 					'DELETE',
 					sessionsPath(`/${started.session_id}${wait ? '?wait=true' : ''}`),
 				);
-				if (wait) expect(response.status).toBe(500);
+				if (wait) await expectOk(response);
 				else {
 					await expectOk(response, 202);
-					expect(metrics.increment).toHaveBeenCalledWith('background.failed', 1, {
-						label: 'session.stop',
-					});
 				}
 				expect(release).toHaveBeenCalledOnce();
 				expect(defer).not.toHaveBeenCalled();
@@ -3810,11 +3799,7 @@ describe('Session routes', () => {
 				'terminating',
 			);
 			expect(destroy).not.toHaveBeenCalled();
-			await expectError(
-				await api.request('DELETE', sessionsPath(`/${started.session_id}?wait=true`)),
-				503,
-				'SERVICE_UNAVAILABLE',
-			);
+			await expectOk(await api.request('DELETE', sessionsPath(`/${started.session_id}?wait=true`)));
 			await background.runAll();
 			expect(destroy).toHaveBeenCalledOnce();
 			expect((await api.deps.services.sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
@@ -3845,7 +3830,7 @@ describe('Session routes', () => {
 			await background.runAll();
 			const { sessions } = api.deps.services;
 			const failed = await sessions.getSession(pid, started.session_id);
-			expect(failed.status).toBe('terminated');
+			expect(failed.status).toBe('terminating');
 			expect(failed.sandbox_reclaimed_at).toBeUndefined();
 			expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBe(started.session_id);
 			expect(destroy).toHaveBeenCalledOnce();
@@ -3862,7 +3847,7 @@ describe('Session routes', () => {
 	});
 
 	it('skips thumbnail capture when wait=true reclaims an expired editor', async () => {
-		const compute = makeFakeCompute();
+		const compute = makeFakeCompute({ files: { '/workspace/notebook.py': 'import marimo as mo' } });
 		const api = createTestApi({ bucket, userId: ACTOR, compute });
 		const stale = makeSession({
 			project_id: pid,
@@ -3875,9 +3860,7 @@ describe('Session routes', () => {
 		});
 		await bucket.put(paths.session(pid, stale.session_id), JSON.stringify(stale));
 		await api.deps.services.sessions.claimEditor(pid, nid, stale.session_id, 'shared');
-		const capture = vi
-			.spyOn(SandboxProvisioner.prototype, 'captureSession')
-			.mockResolvedValue(true);
+		const capture = vi.spyOn(SandboxProvisioner.prototype, 'captureSessionResult');
 		const prepare = vi.spyOn(api.deps.services.notebooks.thumbnails, 'prepare');
 		try {
 			await expectOk(await api.request('DELETE', sessionsPath(`/${stale.session_id}?wait=true`)));
@@ -3889,14 +3872,12 @@ describe('Session routes', () => {
 		}
 	});
 
-	it('rejects wait=true while another request still owns teardown', async () => {
+	it('returns pending while another worker owns the durable stop lease', async () => {
 		const sid = await startSession();
-		await createServices(bucket).sessions.beginTerminating(pid, sid as SessionId);
-		await expectError(
-			await owner('DELETE', sessionsPath(`/${sid}?wait=true`)),
-			503,
-			'SERVICE_UNAVAILABLE',
-		);
+		const sessions = createServices(bucket).sessions;
+		const request = await sessions.requestStop(pid, sid as SessionId);
+		await sessions.claimStop(request, crypto.randomUUID());
+		await expectOk(await owner('DELETE', sessionsPath(`/${sid}?wait=true`)), 202);
 	});
 
 	it.each([true, false])(
@@ -4078,9 +4059,7 @@ describe('Session routes', () => {
 			const api = createTestApi({ bucket, compute, deps: { backgroundWork: background.work } });
 			const started = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
 			await background.runAll();
-			const capture = vi
-				.spyOn(SandboxProvisioner.prototype, 'captureSession')
-				.mockResolvedValue(true);
+			const capture = vi.spyOn(SandboxProvisioner.prototype, 'captureSessionResult');
 			const thumbnail = vi.spyOn(api.deps.services.notebooks.thumbnails, 'prepare');
 			try {
 				await expectOk(
@@ -5060,7 +5039,11 @@ describe('Session routes', () => {
 			paths.editorClaim(pid, nid),
 			JSON.stringify({ session_id: stale.session_id, sharing: 'shared', claimed_at: startedAt }),
 		);
-		const post = createTestApi({ bucket, userId: ACTOR, compute: makeFakeCompute() }).request;
+		const post = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: makeFakeCompute({ files: { '/workspace/notebook.py': 'import marimo as mo' } }),
+		}).request;
 		const services = createServices(bucket);
 
 		await expectError(await post('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
@@ -5095,7 +5078,7 @@ describe('Session routes', () => {
 		});
 		await bucket.put(paths.session(pid, stale.session_id), JSON.stringify(stale));
 		const reclaim = vi
-			.spyOn(SessionRetirer.prototype, 'reclaim')
+			.spyOn(SessionRetirer.prototype, 'stop')
 			.mockRejectedValueOnce(new NotFoundError('Session was reaped'));
 		const invalidate = vi.spyOn(AppPoolService.prototype, 'invalidate');
 		if (invalidationFailed)
@@ -5109,14 +5092,10 @@ describe('Session routes', () => {
 			else {
 				const error = await expectError(
 					response,
-					invalidationFailed ? 409 : 503,
-					invalidationFailed ? 'CONFLICT' : 'SERVICE_UNAVAILABLE',
+					wait ? 404 : 409,
+					wait ? 'NOT_FOUND' : 'CONFLICT',
 				);
-				expect(error.message).toBe(
-					invalidationFailed
-						? 'Pool changed concurrently'
-						: 'The session is still shutting down. Retry shortly.',
-				);
+				expect(error.message).toBe(wait ? 'Session was reaped' : 'Pool changed concurrently');
 			}
 			expect(reclaim).toHaveBeenCalledOnce();
 		} finally {
@@ -5126,7 +5105,9 @@ describe('Session routes', () => {
 	});
 
 	it('Stop keeps an expired claim on destruction failure and retries successfully', async () => {
-		const { instance } = makeFakeSandbox();
+		const { instance } = makeFakeSandbox({
+			files: { '/workspace/notebook.py': 'import marimo as mo' },
+		});
 		const destroy = vi
 			.spyOn(instance, 'destroy')
 			.mockRejectedValueOnce(new Error('provider unavailable'));
@@ -5146,11 +5127,7 @@ describe('Session routes', () => {
 			userId: ACTOR,
 			compute: fakeComputeFrom(instance),
 		}).request;
-		await expectError(
-			await api('DELETE', sessionsPath(`/${stale.session_id}?wait=true`)),
-			503,
-			'SERVICE_UNAVAILABLE',
-		);
+		await expectOk(await api('DELETE', sessionsPath(`/${stale.session_id}?wait=true`)), 202);
 		expect((await services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(stale.session_id);
 		expect(
 			(await services.sessions.getSession(pid, stale.session_id)).sandbox_reclaimed_at,
@@ -5361,6 +5338,12 @@ describe('Session routes', () => {
 	});
 
 	it('POST /sessions: Python setup failure is specific and stored on the session', async () => {
+		await createServices(bucket).notebooks.updateNotebook(
+			pid,
+			nid,
+			{ deps: '[project]\nname = "test"\nversion = "0.1.0"\ndependencies = ["numpy"]\n' },
+			ACTOR,
+		);
 		const { instance: base, calls } = makeFakeSandbox();
 		const instance: SandboxInstance = {
 			...base,

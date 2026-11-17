@@ -338,9 +338,8 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 	// stop when the page unmounts, so an abandoned session is reaped by the server's
 	// heartbeat-TTL reaper. For the shared app this matters doubly: other people may
 	// still be using it. Tearing down happens only on explicit Stop.
-	const handleStop = () => {
-		stop();
-		backToProject();
+	const handleStop = async () => {
+		if (await stop()) backToProject();
 	};
 	const openSecondaryFrame = (frame: SecondarySurfaceFrame) => {
 		setSecondaryFrames((current) => {
@@ -985,7 +984,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 					confirmLabel="Stop Sandbox"
 					onConfirm={() => {
 						confirmEditStop.close();
-						handleStop();
+						void handleStop();
 					}}
 				/>
 			)}
@@ -1018,7 +1017,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 						const action = confirmAppAction.target;
 						confirmAppAction.close();
 						if (action === 'restart') restart();
-						else handleStop();
+						else void handleStop();
 					}}
 				/>
 			)}
