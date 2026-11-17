@@ -18,7 +18,7 @@ import { logEvent } from '../../logs';
 import { captureFilesystemSnapshot } from '../content/filesystemSnapshots';
 import type { NotebookService } from '../content/NotebookService';
 import { SessionCaptureCoordinator } from './SessionCaptureCoordinator';
-import { RuntimeCaptureClient } from './runtimeCapture';
+import { RuntimeCaptureClient, RuntimeMissingError } from './runtimeCapture';
 import { isTerminal, sessionPersistsEdits } from './sessionState';
 import { isPastAuthorizationDeadline } from './SessionService';
 import { pullSourceRootPath, sandboxWorkspaceLayout } from './workspaceLayout';
@@ -388,11 +388,15 @@ export class SessionRetirer {
 								});
 						},
 					});
+					if (result.runtimeState === 'missing') return await finishMissingRuntime();
 					if (options.preserveEditorClaim && result.workspace.status === 'failed') {
 						const resumed = result.runtime
 							? await runtime.resume(result.runtime).then(
 									() => true,
-									() => false,
+									(error: unknown) => {
+										if (error instanceof RuntimeMissingError) throw error;
+										return false;
+									},
 								)
 							: result.runtimeState === 'running';
 						await update({
@@ -463,10 +467,18 @@ export class SessionRetirer {
 			await update({ outcome: 'stopped', runtime_state: 'stopped' });
 			return await finalize(session);
 		} catch (error) {
+			let failure = error;
+			if (error instanceof RuntimeMissingError) {
+				try {
+					return await finishMissingRuntime();
+				} catch (cleanupError) {
+					failure = cleanupError;
+				}
+			}
 			logOperationalError(
 				'session_stop_incomplete',
 				{ operation: 'session.stop', session_id: selected.session_id },
-				error,
+				failure,
 			);
 			// A recorded checkpoint/stop may already be committed. Leave its intent resumable.
 			if (
@@ -978,7 +990,11 @@ export class SessionRetirer {
 		const stopped = await Promise.allSettled(
 			surfaces.map(async ([id]) => {
 				const surface = id as SurfaceId;
-				const cancelledAttemptId = fenced.surfaces?.[id]?.cancelled_attempt_id;
+				const state = fenced.surfaces?.[id];
+				if (state?.status === 'stopped') return;
+				const attemptId = state?.attempt_id;
+				if (!attemptId) throw new ConflictError('The surface stop was superseded');
+				const cancelledAttemptId = state.cancelled_attempt_id;
 				const command = stopSurfaceProcessCommand(surfacePidFile(session.session_id, surface), {
 					cancelFile: cancelledAttemptId
 						? surfaceCancelFile(session.session_id, surface, cancelledAttemptId)
@@ -988,12 +1004,36 @@ export class SessionRetirer {
 					const result = await sandbox.exec(command, { timeout: 10_000 });
 					if (!result.success) throw new Error(`Failed to stop ${id} before session retirement`);
 				} catch (cause) {
+					if (cause instanceof NotFoundError) throw new RuntimeMissingError(cause.message);
+					await this.deps.sessions.setSurfaceStateForStopAttempt(
+						session.project_id,
+						session.session_id,
+						surface,
+						attemptId,
+						{
+							status: 'failed',
+							last_error: `Failed to stop ${id}`,
+							...(cancelledAttemptId ? { cancelled_attempt_id: cancelledAttemptId } : {}),
+						},
+					);
 					throw new SecondarySurfaceStopError(`Failed to stop ${id} before session retirement`, {
 						cause,
 					});
 				}
+				const completed = await this.deps.sessions.setSurfaceStateForStopAttempt(
+					session.project_id,
+					session.session_id,
+					surface,
+					attemptId,
+					{ status: 'stopped' },
+				);
+				if (!completed.transitioned) throw new ConflictError('The surface stop was superseded');
 			}),
 		);
+		const missing = stopped.find(
+			(result) => result.status === 'rejected' && result.reason instanceof RuntimeMissingError,
+		);
+		if (missing?.status === 'rejected') throw missing.reason;
 		const failure = stopped.find((result) => result.status === 'rejected');
 		if (failure) throw failure.reason;
 	}

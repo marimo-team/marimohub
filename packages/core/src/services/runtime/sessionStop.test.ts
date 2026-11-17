@@ -5,6 +5,7 @@ import { SessionService } from './SessionService';
 import { ConflictError, NotFoundError } from '../../errors';
 import { paths } from '../../paths';
 import { SessionSchema } from '../../schema';
+import { execResult } from '../../ports/sandbox';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -112,7 +113,7 @@ describe('durable stop attempts', () => {
 import { ACTOR, fakeComputeFrom, makeFakeSandbox, setupTestEnv } from '../../testing';
 import { SessionRetirer } from './SessionRetirer';
 import { SessionCaptureCoordinator } from './SessionCaptureCoordinator';
-import { RuntimeCaptureClient } from './runtimeCapture';
+import { RuntimeCaptureClient, RuntimeCaptureError } from './runtimeCapture';
 
 async function stopFixture() {
 	const env = await setupTestEnv();
@@ -551,3 +552,155 @@ it.each(
 		expect(env.calls.destroy).toBe(0);
 	},
 );
+
+it.each(['status', 'prepare', 'abort'] as const)(
+	'releases ownership and capacity when the provider confirms absence during capture %s',
+	async (action) => {
+		const env = await stopFixture();
+		vi.spyOn(env.instance, 'exec').mockImplementation(async (command) => {
+			if (command.includes(`"action":"${action}"`))
+				throw new NotFoundError('Provider confirms sandbox absent');
+			if (command.includes('"action":"prepare"')) throw new Error('Prepare reply lost');
+			return execResult(true, JSON.stringify({ ok: true, state: 'running', generation: 0 }), '');
+		});
+		const stopped = await env.retirer.stop(env.requested);
+		expect(stopped).toMatchObject({
+			status: 'terminated',
+			stop: { outcome: 'stopped', finalized_at: expect.any(String) },
+			sandbox_reclaimed_at: expect.any(String),
+		});
+		expect(await env.sessions.ownsEditorClaim(stopped)).toBe(false);
+		expect(await env.sessions.countActiveForUser(ACTOR)).toBe(0);
+		expect(env.calls.destroy).toBe(0);
+	},
+);
+
+it.each(['timeout', 'source', 'storage'] as const)(
+	'keeps ownership when capture fails because of %s without confirmed runtime absence',
+	async (failure) => {
+		const env = await stopFixture();
+		const beginCapture = env.notebooks.beginSessionCapture.bind(env.notebooks);
+		if (failure === 'storage')
+			vi.spyOn(env.notebooks, 'beginSessionCapture')
+				.mockImplementationOnce(beginCapture)
+				.mockRejectedValue(new NotFoundError('Missing object'));
+		vi.spyOn(env.instance, 'exec').mockImplementation(async (command) => {
+			if (failure === 'timeout') throw new Error('Provider timeout');
+			if (command.includes('"action":"prepare"'))
+				return execResult(true, JSON.stringify({ ok: false, code: 'SOURCE_MISSING' }), '');
+			return execResult(true, JSON.stringify({ ok: true, state: 'running', generation: 0 }), '');
+		});
+		const retained = await env.retirer.stop(env.requested);
+		expect(retained.stop?.outcome).toBe('retained');
+		expect(retained.sandbox_reclaimed_at).toBeUndefined();
+		expect(await env.sessions.ownsEditorClaim(retained)).toBe(true);
+		expect(await env.sessions.countActiveForUser(ACTOR)).toBe(1);
+		expect(env.calls.destroy).toBe(0);
+	},
+);
+
+it('records secondary shutdowns after a failed capture so background capture and restart work', async () => {
+	const env = await stopFixture();
+	for (const surface of ['vscode', 'opencode'] as const)
+		await env.sessions.setSurfaceState(env.project.id, env.session.session_id, surface, {
+			status: 'stopping',
+			attempt_id: crypto.randomUUID(),
+		});
+	vi.spyOn(RuntimeCaptureClient.prototype, 'prepare').mockRejectedValueOnce(
+		new RuntimeCaptureError('SOURCE_MISSING', 'running'),
+	);
+	const retained = await env.retirer.stop(env.requested);
+	expect(retained.stop?.outcome).toBe('retained');
+	for (const surface of ['vscode', 'opencode'] as const)
+		expect(retained.surfaces?.[surface]?.status).toBe('stopped');
+	const prepare = vi
+		.spyOn(RuntimeCaptureClient.prototype, 'prepare')
+		.mockRejectedValue(new RuntimeCaptureError('SOURCE_MISSING', 'running'));
+	const capture = new SessionCaptureCoordinator({
+		...env,
+		compute: fakeComputeFrom(env.instance),
+		persistWorkspace: 'source',
+	});
+	const result = await capture.capture(retained, env.instance);
+	expect(result.critical).toMatchObject({ code: 'SOURCE_MISSING' });
+	expect(prepare).toHaveBeenCalledTimes(2);
+	for (const surface of ['vscode', 'opencode'] as const)
+		expect(
+			(await env.sessions.beginSurfaceStart(env.project.id, env.session.session_id, surface))
+				.transitioned,
+		).toBe(true);
+});
+
+it('records each secondary shutdown independently when one process refuses to stop', async () => {
+	const env = await stopFixture();
+	for (const surface of ['vscode', 'opencode'] as const)
+		await env.sessions.setSurfaceState(env.project.id, env.session.session_id, surface, {
+			status: 'stopping',
+			attempt_id: crypto.randomUUID(),
+		});
+	vi.spyOn(env.instance, 'exec').mockImplementation(async (command) =>
+		execResult(!command.includes('opencode'), '', ''),
+	);
+	const capture = vi.spyOn(SessionCaptureCoordinator.prototype, 'capture');
+	const retained = await env.retirer.stop(env.requested);
+	expect(retained.surfaces?.vscode?.status).toBe('stopped');
+	expect(retained.surfaces?.opencode?.status).toBe('failed');
+	expect(retained.stop?.outcome).toBe('uncertain');
+	expect(capture).not.toHaveBeenCalled();
+	expect(env.calls.destroy).toBe(0);
+	expect(await env.sessions.ownsEditorClaim(retained)).toBe(true);
+});
+
+it.each([true, false])(
+	'does not overwrite a superseding surface stop when execution succeeds=%s',
+	async (success) => {
+		const env = await stopFixture();
+		const newerAttempt = crypto.randomUUID();
+		await env.sessions.setSurfaceState(env.project.id, env.session.session_id, 'vscode', {
+			status: 'stopping',
+			attempt_id: crypto.randomUUID(),
+		});
+		vi.spyOn(env.instance, 'exec').mockImplementation(async () => {
+			await env.sessions.setSurfaceState(env.project.id, env.session.session_id, 'vscode', {
+				status: 'stopping',
+				attempt_id: newerAttempt,
+			});
+			return execResult(success, '', '');
+		});
+		const capture = vi.spyOn(SessionCaptureCoordinator.prototype, 'capture');
+		const retained = await env.retirer.stop(env.requested);
+		expect(retained.surfaces?.vscode).toMatchObject({
+			status: 'stopping',
+			attempt_id: newerAttempt,
+		});
+		expect(capture).not.toHaveBeenCalled();
+		expect(env.calls.destroy).toBe(0);
+	},
+);
+
+it('cleans up a missing sandbox discovered while stopping a secondary surface', async () => {
+	const env = await stopFixture();
+	await env.sessions.setSurfaceState(env.project.id, env.session.session_id, 'vscode', {
+		status: 'stopping',
+		attempt_id: crypto.randomUUID(),
+	});
+	vi.spyOn(env.instance, 'exec').mockRejectedValue(new NotFoundError('Sandbox absent'));
+	const stopped = await env.retirer.stop(env.requested);
+	expect(stopped.stop?.outcome).toBe('stopped');
+	expect(await env.sessions.ownsEditorClaim(stopped)).toBe(false);
+	expect(await env.sessions.countActiveForUser(ACTOR)).toBe(0);
+	expect(env.calls.destroy).toBe(0);
+});
+
+it('cleans up confirmed runtime absence while resuming after a failed capture', async () => {
+	const env = await stopFixture();
+	vi.spyOn(RuntimeCaptureClient.prototype, 'prepare').mockResolvedValue({
+		token: crypto.randomUUID(),
+		directory: '/checkpoint',
+	});
+	vi.spyOn(env.instance, 'exec').mockRejectedValue(new NotFoundError('Sandbox absent'));
+	const stopped = await env.retirer.stop(env.requested);
+	expect(stopped.stop?.outcome).toBe('stopped');
+	expect(await env.sessions.ownsEditorClaim(stopped)).toBe(false);
+	expect(await env.sessions.countActiveForUser(ACTOR)).toBe(0);
+});

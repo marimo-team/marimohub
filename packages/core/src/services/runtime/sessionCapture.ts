@@ -31,5 +31,5 @@ export interface SessionCaptureResult {
 	critical: CriticalCaptureResult;
 	workspace: WorkspaceCaptureResult;
 	runtime?: RuntimeCheckpoint;
-	runtimeState?: 'running' | 'paused' | 'unknown';
+	runtimeState?: 'running' | 'paused' | 'missing' | 'unknown';
 }

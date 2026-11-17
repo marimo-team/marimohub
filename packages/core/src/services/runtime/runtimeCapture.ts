@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { NotFoundError } from '../../errors';
 import type { SandboxId } from '../../ids';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { notebookBridgePaths } from './notebookBridgePaths';
@@ -7,6 +8,11 @@ import { shellQuote } from './shell';
 export interface RuntimeCheckpoint {
 	token: string;
 	directory: string;
+}
+
+// Only a provider response to sandbox execution confirms runtime absence.
+export class RuntimeMissingError extends NotFoundError {
+	override readonly name = 'RuntimeMissingError';
 }
 
 export class RuntimeCaptureError extends Error {
@@ -38,10 +44,14 @@ export class RuntimeCaptureClient {
 	private async request(request: Record<string, unknown>) {
 		const path = `${notebookBridgePaths(this.sandboxId, 'marimo-bridge.py').directory}/lifecycle_client.py`;
 		const client = this.sandbox.resolveProcessPath?.(path) ?? path;
-		const result = await this.sandbox.exec(
-			`python ${shellQuote(client)} ${shellQuote(JSON.stringify(request))}`,
-			{ timeout: 60_000 },
-		);
+		const result = await this.sandbox
+			.exec(`python ${shellQuote(client)} ${shellQuote(JSON.stringify(request))}`, {
+				timeout: 60_000,
+			})
+			.catch((cause: unknown) => {
+				if (cause instanceof NotFoundError) throw new RuntimeMissingError(cause.message);
+				throw cause;
+			});
 		if (!result.success) throw new RuntimeCaptureError('CAPTURE_UNAVAILABLE');
 		let reply;
 		try {
@@ -79,9 +89,13 @@ export class RuntimeCaptureClient {
 				throw new RuntimeCaptureError('CAPTURE_UNAVAILABLE');
 			return { token, directory };
 		} catch (cause) {
+			if (cause instanceof RuntimeMissingError) throw cause;
 			const resumed = await this.resume({ token, directory }).then(
 				() => true,
-				() => false,
+				(error: unknown) => {
+					if (error instanceof RuntimeMissingError) throw error;
+					return false;
+				},
 			);
 			throw new RuntimeCaptureError(
 				cause instanceof RuntimeCaptureError ? cause.code : 'CAPTURE_UNAVAILABLE',
@@ -99,6 +113,7 @@ export class RuntimeCaptureClient {
 			const reply = await this.request({ action: 'abort', token: checkpoint.token });
 			if (reply.state !== 'running') throw new RuntimeCaptureError('CAPTURE_UNAVAILABLE');
 		} catch (cause) {
+			if (cause instanceof RuntimeMissingError) throw cause;
 			if ((await this.status()).state !== 'running') throw cause;
 		}
 	}

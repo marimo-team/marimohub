@@ -971,7 +971,7 @@ describe('SessionRetirer', () => {
 		vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockImplementation(async () => {
 			expect(
 				(await sessions.getSession(projectId, session.session_id)).surfaces?.vscode?.status,
-			).toBe('stopping');
+			).toBe('stopped');
 			return captured(false);
 		});
 

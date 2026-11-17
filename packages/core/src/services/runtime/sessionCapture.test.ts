@@ -51,7 +51,7 @@ async function fixture(
 afterEach(() => vi.restoreAllMocks());
 
 describe('session capture outcomes', () => {
-	it.each(['starting', 'ready', 'stopping'] as const)(
+	it.each(['starting', 'ready', 'stopping', 'failed'] as const)(
 		'defers background capture while a secondary writer is %s',
 		async (status) => {
 			const env = await fixture();

@@ -4,7 +4,7 @@ import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import type { SessionService } from './SessionService';
 import { SandboxProvisioner } from './SandboxProvisioner';
-import { RuntimeCaptureClient, RuntimeCaptureError } from './runtimeCapture';
+import { RuntimeCaptureClient, RuntimeCaptureError, RuntimeMissingError } from './runtimeCapture';
 import { sessionPersistsEdits } from './sessionState';
 import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
 import { captureWorkspace } from './sandboxFiles';
@@ -59,7 +59,7 @@ export class SessionCaptureCoordinator {
 				!options.retainRuntime &&
 				Object.entries(session.surfaces ?? {}).some(
 					([id, state]) =>
-						id !== 'marimo' && ['starting', 'ready', 'stopping'].includes(state.status),
+						id !== 'marimo' && ['starting', 'ready', 'stopping', 'failed'].includes(state.status),
 				)
 			)
 				throw new RuntimeCaptureError('CAPTURE_RUNTIME_UNSUPPORTED', 'running');
@@ -150,7 +150,12 @@ export class SessionCaptureCoordinator {
 					cause,
 				},
 				workspace: skipped,
-				runtimeState: cause instanceof RuntimeCaptureError ? cause.runtimeState : 'unknown',
+				runtimeState:
+					cause instanceof RuntimeMissingError
+						? 'missing'
+						: cause instanceof RuntimeCaptureError
+							? cause.runtimeState
+							: 'unknown',
 			};
 			return outcome;
 		} finally {
@@ -159,7 +164,8 @@ export class SessionCaptureCoordinator {
 					await runtime.resume(checkpoint);
 					if (outcome) outcome.runtimeState = 'running';
 				} catch (error) {
-					if (outcome) outcome.runtimeState = 'unknown';
+					if (outcome)
+						outcome.runtimeState = error instanceof RuntimeMissingError ? 'missing' : 'unknown';
 					logOperationalError(
 						'session_capture_resume_failed',
 						{ operation: 'session.capture_resume', session_id: session.session_id },

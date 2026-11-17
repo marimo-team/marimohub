@@ -4,6 +4,8 @@ A normal stop requires durable source, dependencies, and native session outputs 
 persistent local editors. Missing or unreadable required artifacts retain the runtime.
 HTML, thumbnails, filesystem images, and the ordinary workspace mirror are optional.
 Takeover also requires the workspace capture before releasing editor ownership.
+If the provider confirms that the sandbox is gone, cleanup releases editor ownership
+and capacity. Timeouts and missing notebook files do not establish sandbox absence.
 
 ## API decisions
 
@@ -61,8 +63,11 @@ Unsupported runtime capabilities retain the editor and permit an explicit force 
 Native macOS local development remains usable; use a supported Linux container to test
 successful drain and stop. Direct exposure relies on periodic capture rather than
 proxy save observation. Background captures are deferred while VS Code or OpenCode
-can write the workspace; final stop closes those surfaces before capture. External provider kills and unsaved browser buffers remain
-outside the stop guarantee. Retained sessions continue to consume their capacity.
+can write the workspace; final stop closes those surfaces before capture. If capture
+fails after a secondary surface stops, that surface can restart when the session resumes.
+A failed secondary shutdown remains visible as failed and also defers background capture.
+External provider kills and unsaved browser buffers remain outside the stop guarantee.
+Retained sessions continue to consume their capacity.
 
 ## Verification
 
