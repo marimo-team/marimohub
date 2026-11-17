@@ -1751,7 +1751,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SESSION_SNAPSHOT_INTERVAL_SECONDS',
 						name: 'Session snapshot interval (seconds)',
 						description:
-							'Periodic save cadence for live sessions — the durability floor bounding what a hard kill (backstop, node loss, OOM) can lose. Unchanged notebooks are deduped (no spurious versions). `0` disables periodic snapshots.',
+							'Target source-save interval. `0` disables periodic saves. Excludes workspace data and does not bound data loss. See [persistence and recovery](./persistence.md).',
 						default: '120',
 					},
 					{
