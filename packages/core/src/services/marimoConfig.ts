@@ -101,9 +101,13 @@ function computeMarimoBrandCss(theme: ThemeConfig): string {
 }
 
 export function marimoBrandDisplay(theme: ThemeConfig, notebookCss = ''): SessionEnv {
+	// Leave marimo's own theme preference intact unless the deployment forces a mode.
+	const env: SessionEnv =
+		theme.color_mode === 'user' ? {} : { vars: { MARIMO_DISPLAY_THEME: theme.color_mode } };
 	const css = [renderMarimoBrandCss(theme), notebookCss].filter(Boolean).join('\n');
-	if (!css) return {};
+	if (!css) return env;
 	return {
+		...env,
 		files: [{ path: BRAND_CSS_PATH, content: css }],
 		marimoPresentation: { cssFiles: [BRAND_CSS_PATH] },
 	};
