@@ -24,10 +24,7 @@ export function StartupProgress({ progress }: { progress: SandboxStartupSnapshot
 	const now = useNow();
 	const current = SANDBOX_STARTUP_PHASES.indexOf(progress.phase);
 	return (
-		<section
-			className="w-full max-w-sm rounded-xl border bg-card p-6 text-left shadow-sm"
-			aria-label="Session startup"
-		>
+		<section className="w-full max-w-sm p-6 text-left" aria-label="Session startup">
 			<h2 className="text-base font-semibold text-foreground">Starting your notebook</h2>
 			<p className="mt-1 text-sm text-muted-foreground">
 				Your workspace will open when it’s ready.
@@ -47,7 +44,7 @@ export function StartupProgress({ progress }: { progress: SandboxStartupSnapshot
 									'relative z-10 flex size-6 shrink-0 items-center justify-center rounded-full text-xs',
 									active || complete
 										? 'bg-primary/10 text-primary'
-										: 'border bg-card text-muted-foreground',
+										: 'border text-muted-foreground',
 								)}
 							>
 								{complete ? (
