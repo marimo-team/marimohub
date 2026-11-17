@@ -1,10 +1,11 @@
 import type { Bucket } from './bucket';
 import type { SandboxProvider } from './sandbox';
-import type { PreconditionFailedError } from '../errors';
+import type { NotFoundError, PreconditionFailedError } from '../errors';
 
 export const ADAPTER_API_VERSION = 1;
 
 export interface AdapterFactoryErrors {
+	notFound(message?: string): NotFoundError;
 	preconditionFailed(message?: string): PreconditionFailedError;
 }
 
