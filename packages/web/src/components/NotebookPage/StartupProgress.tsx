@@ -20,13 +20,7 @@ const stages: Record<SandboxStartupPhase, { label: string; description: string }
 	},
 };
 
-export function StartupProgress({
-	progress,
-	isApp = false,
-}: {
-	progress: SandboxStartupSnapshot;
-	isApp?: boolean;
-}) {
+export function StartupProgress({ progress }: { progress: SandboxStartupSnapshot }) {
 	const now = useNow();
 	const current = SANDBOX_STARTUP_PHASES.indexOf(progress.phase);
 	return (
@@ -34,9 +28,7 @@ export function StartupProgress({
 			className="w-full max-w-sm rounded-xl border bg-card p-6 text-left shadow-sm"
 			aria-label="Session startup"
 		>
-			<h2 className="text-base font-semibold text-foreground">
-				{isApp ? 'Starting your app' : 'Starting your notebook'}
-			</h2>
+			<h2 className="text-base font-semibold text-foreground">Starting your notebook</h2>
 			<p className="mt-1 text-sm text-muted-foreground">
 				Your workspace will open when it’s ready.
 			</p>
@@ -77,7 +69,7 @@ export function StartupProgress({
 											active ? 'font-medium text-foreground' : 'text-muted-foreground',
 										)}
 									>
-										{isApp && phase === 'starting' ? 'Starting app' : stages[phase].label}
+										{stages[phase].label}
 									</span>
 									{active && (
 										<span

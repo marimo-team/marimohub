@@ -5,6 +5,41 @@ import type { Session } from '@/types';
 import { makeFetch, renderPage, runningSession, sessionPosts } from './NotebookPage.testWorld';
 
 describe('NotebookPage app variant', () => {
+	it('shows no steps, adapter details, or timer even if an older server emits app progress', async () => {
+		const impl = makeFetch({ role: 'editor' });
+		const base = impl.getMockImplementation()!;
+		let stream!: ReadableStreamDefaultController<Uint8Array>;
+		impl.mockImplementation(async (input, init) => {
+			if (init?.method === 'POST' && String(input).endsWith('/sessions')) {
+				return new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							stream = controller;
+						},
+					}),
+					{ headers: { 'Content-Type': 'text/event-stream' } },
+				);
+			}
+			return base(input, init);
+		});
+		const { unmount } = renderPage('app');
+		await screen.findByText('Starting app...');
+		await waitFor(() => expect(stream).toBeDefined());
+		await act(async () => {
+			stream.enqueue(
+				new TextEncoder().encode(
+					`event: progress\ndata: ${JSON.stringify({ phase: 'allocating', detail: 'Private infrastructure detail', started_at: new Date().toISOString(), attempt: 1, observed: ['allocating'] })}\n\n`,
+				),
+			);
+		});
+		expect(screen.getByText('Starting app...')).toBeInTheDocument();
+		expect(screen.queryByRole('list', { name: 'Startup progress' })).toBeNull();
+		expect(screen.queryByText('Private infrastructure detail')).toBeNull();
+		expect(screen.queryByLabelText('Time in current step')).toBeNull();
+		unmount();
+		stream.close();
+	});
+
 	const appSession = (overrides: Partial<Session> = {}) =>
 		runningSession({
 			mode: 'app',

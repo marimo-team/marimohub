@@ -11,7 +11,7 @@ import {
 import { createInitializedBucket, createTestApi, expectOk, expectError } from '../testing';
 import type { SessionCreateResult } from './sessionStart';
 
-async function fixture() {
+async function fixture(role?: 'app-user' | 'viewer' | 'editor' | 'manager') {
 	const inner = await createInitializedBucket();
 	const bucket = new RecordingBucket(inner);
 	const { instance, calls } = makeFakeSandbox();
@@ -19,7 +19,12 @@ async function fixture() {
 	const api = createTestApi({
 		bucket: inner,
 		compute,
-		deps: { bucket, services: createServices(bucket) },
+		userId: role ? uid('startup-reader') : ACTOR,
+		deps: {
+			bucket,
+			services: createServices(bucket),
+			...(role ? { policy: { defaultRole: role, viewerMode: 'applications' as const } } : {}),
+		},
 	});
 	const project = await api.deps.services.projects.createProject(
 		{ name: 'Startup', description: '' },
@@ -62,7 +67,7 @@ it.each(['edit', 'app'] as const)(
 		const reader = response.body!.getReader();
 		let body = '';
 		try {
-			while (!body.includes('Waiting in queue'))
+			while (!body.includes(mode === 'edit' ? 'Waiting in queue' : ': connected'))
 				body += new TextDecoder().decode((await reader.read()).value);
 			expect(body).not.toContain('event: result');
 		} finally {
@@ -74,6 +79,10 @@ it.each(['edit', 'app'] as const)(
 			body += new TextDecoder().decode(next.value);
 		}
 		const result = resultFrom(body);
+		if (mode === 'app') {
+			expect(body).not.toContain('event: progress');
+			expect(body).not.toContain('Waiting in queue');
+		}
 		expect(result.status).toBe('running');
 		if (mode === 'app') expect(result.app_assignment).toBeDefined();
 		expect(result).not.toHaveProperty('startup');
@@ -83,6 +92,25 @@ it.each(['edit', 'app'] as const)(
 		);
 		expect(stored).not.toHaveProperty('startup');
 		expect(stored).not.toHaveProperty('startup_request_id');
+	},
+);
+
+it.each(['app-user', 'viewer', 'editor', 'manager'] as const)(
+	'withholds app startup progress from %s users',
+	async (role) => {
+		const env = await fixture(role);
+		const create = env.compute.create.bind(env.compute);
+		const spy = vi.spyOn(env.compute, 'create').mockImplementation((id, options) => {
+			options?.onProgress?.({ phase: 'allocating', detail: 'Private infrastructure detail' });
+			return create(id, options);
+		});
+		const response = await env.request('POST', env.path, { mode: 'app' }, headers);
+		const body = await response.text();
+		expect(resultFrom(body).status).toBe('running');
+		expect(spy).toHaveBeenCalled();
+		expect(spy.mock.calls[0][1]?.onProgress).toBeUndefined();
+		expect(body).not.toContain('event: progress');
+		expect(body).not.toContain('Private infrastructure detail');
 	},
 );
 

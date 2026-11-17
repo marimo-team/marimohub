@@ -144,6 +144,9 @@ With `Accept: text/event-stream`, the session-creation POST opens a stream after
 - `result`: the normal `{ success: true, data }` response, including app assignments.
 - `error`: `{ success: false, error: { code, message, status } }` with a public error message.
 
+Only edit starts emit `progress`. App starts send keepalives and a final result or error, regardless of the caller's role.
+The app UI shows “Starting app…” without steps, adapter details, or a timer.
+
 `started_at` records phase entry at callback receipt. Sandbox replacement increments `attempt` and discards late callbacks from the previous sandbox.
 The UI marks only `observed` phases complete and shows elapsed time for the current phase.
 

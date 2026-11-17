@@ -267,7 +267,7 @@ const createSession = createRoute({
 					schema: z
 						.string()
 						.describe(
-							'Opt in with Accept: text/event-stream. progress contains { phase, detail?, started_at, attempt, observed }. result carries the JSON success envelope. error carries { success: false, error: { code, message, status } }. No replay or automatic reconnect. Disconnect ends observation, not provisioning.',
+							'Opt in with Accept: text/event-stream. Only edit starts emit progress: { phase, detail?, started_at, attempt, observed }. App starts omit progress for all callers. result carries the JSON success envelope. error carries { success: false, error: { code, message, status } }. No replay or automatic reconnect. Disconnect ends observation, not provisioning.',
 						),
 				},
 			},
@@ -1549,6 +1549,7 @@ async function startNotebookSessionOnce(
 	const { deps, user, pid, nid, body, request } = input;
 	const { sessions, projects, notebooks } = deps.services;
 	const mode: SessionMode = body?.mode ?? 'edit';
+	const onProgress = mode === 'edit' ? input.onProgress : undefined;
 	if ((body?.app_visit_id || body?.replace_app_session_id) && mode !== 'app')
 		throw new BadRequestError('App visit and replacement options are only valid for app sessions');
 
@@ -1966,7 +1967,7 @@ async function startNotebookSessionOnce(
 	let publicationReady = mode !== 'edit' || ephemeral || notebook.source.type !== 'local';
 	const kernelAuthToken = sandbox.auth === 'on' ? createKernelAuthToken() : undefined;
 
-	const startup = sessionStartupReporter(input.onProgress);
+	const startup = sessionStartupReporter(onProgress);
 	let createdSession: KnownObject<Session> | undefined;
 	let session: Session | undefined;
 	let sessionRecordAttempted = false;
@@ -2179,7 +2180,7 @@ async function startNotebookSessionOnce(
 			runtimeCapture: mode === 'edit' && !ephemeral && notebook.source.type === 'local',
 			bridgeParentOrigin: new URL(appBaseUrl).origin,
 			startupTimeoutMs: sandbox.startupTimeoutMs,
-			onProgress: input.onProgress ? startup.forSandbox(sandboxId) : undefined,
+			onProgress: onProgress ? startup.forSandbox(sandboxId) : undefined,
 			kernelAuthToken,
 			// A second editor writes the notebook file, so marimo must reload it.
 			marimoWatch: mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),

@@ -794,8 +794,8 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 				!showIdentityStateFailure &&
 				!showEditorChoice && (
 					<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-sm text-muted-foreground">
-						{startup && !resolvingMode ? (
-							<StartupProgress progress={startup} isApp={isApp} />
+						{startup && !isApp && !resolvingMode ? (
+							<StartupProgress progress={startup} />
 						) : (
 							<>
 								<div
