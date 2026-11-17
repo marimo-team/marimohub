@@ -5,11 +5,13 @@ import tailwindcss from '@tailwindcss/vite';
 import { testTasks } from '@marimo-hub/vite-config';
 import { defineConfig, lazyPlugins } from 'vite-plus';
 import { precompress } from './precompress';
+import { rejectChunkCycles } from './rejectChunkCycles';
 import { devApiTarget, envPort, waitForDevApi } from './devProxy';
 
 // Opt in only files whose imports do not require browser globals.
 const nodeTests = [
 	'src/precompress.test.ts',
+	'src/rejectChunkCycles.test.ts',
 	'src/devProxy.test.ts',
 	'src/lib/{integrationBrowse,integrationNotebook,jobs,sessions,search,roles,git,time,listFilters}.test.ts',
 	'src/components/WorkspaceBrowser/{workspacePreview,workspacePolicy}.test.ts',
@@ -28,6 +30,7 @@ export default defineConfig({
 	plugins: lazyPlugins(() => [
 		react({ compiler: true }),
 		tailwindcss(),
+		rejectChunkCycles(),
 		precompress(),
 		{
 			name: 'wait-for-dev-api',
@@ -81,11 +84,6 @@ export default defineConfig({
 			output: {
 				codeSplitting: {
 					groups: [
-						{
-							name: 'workspace',
-							test: /\/src\/(?:components\/(?:Workspace\/WorkspaceLayout|Workspace\/WorkspaceHome|Project\/Project|ProjectList\/ProjectList|ui\/(?:FormDialog|Page|UserAvatar)|Notebook\/baseImage)|hooks\/useListFilters|api\/thumbnails)\.tsx?$/,
-							includeDependenciesRecursively: false,
-						},
 						{
 							name: 'icons',
 							test: /node_modules\/lucide-react\//,
