@@ -6,6 +6,7 @@ import {
 	missingBucketMethods,
 	missingSandboxInstanceMethods,
 	missingSandboxProviderMethods,
+	NotFoundError,
 	PreconditionFailedError,
 	SANDBOX_INSTANCE_CAPABILITY_FLAGS,
 	SANDBOX_INSTANCE_OPTIONAL_METHODS,
@@ -67,6 +68,7 @@ const LIBRARY_CONFIG = {
 } as const;
 type AdapterKind = keyof typeof LIBRARY_CONFIG;
 const FACTORY_ERRORS = Object.freeze({
+	notFound: (message?: string) => new NotFoundError(message),
 	preconditionFailed: (message?: string) => new PreconditionFailedError(message),
 });
 

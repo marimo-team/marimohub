@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+	NotFoundError,
 	PreconditionFailedError,
 	SANDBOX_INSTANCE_CAPABILITY_FLAGS,
 	SANDBOX_INSTANCE_OPTIONAL_METHODS,
@@ -120,6 +121,16 @@ describe('external adapter library loading', () => {
 		await expect(bucket.verifyConditionalWrites.call(nonAtomic)).rejects.toThrow(
 			/does NOT enforce conditional writes atomically: 8 concurrent writes succeeded/,
 		);
+	});
+
+	it('preserves server NotFoundError identity for missing library sandboxes', async () => {
+		const { compute } = await loadAdapterLibraries(computeEnv(fixture('missing-sandbox.mjs')));
+		const id = 'sb-aaaaaaaaaaaaaaaa' as SandboxId;
+		expect(compute).toBeDefined();
+		expect(() => compute!.connectExisting!(id)).toThrow(NotFoundError);
+		const instance = compute!.create(id);
+		await expect(instance.exec('true')).rejects.toBeInstanceOf(NotFoundError);
+		await expect(instance.exec('true')).rejects.toThrow('Sandbox disappeared');
 	});
 
 	it('passes session lifecycle hints to compute factories', async () => {
