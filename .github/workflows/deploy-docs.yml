@@ -72,7 +72,12 @@ jobs:
       - name: Pull Vercel settings
         env:
           VERCEL_TOKEN: ${{ steps.secrets.outputs.VERCEL_TOKEN }}
-        run: vercel pull --yes --environment="$VERCEL_TARGET_ENV" --git-branch="$DEPLOY_BRANCH" --token="$VERCEL_TOKEN"
+        run: |
+          args=(--yes --environment="$VERCEL_TARGET_ENV" --token="$VERCEL_TOKEN")
+          if [[ "$VERCEL_TARGET_ENV" == "preview" ]]; then
+            args+=(--git-branch="$DEPLOY_BRANCH")
+          fi
+          vercel pull "${args[@]}"
 
       - name: Build docs on the runner
         env:
