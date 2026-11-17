@@ -1081,10 +1081,6 @@ function duckdbIcebergAttachment(
 ) {
 	const params: (string | number | boolean | null)[] = [config.uri];
 	const options = ['TYPE iceberg', 'ENDPOINT ?'];
-	if (config.warehouse) {
-		options.push('WAREHOUSE ?');
-		params.push(config.warehouse);
-	}
 	options.push(...duckdbAuthOptions(config.auth, params));
 	options.push('ACCESS_DELEGATION_MODE ?', 'READ_ONLY');
 	params.push(config.access_delegation);
