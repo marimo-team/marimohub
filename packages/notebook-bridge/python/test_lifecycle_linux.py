@@ -89,7 +89,12 @@ class LinuxRuntimeTests(unittest.TestCase):
 
         self.addCleanup(cleanup)
         try:
-            wait_until(lambda: (directory / 'native.sock').exists())
+            def started():
+                if process.poll() is not None:
+                    raise RuntimeError(f'Runtime exited during startup with code {process.returncode}')
+                return (directory / 'native.sock').exists()
+
+            wait_until(started)
             wait_until(lambda: urllib.request.urlopen('http://127.0.0.1:2718/health', timeout=1).status == 200)
             self.session_id = str(uuid.uuid4())
             ws = connect(f'ws://127.0.0.1:2718/ws?session_id={self.session_id}', open_timeout=10, legacy=True)

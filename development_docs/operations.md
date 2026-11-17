@@ -352,7 +352,7 @@ minutes; zero disables) remains the periodic floor. Periodic captures include so
 dependencies, and native outputs; full workspace mirroring runs on retirement.
 Unchanged captures reuse immutable payloads but still CAS the publication head.
 
-The owned Linux launcher supports marimo 0.24.x. It drains admitted native and host
+The owned Linux launcher supports marimo 0.24.x and 0.25.x. It drains admitted native and host
 mutations, freezes owned writers, and creates a bounded checkpoint. A token-fenced
 commit-stop prevents a delayed destroy after watchdog resume. Unsupported runtimes
 (including native macOS and uv-sandbox launches) remain editable, but safe capture

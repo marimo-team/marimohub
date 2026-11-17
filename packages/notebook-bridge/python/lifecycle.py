@@ -300,7 +300,7 @@ def install_status_only(directory):
 
 def install():
     version = importlib.metadata.version("marimo").split(".")
-    if version[:2] != ["0", "24"]:
+    if version[:2] not in (["0", "24"], ["0", "25"]):
         raise CaptureUnsupported("CAPTURE_RUNTIME_UNSUPPORTED")
     gate = CaptureGate()
     extensions = importlib.import_module("marimo._session.extensions.extensions")

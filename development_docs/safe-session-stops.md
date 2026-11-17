@@ -37,7 +37,9 @@ admitting a successor. Readers, restore, export, and search use the published re
 Workspace files are projections. GC lists candidates before its publication barrier
 and preserves all retained or pinned references.
 
-The marimo 0.24.x adapter and Linux supervisor are tested with 0.24.0 and 0.24.2.
+The capture adapter supports marimo 0.24.x and 0.25.x. Linux integration tests cover
+native saves, checkpoint restoration, and supervisor recovery with the sandbox image’s
+pinned marimo version.
 The Linux supervisor lives outside the frozen writer tree. Prepare drains accepted
 mutations and pauses writers for a bounded checkpoint. Abort or expiry resumes them.
 Commit-stop durably rejects future resume before stopping writers. A delayed token
@@ -73,7 +75,7 @@ Retained sessions continue to consume their capacity.
 
 The normal notebook-bridge Vitest suite runs Python unit discovery. Linux runtime
 integration tests also run in the CI runtime-integrations job with its pinned marimo.
-To run them locally, use a Linux Python environment with marimo 0.24.x installed:
+To run them locally, use a Linux Python environment with the sandbox image’s pinned marimo version installed:
 
 ```sh
 cd packages/notebook-bridge/python

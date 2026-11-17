@@ -45,7 +45,7 @@ export class RuntimeCaptureClient {
 		const path = `${notebookBridgePaths(this.sandboxId, 'marimo-bridge.py').directory}/lifecycle_client.py`;
 		const client = this.sandbox.resolveProcessPath?.(path) ?? path;
 		const result = await this.sandbox
-			.exec(`python ${shellQuote(client)} ${shellQuote(JSON.stringify(request))}`, {
+			.exec(`python3 ${shellQuote(client)} ${shellQuote(JSON.stringify(request))}`, {
 				timeout: 60_000,
 			})
 			.catch((cause: unknown) => {

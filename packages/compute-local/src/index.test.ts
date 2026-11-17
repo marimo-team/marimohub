@@ -315,6 +315,14 @@ describe('rewriteWorkspace (pure)', () => {
 });
 
 describe('rewriteSandboxPaths (pure)', () => {
+	it('does not remap an already resolved capture workdir', () => {
+		const command = `python3 client.py '{"workdir":"/root/workspace"}'`;
+		expect(rewriteSandboxPaths(command, '/root')).toBe(command);
+		expect(rewriteSandboxPaths(`cat /workspace/a /root/workspace/b`, '/root')).toBe(
+			`cat /root/workspace/a /root/workspace/b`,
+		);
+	});
+
 	it('maps the kernel token file into the sandbox root', () => {
 		expect(
 			rewriteSandboxPaths(
