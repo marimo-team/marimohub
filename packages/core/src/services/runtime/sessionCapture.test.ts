@@ -1,6 +1,10 @@
-import { createSandboxId } from '../../ids';
+import { NotebookService } from '../content/NotebookService';
+import { CatalogService } from '../catalog/CatalogService';
+import * as logs from '../../logs';
+import * as operationalLog from '../../operationalLog';
+import { createSandboxId, createVersionId } from '../../ids';
 import { SessionCaptureCoordinator } from './SessionCaptureCoordinator';
-import { RuntimeCaptureClient } from './runtimeCapture';
+import { RuntimeCaptureClient, RuntimeMissingError } from './runtimeCapture';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ACTOR, fakeComputeFrom, makeFsSandbox, setupTestEnv } from '../../testing';
 import { paths } from '../../paths';
@@ -48,33 +52,239 @@ async function fixture(
 	};
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+	vi.restoreAllMocks();
+	vi.useRealTimers();
+});
+
+async function coordinatorFixture() {
+	const env = await fixture();
+	const session = await env.sessions.createSession({
+		project_id: env.project.id,
+		notebook_id: env.notebook.id,
+		user_id: ACTOR,
+		sandbox_id: createSandboxId(),
+	});
+	await env.sessions.claimEditor(env.project.id, env.notebook.id, session.session_id, 'shared');
+	const prepare = vi.spyOn(RuntimeCaptureClient.prototype, 'prepare').mockResolvedValue({
+		token: 'checkpoint',
+		directory: '/workspace',
+	});
+	const resume = vi.spyOn(RuntimeCaptureClient.prototype, 'resume').mockResolvedValue();
+	const log = vi.spyOn(logs, 'logEvent');
+	const coordinator = new SessionCaptureCoordinator({
+		...env,
+		compute: fakeComputeFrom(env.instance),
+		persistWorkspace: 'workspace',
+	});
+	return {
+		...env,
+		session,
+		coordinator,
+		prepare,
+		resume,
+		log,
+		storedSession: () => env.sessions.getSession(env.project.id, session.session_id),
+		incompleteEvents: () =>
+			log.mock.calls
+				.map(([event]) => event)
+				.filter((event) => event.event === 'session_capture_incomplete'),
+	};
+}
+
+describe('capture failure diagnostics and recovery', () => {
+	it.each([null, 300_000, -60_000])(
+		'reports prior capture age %s without leaking runtime errors',
+		async (age) => {
+			vi.useFakeTimers({ toFake: ['Date'] });
+			vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+			const f = await coordinatorFixture();
+			const at = age === null ? undefined : new Date(Date.now() - age).toISOString();
+			f.prepare.mockRejectedValue(new Error('secret-token=private-notebook-content'));
+			const result = await f.coordinator.capture(
+				{
+					...f.session,
+					...(at ? { last_durable_capture: { at, version_id: createVersionId() } } : {}),
+				},
+				f.instance,
+			);
+			expect(result.critical).toMatchObject({
+				status: 'failed',
+				code: 'RUNTIME_CAPTURE_UNAVAILABLE',
+			});
+			const events = f.incompleteEvents();
+			expect(events).toEqual([
+				expect.objectContaining({
+					last_durable_capture_at: at ?? null,
+					durable_capture_age_ms: age === null ? null : Math.max(0, age),
+				}),
+			]);
+			expect(JSON.stringify(events)).not.toContain('secret-token');
+			expect(f.resume).not.toHaveBeenCalled();
+			expect(f.calls.destroy).toBe(0);
+		},
+	);
+
+	it.each(['publication', 'receipt'] as const)(
+		'resumes the runtime and retries after a lost %s acknowledgement',
+		async (failure) => {
+			const f = await coordinatorFixture();
+			if (failure === 'publication') {
+				const commit = f.notebooks.commitSession.bind(f.notebooks);
+				vi.spyOn(f.notebooks, 'commitSession').mockImplementationOnce(async (...args) => {
+					await commit(...args);
+					throw new Error('acknowledgement lost');
+				});
+			} else {
+				vi.spyOn(f.sessions, 'recordDurableCapture').mockRejectedValueOnce(
+					new Error('receipt unavailable'),
+				);
+			}
+			const result = await f.coordinator.capture(f.session, f.instance, {
+				retainRuntime: true,
+				includeWorkspace: false,
+			});
+			const code = failure === 'publication' ? 'PUBLICATION_UNCERTAIN' : 'CAPTURE_RECEIPT_FAILED';
+			expect(result).toMatchObject({
+				critical: { status: 'uncertain', code },
+				runtimeState: 'running',
+			});
+			expect(result.runtime).toBeUndefined();
+			expect(f.resume).toHaveBeenCalledOnce();
+			expect(f.calls.destroy).toBe(0);
+			expect((await f.storedSession()).last_durable_capture).toBeUndefined();
+			expect(await f.notebooks.getNotebookContent(f.project.id, f.notebook.id)).toBe('# edited');
+			expect(f.log).toHaveBeenCalledWith(
+				expect.objectContaining({
+					event: 'session_capture_incomplete',
+					code,
+					critical_status: 'uncertain',
+				}),
+			);
+			expect(
+				(await f.coordinator.capture(f.session, f.instance, { includeWorkspace: false })).critical
+					.status,
+			).toBe('durable');
+			expect((await f.storedSession()).last_durable_capture).toBeDefined();
+		},
+	);
+
+	it('records critical durability despite workspace failure and reports the separate failure', async () => {
+		const f = await coordinatorFixture();
+		const put = f.bucket.put.bind(f.bucket);
+		vi.spyOn(f.bucket, 'put').mockImplementation((key, value, options) => {
+			if (key === f.nb.workspaceFile('data.csv')) throw new Error('private workspace error');
+			return put(key, value, options);
+		});
+		expect(await f.coordinator.capture(f.session, f.instance)).toMatchObject({
+			critical: { status: 'durable' },
+			workspace: { status: 'failed' },
+			runtimeState: 'running',
+		});
+		expect((await f.storedSession()).last_durable_capture).toBeDefined();
+		const event = f.incompleteEvents()[0];
+		expect(event).toMatchObject({ critical_status: 'durable', workspace_status: 'failed' });
+		expect(event).not.toHaveProperty('code');
+		expect(JSON.stringify(event)).not.toContain('private workspace error');
+		expect(f.resume).toHaveBeenCalledOnce();
+	});
+
+	it('preserves durable publication when the runtime disappears during resume', async () => {
+		const f = await coordinatorFixture();
+		const report = vi.spyOn(operationalLog, 'logOperationalError');
+		f.resume.mockRejectedValue(new RuntimeMissingError('sandbox gone'));
+		expect(
+			await f.coordinator.capture(f.session, f.instance, { includeWorkspace: false }),
+		).toMatchObject({
+			critical: { status: 'durable' },
+			runtimeState: 'missing',
+		});
+		expect((await f.storedSession()).last_durable_capture).toBeDefined();
+		expect(f.log).not.toHaveBeenCalledWith(
+			expect.objectContaining({ event: 'session_capture_incomplete' }),
+		);
+		expect(report).toHaveBeenCalledWith(
+			'session_capture_resume_failed',
+			expect.objectContaining({ session_id: f.session.session_id }),
+			expect.any(RuntimeMissingError),
+		);
+	});
+});
 
 describe('session capture outcomes', () => {
+	it.each(['final-capture', 'sandbox-loss', 'storage-failure', 'hub-restart'] as const)(
+		'recovers published artifact bytes after %s',
+		async (failure) => {
+			const artifacts = (generation: string) => ({
+				'notebook.py': `# ${generation}`,
+				'pyproject.toml': `[project]\nname = "${generation}"`,
+				'__marimo__/notebook.html': `<p>${generation}</p>`,
+				'__marimo__/session/notebook.py.json': JSON.stringify({ generation }),
+				'data.csv': generation,
+			});
+			const env = await fixture(artifacts('saved'));
+			expect((await env.capture({ includeWorkspace: false })).critical.status).toBe('durable');
+			await env.instance.writeFiles(
+				Object.entries(artifacts('latest')).map(([path, content]) => ({
+					path: `/workspace/${path}`,
+					content,
+				})),
+			);
+			if (failure === 'storage-failure') {
+				const put = env.bucket.put.bind(env.bucket);
+				vi.spyOn(env.bucket, 'put').mockImplementation((key, value, options) => {
+					if (key === env.nb.source) throw new Error('storage unavailable');
+					return put(key, value, options);
+				});
+				expect((await env.capture({ includeWorkspace: false })).critical.status).toBe('uncertain');
+			} else if (failure === 'final-capture') {
+				expect((await env.capture()).critical.status).toBe('durable');
+			}
+			const recovered = new NotebookService(env.bucket, new CatalogService(env.bucket));
+			const head = await recovered.beginSessionCapture(env.project.id, env.notebook.id);
+			const version = head.versions[0];
+			const stored = env.nb.version(version.version_id);
+			const expected = artifacts(failure === 'final-capture' ? 'latest' : 'saved');
+			expect(await recovered.getNotebookContent(env.project.id, env.notebook.id)).toBe(
+				expected['notebook.py'],
+			);
+			expect(await (await env.bucket.get(stored.deps))!.text()).toBe(expected['pyproject.toml']);
+			expect(
+				await (await env.bucket.get(
+					stored.capture(version.html_snapshot!.capture_id!).html,
+				))!.text(),
+			).toBe(expected['__marimo__/notebook.html']);
+			expect(
+				await (await env.bucket.get(
+					stored.capture(version.session_snapshot!.capture_id!).session,
+				))!.text(),
+			).toBe(expected['__marimo__/session/notebook.py.json']);
+			const data = await env.bucket.get(env.nb.workspaceFile('data.csv'));
+			expect(data ? await data.text() : null).toBe(failure === 'final-capture' ? 'latest' : null);
+		},
+	);
+
 	it.each(['starting', 'ready', 'stopping', 'failed'] as const)(
 		'defers background capture while a secondary writer is %s',
 		async (status) => {
-			const env = await fixture();
-			const session = await env.sessions.createSession({
-				project_id: env.project.id,
-				notebook_id: env.notebook.id,
-				user_id: ACTOR,
-				sandbox_id: createSandboxId(),
-			});
-			await env.sessions.claimEditor(env.project.id, env.notebook.id, session.session_id, 'shared');
-			const prepare = vi.spyOn(RuntimeCaptureClient.prototype, 'prepare');
+			const env = await coordinatorFixture();
+			const { session, log, prepare, coordinator } = env;
 			const commit = vi.spyOn(env.notebooks, 'commitSession');
-			const coordinator = new SessionCaptureCoordinator({
-				...env,
-				compute: fakeComputeFrom(env.instance),
-				persistWorkspace: 'source',
-			});
 			expect(
 				await coordinator.capture({ ...session, surfaces: { vscode: { status } } }, env.instance),
 			).toMatchObject({
 				critical: { status: 'failed', code: 'CAPTURE_UNSUPPORTED', retryable: false },
 				runtimeState: 'running',
 			});
+			expect(log).toHaveBeenCalledWith(
+				expect.objectContaining({
+					event: 'session_capture_incomplete',
+					session_id: session.session_id,
+					code: 'CAPTURE_UNSUPPORTED',
+					last_durable_capture_at: null,
+					durable_capture_age_ms: null,
+				}),
+			);
 			expect(prepare).not.toHaveBeenCalled();
 			expect(commit).not.toHaveBeenCalled();
 			expect(env.calls.destroy).toBe(0);
