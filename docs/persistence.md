@@ -1,76 +1,37 @@
 # Persistence and recovery
 
-Recovery uses artifacts published to the configured bucket. Provider deletion, node loss, and forced destruction can lose changes after the last successful capture.
+Recovery uses the last successful save to the configured bucket. A lost sandbox can lose everything saved only to its disk.
 
-## What survives
+## What is saved
 
-| Content          | Persistence                                                                                                            |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Notebook source  | Persistent local editors publish the actual entrypoint, including imported paths.                                      |
-| Dependencies     | Capture includes `pyproject.toml` when present, not installed packages or virtual environments.                        |
-| HTML             | Capture copies available `__marimo__/notebook.html`. It is optional and can be stale.                                  |
-| Session snapshot | Capture copies available `__marimo__/session/notebook.py.json`. Imported entrypoints use corresponding artifact paths. |
-| Generated data   | Workspace mode captures eligible files during teardown. Periodic capture excludes workspace data.                      |
-| Kernel memory    | Capture does not preserve arbitrary Python objects, open connections, or running computations.                         |
+| Content                              | Persistence                                                                                            |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Notebook source and `pyproject.toml` | Saved periodically and before normal stop. Imported notebooks retain their entrypoint paths.           |
+| HTML and session snapshots           | Saved when available. They may be stale; capture does not force a fresh export.                        |
+| Generated files                      | Saved at teardown with `MARIMOHUB_PERSIST_WORKSPACE=workspace`, subject to exclusions and size limits. |
+| Kernel memory                        | Not preserved. Recovery does not resume arbitrary Python objects or running computations.              |
 
-Capture does not force fresh HTML or session exports. Unreadable dependency files or session snapshots can block critical capture.
-Optional HTML failure does not block source publication.
+App, ephemeral, and remote-source sessions do not write edits back.
+See [configuration](./configuration.md) for workspace limits and exclusions.
 
-App, ephemeral, and remote-source sessions do not write edits back, even in workspace mode.
-Explicit source-control operations follow their own publication rules.
+## Shutdown and data loss
 
-Workspace capture applies size limits and excludes regenerable caches, Git hooks, and directories marked with `CACHEDIR.TAG`.
-Captured hidden files can expose secrets to notebook readers. See [workspace configuration](./configuration.md) and [security](./security.md).
+If required notebook files cannot be saved, a normal editor stop retains the sandbox. Force-stop and provider deletion can lose unsaved changes.
+Workspace capture is optional: source can be saved even if generated files are not.
+Hub shutdown does not save every live sandbox before exiting.
 
-## Stops and failures
+`MARIMOHUB_SESSION_SNAPSHOT_INTERVAL_SECONDS` defaults to 120; `0` disables periodic saves.
+This interval is a target, not a maximum loss window. Maintenance delays and storage failures can extend it.
+Shorter intervals increase capture overhead and do not protect generated files.
 
-Normal persistent-editor stops require successful critical capture before destruction. Capture failure retains the runtime for retry.
-An uncertain publication or receipt is not a successful stop. Inspect the stop outcome before retrying.
-Force-stop permits data loss. The stop protocol cannot prevent external provider destruction.
+For durable generated data, write explicit checkpoints to object storage or a database.
+Automatic directory streaming is not supported: it adds storage costs and can copy partial writes.
+The teardown workspace copy is not an atomic checkpoint.
 
-Workspace capture and native filesystem snapshots are optional. Their failure can leave source durable but generated data unsaved.
-The workspace mirror is not an atomic checkpoint across files.
+## Diagnose failed saves
 
-Hub shutdown drains background work within its budget, without capturing every live sandbox.
-After restart, maintenance resumes from persisted session records. Surviving sandboxes may still contain unpublished edits.
+Check `session_capture_incomplete` for failure codes, workspace status, and time since the prior acknowledged capture.
+A null age means no capture was acknowledged. Resume failures use `session_capture_resume_failed`.
 
-## Cadence and diagnosis
-
-`MARIMOHUB_SESSION_SNAPSHOT_INTERVAL_SECONDS` defaults to 120. This is a target cadence, not a maximum loss window. Zero disables periodic capture.
-Dirty-save notifications can request earlier capture, subject to attempt throttling and maintenance scheduling.
-Maintenance delays, runtime unavailability, storage failures, and retries extend the gap between successful captures.
-
-For faster source recovery, evaluate a 30–60 second interval against measured runtime pauses and storage requests.
-Unchanged artifacts can reuse cached content, but hashing, ownership checks, and publication still cost resources.
-A shorter interval does not protect data directories.
-
-| Session field             | Meaning                                                           |
-| ------------------------- | ----------------------------------------------------------------- |
-| `last_capture_attempt_at` | Last recorded attempt, not proof of durability.                   |
-| `last_durable_capture`    | Last acknowledged critical publication: timestamp and version ID. |
-| `save_dirty`              | Runtime saves awaiting durable acknowledgement.                   |
-| `stop`                    | Stop outcome, runtime state, and safe failure code.               |
-
-Capture age is `now - last_durable_capture.at`. No receipt means unknown age, not zero.
-Do not use `last_snapshot_at` as proof of publication: remote-source checks can advance it without saving edits.
-
-`session_capture_incomplete` reports critical and workspace status, a safe critical failure code, and prior acknowledged capture age.
-Age is null before the first acknowledgement. Workspace-only failure can accompany durable source.
-This event excludes exception messages and notebook contents. Resume failures use `session_capture_resume_failed`.
-
-`sessions.capture.durable` counts acknowledged captures. `sessions.capture.durable_lag_ms` measures lag from dirty-save acknowledgement.
-Alert on increasing capture age and repeated failures, rather than relying on the configured interval.
-
-## Data-directory decision
-
-Keep periodic capture source-only. Use explicit application checkpoints in object storage or a database for durable generated results.
-
-Automatic directory streaming adds scan, transfer, and retention costs. Watchers can miss events, and copying active files can preserve partial writes.
-Database files require database-specific backup protocols.
-
-A future incremental checkpoint feature needs:
-
-- Immutable chunks and a manifest published through compare-and-swap. Interrupted uploads must leave the previous checkpoint readable.
-- Flushed or quiescent files, consistent deletion handling, and recovery from a complete manifest with a timestamp.
-- Per-file and total-byte limits, bounded uploads, retention limits, and cleanup of abandoned chunks.
-- Existing ownership, workspace exclusions, and app, ephemeral, and remote-source no-write-back rules.
+The session's `last_durable_capture` records the last acknowledged save and version.
+`last_capture_attempt_at` records attempts only. Inspect `stop` for retained or uncertain stop outcomes.
