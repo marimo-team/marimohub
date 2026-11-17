@@ -1,3 +1,4 @@
+import { ToolTable } from './ToolTable';
 import { CheckCircle2, ChevronRight, CircleAlert, LoaderCircle } from 'lucide-react';
 import { TOOL_STATUS_LABELS, toolLabel } from './toolActivityModel';
 import type { ToolActivityEntry, ToolStatus } from './toolActivityModel';
@@ -84,6 +85,7 @@ export function ToolActivity({
 								{call.summary ? (
 									<p className="mt-1 break-words text-muted-foreground">{call.summary}</p>
 								) : null}
+								{call.status === 'succeeded' && <ToolTable output={call.output_preview} />}
 								{call.permission && (
 									<PermissionCard
 										key={call.permission.id}

@@ -25,7 +25,7 @@ import { UnavailableError } from '@marimo-hub/core/errors';
 import { DEFAULT_CHAT_CONFIG } from '../context';
 import type { ApiDeps } from '../context';
 import { logEvent } from '../log';
-import { toolErrorSummary, toolPreview } from './toolPreview';
+import { toolErrorSummary, toolPreview, toolOutputPreview } from './toolPreview';
 import type { ToolSession } from './tools';
 
 const MAX_PROVIDER_STEPS = CHAT_LIMITS.toolCallsPerTurn + 6;
@@ -97,7 +97,7 @@ export function sanitizeChunk(chunk: UIMessageChunk): UIMessageChunk | undefined
 		return {
 			type: chunk.type,
 			toolCallId: chunk.toolCallId,
-			output: toolPreview(chunk.output),
+			output: toolOutputPreview(chunk.output),
 			dynamic: true,
 		};
 	if (chunk.type === 'tool-output-error')

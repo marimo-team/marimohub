@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { boundedOutput, redactSecrets, toolErrorSummary, toolPreview } from './toolPreview';
+import {
+	boundedOutput,
+	redactSecrets,
+	toolErrorSummary,
+	toolPreview,
+	toolOutputPreview,
+} from './toolPreview';
 
 describe('toolPreview', () => {
 	it('redacts credential-like keys by segment and keeps look-alikes', () => {
@@ -133,5 +139,72 @@ describe('toolPreview', () => {
 	it('never truncates a long cursor', () => {
 		const output = boundedOutput({ items: [1, 2], next_cursor: 'c'.repeat(30_000) });
 		expect(output).toEqual({ items: [1, 2], next_cursor: 'c'.repeat(30_000) });
+	});
+});
+
+it('preserves bounded tables while redacting credential columns and nested cells', () => {
+	const output = JSON.parse(
+		toolOutputPreview({
+			columns: ['id', 'access_token', 'nested'],
+			rows: [[1, 'private-token', { secret: 'hidden' }]],
+		}),
+	);
+	expect(output).toMatchObject({ rows: [[1, '[Redacted]', '[Omitted]']] });
+	const capped = toolOutputPreview({
+		columns: ['value'],
+		rows: Array.from({ length: 100 }, () => ['x'.repeat(200)]),
+	});
+	expect(capped.length).toBeLessThanOrEqual(2000);
+	expect(JSON.parse(capped)).toMatchObject({ truncated: true });
+});
+
+it.each([
+	{ columns: ['value'], rows: [['x'.repeat(201)]] },
+	{ columns: ['x'.repeat(101)], rows: [[1]] },
+	{ columns: ['value'], rows: [[{ nested: true }]] },
+	{ columns: ['a', 'b'], rows: [[1]] },
+	{ columns: ['a'], rows: [[1, 2]] },
+])('marks altered table structure or content as partial: %j', (data) => {
+	expect(JSON.parse(toolOutputPreview(data))).toMatchObject({ truncated: true });
+});
+
+it('redacts secret-like columns regardless of casing and preserves harmless scalar values', () => {
+	const output = toolOutputPreview({
+		columns: ['apiKey', 'access_token', 'Password', 'tokens', 'zero', 'false'],
+		rows: [['private-a', 'private-b', 'private-c', 42, 0, false]],
+	});
+	expect(JSON.parse(output)).toMatchObject({
+		rows: [['[Redacted]', '[Redacted]', '[Redacted]', 42, 0, false]],
+	});
+	expect(output).not.toContain('private-');
+});
+
+it('preserves earlier rows when the model output budget replaces later rows', () => {
+	const bounded = boundedOutput({
+		columns: ['id', 'description'],
+		rows: [
+			[1, 'Keep this row'],
+			[2, 'x'.repeat(12000)],
+			[3, 'y'.repeat(12000)],
+			[4, 'Omitted row'],
+		],
+	});
+	expect(bounded.rows).toContain('[Content omitted]');
+	expect(JSON.parse(toolOutputPreview(bounded))).toMatchObject({
+		columns: ['id', 'description'],
+		rows: [
+			[1, 'Keep this row'],
+			[2, expect.any(String)],
+			[3, expect.any(String)],
+		],
+		truncated: true,
+	});
+});
+
+it('renders an empty partial table when all rows are omitted', () => {
+	expect(JSON.parse(toolOutputPreview({ columns: ['id'], rows: ['[Content omitted]'] }))).toEqual({
+		columns: ['id'],
+		rows: [],
+		truncated: true,
 	});
 });

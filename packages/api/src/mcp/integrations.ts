@@ -1,3 +1,5 @@
+import { searchIntegrationTables, profileIntegrationTable } from '../integrations/discovery';
+import { searchWorkspace } from '../search/operations';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { IntegrationId, NotFoundError, withAbortSignal } from '@marimo-hub/core';
@@ -5,6 +7,8 @@ import type { AuthenticatedPrincipal, ProjectId } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
 import {
 	CATALOG_PAGE_LIMIT,
+	DataQueryBody,
+	queryIntegrationData,
 	NamespaceParts,
 	OBJECT_PAGE_LIMIT,
 	ObjectBucketValue,
@@ -51,6 +55,7 @@ const Namespace = NamespaceParts.describe(
 	'Namespace parts from list_namespaces. Preserve dots inside each part.',
 );
 const Table = { namespace: Namespace, table: z.string().min(1) };
+const SearchLimit = z.number().int().min(1).max(50).default(20);
 const Bucket = ObjectBucketValue.describe('Bucket or container name from list_object_buckets.');
 const ObjectIdentity = {
 	bucket: Bucket,
@@ -76,7 +81,7 @@ export function registerIntegrationTools(
 		name: string,
 		description: string,
 		inputSchema: z.ZodType<Input>,
-		action: 'integration.read' | 'integration.use',
+		action: 'integration.read' | 'integration.use' | 'integration.manage',
 		handler: (input: Input, context: Omit<IntegrationBrowseContext, 'iid'>) => Promise<object>,
 	) {
 		server.registerTool(
@@ -84,7 +89,7 @@ export function registerIntegrationTools(
 			{
 				description,
 				inputSchema,
-				annotations: action === 'integration.use' ? READ_UPSTREAM : READ_HUB,
+				annotations: action === 'integration.read' ? READ_HUB : READ_UPSTREAM,
 			},
 			async (input, extra) => {
 				const signal = request.signal
@@ -131,17 +136,18 @@ export function registerIntegrationTools(
 	);
 	if (!deps.dataBrowser) return;
 
-	function browse<Input extends z.infer<typeof IntegrationSelector>>(
+	function registerBrowse<Input extends z.infer<typeof IntegrationSelector>>(
 		name: string,
 		description: string,
 		schema: z.ZodType<Input>,
 		handler: (context: IntegrationBrowseContext, input: Input) => Promise<object>,
+		action: 'integration.use' | 'integration.manage' = 'integration.use',
 	) {
 		register(
 			name,
-			`${description} Requires integration.use (editor or above).`,
+			`${description} Requires ${action} (${action === 'integration.manage' ? 'admin' : 'editor'} or above).`,
 			schema,
-			'integration.use',
+			action,
 			async (input, context) =>
 				handler(
 					{
@@ -153,40 +159,86 @@ export function registerIntegrationTools(
 		);
 	}
 
-	browse(
+	registerBrowse(
 		'list_namespaces',
 		'List catalog namespaces, optionally beneath a parent. Returns namespace parts and next_cursor.',
 		IntegrationSelector.extend({ ...page(CATALOG_PAGE_LIMIT), parent: Namespace.optional() }),
 		listIntegrationNamespaces,
 	);
-	browse(
+	registerBrowse(
 		'list_tables',
 		'List tables in a namespace. Returns table names and next_cursor.',
 		IntegrationSelector.extend({ ...page(CATALOG_PAGE_LIMIT), namespace: Namespace }),
 		listIntegrationTables,
 	);
-	browse(
+	registerBrowse(
 		'get_table_schema',
 		'Read column names, types, partitioning, and an available notebook loading snippet.',
 		IntegrationSelector.extend(Table),
 		getIntegrationTableSchema,
 	);
+	registerBrowse(
+		'search_tables',
+		'Find table names within one integration. Bounded traversal returns coverage and a reason when incomplete.',
+		IntegrationSelector.extend({
+			q: z.string().min(1).max(256),
+			namespace: Namespace.optional(),
+			limit: SearchLimit,
+		}),
+		searchIntegrationTables,
+	);
+	if (deps.search) {
+		registerBrowse(
+			'find_notebooks_using_table',
+			'Find indexed notebook code that may reference a table. Matches are candidates, not verified integration bindings; index coverage may be incomplete.',
+			IntegrationSelector.extend({ ...Table, limit: SearchLimit }),
+			async (context, input) => {
+				await getIntegrationTableSchema(context, input);
+				const data = await searchWorkspace(
+					deps,
+					principal,
+					{ project_id: context.pid, q: input.table, kinds: ['code'], limit: input.limit },
+					context.signal,
+				);
+				return { ...data, integration_binding: 'unverified' };
+			},
+		);
+	}
 	if (deps.dataBrowser.preview) {
-		browse(
+		registerBrowse(
+			'profile_table',
+			'Summarize nulls and distinct primitive values in a bounded preview sample, not a whole-table estimate.',
+			IntegrationSelector.extend({
+				...Table,
+				sample_rows: PreviewRowLimit,
+				columns: z.array(z.string()).min(1).max(50).optional(),
+			}),
+			profileIntegrationTable,
+		);
+		registerBrowse(
 			'preview_table',
 			'Read a bounded row sample without creating a notebook. May start temporary preview compute.',
 			IntegrationSelector.extend({ ...Table, limit: PreviewRowLimit }),
 			previewIntegrationTable,
 		);
 	}
+	if (deps.dataBrowser.query) {
+		registerBrowse(
+			'run_query',
+			'Run read-only SQL against one integration with deployment row, byte, and time limits.',
+			IntegrationSelector.extend(DataQueryBody.shape),
+			queryIntegrationData,
+			'integration.manage',
+		);
+	}
 	if (!deps.dataBrowser.objectBrowser) return;
-	browse(
+	registerBrowse(
 		'list_object_buckets',
 		'List buckets or containers accessible through an integration. Returns next_cursor for pagination.',
 		IntegrationSelector.extend(page(OBJECT_PAGE_LIMIT)),
 		listIntegrationObjectBuckets,
 	);
-	browse(
+	registerBrowse(
 		'list_objects',
 		'List direct object and prefix children in a bucket or container. Pass a returned prefix to descend; this is not recursive search.',
 		IntegrationSelector.extend({
@@ -196,13 +248,13 @@ export function registerIntegrationTools(
 		}),
 		listIntegrationObjects,
 	);
-	browse(
+	registerBrowse(
 		'get_object_metadata',
 		'Read object size, content type, metadata, tags, and an available loading snippet without downloading its body.',
 		IntegrationSelector.extend(ObjectIdentity),
 		getIntegrationObjectMetadata,
 	);
-	browse(
+	registerBrowse(
 		'preview_object',
 		'Preview bounded table rows or text from an object. Images return only their content type and size; open the Data page to view them. Unsupported formats return a reason.',
 		IntegrationSelector.extend({ ...ObjectIdentity, limit: PreviewRowLimit }),

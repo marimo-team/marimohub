@@ -1,8 +1,9 @@
+import { z } from 'zod';
 import { CHAT_LIMITS } from '@marimo-hub/core/chat';
 
 // Previews are what the UI shows and what the conversation record keeps. They
-// drop payload fields (code, data, query results) and anything that looks like a
-// credential, so a stored transcript never becomes a secret store.
+// omit general payload fields and redact credential-like values. Table outputs
+// have a separate bounded preview for the transcript.
 // Keys are split into words (snake, kebab, camel) and matched whole, so
 // `access_token` and `apiKey` are redacted while `tokens` or `security` are not.
 const PRIVATE_WORDS = new Set([
@@ -260,4 +261,55 @@ export function boundedOutput(data: Record<string, unknown>): Record<string, unk
 	if (pageCut) delete output.next_cursor;
 	if (truncated.length > 0) output.truncated_paths = truncated.slice(0, 30);
 	return output;
+}
+
+const TableOutput = z.object({
+	columns: z.array(z.string()),
+	rows: z.array(z.union([z.array(z.unknown()), z.literal('[Content omitted]')])),
+	truncated: z.boolean().optional(),
+	truncated_paths: z.array(z.string()).optional(),
+});
+
+export function toolOutputPreview(value: unknown): string {
+	const parsed = TableOutput.safeParse(value);
+	if (!parsed.success) return toolPreview(value);
+	const data = parsed.data;
+	let contentTruncated = false;
+	const shorten = (text: string, limit: number) => {
+		const redacted = redactPreviewText(text);
+		if (redacted.length > limit) contentTruncated = true;
+		return redacted.slice(0, limit);
+	};
+	const columns = data.columns.slice(0, 50).map((name) => shorten(name, 100));
+	const rows = data.rows
+		.slice(0, 100)
+		.filter((row) => Array.isArray(row))
+		.map((row) => {
+			if (row.length !== data.columns.length) contentTruncated = true;
+			return columns.map((_, index) => {
+				if (isPrivateKey(data.columns[index])) return '[Redacted]';
+				const cell = row[index];
+				if (cell === null || cell === undefined) return null;
+				if (typeof cell === 'number' || typeof cell === 'boolean') return cell;
+				if (typeof cell === 'string') return shorten(cell, 200);
+				contentTruncated = true;
+				return '[Omitted]';
+			});
+		});
+	const output = {
+		columns,
+		rows,
+		truncated:
+			contentTruncated ||
+			data.truncated === true ||
+			!!data.truncated_paths?.length ||
+			data.rows.length > rows.length ||
+			data.columns.length > columns.length,
+	};
+	while (JSON.stringify(output).length > MAX_PREVIEW && rows.length > 0) {
+		rows.pop();
+		output.truncated = true;
+	}
+	if (JSON.stringify(output).length > MAX_PREVIEW) return toolPreview(value);
+	return JSON.stringify(output);
 }

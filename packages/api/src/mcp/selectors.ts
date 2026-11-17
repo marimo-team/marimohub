@@ -30,10 +30,14 @@ export async function resolveProject(
 		| 'notebook.write'
 		| 'working-branch.write'
 		| 'integration.read'
-		| 'integration.use' = 'project.read',
+		| 'integration.use'
+		| 'integration.manage' = 'project.read',
 	appAccess = false,
 ): Promise<Project> {
-	const integrationAction = action === 'integration.read' || action === 'integration.use';
+	const integrationAction =
+		action === 'integration.read' ||
+		action === 'integration.use' ||
+		action === 'integration.manage';
 	const loadProject = async (id: ProjectId) => {
 		if (appAccess) return loadSessionProject(deps.services.projects, id, principal, deps);
 		const project = await deps.services.projects.getProject(id);
