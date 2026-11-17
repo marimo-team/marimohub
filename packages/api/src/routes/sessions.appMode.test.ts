@@ -363,6 +363,24 @@ describe('Session routes (app mode)', () => {
 		},
 	);
 
+	it.each(['light', 'dark', 'user'] as const)(
+		'applies the deployment %s color mode to edit and app runtime environments',
+		async (color_mode) => {
+			for (const mode of ['edit', 'app'] as const) {
+				const fake = makeFakeSandbox();
+				const api = createTestApi({
+					bucket,
+					userId: ACTOR,
+					compute: fakeComputeFrom(fake.instance),
+					deps: { theme: { ...DEFAULT_THEME_CONFIG, color_mode } },
+				});
+				await expectOk(await api.request('POST', sessionsPath(), { mode }));
+				const vars = Object.assign({}, ...fake.calls.setEnvVars);
+				expect(vars.MARIMO_DISPLAY_THEME).toBe(color_mode === 'user' ? undefined : color_mode);
+			}
+		},
+	);
+
 	it.each([
 		{ mode: 'edit', notebook_palette: 'off' },
 		{ mode: 'app', notebook_palette: 'off' },

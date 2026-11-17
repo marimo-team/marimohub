@@ -239,6 +239,20 @@ describe('deployment brand CSS', () => {
 		expect(marimoBrandDisplay(brandedTheme)).toEqual({});
 	});
 
+	it.each(['light', 'dark'] as const)(
+		'preserves forced %s mode alongside brand CSS',
+		(color_mode) => {
+			const env = marimoBrandDisplay({
+				...brandedTheme,
+				color_mode,
+				notebook_palette: 'accents',
+			});
+			const resolved = prepareMarimoPresentation(env, (path) => `/sandbox${path}`, { mode: 'app' });
+			expect(resolved?.vars?.MARIMO_DISPLAY_THEME).toBe(color_mode);
+			expect(resolved?.files?.some((file) => file.path.endsWith('/brand.css'))).toBe(true);
+		},
+	);
+
 	it('applies operator CSS independently of the notebook palette', () => {
 		const css = ':root { --operator-color: purple; }';
 		expect(marimoBrandDisplay(brandedTheme, css).files![0].content).toBe(css);
