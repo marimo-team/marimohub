@@ -278,48 +278,54 @@ Use `stop_session` to stop a session explicitly.
 
 ## Discover data
 
-These read-only tools work through MCP and project chat. For chat consent, see
-[Project chat](./ai.md#project-chat). The tools share the [data browser's](./integrations.md#browse-data)
-access checks, caches, and request budgets.
+These read-only tools work in MCP clients and [project chat](./ai.md#project-chat).
+They share REST authorization, limits, cancellation, and audit behavior.
 
-| Tool                  | Purpose                                                                                        |
-| --------------------- | ---------------------------------------------------------------------------------------------- |
-| `list_integrations`   | List project and inherited organization integrations, excluding credentials and configuration. |
-| `list_namespaces`     | List namespaces, optionally beneath a parent.                                                  |
-| `list_tables`         | List tables in a namespace.                                                                    |
-| `get_table_schema`    | Read columns, types, partitioning, and an available loading snippet.                           |
-| `preview_table`       | Sample table rows. This can start temporary preview compute.                                   |
-| `list_object_buckets` | List accessible buckets or containers.                                                         |
-| `list_objects`        | List objects and prefixes at one directory level.                                              |
-| `get_object_metadata` | Read metadata, tags, and an available loading snippet.                                         |
-| `preview_object`      | Preview text or rows, or describe an image.                                                    |
+| Tool                         | Purpose                                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------------------------ |
+| `list_integrations`          | List project and inherited organization integrations without credentials or configuration. |
+| `list_namespaces`            | List namespaces, optionally under a parent.                                                |
+| `list_tables`                | List tables in a namespace.                                                                |
+| `get_table_schema`           | Read columns, types, partitioning, and an available loading snippet.                       |
+| `preview_table`              | Read a bounded row sample. Can start temporary compute.                                    |
+| `run_query`                  | Run bounded read-only SQL.                                                                 |
+| `search_tables`              | Search table names and report incomplete coverage.                                         |
+| `profile_table`              | Count nulls and distinct primitive values in a sample.                                     |
+| `find_notebooks_using_table` | Find indexed code candidates. Integration bindings remain unverified.                      |
+| `list_object_buckets`        | List accessible buckets or containers.                                                     |
+| `list_objects`               | List objects and prefixes at one directory level.                                          |
+| `get_object_metadata`        | Read metadata, tags, and an available loading snippet.                                     |
+| `preview_object`             | Preview text or rows, or describe an image.                                                |
 
-`list_integrations` requires integrations to be enabled and `integration.read`.
-The other tools require the data browser and `integration.use` (editor or above).
-`preview_table` also requires table previews. Object tools also require the object browser.
-Disabled tools are absent from `tools/list`. Each integration must support the requested operation.
-Token grants must permit the required action in the selected project.
+`list_integrations` requires `integration.read`. SQL requires `integration.manage` (admin or above).
+Other tools require `integration.use` (editor or above). Token grants must permit the action in the selected project.
 
-All tools accept `project` as an ID or exact name. Browse tools also require an `integration`.
-Use the ID or exact name of a `list_integrations` entry with `enabled: true` and `shadowed: false`.
-A name selects the unshadowed entry with that name.
-Namespaces are arrays from `list_namespaces`, such as `["sales", "eu.central"]`. Each part keeps its dots.
-Schema and table preview calls also require a table name from `list_tables`.
+Except for integration listing, these tools require the [data browser](./integrations.md#browse-data).
+Table previews and profiles require the preview feature. SQL, object tools, and notebook discovery require their respective query, object-browser, and search features.
+Disabled tool families are absent from `tools/list`. Each integration must also support the operation.
 
-Lists return `items` and `next_cursor`. For another page, pass `next_cursor` as `cursor` with the
-same filters. Results come from the data browser's metadata cache when possible. The `limit`
-values match the browse API:
+All tools accept a project ID or exact name. Other than `list_integrations`, they also accept an integration ID or exact name.
+Integration listing marks disabled and shadowed entries, which cannot be browsed. Names resolve to the unshadowed entry.
+Namespaces are arrays such as `["sales", "eu.central"]`. Dots within each part remain intact.
 
-| Tools                                                 | Default `limit` | Maximum  |
-| ----------------------------------------------------- | --------------- | -------- |
-| `list_integrations`, `list_namespaces`, `list_tables` | 100             | 500      |
-| `list_object_buckets`, `list_objects`                 | 50              | 100      |
-| `preview_table`, tabular `preview_object`             | 20 rows         | 100 rows |
+Paged lists return `items` and `next_cursor`. To continue, pass `next_cursor` as `cursor` with the same filters.
 
-Project chat caps every page at 100 items.
-Text, image, and Parquet previews also enforce [configured byte limits](./configuration.md#integrations).
-Image previews return only `kind`, `content_type`, and `size`. To view the image, open the Data page.
-Unsupported object formats return a reason.
+| Input                                          | Default | Maximum  |
+| ---------------------------------------------- | ------- | -------- |
+| Integration, namespace, and table list `limit` | 100     | 500      |
+| Object list `limit`                            | 50      | 100      |
+| Table or tabular object preview `limit`        | 20 rows | 100 rows |
+| Search or notebook discovery `limit`           | 20      | 50       |
+| Profile `sample_rows`                          | 20      | 100      |
+
+Table search stops at 1,000 entries, 32 browse calls, or 6.5 seconds. It returns `coverage.complete` and `coverage.reason`.
+If coverage is incomplete, narrow the namespace. Profiles cover at most 50 columns and are not whole-table estimates.
+Previews also enforce [configured byte limits](./configuration.md#integrations). Unsupported object formats return a reason.
+Image previews return content type and size. Images are visible on the Data page.
+
+Chat asks for consent before SQL, profiling, or previews send data to the model. SQL asks on every call.
+Chat caps pages at 100 items. Saved table previews fit within 2,000 characters, with at most 100 rows and 50 columns.
+They redact credential-like columns and inline secrets, omit nested values, and label partial results.
 
 ## Project chat
 

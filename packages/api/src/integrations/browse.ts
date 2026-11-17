@@ -1,6 +1,7 @@
 import { deploymentState } from '../requestMemo';
 import {
 	LazyMap,
+	MAX_DATA_QUERY_SQL_BYTES,
 	NotFoundError,
 	ResourceExhaustedError,
 	ValidationError,
@@ -584,4 +585,54 @@ export async function previewIntegrationObject(
 		);
 	}
 	return data;
+}
+
+export const DataQueryBody = z
+	.object({
+		sql: z
+			.string()
+			.min(1)
+			.refine((value) => utf8ByteLength(value) <= MAX_DATA_QUERY_SQL_BYTES, {
+				message: `SQL exceeds the ${MAX_DATA_QUERY_SQL_BYTES}-byte limit.`,
+			}),
+	})
+	.strict();
+
+export async function queryIntegrationData(
+	context: IntegrationBrowseContext,
+	input: z.infer<typeof DataQueryBody>,
+) {
+	const { deps, user, pid, iid, signal, request } = context;
+	const { sql } = input;
+	const { integrations } = requireDataBrowser(deps);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps);
+	if (deps.dataBrowser?.query !== true) {
+		throw new NotFoundError('Run SQL is not enabled on this deployment');
+	}
+	const capability = await integrations.browseCapability(pid, iid);
+	if (capability.surfaces.query?.available !== true) {
+		throw new NotFoundError(capability.surfaces.query?.reason ?? 'Run SQL is unavailable');
+	}
+	assertIntegrationBudget(deps, 'dataQuery', user.id);
+	const data = await integrations.runDataQuery(
+		pid,
+		iid,
+		{ userId: user.id, email: user.email },
+		createSessionId(),
+		sql,
+		signal,
+	);
+	await appendAudit(deps, { ...request, userId: user.id }, 'integration.query', () =>
+		deps.services.events.append({
+			event: 'integration.query',
+			actor: user.id,
+			project_id: pid,
+			integration_id: iid,
+			sql_bytes: utf8ByteLength(sql),
+			row_count: data.rows.length,
+			truncated: data.truncated,
+		}),
+	);
+
+	return { ...data, execution_ms: data.execution_ms ?? 0 };
 }

@@ -11,6 +11,8 @@ import {
 	listIntegrationTables,
 	getIntegrationTableSchema,
 	previewIntegrationTable,
+	queryIntegrationData,
+	DataQueryBody,
 	listIntegrationObjectBuckets,
 	listIntegrationObjects,
 	getIntegrationObjectMetadata,
@@ -34,17 +36,16 @@ import { UploadPartBody, UploadResponseSchema } from '../uploads';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	ResumableUploads,
+	MAX_DATA_QUERY_SQL_BYTES,
 	paths,
 	uploadStatus,
 	MAX_UPLOAD_BYTES,
 	ForbiddenError,
 	ConflictError,
 	IntegrationId,
-	MAX_DATA_QUERY_SQL_BYTES,
 	NotFoundError,
 	ValidationError,
 	assertValidDataQuerySql,
-	createSessionId,
 	StaleWhileRevalidateCache,
 } from '@marimo-hub/core';
 import type { AuthUser, ProjectId, ProjectIntegrationsService } from '@marimo-hub/core';
@@ -199,17 +200,6 @@ const BrowsePreviewBody = z.object({
 	table: z.string().min(1),
 	limit: PreviewRowLimit,
 });
-
-const DataQueryBody = z
-	.object({
-		sql: z
-			.string()
-			.min(1)
-			.refine((value) => utf8ByteLength(value) <= MAX_DATA_QUERY_SQL_BYTES, {
-				message: `SQL exceeds the ${MAX_DATA_QUERY_SQL_BYTES}-byte limit.`,
-			}),
-	})
-	.strict();
 
 const DataQueryResultSchema = z
 	.object({
@@ -1318,44 +1308,11 @@ app.openapi(browseTablePreview, async (c) => {
 
 app.openapi(runDataQuery, async (c) => {
 	c.header('Cache-Control', 'no-store');
-	const deps = c.get('deps');
-	const user = c.get('user');
-	const { pid, iid } = c.req.valid('param');
-	const { sql } = c.req.valid('json');
-	const { integrations } = requireDataBrowser(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps);
-	if (deps.dataBrowser?.query !== true) {
-		throw new NotFoundError('Run SQL is not enabled on this deployment');
-	}
-	const capability = await integrations.browseCapability(pid, iid);
-	if (capability.surfaces.query?.available !== true) {
-		throw new NotFoundError(capability.surfaces.query?.reason ?? 'Run SQL is unavailable');
-	}
-	assertIntegrationBudget(deps, 'dataQuery', user.id);
-	const data = await integrations.runDataQuery(
-		pid,
-		iid,
-		{ userId: user.id, email: user.email },
-		createSessionId(),
-		sql,
-		c.req.raw.signal,
+	const data = await queryIntegrationData(
+		browseContext(c, c.req.valid('param')),
+		c.req.valid('json'),
 	);
-	await appendAudit(
-		deps,
-		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
-		'integration.query',
-		() =>
-			deps.services.events.append({
-				event: 'integration.query',
-				actor: user.id,
-				project_id: pid,
-				integration_id: iid,
-				sql_bytes: utf8ByteLength(sql),
-				row_count: data.rows.length,
-				truncated: data.truncated,
-			}),
-	);
-	return c.json({ success: true, data: { ...data, execution_ms: data.execution_ms ?? 0 } }, 200);
+	return c.json({ success: true, data }, 200);
 });
 
 app.openapi(getDataQuerySchema, async (c) => {

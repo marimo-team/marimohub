@@ -22,7 +22,12 @@ type Detail = ConversationPermission['details'][number];
  * Read-only for MCP clients, but they can start preview compute and send row or
  * object content to the model provider, so chat asks first.
  */
-const DATA_PREVIEW_TOOLS: ReadonlySet<string> = new Set(['preview_table', 'preview_object']);
+const DATA_PREVIEW_TOOLS: ReadonlySet<string> = new Set([
+	'preview_table',
+	'preview_object',
+	'run_query',
+	'profile_table',
+]);
 
 /** Every tool that can change something or send previewed data asks first; other reads run freely. */
 export function isGated(tool: GatedTool): boolean {
@@ -198,6 +203,25 @@ const ACTIONS: Record<
 			['Job', 'job'],
 			['Schedule', 'schedule'],
 			['Enabled', 'enabled'],
+		],
+	},
+	run_query: {
+		action: 'Run read-only SQL',
+		label: 'querying integration data',
+		remember: false,
+		fields: [
+			['Integration', 'integration'],
+			['SQL', 'sql', DETAIL_LIMITS.code],
+		],
+	},
+	profile_table: {
+		action: 'Profile table rows',
+		label: 'profiling table rows',
+		fields: [
+			['Integration', 'integration'],
+			['Namespace', 'namespace'],
+			['Table', 'table'],
+			['Sample rows', 'sample_rows'],
 		],
 	},
 	preview_table: {
