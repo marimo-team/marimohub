@@ -74,5 +74,3 @@ A future incremental checkpoint feature needs:
 - Flushed or quiescent files, consistent deletion handling, and recovery from a complete manifest with a timestamp.
 - Per-file and total-byte limits, bounded uploads, retention limits, and cleanup of abandoned chunks.
 - Existing ownership, workspace exclusions, and app, ephemeral, and remote-source no-write-back rules.
-
-See the [validation matrix](./persistence-validation.md) for local evidence and pending cluster tests.
