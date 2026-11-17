@@ -485,6 +485,14 @@ Linked worktrees are unsupported.
 
 ### Several apps in one repository
 
+The push manifest publishes existing push-mode Git notebooks. It does not create
+notebooks or delete notebooks omitted from the manifest.
+
+Before the first upload, [create each notebook](#create-a-synced-notebook) with
+`sync_mode: "push"`. Store each returned sync token in a separate CI secret.
+Each notebook needs its own token, even when notebooks share a repository or project.
+Adding a manifest entry requires this setup for the new notebook.
+
 Create an `apps.json` manifest with 1–256 notebooks across projects.
 Each entry specifies a folder, project ID, notebook ID, and sync-token secret name:
 
