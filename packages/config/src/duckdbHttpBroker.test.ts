@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
-import { createIntegrationId, s3 } from '@marimo-hub/core';
+import { createIntegrationId, icebergRest, s3 } from '@marimo-hub/core';
 import type { DuckDBHttpAccess } from '@marimo-hub/core';
 import {
 	createNodeDataQueryExecutorFactory,
@@ -1753,64 +1753,94 @@ describe('createDuckDBHttpSessionFactory', () => {
 		expect(JSON.stringify(calls)).not.toContain('fixture-secret-not-for-assertion');
 	}, 30_000);
 
-	it('injects a parent-exchanged OAuth token into an actual DuckDB-Wasm catalog request', async () => {
-		const calls: IcebergHttpBrokerTransportRequest[] = [];
-		const exchange = vi.fn<OAuthTokenExchange>(async () => ({
-			accessToken: 'short-lived-token',
-			expiresInSeconds: 300,
-		}));
-		const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
-			calls.push(request);
-			const url = new URL(request.url);
-			if (url.pathname.endsWith('/v1/config')) {
+	it.each(['oauth_warehouse', "lake'house & archive", undefined])(
+		'uses the configured warehouse %s and parent-exchanged token in DuckDB-Wasm',
+		async (warehouse) => {
+			const calls: IcebergHttpBrokerTransportRequest[] = [];
+			const exchange = vi.fn<OAuthTokenExchange>(async () => ({
+				accessToken: 'short-lived-token',
+				expiresInSeconds: 300,
+			}));
+			const transport = vi.fn<IcebergHttpBrokerTransport>(async (request) => {
+				calls.push(request);
+				const url = new URL(request.url);
+				if (url.pathname.endsWith('/v1/config')) {
+					return {
+						status: 200,
+						headers: { 'content-type': 'application/json' },
+						body: new TextEncoder().encode(JSON.stringify({ defaults: {}, overrides: {} })),
+					};
+				}
 				return {
-					status: 200,
-					headers: { 'content-type': 'application/json' },
-					body: new TextEncoder().encode(JSON.stringify({ defaults: {}, overrides: {} })),
+					status: 404,
+					headers: {} as Record<string, string>,
+					body: new Uint8Array(),
 				};
+			});
+			const runtime = await createNodeDuckDBWasmRuntimeFactory(
+				'worker',
+				createDuckDBHttpSessionFactory({ transport, oauthTokenExchange: exchange }),
+			)();
+
+			const config = icebergRest.configSchema.parse({
+				uri: OAUTH_ACCESS.catalog.url,
+				warehouse,
+				auth: {
+					method: 'oauth2_client_credentials',
+					token_endpoint: OAUTH_ACCESS.catalog.oauth2.tokenEndpoint,
+					client_id: OAUTH_ACCESS.catalog.oauth2.clientId,
+					client_secret: OAUTH_ACCESS.catalog.oauth2.clientSecret,
+					scope: OAUTH_ACCESS.catalog.oauth2.scope,
+				},
+				storage: {
+					scheme: 's3',
+					endpoint: ACCESS.storage.endpoint,
+					region: ACCESS.storage.region,
+					credentials: {
+						method: 'static',
+						access_key_id: ACCESS.storage.credentials.accessKeyId,
+						secret_access_key: ACCESS.storage.credentials.secretAccessKey,
+					},
+					broker_read_locations: ACCESS.storage.locations,
+				},
+				access_delegation: 'none',
+			});
+			const plan = icebergRest.query!.plan({
+				config,
+				integration: {
+					id: createIntegrationId(),
+					name: 'oauth_e2e',
+					kind: 'iceberg_rest',
+					version: 1,
+				},
+			});
+			if (plan.engine === 'postgres') throw new Error('Expected a DuckDB plan');
+
+			try {
+				await runtime.initialize({ memoryLimitMb: 128 });
+				await expect(
+					runtime.execute({
+						...plan,
+						query: { text: 'SELECT 1 AS value' },
+						requires: ['iceberg-http'],
+					}),
+				).resolves.toEqual({ columns: ['value'], rows: [[1]] });
+			} finally {
+				await runtime.close();
 			}
-			return {
-				status: 404,
-				headers: {} as Record<string, string>,
-				body: new Uint8Array(),
-			};
-		});
-		const runtime = await createNodeDuckDBWasmRuntimeFactory(
-			'worker',
-			createDuckDBHttpSessionFactory({ transport, oauthTokenExchange: exchange }),
-		)();
 
-		try {
-			await runtime.initialize({ memoryLimitMb: 128 });
-			await expect(
-				runtime.execute({
-					setup: [
-						{ text: 'LOAD iceberg' },
-						{ text: 'LOAD httpfs' },
-						{
-							text:
-								`ATTACH 'oauth_warehouse' AS "oauth_e2e" (` +
-								'TYPE iceberg, ENDPOINT ?, TOKEN ?, ACCESS_DELEGATION_MODE ?, READ_ONLY)',
-							params: [OAUTH_ACCESS.catalog.url, 'marimohub-parent-broker', 'none'],
-						},
-					],
-					query: { text: 'SELECT 1 AS value' },
-					cleanup: [{ text: 'DETACH "oauth_e2e"' }],
-					requires: ['iceberg-http'],
-					httpAccess: OAUTH_ACCESS,
-				}),
-			).resolves.toEqual({ columns: ['value'], rows: [[1]] });
-		} finally {
-			await runtime.close();
-		}
-
-		expect(exchange).toHaveBeenCalledOnce();
-		const configRequest = calls.find((request) =>
-			new URL(request.url).pathname.endsWith('/v1/config'),
-		);
-		expect(configRequest?.headers?.authorization).toBe('Bearer short-lived-token');
-		expect(JSON.stringify(calls)).not.toContain('client-secret');
-	}, 30_000);
+			expect(exchange).toHaveBeenCalledOnce();
+			const configRequest = calls.find((request) =>
+				new URL(request.url).pathname.endsWith('/v1/config'),
+			);
+			expect(configRequest?.headers?.authorization).toBe('Bearer short-lived-token');
+			expect(new URL(configRequest!.url).searchParams.get('warehouse')).toBe(
+				warehouse ?? 'oauth_e2e',
+			);
+			expect(JSON.stringify(calls)).not.toContain('client-secret');
+		},
+		30_000,
+	);
 
 	it('keeps non-DNS R2 bucket names on the path-style route', async () => {
 		const calls: IcebergHttpBrokerTransportRequest[] = [];

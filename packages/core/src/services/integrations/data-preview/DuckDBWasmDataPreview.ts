@@ -205,6 +205,7 @@ export class DuckDBWasmDataPreview {
 				reason === 'timeout'
 					? 'DuckDB-Wasm preview timed out.'
 					: 'DuckDB-Wasm could not preview this table.',
+				{ cause: error },
 			);
 		} finally {
 			slot.controller = undefined;

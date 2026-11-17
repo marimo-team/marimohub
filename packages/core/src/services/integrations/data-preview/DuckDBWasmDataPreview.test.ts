@@ -63,9 +63,10 @@ describe('DuckDBWasmDataPreview', () => {
 	});
 
 	it('poisons a failed slot and replaces it without retrying the failed query', async () => {
+		const failure = new Error('private runtime detail');
 		const failed = runtime({
 			execute: vi.fn(async () => {
-				throw new Error('secret');
+				throw failure;
 			}),
 		});
 		const healthy = runtime({
@@ -75,8 +76,11 @@ describe('DuckDBWasmDataPreview', () => {
 		const preview = new DuckDBWasmDataPreview(factory, options);
 		await preview.check();
 
-		await expect(preview.preview({ setup: [], query: { text: 'SELECT 1' } })).rejects.toThrow(
-			'could not preview',
+		await expect(preview.preview({ setup: [], query: { text: 'SELECT 1' } })).rejects.toMatchObject(
+			{
+				message: 'DuckDB-Wasm could not preview this table.',
+				cause: failure,
+			},
 		);
 		expect(failed.execute).toHaveBeenCalledOnce();
 		expect(failed.close).toHaveBeenCalledOnce();

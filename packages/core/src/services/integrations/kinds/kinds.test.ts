@@ -638,12 +638,11 @@ describe('kind renders (golden)', () => {
 		const attach = programs?.duckdbWasm?.setup.at(-1);
 		expect(attach?.text).toContain("ATTACH 'lake''house'");
 		expect(attach?.text).toContain('ENDPOINT ?');
-		expect(attach?.text).toContain('WAREHOUSE ?');
+		expect(attach?.text).not.toContain('WAREHOUSE');
 		expect(attach?.text).toContain('TOKEN ?');
 		expect(attach?.text).not.toContain("tok'en");
 		expect(attach?.params).toEqual([
 			'https://catalog.example.com/api',
-			"lake'house",
 			'marimohub-parent-broker',
 			'none',
 		]);
@@ -705,7 +704,6 @@ describe('kind renders (golden)', () => {
 		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
 		expect(programs?.duckdbWasm?.setup.at(-1)?.params).toEqual([
 			'https://catalog.example.com/api',
-			'lake',
 			'marimohub-parent-broker',
 			'none',
 		]);
