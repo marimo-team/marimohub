@@ -30,14 +30,17 @@ describe('pod templates over the Kubernetes SDK HTTP transport', () => {
 		}
 	});
 
-	async function cluster(podStatus = 201, existingPod?: object) {
+	async function cluster(podStatus = 201, existingPod?: object, podReadStatus?: number) {
 		const requests: { path: string; body: unknown }[] = [];
 		const reads: string[] = [];
 		server = createServer((request, response) => {
 			if (request.method === 'GET') {
 				reads.push(request.url!);
 				const found = existingPod !== undefined && request.url!.includes('/pods/');
-				response.writeHead(found ? 200 : 404, { 'content-type': 'application/json' });
+				const status = request.url!.includes('/pods/')
+					? (podReadStatus ?? (found ? 200 : 404))
+					: 404;
+				response.writeHead(status, { 'content-type': 'application/json' });
 				response.end(
 					JSON.stringify(
 						found
@@ -46,8 +49,8 @@ describe('pod templates over the Kubernetes SDK HTTP transport', () => {
 									apiVersion: 'v1',
 									kind: 'Status',
 									status: 'Failure',
-									code: 404,
-									reason: 'NotFound',
+									code: status,
+									reason: status === 404 ? 'NotFound' : 'ReadFailed',
 								},
 					),
 				);
@@ -135,6 +138,16 @@ describe('pod templates over the Kubernetes SDK HTTP transport', () => {
 			await expect(
 				client.ensure({ ...options, podTemplate: { spec: { serviceAccountName: 'missing' } } }),
 			).rejects.toMatchObject({ code });
+		},
+	);
+
+	it.each([401, 403, 409, 429, 500, 503])(
+		'propagates Pod read failure %i without attempting a Pod create',
+		async (code) => {
+			const { client, requests, reads } = await cluster(201, undefined, code);
+			await expect(client.ensure(options)).rejects.toMatchObject({ code });
+			expect(reads).toContain(`/api/v1/namespaces/kernels/pods/${options.name}`);
+			expect(requests.filter((r) => r.path.endsWith('/pods'))).toEqual([]);
 		},
 	);
 

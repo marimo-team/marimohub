@@ -87,7 +87,6 @@ const OWNED_INGRESS = {
 	metadata: { ...OWNED_SERVICE.metadata, uid: 'ingress-uid' },
 };
 
-/** The Pod read in `ensure` finds nothing, so the create is sent. */
 function podAbsent(times = 1): void {
 	for (let i = 0; i < times; i++) {
 		k8sMock.core.readNamespacedPod.mockRejectedValueOnce({ code: 404 });
@@ -297,6 +296,41 @@ describe('createK8sClient', () => {
 			name: 'mh-sb',
 			namespace: 'kernels',
 		});
+		expect(k8sMock.core.createNamespacedPod).not.toHaveBeenCalled();
+	});
+
+	it('reads Pod existence on every ensure after creation and deletion', async () => {
+		podAbsent();
+		const client = createK8sClient({ namespace: 'kernels' });
+		const options = {
+			name: 'mh-sb',
+			sandboxId: SANDBOX_ID,
+			image: 'kernel-image:v1',
+			ports: [{ port: 2718, host: '' }],
+			namespace: 'kernels',
+		};
+
+		await expect(client.ensure(options)).resolves.toEqual({ createdPod: true });
+		await expect(client.ensure(options)).resolves.toEqual({ createdPod: false });
+		podAbsent();
+		await expect(client.ensure(options)).resolves.toEqual({ createdPod: true });
+		expect(k8sMock.core.readNamespacedPod).toHaveBeenCalledTimes(3);
+		expect(k8sMock.core.createNamespacedPod).toHaveBeenCalledTimes(2);
+	});
+
+	it('propagates a Pod read transport error without creating a Pod', async () => {
+		const error = new Error('connection reset');
+		k8sMock.core.readNamespacedPod.mockRejectedValueOnce(error);
+		const client = createK8sClient({ namespace: 'kernels' });
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				sandboxId: SANDBOX_ID,
+				image: 'kernel-image:v1',
+				ports: [{ port: 2718, host: '' }],
+				namespace: 'kernels',
+			}),
+		).rejects.toBe(error);
 		expect(k8sMock.core.createNamespacedPod).not.toHaveBeenCalled();
 	});
 
