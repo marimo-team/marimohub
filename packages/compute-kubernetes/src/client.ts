@@ -314,7 +314,7 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			await create();
 			return true;
 		} catch (err) {
-			if (hasCode(err, 409)) return false; // already exists — idempotent
+			if (hasCode(err, 409)) return false; // another creator won the race
 			throw err;
 		}
 	}
@@ -335,6 +335,12 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			if (hasCode(err, 404)) return;
 			throw err;
 		}
+	}
+
+	async function ensurePod(core: K8s.CoreV1Api, name: string, pod: V1Pod): Promise<boolean> {
+		const existing = await readOptional(() => core.readNamespacedPod({ name, namespace }));
+		if (existing) return false;
+		return createTolerant(() => core.createNamespacedPod({ namespace, body: pod }));
 	}
 
 	function routePreconditions(resource: V1Service | V1Ingress | undefined, kind: string) {
@@ -442,12 +448,9 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			const service = serviceManifest(o);
 			const ingress = o.ports.some((p) => p.host) ? ingressManifest(o) : undefined;
 			const { core } = await apis();
-			// Order-independent: k8s is declarative (a Service's selector / an
-			// Ingress's backend need not pre-exist), so the creates fan out. The
-			// Service and Ingress reconcile so a reconnect picks up newly reserved
-			// surface ports rather than swallowing the create conflict.
+			// Routes reconcile even when the Pod exists so reconnects pick up newly reserved ports.
 			const [createdPod] = await Promise.all([
-				createTolerant(() => core.createNamespacedPod({ namespace, body: pod })),
+				ensurePod(core, o.name, pod),
 				reconcileRoutes(service, ingress),
 			]);
 			return { createdPod };

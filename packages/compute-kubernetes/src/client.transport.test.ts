@@ -30,8 +30,8 @@ describe('pod templates over the Kubernetes SDK HTTP transport', () => {
 		}
 	});
 
-	async function cluster(podStatus = 201) {
-		const requests: { path: string; body: unknown }[] = [];
+	async function cluster(podStatus = 201, podExists = false) {
+		const requests: { method: string; path: string; body: unknown }[] = [];
 		server = createServer((request, response) => {
 			let body = '';
 			request.setEncoding('utf8');
@@ -39,22 +39,33 @@ describe('pod templates over the Kubernetes SDK HTTP transport', () => {
 				body += chunk;
 			});
 			request.on('end', () => {
-				const parsedBody: unknown = JSON.parse(body);
-				requests.push({ path: request.url!, body: parsedBody });
-				const status = request.url!.endsWith('/pods') ? podStatus : 201;
+				const parsedBody: unknown = body ? JSON.parse(body) : undefined;
+				requests.push({ method: request.method!, path: request.url!, body: parsedBody });
+				const readingPod =
+					request.method === 'GET' &&
+					request.url === `/api/v1/namespaces/kernels/pods/${options.name}`;
+				const status = readingPod
+					? podExists
+						? 200
+						: 404
+					: request.url!.endsWith('/pods')
+						? podStatus
+						: 201;
 				response.writeHead(status, { 'content-type': 'application/json' });
 				response.end(
 					JSON.stringify(
-						status === 201
-							? parsedBody
-							: {
-									apiVersion: 'v1',
-									kind: 'Status',
-									status: 'Failure',
-									code: status,
-									message: 'Pod rejected by test API',
-									reason: status === 409 ? 'AlreadyExists' : 'Invalid',
-								},
+						status === 200
+							? { apiVersion: 'v1', kind: 'Pod', metadata: { name: options.name } }
+							: status === 201
+								? parsedBody
+								: {
+										apiVersion: 'v1',
+										kind: 'Status',
+										status: 'Failure',
+										code: status,
+										message: 'Pod rejected by test API',
+										reason: status === 409 ? 'AlreadyExists' : 'Invalid',
+									},
 					),
 				);
 			});
@@ -83,7 +94,7 @@ describe('pod templates over the Kubernetes SDK HTTP transport', () => {
 		const { client, requests } = await cluster();
 		const podTemplate = parsePodTemplate(projectedToken);
 		await expect(client.ensure({ ...options, podTemplate })).resolves.toEqual({ createdPod: true });
-		expect(requests).toHaveLength(2);
+		expect(requests).toHaveLength(3);
 		expect(requests.find((r) => r.path.endsWith('/pods'))?.body).toMatchObject(podTemplate);
 		expect(requests.find((r) => r.path.endsWith('/services'))?.body).toMatchObject({
 			spec: { selector: { 'marimohub.io/sandbox-name': options.name } },
@@ -118,15 +129,37 @@ describe('pod templates over the Kubernetes SDK HTTP transport', () => {
 		},
 	);
 
-	it('treats an existing Pod as a reconnect without replacing its template', async () => {
+	it('tolerates a competing Pod create without replacing its template', async () => {
 		const { client, requests } = await cluster(409);
 		await expect(
 			client.ensure({ ...options, podTemplate: { spec: { serviceAccountName: 'new-account' } } }),
 		).resolves.toEqual({ createdPod: false });
 		expect(requests.map((r) => r.path).sort()).toEqual([
 			'/api/v1/namespaces/kernels/pods',
+			`/api/v1/namespaces/kernels/pods/${options.name}`,
 			'/api/v1/namespaces/kernels/services',
 		]);
+	});
+
+	it('reuses an existing Pod without sending a create request through the SDK', async () => {
+		const { client, requests } = await cluster(403, true);
+		for (let i = 0; i < 2; i++) {
+			await expect(client.ensure(options)).resolves.toEqual({ createdPod: false });
+		}
+		expect(requests.filter((r) => r.path.endsWith('/pods'))).toEqual([]);
+		expect(requests.filter((r) => r.method === 'GET')).toEqual([
+			{
+				method: 'GET',
+				path: `/api/v1/namespaces/kernels/pods/${options.name}`,
+				body: undefined,
+			},
+			{
+				method: 'GET',
+				path: `/api/v1/namespaces/kernels/pods/${options.name}`,
+				body: undefined,
+			},
+		]);
+		expect(requests.filter((r) => r.path.endsWith('/services'))).toHaveLength(2);
 	});
 
 	it('makes no HTTP requests when template validation fails', async () => {
