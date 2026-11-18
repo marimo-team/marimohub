@@ -1978,7 +1978,14 @@ async function startNotebookSessionOnce(
 	);
 	const recordSandboxCleanup = async () => {
 		if (sessionRecordAttempted) {
-			await sessions.markSandboxReclaimed(pid, sessionId, new Date().toISOString(), sandboxId);
+			const reclaimed = await sessions.markSandboxReclaimed(
+				pid,
+				sessionId,
+				new Date().toISOString(),
+				sandboxId,
+			);
+			if (reclaimed.sandbox_id === sandboxId && reclaimed.stop?.outcome === 'stopped')
+				await sessionRetirer(deps).stop(reclaimed);
 		}
 	};
 	let updated: Session | undefined;

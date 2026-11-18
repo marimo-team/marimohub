@@ -958,7 +958,22 @@ export class SessionService {
 	): Promise<Session> {
 		return this.mutate(projectId, id, (session) => {
 			if (expectedSandboxId && session.sandbox_id !== expectedSandboxId) return null;
-			return { ...session, sandbox_reclaimed_at: at };
+			const stop = session.stop;
+			const stopped = expectedSandboxId && stop && ['retained', 'uncertain'].includes(stop.outcome);
+			return {
+				...session,
+				sandbox_reclaimed_at: at,
+				...(stopped
+					? {
+							stop: {
+								...stop,
+								outcome: 'stopped' as const,
+								runtime_state: 'stopped' as const,
+								updated_at: at,
+							},
+						}
+					: {}),
+			};
 		});
 	}
 
