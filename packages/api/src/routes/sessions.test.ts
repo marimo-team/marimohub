@@ -1,5 +1,6 @@
 beforeEach(mockRuntimeCapture);
 import { mockRuntimeCapture } from '../testing/runtimeCapture';
+import { RuntimeCaptureClient } from '@marimo-hub/core/runtime-capture';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Mock } from 'vitest';
 import {
@@ -985,6 +986,60 @@ describe('Session routes', () => {
 			}
 			if (!drainsOnShutdown) await expectOk(await request);
 			await background.runAll();
+		},
+	);
+
+	it.each([false, true])(
+		'finalizes a retained stop only after failed provisioning confirms destruction (destroy fails: %s)',
+		async (destroyFails) => {
+			const fake = makeFakeSandbox();
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			vi.spyOn(fake.instance, 'exposePort').mockImplementation(async () => {
+				entered.resolve();
+				await release.promise;
+				throw new Error('exposure failed');
+			});
+			if (destroyFails)
+				vi.spyOn(fake.instance, 'destroy').mockRejectedValue(new Error('provider unavailable'));
+			const api = createTestApi({ bucket, compute: fakeComputeFrom(fake.instance) });
+			const launch = Promise.resolve(api.request('POST', sessionsPath()));
+			await entered.promise;
+			const sessions = api.deps.services.sessions;
+			const [starting] = await sessions.listSessions(nid);
+			vi.spyOn(RuntimeCaptureClient.prototype, 'prepare').mockRejectedValue(
+				new Error('capture unavailable'),
+			);
+			let retained: Session;
+			try {
+				await expectError(
+					await api.request('DELETE', sessionsPath(`/${starting.session_id}?wait=true`)),
+					409,
+				);
+				retained = await sessions.getSession(pid, starting.session_id);
+				expect(retained.stop?.outcome).toBe('retained');
+			} finally {
+				release.resolve();
+			}
+			await expectError(await launch, 503);
+			const current = await sessions.getSession(pid, starting.session_id);
+			if (destroyFails) {
+				expect(current.sandbox_reclaimed_at).toBeUndefined();
+				expect(current.stop).toEqual(retained.stop);
+			} else {
+				expect(current).toMatchObject({
+					status: 'terminated',
+					sandbox_reclaimed_at: expect.any(String),
+					stop: {
+						id: retained.stop!.id,
+						outcome: 'stopped',
+						runtime_state: 'stopped',
+						finalized_at: expect.any(String),
+						failure: retained.stop!.failure,
+					},
+				});
+				expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
+			}
 		},
 	);
 
