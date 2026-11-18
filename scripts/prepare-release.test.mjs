@@ -17,6 +17,9 @@ await test('rejects invalid, equal, and regressing versions', () => {
 		'2.0.0-rc.1',
 		'1.2.4\n',
 		'1.2.4\r\n',
+		'1.2.4\r',
+		'1.2.4\u2028',
+		'1.2.4\u2029',
 		undefined,
 	]) {
 		assert.throws(() => nextVersion('1.2.3', requested));

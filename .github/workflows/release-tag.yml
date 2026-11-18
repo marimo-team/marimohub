@@ -14,6 +14,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       startsWith(github.event.pull_request.head.ref, 'release/') &&
       startsWith(github.event.pull_request.title, 'release: ')
+    environment: release
     runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 10
     concurrency:
@@ -36,7 +37,7 @@ jobs:
           test "$(sed -n 's/^version = "\([^"]*\)"$/\1/p' apps/cli/Cargo.toml | head -1)" = "$VERSION"
 
       - name: Tag merged release
-        uses: marimo-team/internal-gh-actions/release-tag@32a385ed1559460190bdab8b052057e928a34508
+        uses: marimo-team/internal-gh-actions/release-tag@74ee8a7685d858d4ac6569f8c81865f9249631d4
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}

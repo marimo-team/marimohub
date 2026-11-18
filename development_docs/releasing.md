@@ -2,83 +2,52 @@
 
 ## Release procedure
 
-Releases are cut via a PR, never by pushing to `main` or hand-pushing tags.
+1. With authenticated `gh`, run `pnpm release <patch | minor | major | X.Y.Z>`.
+   This dispatches [Prepare release PR](../.github/workflows/release-pr.yml) on
+   `main` without changing your local checkout. Another `marimo-eng` member approves
+   the `release` environment. The App then opens `release/X.Y.Z` with matching
+   root, CLI/Cargo lockfile, IaC package, and Deno import versions.
+2. Review the diff and merge the PR. Main requires an independent approval,
+   resolved review threads, and passing `test` and `verify` checks on an up-to-date branch.
+3. Another `marimo-eng` member approves the tagging job's `release` environment.
+   The App creates the immutable annotated `vX.Y.Z` tag at the exact merge commit.
+4. The tag workflow publishes the container, Helm chart, CLI, and server binaries.
+   Its aggregate notification reports the required publishers' result. The IaC npm
+   package retains its [separate publication step](#integration-iac-package).
 
-1. Run `pnpm release <X.Y.Z | patch | minor | major>` with authenticated `gh`.
-   This dispatches [Prepare release PR](../.github/workflows/release-pr.yml) from
-   `main`; it does not change your local branch or working tree. Follow the run with
-   `gh run list --workflow release-pr.yml`, or use the Actions page directly.
-   The workflow updates the root, CLI Cargo package and lockfile, IaC package, and
-   Deno example imports. The release App opens `release/X.Y.Z` with title
-   `release: X.Y.Z`. Review and CI happen on that PR. Versions must increase.
-2. Merge it. [`release-tag.yml`](../.github/workflows/release-tag.yml) verifies
-   the same-repository branch, PR title, and package versions, then calls the shared
-   release-tag action to create the annotated `vX.Y.Z` tag at the merge commit.
-   The App-created tag triggers publishing.
-3. The tag push triggers [`release.yml`](../.github/workflows/release.yml),
-   which publishes the container image and the Helm chart to GHCR, builds the
-   cross-platform `mohub` binaries and binary-only wheels, and creates a GitHub
-   release whose changelog is generated from the commits since the last
-   published release ([changelogithub](https://github.com/antfu/changelogithub),
-   so conventional-commit prefixes like `feat:`/`fix:` drive the grouping). If
-   a tag's release never shipped, its commits roll into the next release's
-   notes.
+Use `gh run list --workflow release-pr.yml` to find the preparation run and PR link.
+Versions must increase. An identical open release PR is reused; conflicting branches
+are never overwritten. Reopen a closed PR explicitly before retrying.
 
-Before you merge, check that the latest [Chart workflow](../.github/workflows/chart.yml)
-run on `main` passed. The workflow has path filters, so a red run stays red
-until a chart change or a manual re-run. Both `chart.yml` and `release.yml` pin
-Helm v4.3.1; change the two pins together.
+Before merging, check the latest [Chart workflow](../.github/workflows/chart.yml)
+passed. Its path filters can leave an earlier failed run unresolved. Chart and release
+workflows pin Helm v4.3.1; update those pins together.
 
-### Who can release
+## Access and setup
 
-GitHub requires repository Write access to [dispatch a workflow](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
-The preparation workflow has no additional team or actor allowlist, so Write,
-Maintain, and Admin collaborators can start it. Read-only and fork contributors
-cannot dispatch it on this repository. API credentials must also permit workflow dispatch.
+Repository Write access permits dispatch; read-only and fork contributors cannot
+start it on this repository. Dispatch does not authorize publication.
+The `release` environment permits only the `main` branch and requires a `marimo-eng`
+reviewer other than the initiator, with admin bypass disabled.
 
-Starting preparation opens a PR; it does not publish assets. Merging the release PR
-starts tagging and publication. Merge permission, required checks, and review rules
-come from repository settings, not these actions. The release App does not approve
-or merge its own PRs.
+Store `RELEASE_APP_ID` as a repository variable and `RELEASE_APP_PRIVATE_KEY` only
+as a `release` environment secret. Remove any repository-level copy after installing
+the environment secret. The App needs Contents and Pull requests write permission.
+Each action requests only its repository and required permissions; no Git credentials
+are persisted. Limit the App installation to its active consumers.
 
-The documented policy is to release through a PR. The current tag rules prevent
-moving or deleting tags, but do not restrict creating them. A writer can still
-create a matching version tag manually. Tag/manifest equality and main ancestry do
-not prove release-PR provenance. Enforcing PR-only releases requires a tag-creation
-ruleset for `v*` with the release App as the allowed creator. Restricting releases to
-a smaller maintainer group also requires an explicit merge or environment approval
-policy; the workflow does not implement that restriction.
+The `Release tags created by App` ruleset allows only the App to create `v*` tags.
+The separate `Immutable tags` ruleset prevents everyone, including the App, from
+moving or deleting them. The source ruleset requires PR review and CI with no bypass.
+These rules are maintained in `github-maintenance/config/rulesets.json`.
 
-### Release App
+Shared actions live in [internal-gh-actions](https://github.com/marimo-team/internal-gh-actions).
+Update all four pinned SHAs together. Version preparation and package consistency
+checks stay in this repository. Publishers require a stable tag matching the manifest,
+an exact tag checkout, and main ancestry.
 
-Configure `RELEASE_APP_ID` as a repository variable and `RELEASE_APP_PRIVATE_KEY`
-as a repository secret. Install the App on this repository with Contents write
-permission and Pull requests write permission. Approve the installation permission
-update after changing the App. The tagging job requests only Contents write; the
-PR preparation job requests Contents and Pull requests write. Both are scoped to this repository.
-It does not need branch-protection bypass or pull-request approval permission.
-The App token is minted after release validation and is not persisted in Git config.
-
-Tag creation uses the exact merged commit, even if `main` has advanced. A rerun
-accepts an existing tag only if it resolves to that commit; it never moves a tag.
-An existing tag does not trigger publication again: re-run the failed release jobs.
-
-### Tag validation
-
-The `validate-tag` job runs first, and every release job depends on it. The shared
-`validate-release` action requires a stable tag matching the root manifest version,
-a checkout at that tag, and ancestry on `origin/main`. Only `vMAJOR.MINOR.PATCH`
-without leading zeros passes. Prereleases fail before publication.
-
-The shared actions live in [internal-gh-actions](https://github.com/marimo-team/internal-gh-actions)
-and are pinned by commit SHA in the preparation, tagging, and publication workflows.
-Update these pins together. Repository-specific version preparation stays in
-`scripts/prepare-release.mjs`; shared actions never run package preparation commands.
-Notifications aggregate all required publishers, including cancelled or skipped jobs.
-
-If preparation finds that `main` advanced, rerun it. An identical release branch and
-open PR are reused. Different changes on that branch are never overwritten; inspect
-and resolve the pending release before retrying. Reopen a closed release PR explicitly.
+An existing tag at the same commit is a successful no-op; it does not restart publication.
+Re-run failed publisher jobs to recover. A tag at a different commit is rejected.
 
 ### Floating image tags
 
