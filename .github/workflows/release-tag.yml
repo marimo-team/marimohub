@@ -37,7 +37,7 @@ jobs:
           test "$(sed -n 's/^version = "\([^"]*\)"$/\1/p' apps/cli/Cargo.toml | head -1)" = "$VERSION"
 
       - name: Tag merged release
-        uses: marimo-team/internal-gh-actions/release-tag@74ee8a7685d858d4ac6569f8c81865f9249631d4
+        uses: marimo-team/internal-gh-actions/release-tag@3a52681ab8e200a34175ec8e5d14985e4e7ce3c3
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
