@@ -64,7 +64,7 @@ export function parseAccessTokenScopes(value: unknown): string[] | null {
 			!value.every((scope) => typeof scope === 'string' && SCOPE_TOKEN.test(scope))
 		)
 			return null;
-		value = value.join(' ');
+		return parseAccessTokenScopes(value.join(' '));
 	}
 	if (typeof value !== 'string' || value.length > MAX_SCOPE_LENGTH || !SCOPE_LIST.test(value))
 		return null;

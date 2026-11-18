@@ -511,7 +511,7 @@ export function parseAccessTokenScopeGrants(env: Env): Map<string, TokenGrantPre
 	for (const entry of raw.split(',').map((item) => item.trim())) {
 		// Scopes may contain `=`; presets never do.
 		const separator = entry.lastIndexOf('=');
-		if (separator < 0) throw invalid(`${JSON.stringify(entry)} is not a scope=preset pair.`);
+		if (separator === -1) throw invalid(`${JSON.stringify(entry)} is not a scope=preset pair.`);
 		const scope = entry.slice(0, separator).trim();
 		const preset = entry.slice(separator + 1).trim();
 		if (!isAccessTokenScope(scope))
