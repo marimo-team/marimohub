@@ -23,3 +23,5 @@ jobs:
         with:
           workflows: |
             ci.yml
+            cli.yml
+            iac.yml
