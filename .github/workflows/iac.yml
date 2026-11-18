@@ -3,6 +3,7 @@ name: Integration IaC SDK
 on:
   pull_request:
   push:
+    branches: [main]
     tags: ['v*.*.*']
   workflow_dispatch:
     inputs:

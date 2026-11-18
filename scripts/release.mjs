@@ -7,7 +7,17 @@ if (!['patch', 'minor', 'major'].includes(version) && !isStableVersion(version))
 }
 execFileSync(
 	'gh',
-	['workflow', 'run', 'release-pr.yml', '--ref', 'main', '-f', `version=${version}`],
+	[
+		'workflow',
+		'run',
+		'release-pr.yml',
+		'--repo',
+		'marimo-team/marimohub',
+		'--ref',
+		'main',
+		'-f',
+		`version=${version}`,
+	],
 	{ stdio: 'inherit' },
 );
 console.log(
