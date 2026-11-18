@@ -1,0 +1,51 @@
+name: Prepare release PR
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable version or patch, minor, major
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: prepare-release-pr
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    environment: release
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Test version preparation
+        run: node --test scripts/prepare-release.test.mjs
+      - name: Prepare versions
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          node scripts/prepare-release.mjs "$REQUESTED_VERSION"
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Open release PR
+        id: pr
+        uses: marimo-team/internal-gh-actions/release-pr@3a52681ab8e200a34175ec8e5d14985e4e7ce3c3
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          version: ${{ steps.version.outputs.version }}
+          files: |
+            package.json
+            apps/cli/Cargo.toml
+            apps/cli/Cargo.lock
+            packages/iac/package.json
+            examples/integration-iac/deno/deno.json
+      - name: Link release PR
+        env:
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: echo "Release PR $PR_URL" >> "$GITHUB_STEP_SUMMARY"

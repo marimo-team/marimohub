@@ -25,12 +25,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Validate tag
         id: v
-        # Every release job needs this one: the `v*.*.*` trigger glob also matches prereleases.
-        run: |
-          version=$(scripts/release-tag.sh validate "$GITHUB_REF_NAME")
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+        uses: marimo-team/internal-gh-actions/validate-release@3a52681ab8e200a34175ec8e5d14985e4e7ce3c3
 
   cli-assets:
     name: Test and generate CLI assets
@@ -541,42 +539,9 @@ jobs:
       ]
     if: always()
     steps:
-      - name: Notify Slack - Release Success
-        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
-        uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
+      - name: Notify release result
+        uses: marimo-team/internal-gh-actions/release-notification@3a52681ab8e200a34175ec8e5d14985e4e7ce3c3
         with:
-          webhook: ${{ secrets.SLACK_WEBHOOK_URL_RELEASES }}
-          webhook-type: incoming-webhook
-          payload: |
-            {
-              "text": "✅ Release completed successfully for marimohub ${{ github.ref_name }}",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "✅ *Release successful*\n\n*Repository:* marimohub\n*Version:* ${{ github.ref_name }}\n*Image:* `${{ env.IMAGE }}:${{ github.ref_name }}`\n*Release:* <https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}|View release>"
-                  }
-                }
-              ]
-            }
-
-      - name: Notify Slack - Release Failed
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
-        uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
-        with:
-          webhook: ${{ secrets.SLACK_WEBHOOK_URL_RELEASES }}
-          webhook-type: incoming-webhook
-          payload: |
-            {
-              "text": "❌ Release failed for marimohub ${{ github.ref_name }}",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "❌ *Release failed*\n\n*Repository:* marimohub\n*Version:* ${{ github.ref_name }}\n*Commit:* <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>\n*Triggered by:* ${{ github.actor }}\n*Workflow:* <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
-                  }
-                }
-              ]
-            }
+          results: ${{ toJSON(needs) }}
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL_RELEASES }}
+          artifact-url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}

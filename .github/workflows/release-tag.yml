@@ -1,11 +1,9 @@
 name: Auto-tag Release
 
-# When a release PR (title "release: X.Y.Z") is merged into main, create and
-# push the vX.Y.Z tag. The tag push then triggers release.yml, which publishes
-# the container image and Helm chart.
 on:
   pull_request:
     types: [closed]
+    branches: [main]
 
 permissions: {}
 
@@ -13,52 +11,33 @@ jobs:
   create-tag:
     if: >-
       github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'release/') &&
       startsWith(github.event.pull_request.title, 'release: ')
+    environment: release
     runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 10
+    concurrency:
+      group: release-tag-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     permissions:
       contents: read
     steps:
-      - name: Extract version from PR title
-        id: version
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          VERSION="${PR_TITLE#release: }"
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid version format: $VERSION"
-            exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      # Use a GitHub App token so the tag push triggers release.yml.
-      # Tags pushed with the default GITHUB_TOKEN do not trigger workflows.
-      - name: Generate app token
-        id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
-        with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-
-      - name: Checkout
+      - name: Checkout merged release
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
-          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+          fetch-depth: 0
 
-      - name: Verify version in package.json
+      - name: Check package versions
         run: |
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          if [ "$PKG_VERSION" != "${{ steps.version.outputs.version }}" ]; then
-            echo "::error::Version mismatch: PR title says ${{ steps.version.outputs.version }}, package.json says $PKG_VERSION"
-            exit 1
-          fi
+          VERSION=$(node -p "require('./package.json').version")
+          test "$(node -p "require('./packages/iac/package.json').version")" = "$VERSION"
+          test "$(sed -n 's/^version = "\([^"]*\)"$/\1/p' apps/cli/Cargo.toml | head -1)" = "$VERSION"
 
-      - name: Create and push tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          VERSION="v${{ steps.version.outputs.version }}"
-          git tag -a "$VERSION" -m "release: ${{ steps.version.outputs.version }}"
-          git push origin "$VERSION"
+      - name: Tag merged release
+        uses: marimo-team/internal-gh-actions/release-tag@3a52681ab8e200a34175ec8e5d14985e4e7ce3c3
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}

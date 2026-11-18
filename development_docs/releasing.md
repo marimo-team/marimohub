@@ -1,40 +1,53 @@
 # Releasing
 
-## For maintainers only
+## Release procedure
 
-Releases are cut via a PR, never by pushing to `main` or hand-pushing tags.
+1. With authenticated `gh`, run `pnpm release <patch | minor | major | X.Y.Z>`.
+   This dispatches [Prepare release PR](../.github/workflows/release-pr.yml) on
+   `main` without changing your local checkout. Another `marimo-eng` member approves
+   the `release` environment. The App then opens `release/X.Y.Z` with matching
+   root, CLI/Cargo lockfile, IaC package, and Deno import versions.
+2. Review the diff and merge the PR. Main requires an independent approval,
+   resolved review threads, and passing `test` and `verify` checks on an up-to-date branch.
+3. Another `marimo-eng` member approves the tagging job's `release` environment.
+   The App creates the immutable annotated `vX.Y.Z` tag at the exact merge commit.
+4. The tag workflow publishes the container, Helm chart, CLI, and server binaries.
+   Its aggregate notification reports the required publishers' result. The IaC npm
+   package retains its [separate publication step](#integration-iac-package).
 
-1. Run `pnpm release <X.Y.Z | patch | minor | major>`. This keeps the root,
-   Cargo package, and lockfile versions in sync on a fresh branch off
-   `origin/main`, then opens a PR titled `release: X.Y.Z`. The binary wheel
-   derives its version from Cargo.
-2. Merge it. [`release-tag.yml`](../.github/workflows/release-tag.yml) verifies
-   the PR title matches `package.json`, then creates and pushes the `vX.Y.Z`
-   tag using a GitHub App token (tags pushed with the default `GITHUB_TOKEN`
-   do not trigger workflows).
-3. The tag push triggers [`release.yml`](../.github/workflows/release.yml),
-   which publishes the container image and the Helm chart to GHCR, builds the
-   cross-platform `mohub` binaries and binary-only wheels, and creates a GitHub
-   release whose changelog is generated from the commits since the last
-   published release ([changelogithub](https://github.com/antfu/changelogithub),
-   so conventional-commit prefixes like `feat:`/`fix:` drive the grouping). If
-   a tag's release never shipped, its commits roll into the next release's
-   notes.
+Use `gh run list --workflow release-pr.yml` to find the preparation run and PR link.
+Versions must increase. An identical open release PR is reused; conflicting branches
+are never overwritten. Reopen a closed PR explicitly before retrying.
 
-Before you tag, check that the latest [Chart workflow](../.github/workflows/chart.yml)
-run on `main` passed. The workflow has path filters, so a red run stays red
-until a chart change or a manual re-run. Both `chart.yml` and `release.yml` pin
-Helm v4.3.1; change the two pins together.
+Before merging, check the latest [Chart workflow](../.github/workflows/chart.yml)
+passed. Its path filters can leave an earlier failed run unresolved. Chart and release
+workflows pin Helm v4.3.1; update those pins together.
 
-### Tag validation
+## Access and setup
 
-The `validate-tag` job runs first, and every release job depends on it. It runs
-`scripts/release-tag.sh validate TAG`, which prints the version without the
-leading `v` or exits 1. Only stable `vMAJOR.MINOR.PATCH` tags without leading
-zeros pass (`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`).
-Tags such as `v1.2` and `1.2.3` do not match the `v*.*.*` trigger, so no Release
-run starts. Tags such as `v1.2.3-rc.1` and `v01.2.3` match the trigger and start a
-run, but `validate-tag` fails and the workflow publishes nothing.
+Repository Write access permits dispatch; read-only and fork contributors cannot
+start it on this repository. Dispatch does not authorize publication.
+The `release` environment permits only the `main` branch and requires a `marimo-eng`
+reviewer other than the initiator, with admin bypass disabled.
+
+Store `RELEASE_APP_ID` as a repository variable and `RELEASE_APP_PRIVATE_KEY` only
+as a `release` environment secret. Remove any repository-level copy after installing
+the environment secret. The App needs Contents and Pull requests write permission.
+Each action requests only its repository and required permissions; no Git credentials
+are persisted. Limit the App installation to its active consumers.
+
+The `Release tags created by App` ruleset allows only the App to create `v*` tags.
+The separate `Immutable tags` ruleset prevents everyone, including the App, from
+moving or deleting them. The source ruleset requires PR review and CI with no bypass.
+These rules are maintained in `github-maintenance/config/rulesets.json`.
+
+Shared actions live in [internal-gh-actions](https://github.com/marimo-team/internal-gh-actions).
+Update all four pinned SHAs together. Version preparation and package consistency
+checks stay in this repository. Publishers require a stable tag matching the manifest,
+an exact tag checkout, and main ancestry.
+
+An existing tag at the same commit is a successful no-op; it does not restart publication.
+Re-run failed publisher jobs to recover. A tag at a different commit is rejected.
 
 ### Floating image tags
 

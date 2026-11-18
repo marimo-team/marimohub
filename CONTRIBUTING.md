@@ -90,3 +90,10 @@ request.
 - Note any skipped verification commands and why.
 - Before you finish, remove comments or prose that only restate what the code or
   heading already says.
+
+## Releases
+
+Run `pnpm release patch` to request a release PR. Repository writers can start the
+workflow; another `marimo-eng` member must approve its protected environment.
+Review and merge the version PR, then approve tagging to publish.
+See [Releasing](./development_docs/releasing.md) for versions, approvals, and recovery.

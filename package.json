@@ -16,7 +16,7 @@
 		"test:perf": "pnpm --filter @marimo-hub/api test run src/testing/performance",
 		"test:perf:update": "pnpm test:perf --update",
 		"test:root": "node --test actions/preview/preview.test.mjs && vp run test:root:vitest",
-		"test:release-scripts": "bash scripts/release-helpers.test.sh",
+		"test:release-scripts": "node --test scripts/prepare-release.test.mjs && bash scripts/release-helpers.test.sh",
 		"test:external-adapter": "node --test examples/external-adapter/oidc-login-policy.test.mjs",
 		"test:coverage": "pnpm test:coverage:root && pnpm test:coverage:web",
 		"test:coverage:root": "vp test --coverage",
