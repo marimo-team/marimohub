@@ -30,9 +30,29 @@ describe('pod templates over the Kubernetes SDK HTTP transport', () => {
 		}
 	});
 
-	async function cluster(podStatus = 201) {
+	async function cluster(podStatus = 201, existingPod?: object) {
 		const requests: { path: string; body: unknown }[] = [];
+		const reads: string[] = [];
 		server = createServer((request, response) => {
+			if (request.method === 'GET') {
+				reads.push(request.url!);
+				const found = existingPod !== undefined && request.url!.includes('/pods/');
+				response.writeHead(found ? 200 : 404, { 'content-type': 'application/json' });
+				response.end(
+					JSON.stringify(
+						found
+							? existingPod
+							: {
+									apiVersion: 'v1',
+									kind: 'Status',
+									status: 'Failure',
+									code: 404,
+									reason: 'NotFound',
+								},
+					),
+				);
+				return;
+			}
 			let body = '';
 			request.setEncoding('utf8');
 			request.on('data', (chunk: string) => {
@@ -76,7 +96,7 @@ describe('pod templates over the Kubernetes SDK HTTP transport', () => {
 		vi.spyOn(KubeConfig.prototype, 'loadFromDefault').mockImplementation(() => {
 			throw new Error('Tests must not read local kubeconfig');
 		});
-		return { client: createK8sClient({ namespace: 'kernels' }), requests };
+		return { client: createK8sClient({ namespace: 'kernels' }), requests, reads };
 	}
 
 	it('preserves projected tokens, false security settings, and octal modes on the wire', async () => {
@@ -118,7 +138,20 @@ describe('pod templates over the Kubernetes SDK HTTP transport', () => {
 		},
 	);
 
-	it('treats an existing Pod as a reconnect without replacing its template', async () => {
+	it('treats an existing Pod as a reconnect without sending a create', async () => {
+		const { client, requests, reads } = await cluster(201, {
+			apiVersion: 'v1',
+			kind: 'Pod',
+			metadata: { name: options.name, namespace: 'kernels' },
+		});
+		await expect(
+			client.ensure({ ...options, podTemplate: { spec: { serviceAccountName: 'new-account' } } }),
+		).resolves.toEqual({ createdPod: false });
+		expect(reads).toContain(`/api/v1/namespaces/kernels/pods/${options.name}`);
+		expect(requests.map((r) => r.path)).toEqual(['/api/v1/namespaces/kernels/services']);
+	});
+
+	it('treats a create that loses the race to another writer as a reconnect', async () => {
 		const { client, requests } = await cluster(409);
 		await expect(
 			client.ensure({ ...options, podTemplate: { spec: { serviceAccountName: 'new-account' } } }),

@@ -446,10 +446,13 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			// Ingress's backend need not pre-exist), so the creates fan out. The
 			// Service and Ingress reconcile so a reconnect picks up newly reserved
 			// surface ports rather than swallowing the create conflict.
-			const [createdPod] = await Promise.all([
-				createTolerant(() => core.createNamespacedPod({ namespace, body: pod })),
-				reconcileRoutes(service, ingress),
-			]);
+			// Read first so a reconnect sends no create through admission control; the
+			// 409 tolerance still covers a create racing another writer.
+			const ensurePod = async (): Promise<boolean> =>
+				(await readOptional(() => core.readNamespacedPod({ name: o.name, namespace })))
+					? false
+					: createTolerant(() => core.createNamespacedPod({ namespace, body: pod }));
+			const [createdPod] = await Promise.all([ensurePod(), reconcileRoutes(service, ingress)]);
 			return { createdPod };
 		},
 
