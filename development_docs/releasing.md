@@ -9,6 +9,7 @@
    root, CLI/Cargo lockfile, IaC package, and Deno import versions.
 2. Review the diff and merge the PR. Main requires an independent approval,
    resolved review threads, and passing `test` and `verify` checks on an up-to-date branch.
+   Repository admins may bypass these requirements when merging a PR.
 3. Another `marimo-eng` member approves the tagging job's `release` environment.
    The App creates the immutable annotated `vX.Y.Z` tag at the exact merge commit.
 4. The tag workflow publishes the container, Helm chart, CLI, and server binaries.
@@ -38,7 +39,9 @@ are persisted. Limit the App installation to its active consumers.
 
 The `Release tags created by App` ruleset allows only the App to create `v*` tags.
 The separate `Immutable tags` ruleset prevents everyone, including the App, from
-moving or deleting them. The source ruleset requires PR review and CI with no bypass.
+moving or deleting them. The source ruleset requires PR review and CI, with an admin
+bypass for PR merges only. That bypass does not permit direct pushes or bypass
+release-environment approvals.
 These rules are maintained in `github-maintenance/config/rulesets.json`.
 
 Shared actions live in [internal-gh-actions](https://github.com/marimo-team/internal-gh-actions).
