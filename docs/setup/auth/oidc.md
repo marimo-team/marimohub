@@ -389,21 +389,17 @@ comma-separated list of `scope=preset` pairs, where the preset is `read`, `run`,
 MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS=marimohub-prod=edit,marimohub-reports=read
 ```
 
-A mapped scope grants exactly the actions of its preset and combines with any
-other grant scopes in the token. Matching is exact and case-sensitive. The
-built-in `marimohub:*` scopes keep their meaning: a mapping that names one of
-them stops startup, as do malformed pairs, unknown presets, invalid scope
-names, and duplicate scopes. Discovery metadata and MCP challenges advertise
-only the built-in scopes.
+Mappings are case-sensitive and add the preset's actions to the token's grants.
+Startup rejects built-in scope overrides, malformed pairs, unknown presets,
+invalid scope names, and duplicate scopes.
 
-Use dedicated Hub scopes for these mappings. Do not map general identity scopes
-such as `openid`, `profile`, or `email` to Hub presets.
-Every otherwise-valid token with a mapped scope receives that preset, regardless
-of which OAuth client requested the token. The user's permissions still limit access.
+Use dedicated Hub scopes, not identity scopes such as `openid`, `profile`, or
+`email`. Mappings apply to every otherwise-valid token with that scope,
+regardless of the requesting OAuth client.
 
-Mappings do not replace the `mcp:tools` requirement. If the issuer cannot issue
-`mcp:tools`, mapped tokens can access the API but cannot access MCP.
-Clients must request the custom scopes explicitly; discovery does not advertise them.
+Discovery metadata and MCP challenges advertise only built-in scopes; clients
+must request custom scopes explicitly. MCP still requires `mcp:tools`.
+If the issuer cannot issue it, mapped tokens work only with the API.
 
 These scopes belong in the access token. `MARIMOHUB_AUTH_OIDC_SCOPES` controls
 browser login and does not request scopes for external clients.

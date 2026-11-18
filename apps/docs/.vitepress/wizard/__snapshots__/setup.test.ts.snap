@@ -358,19 +358,15 @@ comma-separated list of <code>scope=preset</code> pairs, where the preset is <co
 <code>edit</code>, or <code>full</code>:</p>
 <pre><code class="language-dotenv">MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS=marimohub-prod=edit,marimohub-reports=read
 </code></pre>
-<p>A mapped scope grants exactly the actions of its preset and combines with any
-other grant scopes in the token. Matching is exact and case-sensitive. The
-built-in <code>marimohub:*</code> scopes keep their meaning: a mapping that names one of
-them stops startup, as do malformed pairs, unknown presets, invalid scope
-names, and duplicate scopes. Discovery metadata and MCP challenges advertise
-only the built-in scopes.</p>
-<p>Use dedicated Hub scopes for these mappings. Do not map general identity scopes
-such as <code>openid</code>, <code>profile</code>, or <code>email</code> to Hub presets.
-Every otherwise-valid token with a mapped scope receives that preset, regardless
-of which OAuth client requested the token. The user's permissions still limit access.</p>
-<p>Mappings do not replace the <code>mcp:tools</code> requirement. If the issuer cannot issue
-<code>mcp:tools</code>, mapped tokens can access the API but cannot access MCP.
-Clients must request the custom scopes explicitly; discovery does not advertise them.</p>
+<p>Mappings are case-sensitive and add the preset's actions to the token's grants.
+Startup rejects built-in scope overrides, malformed pairs, unknown presets,
+invalid scope names, and duplicate scopes.</p>
+<p>Use dedicated Hub scopes, not identity scopes such as <code>openid</code>, <code>profile</code>, or
+<code>email</code>. Mappings apply to every otherwise-valid token with that scope,
+regardless of the requesting OAuth client.</p>
+<p>Discovery metadata and MCP challenges advertise only built-in scopes; clients
+must request custom scopes explicitly. MCP still requires <code>mcp:tools</code>.
+If the issuer cannot issue it, mapped tokens work only with the API.</p>
 <p>These scopes belong in the access token. <code>MARIMOHUB_AUTH_OIDC_SCOPES</code> controls
 browser login and does not request scopes for external clients.</p>
 <p>Grants apply to all projects that the user can already access. They cannot
