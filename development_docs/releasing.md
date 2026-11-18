@@ -1,6 +1,6 @@
 # Releasing
 
-## For maintainers only
+## Release procedure
 
 Releases are cut via a PR, never by pushing to `main` or hand-pushing tags.
 
@@ -28,6 +28,26 @@ Before you merge, check that the latest [Chart workflow](../.github/workflows/ch
 run on `main` passed. The workflow has path filters, so a red run stays red
 until a chart change or a manual re-run. Both `chart.yml` and `release.yml` pin
 Helm v4.3.1; change the two pins together.
+
+### Who can release
+
+GitHub requires repository Write access to [dispatch a workflow](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
+The preparation workflow has no additional team or actor allowlist, so Write,
+Maintain, and Admin collaborators can start it. Read-only and fork contributors
+cannot dispatch it on this repository. API credentials must also permit workflow dispatch.
+
+Starting preparation opens a PR; it does not publish assets. Merging the release PR
+starts tagging and publication. Merge permission, required checks, and review rules
+come from repository settings, not these actions. The release App does not approve
+or merge its own PRs.
+
+The documented policy is to release through a PR. The current tag rules prevent
+moving or deleting tags, but do not restrict creating them. A writer can still
+create a matching version tag manually. Tag/manifest equality and main ancestry do
+not prove release-PR provenance. Enforcing PR-only releases requires a tag-creation
+ruleset for `v*` with the release App as the allowed creator. Restricting releases to
+a smaller maintainer group also requires an explicit merge or environment approval
+policy; the workflow does not implement that restriction.
 
 ### Release App
 

@@ -9,7 +9,16 @@ await test('bumps stable versions', () => {
 	assert.equal(nextVersion('1.2.3', '1.10.0'), '1.10.0');
 });
 await test('rejects invalid, equal, and regressing versions', () => {
-	for (const requested of ['1.2.3', '1.2.2', '0.9.9', '01.3.0', '2.0.0-rc.1', undefined]) {
+	for (const requested of [
+		'1.2.3',
+		'1.2.2',
+		'0.9.9',
+		'01.3.0',
+		'2.0.0-rc.1',
+		'1.2.4\n',
+		'1.2.4\r\n',
+		undefined,
+	]) {
 		assert.throws(() => nextVersion('1.2.3', requested));
 	}
 });

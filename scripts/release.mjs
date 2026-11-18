@@ -1,10 +1,8 @@
 import { execFileSync } from 'node:child_process';
+import { isStableVersion } from './release-version.mjs';
 
 const version = process.argv[2];
-if (
-	!['patch', 'minor', 'major'].includes(version) &&
-	!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)
-) {
+if (!['patch', 'minor', 'major'].includes(version) && !isStableVersion(version)) {
 	throw new Error('usage: pnpm release <X.Y.Z | patch | minor | major>');
 }
 execFileSync(

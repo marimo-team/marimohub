@@ -37,7 +37,12 @@ beforeEach(() => {
 	write('packages/iac/package.json', manifest);
 	write('examples/integration-iac/deno/deno.json', deno);
 	mkdirSync(join(fixture, 'scripts'));
-	for (const script of ['iac-release.mjs', 'check-iac-release.mjs', 'prepare-iac-release.mjs'])
+	for (const script of [
+		'release-version.mjs',
+		'iac-release.mjs',
+		'check-iac-release.mjs',
+		'prepare-iac-release.mjs',
+	])
 		copyFileSync(new URL(script, import.meta.url), join(fixture, 'scripts', script));
 });
 afterEach(() => rmSync(fixture, { recursive: true, force: true }));
@@ -60,7 +65,7 @@ describe('release validation', () => {
 		write('packages/iac/package.json', { ...manifest, version: '1.2.2' });
 		expect(run('check-iac-release.mjs', 'refs/tags/v1.2.3').status).not.toBe(0);
 	});
-	it.each(['1.2.3-beta.1', '01.2.3', 'invalid', null])(
+	it.each(['1.2.3-beta.1', '01.2.3', '1.2.3\n', '1.2.3\r\n', 'invalid', null])(
 		'rejects unsupported version %s even when versions and ref match',
 		(version) => {
 			write('package.json', { version });

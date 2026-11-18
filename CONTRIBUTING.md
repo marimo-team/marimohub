@@ -90,3 +90,17 @@ request.
 - Note any skipped verification commands and why.
 - Before you finish, remove comments or prose that only restate what the code or
   heading already says.
+
+## Releases
+
+Releases use versioned pull requests. With repository Write access and authenticated
+`gh`, run `pnpm release patch` (or `minor`, `major`, or an explicit version).
+The release App opens `release/X.Y.Z`; merging that PR creates the release tag and
+starts publication. The command does not change your local checkout.
+
+Write access permits release preparation; this is not restricted to GitHub's
+Maintain or Admin roles. Read-only and fork contributors cannot dispatch it on this
+repository. Merge access and repository rules control who can merge the release PR.
+
+See [Releasing](./development_docs/releasing.md) for the complete procedure, access
+controls, asset publication, and recovery. Do not create or move release tags manually.

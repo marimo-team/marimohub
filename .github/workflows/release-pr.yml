@@ -33,7 +33,7 @@ jobs:
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
       - name: Open release PR
         id: pr
-        uses: marimo-team/internal-gh-actions/release-pr@fb4c07d81a85b62f55e710c0224cebcf9bc9dc74
+        uses: marimo-team/internal-gh-actions/release-pr@32a385ed1559460190bdab8b052057e928a34508
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}

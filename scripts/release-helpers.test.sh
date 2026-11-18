@@ -344,7 +344,7 @@ fi
 release_repo="$temporary/release-script"
 mkdir -p "$release_repo/apps/cli" "$release_repo/docs" "$release_repo/scripts" "$release_repo/bin" \
 	"$release_repo/packages/iac" "$release_repo/examples/integration-iac/deno"
-for script in release.mjs prepare-release.mjs prepare-iac-release.mjs iac-release.mjs; do
+for script in release-version.mjs release.mjs prepare-release.mjs prepare-iac-release.mjs iac-release.mjs; do
 	cp "$repo_root/scripts/$script" "$release_repo/scripts/$script"
 done
 printf '{"name":"@marimo-hub/iac","version":"1.2.3"}\n' >"$release_repo/packages/iac/package.json"

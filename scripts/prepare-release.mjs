@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { isStableVersion } from './release-version.mjs';
 
-const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 export function nextVersion(current, requested) {
-	if (!stable.test(current)) throw new Error('Current version must be stable SemVer');
+	if (!isStableVersion(current)) throw new Error('Current version must be stable SemVer');
 	const parts = current.split('.').map(BigInt);
 	const bump = ['major', 'minor', 'patch'].indexOf(requested);
 	let next = requested;
@@ -13,7 +13,7 @@ export function nextVersion(current, requested) {
 		for (let i = bump + 1; i < parts.length; i++) parts[i] = 0n;
 		next = parts.join('.');
 	}
-	if (!stable.test(next)) throw new Error('Expected X.Y.Z, patch, minor, or major');
+	if (!isStableVersion(next)) throw new Error('Expected X.Y.Z, patch, minor, or major');
 	const before = current.split('.').map(BigInt);
 	const after = next.split('.').map(BigInt);
 	const index = after.findIndex((part, i) => part !== before[i]);
