@@ -11,6 +11,7 @@ export { ShellEnvironment, privateEnvironmentWriteCommand } from './shellEnviron
 export {
 	validateOutputBudget,
 	readBoundedFile,
+	readBoundedFiles,
 	readBoundedStream,
 	collectBoundedOutput,
 	waitWithSignal,

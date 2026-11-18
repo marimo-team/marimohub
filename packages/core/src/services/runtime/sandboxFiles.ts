@@ -675,19 +675,58 @@ export async function readSessionArtifacts(
 	strict = false,
 ): Promise<CommitSessionInput> {
 	if (!supportsBoundedReads(sandbox)) return {};
-	const sizes = hints?.sizes ?? (await fileSizes(listing));
+	const fields = ['code', 'deps', 'html', 'session'] as const;
 	const files = sessionArtifactPaths(mountPath, entryNotebook);
-	const read = (field: keyof CommitSessionInput) => {
+	const listed =
+		strict && !hints && sandbox.readFilesBounded
+			? await listing().catch(() => listFilesFailure('BACKEND_ERROR'))
+			: undefined;
+	const sizes = hints?.sizes ?? (await fileSizes(listed ? async () => listed : listing));
+	const artifactSizes = fields.map((field) =>
+		sizes.has(files[field]) ? sizes.get(files[field]) : 0,
+	);
+	// Keep large captures on individual reads to bound the aggregate response.
+	const canBatch =
+		listed?.success &&
+		artifactSizes.every(
+			(size): size is number => typeof size === 'number' && Number.isSafeInteger(size) && size >= 0,
+		) &&
+		artifactSizes.reduce((total, size) => total + size, 0) <= MAX_ARTIFACT_BYTES;
+	const batch = canBatch
+		? await sandbox.readFilesBounded!(
+				fields.map((field) => files[field]),
+				{
+					maxBytes: MAX_ARTIFACT_BYTES,
+					maxTotalBytes: MAX_ARTIFACT_BYTES,
+					timeoutMs: CAPTURE_READ_TIMEOUT_MS,
+				},
+			)
+		: undefined;
+	if (canBatch && (!Array.isArray(batch) || batch.length !== fields.length))
+		throw new Error('Incomplete bounded read batch');
+	let totalBytes = 0;
+	const decodedBatch = batch?.map((result) => {
+		const decoded = decodeBoundedBytes(result, MAX_ARTIFACT_BYTES);
+		if (decoded?.success) totalBytes += decoded.bytes.byteLength;
+		if (totalBytes > MAX_ARTIFACT_BYTES) throw new Error('Bounded read batch exceeds byte limit');
+		return decoded;
+	});
+	const read = async (field: keyof CommitSessionInput) => {
 		if (hints && Object.hasOwn(hints.reusable, field)) return hints.reusable[field];
+		const result = decodedBatch
+			? decodedBatch[fields.indexOf(field)]
+			: await readCappedBytes(sandbox, files[field], sizes);
 		return field === 'code' || (strict && field !== 'html')
-			? readNotebookCode(
-					sandbox,
+			? decodeNotebookCode(
+					result,
 					files[field],
 					sizes,
 					field === 'code' ? entryNotebook : field,
 					field === 'code',
 				)
-			: readCappedFile(sandbox, files[field], sizes);
+			: result?.success
+				? new TextDecoder().decode(result.bytes)
+				: undefined;
 	};
 	const [code, deps, html, session] = await Promise.all([
 		read('code'),
@@ -698,14 +737,13 @@ export async function readSessionArtifacts(
 	return { code, deps, html, session };
 }
 
-async function readNotebookCode(
-	sandbox: SandboxInstance,
+function decodeNotebookCode(
+	result: BoundedBytesResult | undefined,
 	absolutePath: string,
 	sizes: ReadonlyMap<string, number>,
 	entryNotebook: string,
-	required = true,
-): Promise<string | undefined> {
-	const result = await readCappedBytes(sandbox, absolutePath, sizes);
+	required: boolean,
+): string | undefined {
 	if (result?.success) return decodeUtf8PreservingBom(result.bytes);
 	const code = result?.error.code ?? 'READ_FAILED';
 	const error = Object.assign(new Error(`Could not read ${entryNotebook}: ${code}`), {
@@ -782,6 +820,13 @@ async function readBoundedBytes(
 		maxBytes,
 		timeoutMs: CAPTURE_READ_TIMEOUT_MS,
 	});
+	return decodeBoundedBytes(result, maxBytes);
+}
+
+function decodeBoundedBytes(
+	result: ReadFileResult | undefined,
+	maxBytes: number,
+): BoundedBytesResult | undefined {
 	if (!result?.success) return result;
 	const encodedLimit = result.encoding === 'base64' ? 4 * Math.ceil(maxBytes / 3) : maxBytes;
 	if (result.content.length > encodedLimit) return undefined;

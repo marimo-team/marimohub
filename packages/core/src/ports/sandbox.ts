@@ -137,6 +137,11 @@ export interface BoundedReadOptions {
 	timeoutMs: number;
 }
 
+export interface BoundedBatchReadOptions extends BoundedReadOptions {
+	/** Maximum sum of decoded file bytes, independent of per-file limits. */
+	maxTotalBytes: number;
+}
+
 export interface FileInfo {
 	name: string;
 	absolutePath: string;
@@ -219,6 +224,15 @@ export interface SandboxInstance {
 	readFile(path: string): Promise<ReadFileResult>;
 	/** Reject symlinks/nonregular files; cap transport bytes and cancel on deadline/overflow. */
 	readFileBounded?(path: string, options: BoundedReadOptions): Promise<ReadFileResult>;
+	/**
+	 * Up to 16 paths, with the single-file safety checks and results in input order.
+	 * Enforce maxTotalBytes and the shared deadline before returning any successful batch.
+	 * Missing files are per-file results; transport/protocol/aggregate failures fail every result.
+	 */
+	readFilesBounded?(
+		paths: readonly string[],
+		options: BoundedBatchReadOptions,
+	): Promise<ReadFileResult[]>;
 	/**
 	 * List entries below a directory. An existing non-directory path returns
 	 * `NOT_A_DIRECTORY`; it must never succeed with an empty file list.
