@@ -1,9 +1,12 @@
 import { isAuthGroupId, MAX_AUTH_GROUP_ID_LENGTH } from '@marimo-hub/core/ports/auth';
 import type { Authenticator } from '@marimo-hub/core';
 import { basePathFromUrl } from '@marimo-hub/core/url';
+import { isExternalTokenScope, TOKEN_GRANT_PRESETS } from '@marimo-hub/core/token-grants';
+import type { TokenGrantPreset } from '@marimo-hub/core/token-grants';
 import {
 	createOidcAuth,
 	createOidcAccessTokenAuthenticator,
+	isAccessTokenScope,
 	MAX_MEMBERSHIP_GROUP_PREFIXES,
 	MAX_MEMBERSHIP_GROUPS,
 	normalizeEmailDomains,
@@ -488,11 +491,47 @@ export function projectCreationRestricted(env: Env): boolean {
 	return mode === 'restricted' || (authBackend(env) === 'oidc' && groupsConfigured);
 }
 
+const SCOPE_GRANTS_VAR = 'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS';
+
+function isTokenGrantPreset(value: string): value is TokenGrantPreset {
+	return Object.hasOwn(TOKEN_GRANT_PRESETS, value);
+}
+
+/** Parses `scope=preset` pairs separated by commas, e.g. `marimohub-prod=edit,reports=read`. */
+export function parseAccessTokenScopeGrants(env: Env): Map<string, TokenGrantPreset> | undefined {
+	const raw = env[SCOPE_GRANTS_VAR];
+	if (raw === undefined) return undefined;
+	const invalid = (message: string) =>
+		new ConfigError(`Invalid ${SCOPE_GRANTS_VAR}: ${message}`, {
+			variable: SCOPE_GRANTS_VAR,
+			remediation: `Use comma-separated scope=preset pairs, where preset is one of ${Object.keys(TOKEN_GRANT_PRESETS).join(', ')}.`,
+			docs: 'docs/setup/auth/oidc.md',
+		});
+	const grants = new Map<string, TokenGrantPreset>();
+	for (const entry of raw.split(',').map((item) => item.trim())) {
+		// Scopes may contain `=`; presets never do.
+		const separator = entry.lastIndexOf('=');
+		if (separator === -1) throw invalid(`${JSON.stringify(entry)} is not a scope=preset pair.`);
+		const scope = entry.slice(0, separator).trim();
+		const preset = entry.slice(separator + 1).trim();
+		if (!isAccessTokenScope(scope))
+			throw invalid(`${JSON.stringify(scope)} is not a valid OAuth scope.`);
+		if (isExternalTokenScope(scope))
+			throw invalid(`${scope} is a built-in scope and cannot be remapped.`);
+		if (!isTokenGrantPreset(preset))
+			throw invalid(`${JSON.stringify(preset)} is not a grant preset.`);
+		if (grants.has(scope)) throw invalid(`${scope} is listed more than once.`);
+		grants.set(scope, preset);
+	}
+	return grants;
+}
+
 function externalTokensEnabled(env: Env, backend: string | undefined): boolean {
 	const enabled = parseOnOff(env, 'MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS', { fallback: false });
 	const orphan = [
 		'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE',
 		'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL',
+		SCOPE_GRANTS_VAR,
 	].find((key) => env[key] !== undefined);
 	if (!enabled && orphan)
 		throw new ConfigError(`${orphan} requires MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS=on.`, {
@@ -514,6 +553,7 @@ function makeExternalAuthenticator(env: Env, config: OidcConfig): Authenticator 
 	const audience = requiredVar(env, 'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE', {
 		docs: 'docs/setup/auth/oidc.md',
 	}).trim();
+	const scopeGrants = parseAccessTokenScopeGrants(env);
 	try {
 		const jwksUrl =
 			env.MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL === undefined
@@ -526,6 +566,7 @@ function makeExternalAuthenticator(env: Env, config: OidcConfig): Authenticator 
 			audience,
 			clientId: config.clientId,
 			...(jwksUrl !== undefined ? { jwksUrl } : {}),
+			...(scopeGrants ? { scopeGrants } : {}),
 			allowedEmailDomains: config.allowedEmailDomains,
 			emailVerification: config.emailVerification,
 			groups: config.groups,

@@ -1382,6 +1382,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
+						id: 'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS',
+						name: 'External access-token scope grants',
+						description:
+							'Optional comma-separated `scope=preset` pairs that let issuer-specific scopes grant a preset (`read`, `run`, `edit`, or `full`), for example `marimohub-prod=edit`. Adds to the built-in `marimohub:*` scopes and cannot remap them.',
+						example: 'marimohub-prod=edit',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_AUTH_OIDC_PROMPT',
 						name: 'OIDC prompt',
 						description:

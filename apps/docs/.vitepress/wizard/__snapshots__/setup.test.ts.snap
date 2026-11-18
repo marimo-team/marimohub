@@ -247,6 +247,8 @@ and existing Hub tokens continue to work.</p>
 MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE=https://hub.example.com/mcp
 # Optional. Otherwise, the Hub discovers JWKS from the configured OIDC issuer.
 # MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL=https://accounts.example.com/jwks
+# Optional. Lets issuer-specific scopes grant a preset. See &quot;Scope grants&quot;.
+# MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS=marimohub-prod=edit
 </code></pre>
 <p>If MCP is enabled, set the audience to the exact public MCP URL.
 For example, a base URL of <code>https://hub.example.com/hub</code> requires
@@ -254,7 +256,7 @@ For example, a base URL of <code>https://hub.example.com/hub</code> requires
 For API-only deployments, choose a Hub resource audience that differs from the browser client ID.</p>
 <p>The issuer and JWKS endpoint must use HTTPS without embedded credentials.
 Startup fails for incomplete configuration, non-OIDC backends, or custom OIDC login-policy modules.
-The audience and JWKS variables require <code>MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS=on</code>.</p>
+The audience, JWKS, and scope-grant variables require <code>MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS=on</code>.</p>
 <h4>Issuer requirements</h4>
 <p>Configure the issuer to issue JWT access tokens for the Hub resource with these claims:</p>
 <table>
@@ -295,10 +297,15 @@ The audience and JWKS variables require <code>MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS=
 </tr>
 <tr>
 <td><code>scope</code></td>
-<td>Space-separated OAuth scopes, including a Hub grant scope</td>
+<td>OAuth scopes, including a Hub grant scope (see below)</td>
 </tr>
 </tbody>
 </table>
+<p>The <code>scope</code> claim can be a space-separated string (RFC 9068) or a JSON array of
+strings, as IdentityServer and Duende send it. <code>[&quot;marimohub-prod&quot;, &quot;openid&quot;]</code> is
+equivalent to <code>&quot;marimohub-prod openid&quot;</code>. Each scope must be a nonempty OAuth scope
+token: printable ASCII without spaces, <code>&quot;</code>, or <code>\\</code>. The joined claim cannot exceed 8,192
+characters. An empty array or a non-string entry rejects the token.</p>
 <p>The total token lifetime (<code>exp - iat</code>) cannot exceed 3,600 seconds.
 If group authorization uses a shorter session lifetime, that limit applies instead.
 The Hub rejects future <code>iat</code> or <code>nbf</code> values and expired tokens.</p>
@@ -345,6 +352,21 @@ user identities, not machine identities or client-credentials grants.</p>
 <p>Clients must request at least one grant scope. Multiple grant scopes combine
 their actions. The Hub ignores unrelated scopes and rejects tokens without a
 recognized grant scope. MCP also requires <code>mcp:tools</code>.</p>
+<p>If the issuer cannot issue scopes with these names, map its own scopes to a
+preset with <code>MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS</code>. The value is a
+comma-separated list of <code>scope=preset</code> pairs, where the preset is <code>read</code>, <code>run</code>,
+<code>edit</code>, or <code>full</code>:</p>
+<pre><code class="language-dotenv">MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS=marimohub-prod=edit,marimohub-reports=read
+</code></pre>
+<p>Mappings are case-sensitive and add the preset's actions to the token's grants.
+Startup rejects built-in scope overrides, malformed pairs, unknown presets,
+invalid scope names, and duplicate scopes.</p>
+<p>Use dedicated Hub scopes, not identity scopes such as <code>openid</code>, <code>profile</code>, or
+<code>email</code>. Mappings apply to every otherwise-valid token with that scope,
+regardless of the requesting OAuth client.</p>
+<p>Discovery metadata and MCP challenges advertise only built-in scopes; clients
+must request custom scopes explicitly. MCP still requires <code>mcp:tools</code>.
+If the issuer cannot issue it, mapped tokens work only with the API.</p>
 <p>These scopes belong in the access token. <code>MARIMOHUB_AUTH_OIDC_SCOPES</code> controls
 browser login and does not request scopes for external clients.</p>
 <p>Grants apply to all projects that the user can already access. They cannot

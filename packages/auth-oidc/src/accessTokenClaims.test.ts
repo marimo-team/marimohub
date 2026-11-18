@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { principalFromVerifiedAccessToken, parseAccessTokenScopes } from './accessTokenClaims';
 import { createAdmissionPolicy } from './admission';
 import { MAX_AUTH_GROUPS } from '@marimo-hub/core/ports/auth';
+import { expandTokenGrantPreset } from '@marimo-hub/core/token-grants';
 import { groupsExceedingBytes, groupsExceedingCount } from '@marimo-hub/core/testing/auth-groups';
 
 const now = 1700000000;
@@ -112,6 +113,42 @@ describe('access-token claim boundaries', () => {
 		}
 	});
 
+	it('treats an array scope claim like the equivalent string', () => {
+		expect(parse({ scope: ['marimohub:read', 'openid', 'marimohub:read'] })).toEqual(
+			parse({ scope: 'marimohub:read openid' }),
+		);
+		expect(parse({ scope: ['marimohub-prod'] })).toEqual({ error: 'missing_grant_scope' });
+	});
+
+	it('grants a configured scope exactly its preset and combines it with built-in scopes', () => {
+		const mapped = {
+			...policy,
+			scopeGrants: new Map([
+				['marimohub-prod', 'read'],
+				['constructor', 'run'],
+			] as const),
+		};
+		const grantFor = (scope: unknown) => {
+			const result = principalFromVerifiedAccessToken({ ...claims, scope }, 'at+jwt', mapped, now);
+			return 'principal' in result ? result.principal.credential.grant : result;
+		};
+		expect(grantFor(['marimohub-prod', 'openid'])).toEqual({
+			actions: expandTokenGrantPreset('read'),
+			projects: '*',
+		});
+		expect(grantFor('constructor')).toEqual({
+			actions: expandTokenGrantPreset('run'),
+			projects: '*',
+		});
+		expect(grantFor('marimohub-prod marimohub:full')).toEqual({ actions: '*', projects: '*' });
+		expect(grantFor('marimohub:run')).toEqual({
+			actions: expandTokenGrantPreset('run'),
+			projects: '*',
+		});
+		for (const scope of ['other-api', 'MARIMOHUB-PROD', 'toString', '__proto__', 'hasOwnProperty'])
+			expect(grantFor(scope)).toEqual({ error: 'missing_grant_scope' });
+	});
+
 	it('does not add bearer powers to identity claims', () => {
 		const result = parse({ entitlements: ['super-admin'], name: 'User' });
 		expect(result).toHaveProperty('principal');
@@ -141,6 +178,31 @@ describe('OAuth scope syntax', () => {
 		'a'.repeat(8193),
 	])('rejects invalid scopes: %j', (value) => {
 		expect(parseAccessTokenScopes(value)).toBeNull();
+	});
+	it.each([
+		[],
+		[''],
+		['marimohub:read', ''],
+		['marimohub:read', 1],
+		['marimohub:read', null],
+		[['marimohub:read']],
+		['marimohub:read mcp:tools'],
+		[' marimohub:read'],
+		['marimohub:read\t'],
+		['"read"'],
+		['réad'],
+		['a'.repeat(8192), 'b'],
+		Array.from({ length: 4097 }, (_, i) => String.fromCharCode(0x41 + (i % 26))),
+	])('rejects invalid scope arrays: %j', (...value) => {
+		expect(parseAccessTokenScopes(value)).toBeNull();
+	});
+	it('accepts a scope array like the equivalent string, within the same length bound', () => {
+		expect(parseAccessTokenScopes(['marimohub-prod', 'openid', 'marimohub-prod'])).toEqual([
+			'marimohub-prod',
+			'openid',
+		]);
+		expect(parseAccessTokenScopes(['a'.repeat(8190), 'b'])).toEqual(['a'.repeat(8190), 'b']);
+		expect(parseAccessTokenScopes(['a'.repeat(8191), 'b'])).toBeNull();
 	});
 	it('accepts scope punctuation and the maximum encoded length', () => {
 		expect(

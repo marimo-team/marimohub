@@ -52,6 +52,7 @@ export {
 	emailDomainAllowed,
 } from './claims';
 export * from './accessTokens';
+export { isAccessTokenScope } from './accessTokenClaims';
 export * from './loginPolicy';
 
 export interface OidcLoginPolicySettings {

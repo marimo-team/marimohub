@@ -154,7 +154,9 @@ describe('external OIDC access tokens', () => {
 		['absent verification', { email_verified: undefined }],
 		['foreign domain', { email: 'user@foreign.com' }],
 		['proof binding', { cnf: { jkt: 'key' } }],
-		['scope array', { scope: ['marimohub:read'] }],
+		['empty scope array', { scope: [] }],
+		['scope array with whitespace', { scope: ['mcp:tools marimohub:read'] }],
+		['scope array with a non-string', { scope: ['marimohub:read', 1] }],
 		['scope tab', { scope: 'mcp:tools\tmarimohub:read' }],
 		['no grant scope', { scope: 'mcp:tools openid' }],
 	] as const)('rejects %s', async (_name, overrides) => {
@@ -313,6 +315,36 @@ describe('external OIDC access tokens', () => {
 			expect(await auth.authenticate(request(await sign(claims({ org: { groups } }))))).toBeNull();
 		}
 	});
+
+	it('authenticates an IdentityServer-style token with an array scope mapped to a preset', async () => {
+		const auth = createOidcAccessTokenAuthenticator({
+			...config,
+			scopeGrants: new Map([['marimohub-prod', 'edit']]),
+		});
+		const token = await sign(claims({ scope: ['marimohub-prod', 'openid'] }));
+		expect(await auth.authenticate(request(token))).toMatchObject({
+			id: 'user-one',
+			credential: {
+				kind: 'external-access-token',
+				grant: { actions: expandTokenGrantPreset('edit'), projects: '*' },
+				oauth: { scopes: ['marimohub-prod', 'openid'] },
+			},
+		});
+		const unmapped = await sign(claims({ scope: ['other-api', 'openid'] }));
+		expect(await auth.authenticate(request(unmapped))).toBeNull();
+		expect(
+			await createOidcAccessTokenAuthenticator(config).authenticate(request(token)),
+		).toBeNull();
+	});
+
+	it.each(['marimohub:read', 'hub prod', ''])(
+		'rejects an invalid or built-in scope grant: %j',
+		(scope) => {
+			expect(() =>
+				createOidcAccessTokenAuthenticator({ ...config, scopeGrants: new Map([[scope, 'full']]) }),
+			).toThrow(/scope grant/);
+		},
+	);
 
 	it('does not carry group entitlements from another request', async () => {
 		const auth = createOidcAccessTokenAuthenticator({

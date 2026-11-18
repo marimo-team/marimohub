@@ -313,6 +313,8 @@ MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS=on
 MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE=https://hub.example.com/mcp
 # Optional. Otherwise, the Hub discovers JWKS from the configured OIDC issuer.
 # MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL=https://accounts.example.com/jwks
+# Optional. Lets issuer-specific scopes grant a preset. See "Scope grants".
+# MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS=marimohub-prod=edit
 ```
 
 If MCP is enabled, set the audience to the exact public MCP URL.
@@ -322,7 +324,7 @@ For API-only deployments, choose a Hub resource audience that differs from the b
 
 The issuer and JWKS endpoint must use HTTPS without embedded credentials.
 Startup fails for incomplete configuration, non-OIDC backends, or custom OIDC login-policy modules.
-The audience and JWKS variables require `MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS=on`.
+The audience, JWKS, and scope-grant variables require `MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS=on`.
 
 #### Issuer requirements
 
@@ -337,7 +339,13 @@ Configure the issuer to issue JWT access tokens for the Hub resource with these 
 | `email_verified` | `true` or `"true"`. Omission requires `trusted-issuer`.                   |
 | `client_id`      | Nonempty ID of the OAuth client that requested the token                  |
 | `iat`, `exp`     | Integer issuance and expiry times, in Unix seconds                        |
-| `scope`          | Space-separated OAuth scopes, including a Hub grant scope                 |
+| `scope`          | OAuth scopes, including a Hub grant scope (see below)                     |
+
+The `scope` claim can be a space-separated string (RFC 9068) or a JSON array of
+strings, as IdentityServer and Duende send it. `["marimohub-prod", "openid"]` is
+equivalent to `"marimohub-prod openid"`. Each scope must be a nonempty OAuth scope
+token: printable ASCII without spaces, `"`, or `\`. The joined claim cannot exceed 8,192
+characters. An empty array or a non-string entry rejects the token.
 
 The total token lifetime (`exp - iat`) cannot exceed 3,600 seconds.
 If group authorization uses a shorter session lifetime, that limit applies instead.
@@ -371,6 +379,27 @@ user identities, not machine identities or client-credentials grants.
 Clients must request at least one grant scope. Multiple grant scopes combine
 their actions. The Hub ignores unrelated scopes and rejects tokens without a
 recognized grant scope. MCP also requires `mcp:tools`.
+
+If the issuer cannot issue scopes with these names, map its own scopes to a
+preset with `MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS`. The value is a
+comma-separated list of `scope=preset` pairs, where the preset is `read`, `run`,
+`edit`, or `full`:
+
+```dotenv
+MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS=marimohub-prod=edit,marimohub-reports=read
+```
+
+Mappings are case-sensitive and add the preset's actions to the token's grants.
+Startup rejects built-in scope overrides, malformed pairs, unknown presets,
+invalid scope names, and duplicate scopes.
+
+Use dedicated Hub scopes, not identity scopes such as `openid`, `profile`, or
+`email`. Mappings apply to every otherwise-valid token with that scope,
+regardless of the requesting OAuth client.
+
+Discovery metadata and MCP challenges advertise only built-in scopes; clients
+must request custom scopes explicitly. MCP still requires `mcp:tools`.
+If the issuer cannot issue it, mapped tokens work only with the API.
 
 These scopes belong in the access token. `MARIMOHUB_AUTH_OIDC_SCOPES` controls
 browser login and does not request scopes for external clients.

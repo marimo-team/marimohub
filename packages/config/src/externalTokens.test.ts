@@ -29,6 +29,21 @@ const env = {
 	MARIMOHUB_MCP: 'on',
 	MARIMOHUB_APP_BASE_URL: 'https://hub.example.com/hub/',
 };
+const mappedEnv = {
+	...env,
+	MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS: 'hub-read=read,hub-edit=edit,hub-full=full',
+	MARIMOHUB_DEFAULT_ROLE: 'none',
+};
+function mappedTokenFixture() {
+	const deps = createFromEnv(mappedEnv);
+	const app = createApi(deps);
+	const request = (path: string, claims: Record<string, unknown>, init: RequestInit = {}) => {
+		const headers = new Headers(init.headers);
+		headers.set('Authorization', `Bearer ${accessToken(claims)}`);
+		return app.request(path, { ...init, headers });
+	};
+	return { deps, request };
+}
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
 function accessToken(overrides: Record<string, unknown> = {}) {
 	const now = Math.floor(Date.now() / 1000);
@@ -165,6 +180,99 @@ describe('signed external tokens through the composition root', () => {
 				).status,
 			).toBe(401);
 		}
+	});
+
+	it('authenticates an array-scope token through a configured scope grant', async () => {
+		const { request } = mappedTokenFixture();
+		expect((await request('/api/v1/me', { scope: ['hub-read', 'openid'] })).status).toBe(200);
+		expect((await request('/api/v1/me', { scope: ['other-api', 'openid'] })).status).toBe(401);
+	});
+
+	it.each(['string', 'array'] as const)(
+		'enforces mapped grants and project permissions for %s scope claims',
+		async (format) => {
+			const { deps, request: signedRequest } = mappedTokenFixture();
+			const user = UserId.parse('user-one');
+			await deps.services.catalog.initialize(user);
+			const own = await deps.services.projects.createProject(
+				{ name: 'Own', description: '' },
+				user,
+			);
+			const foreign = await deps.services.projects.createProject(
+				{ name: 'Foreign', description: '' },
+				UserId.parse('other-user'),
+			);
+			const request = (scopes: string[], path: string, method = 'GET', body?: unknown) =>
+				signedRequest(
+					`/api/v1${path}`,
+					{ scope: format === 'array' ? scopes : scopes.join(' ') },
+					{
+						method,
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify(body),
+					},
+				);
+			const notebook = { title: 'Notebook', description: '', code: 'import marimo' };
+			expect((await request(['hub-read'], `/projects/${own.id}`)).status).toBe(200);
+			expect(
+				(await request(['hub-read'], `/projects/${own.id}/notebooks`, 'POST', notebook)).status,
+			).toBe(403);
+			expect(
+				(await request(['hub-read', 'hub-edit'], `/projects/${own.id}/notebooks`, 'POST', notebook))
+					.status,
+			).toBe(201);
+			expect((await request(['hub-full'], `/projects/${own.id}`)).status).toBe(200);
+			expect((await request(['hub-full'], `/projects/${foreign.id}`)).status).toBe(404);
+			expect(
+				(await request(['hub-full'], `/projects/${foreign.id}/notebooks`, 'POST', notebook)).status,
+			).toBe(403);
+			for (const path of ['/me/tokens', '/admin/users']) {
+				expect((await request(['hub-full'], path)).status).toBe(403);
+			}
+		},
+	);
+
+	it('requires mcp:tools even when a mapped scope grants full access', async () => {
+		const { request } = mappedTokenFixture();
+		for (const [scope, status] of [
+			[['hub-full'], 401],
+			[['hub-full', 'mcp:tools'], 200],
+			[['mcp:tools'], 401],
+		] as const) {
+			const response = await request(
+				'/mcp',
+				{ scope },
+				{
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						Accept: 'application/json, text/event-stream',
+					},
+					body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+				},
+			);
+			expect(response.status).toBe(status);
+		}
+	});
+
+	it.each([
+		{ aud: 'https://other.example.com' },
+		{ iss: 'https://other-issuer.example.com' },
+		{ exp: 1 },
+		{ groups: ['guest'] },
+		{ email_verified: false },
+		{ scope: ['hub-full', 1] },
+		{ scope: ['hub-full mcp:tools'] },
+		{ scope: ['HUB-FULL'] },
+		{ scope: ['openid'] },
+	])('rejects invalid mapped tokens despite a valid browser cookie: %j', async (override) => {
+		const { request } = mappedTokenFixture();
+		const response = await request(
+			'/api/v1/me',
+			{ scope: ['hub-full'], ...override },
+			{ headers: { Cookie: sessionCookie() } },
+		);
+		expect(response.status).toBe(401);
 	});
 
 	it('rejects a combined Authorization header even with a valid browser session', async () => {
