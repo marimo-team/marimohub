@@ -1,6 +1,6 @@
 # Releasing
 
-Run `pnpm release <patch | minor | major | X.Y.Z>` to request a release PR.
+Run `pnpm release patch` (or `minor`, `major`, or a stable `X.Y.Z`) to request a release PR.
 Review and merge it to approve publication.
 See the [maintainer runbook](https://github.com/marimo-team/github-maintenance/blob/main/docs/releases.md) (internal) for approvals, access, and setup.
 

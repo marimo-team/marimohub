@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const json = (path) => JSON.parse(readFileSync(path, 'utf8'));
+const version = json('package.json').version;
+assert.equal(json('packages/iac/package.json').version, version);
+const imports = json('examples/integration-iac/deno/deno.json').imports;
+assert.equal(imports['@marimo-hub/iac'], `npm:@marimo-hub/iac@${version}`);
+assert.equal(imports['@marimo-hub/iac/runner'], `npm:@marimo-hub/iac@${version}/runner`);
+const cargo = readFileSync('apps/cli/Cargo.toml', 'utf8');
+assert.equal(cargo.match(/^version = "([^"]+)"$/m)?.[1], version);
+const lock = readFileSync('apps/cli/Cargo.lock', 'utf8');
+assert.equal(lock.match(/\[\[package\]\]\nname = "mohub"\nversion = "([^"]+)"/)?.[1], version);

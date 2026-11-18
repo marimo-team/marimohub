@@ -23,28 +23,26 @@ jobs:
         with:
           ref: main
           persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
       - name: Test version preparation
         run: node --test scripts/prepare-release.test.mjs
       - name: Prepare versions
         id: version
-        env:
-          REQUESTED_VERSION: ${{ inputs.version }}
-        run: |
-          node scripts/prepare-release.mjs "$REQUESTED_VERSION"
-          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+        uses: marimo-team/internal-gh-actions/prepare-release@SHARED_SHA
+        with:
+          version: ${{ inputs.version }}
       - name: Open release PR
         id: pr
-        uses: marimo-team/internal-gh-actions/release-pr@3a52681ab8e200a34175ec8e5d14985e4e7ce3c3
+        uses: marimo-team/internal-gh-actions/release-pr@SHARED_SHA
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          current-version: ${{ steps.version.outputs.current-version }}
+          manifest: ${{ steps.version.outputs.manifest }}
           version: ${{ steps.version.outputs.version }}
-          files: |
-            package.json
-            apps/cli/Cargo.toml
-            apps/cli/Cargo.lock
-            packages/iac/package.json
-            examples/integration-iac/deno/deno.json
+          files: ${{ steps.version.outputs.files }}
       - name: Link release PR
         env:
           PR_URL: ${{ steps.pr.outputs.url }}

@@ -1,0 +1,43 @@
+{
+  "repository": "marimo-team/marimohub",
+  "files": [
+    "package.json",
+    "apps/cli/Cargo.toml",
+    "apps/cli/Cargo.lock",
+    "packages/iac/package.json",
+    "examples/integration-iac/deno/deno.json"
+  ],
+  "command": [
+    "pnpm",
+    "release"
+  ],
+  "docs": "development_docs/releasing.md",
+  "checks": [
+    [
+      "node",
+      "scripts/check-release-metadata.mjs"
+    ],
+    [
+      "cargo",
+      "metadata",
+      "--manifest-path",
+      "apps/cli/Cargo.toml",
+      "--locked",
+      "--no-deps",
+      "--format-version",
+      "1"
+    ],
+    [
+      "pnpm",
+      "install",
+      "--lockfile-only",
+      "--frozen-lockfile",
+      "--ignore-scripts"
+    ]
+  ],
+  "manifest": "package.json",
+  "prepare": [
+    "node",
+    "scripts/prepare-release.mjs"
+  ]
+}
