@@ -364,6 +364,13 @@ built-in <code>marimohub:*</code> scopes keep their meaning: a mapping that name
 them stops startup, as do malformed pairs, unknown presets, invalid scope
 names, and duplicate scopes. Discovery metadata and MCP challenges advertise
 only the built-in scopes.</p>
+<p>Use dedicated Hub scopes for these mappings. Do not map general identity scopes
+such as <code>openid</code>, <code>profile</code>, or <code>email</code> to Hub presets.
+Every otherwise-valid token with a mapped scope receives that preset, regardless
+of which OAuth client requested the token. The user's permissions still limit access.</p>
+<p>Mappings do not replace the <code>mcp:tools</code> requirement. If the issuer cannot issue
+<code>mcp:tools</code>, mapped tokens can access the API but cannot access MCP.
+Clients must request the custom scopes explicitly; discovery does not advertise them.</p>
 <p>These scopes belong in the access token. <code>MARIMOHUB_AUTH_OIDC_SCOPES</code> controls
 browser login and does not request scopes for external clients.</p>
 <p>Grants apply to all projects that the user can already access. They cannot

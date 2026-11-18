@@ -180,6 +180,99 @@ describe('signed external tokens through the composition root', () => {
 		expect((await me(['other-api', 'openid'])).status).toBe(401);
 	});
 
+	it.each(['string', 'array'] as const)(
+		'enforces mapped grants and project permissions for %s scope claims',
+		async (format) => {
+			const deps = createFromEnv({
+				...env,
+				MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS: 'hub-read=read,hub-edit=edit,hub-full=full',
+				MARIMOHUB_DEFAULT_ROLE: 'none',
+			});
+			const user = UserId.parse('user-one');
+			await deps.services.catalog.initialize(user);
+			const own = await deps.services.projects.createProject(
+				{ name: 'Own', description: '' },
+				user,
+			);
+			const foreign = await deps.services.projects.createProject(
+				{ name: 'Foreign', description: '' },
+				UserId.parse('other-user'),
+			);
+			const app = createApi(deps);
+			const request = (scopes: string[], path: string, method = 'GET', body?: unknown) =>
+				app.request(`/api/v1${path}`, {
+					method,
+					headers: {
+						Authorization: `Bearer ${accessToken({ scope: format === 'array' ? scopes : scopes.join(' ') })}`,
+						'Content-Type': 'application/json',
+					},
+					...(body === undefined ? {} : { body: JSON.stringify(body) }),
+				});
+			const notebook = { title: 'Notebook', description: '', code: 'import marimo' };
+			expect((await request(['hub-read'], `/projects/${own.id}`)).status).toBe(200);
+			expect(
+				(await request(['hub-read'], `/projects/${own.id}/notebooks`, 'POST', notebook)).status,
+			).toBe(403);
+			expect(
+				(await request(['hub-read', 'hub-edit'], `/projects/${own.id}/notebooks`, 'POST', notebook))
+					.status,
+			).toBe(201);
+			expect((await request(['hub-full'], `/projects/${own.id}`)).status).toBe(200);
+			expect((await request(['hub-full'], `/projects/${foreign.id}`)).status).toBe(404);
+			expect(
+				(await request(['hub-full'], `/projects/${foreign.id}/notebooks`, 'POST', notebook)).status,
+			).toBe(403);
+			for (const path of ['/me/tokens', '/admin/users']) {
+				expect((await request(['hub-full'], path)).status).toBe(403);
+			}
+		},
+	);
+
+	it('requires mcp:tools even when a mapped scope grants full access', async () => {
+		const app = createApi(
+			createFromEnv({ ...env, MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS: 'hub-full=full' }),
+		);
+		for (const [scope, status] of [
+			[['hub-full'], 401],
+			[['hub-full', 'mcp:tools'], 200],
+			[['mcp:tools'], 401],
+		] as const) {
+			const response = await app.request('/mcp', {
+				method: 'POST',
+				headers: {
+					Authorization: `Bearer ${accessToken({ scope })}`,
+					'Content-Type': 'application/json',
+					Accept: 'application/json, text/event-stream',
+				},
+				body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+			});
+			expect(response.status).toBe(status);
+		}
+	});
+
+	it.each([
+		{ aud: 'https://other.example.com' },
+		{ iss: 'https://other-issuer.example.com' },
+		{ exp: 1 },
+		{ groups: ['guest'] },
+		{ email_verified: false },
+		{ scope: ['hub-full', 1] },
+		{ scope: ['hub-full mcp:tools'] },
+		{ scope: ['HUB-FULL'] },
+		{ scope: ['openid'] },
+	])('rejects invalid mapped tokens despite a valid browser cookie: %j', async (override) => {
+		const app = createApi(
+			createFromEnv({ ...env, MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS: 'hub-full=full' }),
+		);
+		const response = await app.request('/api/v1/me', {
+			headers: {
+				Cookie: sessionCookie(),
+				Authorization: `Bearer ${accessToken({ scope: ['hub-full'], ...override })}`,
+			},
+		});
+		expect(response.status).toBe(401);
+	});
+
 	it('rejects a combined Authorization header even with a valid browser session', async () => {
 		const app = createApi(createFromEnv(env));
 		const cookie = sessionCookie();
