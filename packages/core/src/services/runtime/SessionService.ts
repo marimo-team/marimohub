@@ -1254,6 +1254,25 @@ export class SessionService {
 		return sessions.filter((s) => present.includes(s.status));
 	}
 
+	async listPresentForUser(userId: UserId, projectId: ProjectId): Promise<Session[]> {
+		// Until completeness is established, an existing index may omit live sessions.
+		const index = this.indexReady() ? await this.index.read(userId) : null;
+		if (!index)
+			return (await this.listActiveByProject(projectId)).filter(
+				(session) => session.user_id === userId,
+			);
+		const records = await mapWithConcurrency(
+			index.entries.filter((entry) => entry.project_id === projectId),
+			BUCKET_SCAN_CONCURRENCY,
+			(entry) => this.readIndexedSession(userId, entry),
+		);
+		const present = PRESENT_STATUSES as readonly Session['status'][];
+		// Preserve project LIST order when reuse candidates have equal heartbeats.
+		return records
+			.filter((session): session is Session => session !== null && present.includes(session.status))
+			.sort((a, b) => a.session_id.localeCompare(b.session_id));
+	}
+
 	async listEditorsBlockingSourceUpdate(
 		projectId: ProjectId,
 		notebookId: NotebookId,
@@ -1360,7 +1379,9 @@ export class SessionService {
 			}
 		}
 		const now = Date.now();
-		const sessions = await this.scanProject(projectId, (session) => session);
+		const sessions = temporary
+			? await this.listPresentForUser(userId, projectId)
+			: await this.scanProject(projectId, (session) => session);
 		const live = sessions.filter(
 			(s) => s.notebook_id === notebookId && sessionMode(s) === 'edit' && isReusableSession(s, now),
 		);

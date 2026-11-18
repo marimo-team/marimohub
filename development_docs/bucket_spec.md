@@ -598,6 +598,11 @@ Matching membership skips session validation and writes. Changed membership is v
 Unchanged results preserve the index ETag. Explicit backfill processes every user.
 Heartbeats do not write the index.
 
+Temporary editor reuse reads the owner's index and validates only references in the requested project.
+Missing indexes or unconfirmed index completeness use a project-scoped scan.
+Present-session reads include starting, running and terminating sessions; reuse still excludes stopping and stale starting sessions.
+Project-wide listings and persistent editor sharing retain their project-wide scope.
+
 The [session index migration](./migrations.md#session-index-v1) builds indexes automatically.
 Admission uses scans until the background runner observes completion, then uses validated indexes.
 Existing indexes need no deployment-wide session LIST, including on cold replicas after startup checks.
