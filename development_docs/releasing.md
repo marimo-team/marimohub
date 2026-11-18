@@ -1,58 +1,18 @@
 # Releasing
 
-## Release procedure
+Run `pnpm release <patch | minor | major | X.Y.Z>` to request a release PR.
+Review and merge it to approve publication.
+See the [maintainer runbook](https://github.com/marimo-team/github-maintenance/blob/main/docs/releases.md) (internal) for approvals, access, and setup.
 
-1. With authenticated `gh`, run `pnpm release <patch | minor | major | X.Y.Z>`.
-   This dispatches [Prepare release PR](../.github/workflows/release-pr.yml) on
-   `main` without changing your local checkout. Another `marimo-eng` member approves
-   the `release` environment. The App then opens `release/X.Y.Z` with matching
-   root, CLI/Cargo lockfile, IaC package, and Deno import versions.
-2. Review the diff and merge the PR. Main requires an independent approval,
-   resolved review threads, and passing `test` and `verify` checks on an up-to-date branch.
-   Repository admins may bypass these requirements when merging a PR.
-3. Another `marimo-eng` member approves the tagging job's `release` environment.
-   The App creates the immutable annotated `vX.Y.Z` tag at the exact merge commit.
-4. The tag workflow publishes the container, Helm chart, CLI, and server binaries.
-   Its aggregate notification reports the required publishers' result. The IaC npm
-   package retains its [separate publication step](#integration-iac-package).
+The PR updates the root, CLI, IaC, and Deno import versions together.
+The tag publishes containers, the Helm chart, CLI, and server binaries.
+The IaC npm package has a [separate publication step](#integration-iac-package).
 
-Use `gh run list --workflow release-pr.yml` to find the preparation run and PR link.
-Versions must increase. An identical open release PR is reused; conflicting branches
-are never overwritten. Reopen a closed PR explicitly before retrying.
+Before merging, check the latest [Chart workflow](../.github/workflows/chart.yml) passed.
+Its path filters can leave an earlier failed run unresolved.
+Keep the Helm version pins in the chart and release workflows aligned.
 
-Before merging, check the latest [Chart workflow](../.github/workflows/chart.yml)
-passed. Its path filters can leave an earlier failed run unresolved. Chart and release
-workflows pin Helm v4.3.1; update those pins together.
-
-## Access and setup
-
-Repository Write access permits dispatch; read-only and fork contributors cannot
-start it on this repository. Dispatch does not authorize publication.
-The `release` environment permits only the `main` branch and requires a `marimo-eng`
-reviewer other than the initiator, with admin bypass disabled.
-
-Store `RELEASE_APP_ID` as a repository variable and `RELEASE_APP_PRIVATE_KEY` only
-as a `release` environment secret. Remove any repository-level copy after installing
-the environment secret. The App needs Contents and Pull requests write permission.
-Each action requests only its repository and required permissions; no Git credentials
-are persisted. Limit the App installation to its active consumers.
-
-The `Release tags created by App` ruleset allows only the App to create `v*` tags.
-The separate `Immutable tags` ruleset prevents everyone, including the App, from
-moving or deleting them. The source ruleset requires PR review and CI, with an admin
-bypass for PR merges only. That bypass does not permit direct pushes or bypass
-release-environment approvals.
-These rules are maintained in `github-maintenance/config/rulesets.json`.
-
-Shared actions live in [internal-gh-actions](https://github.com/marimo-team/internal-gh-actions).
-Update all four pinned SHAs together. Version preparation and package consistency
-checks stay in this repository. Publishers require a stable tag matching the manifest,
-an exact tag checkout, and main ancestry.
-
-An existing tag at the same commit is a successful no-op; it does not restart publication.
-Re-run failed publisher jobs to recover. A tag at a different commit is rejected.
-
-### Floating image tags
+## Release artifacts
 
 Every release pushes the `X.Y.Z`, `X.Y`, and `X` image tags. `latest` moves only
 when the released tag is the highest stable `v*` tag in the repository

@@ -93,7 +93,5 @@ request.
 
 ## Releases
 
-Run `pnpm release patch` to request a release PR. Repository writers can start the
-workflow; another `marimo-eng` member must approve its protected environment.
-Review and merge the version PR, then approve tagging to publish.
-See [Releasing](./development_docs/releasing.md) for versions, approvals, and recovery.
+Run `pnpm release patch` to request a release PR.
+See [Releasing](./development_docs/releasing.md) for package-specific steps and the internal maintainer runbook.
