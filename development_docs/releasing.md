@@ -4,14 +4,17 @@
 
 Releases are cut via a PR, never by pushing to `main` or hand-pushing tags.
 
-1. Run `pnpm release <X.Y.Z | patch | minor | major>`. This keeps the root,
-   Cargo package, and lockfile versions in sync on a fresh branch off
-   `origin/main`, then opens a PR titled `release: X.Y.Z`. The binary wheel
-   derives its version from Cargo.
+1. Run `pnpm release <X.Y.Z | patch | minor | major>` with authenticated `gh`.
+   This dispatches [Prepare release PR](../.github/workflows/release-pr.yml) from
+   `main`; it does not change your local branch or working tree. Follow the run with
+   `gh run list --workflow release-pr.yml`, or use the Actions page directly.
+   The workflow updates the root, CLI Cargo package and lockfile, IaC package, and
+   Deno example imports. The release App opens `release/X.Y.Z` with title
+   `release: X.Y.Z`. Review and CI happen on that PR. Versions must increase.
 2. Merge it. [`release-tag.yml`](../.github/workflows/release-tag.yml) verifies
-   the PR title matches `package.json`, then creates and pushes the `vX.Y.Z`
-   tag using a GitHub App token (tags pushed with the default `GITHUB_TOKEN`
-   do not trigger workflows).
+   the same-repository branch, PR title, and package versions, then calls the shared
+   release-tag action to create the annotated `vX.Y.Z` tag at the merge commit.
+   The App-created tag triggers publishing.
 3. The tag push triggers [`release.yml`](../.github/workflows/release.yml),
    which publishes the container image and the Helm chart to GHCR, builds the
    cross-platform `mohub` binaries and binary-only wheels, and creates a GitHub
@@ -21,20 +24,41 @@ Releases are cut via a PR, never by pushing to `main` or hand-pushing tags.
    a tag's release never shipped, its commits roll into the next release's
    notes.
 
-Before you tag, check that the latest [Chart workflow](../.github/workflows/chart.yml)
+Before you merge, check that the latest [Chart workflow](../.github/workflows/chart.yml)
 run on `main` passed. The workflow has path filters, so a red run stays red
 until a chart change or a manual re-run. Both `chart.yml` and `release.yml` pin
 Helm v4.3.1; change the two pins together.
 
+### Release App
+
+Configure `RELEASE_APP_ID` as a repository variable and `RELEASE_APP_PRIVATE_KEY`
+as a repository secret. Install the App on this repository with Contents write
+permission and Pull requests write permission. Approve the installation permission
+update after changing the App. The tagging job requests only Contents write; the
+PR preparation job requests Contents and Pull requests write. Both are scoped to this repository.
+It does not need branch-protection bypass or pull-request approval permission.
+The App token is minted after release validation and is not persisted in Git config.
+
+Tag creation uses the exact merged commit, even if `main` has advanced. A rerun
+accepts an existing tag only if it resolves to that commit; it never moves a tag.
+An existing tag does not trigger publication again: re-run the failed release jobs.
+
 ### Tag validation
 
-The `validate-tag` job runs first, and every release job depends on it. It runs
-`scripts/release-tag.sh validate TAG`, which prints the version without the
-leading `v` or exits 1. Only stable `vMAJOR.MINOR.PATCH` tags without leading
-zeros pass (`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`).
-Tags such as `v1.2` and `1.2.3` do not match the `v*.*.*` trigger, so no Release
-run starts. Tags such as `v1.2.3-rc.1` and `v01.2.3` match the trigger and start a
-run, but `validate-tag` fails and the workflow publishes nothing.
+The `validate-tag` job runs first, and every release job depends on it. The shared
+`validate-release` action requires a stable tag matching the root manifest version,
+a checkout at that tag, and ancestry on `origin/main`. Only `vMAJOR.MINOR.PATCH`
+without leading zeros passes. Prereleases fail before publication.
+
+The shared actions live in [internal-gh-actions](https://github.com/marimo-team/internal-gh-actions)
+and are pinned by commit SHA in the preparation, tagging, and publication workflows.
+Update these pins together. Repository-specific version preparation stays in
+`scripts/prepare-release.mjs`; shared actions never run package preparation commands.
+Notifications aggregate all required publishers, including cancelled or skipped jobs.
+
+If preparation finds that `main` advanced, rerun it. An identical release branch and
+open PR are reused. Different changes on that branch are never overwritten; inspect
+and resolve the pending release before retrying. Reopen a closed release PR explicitly.
 
 ### Floating image tags
 

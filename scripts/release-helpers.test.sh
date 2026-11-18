@@ -344,7 +344,7 @@ fi
 release_repo="$temporary/release-script"
 mkdir -p "$release_repo/apps/cli" "$release_repo/docs" "$release_repo/scripts" "$release_repo/bin" \
 	"$release_repo/packages/iac" "$release_repo/examples/integration-iac/deno"
-for script in release.mjs prepare-iac-release.mjs iac-release.mjs; do
+for script in release.mjs prepare-release.mjs prepare-iac-release.mjs iac-release.mjs; do
 	cp "$repo_root/scripts/$script" "$release_repo/scripts/$script"
 done
 printf '{"name":"@marimo-hub/iac","version":"1.2.3"}\n' >"$release_repo/packages/iac/package.json"
@@ -355,27 +355,23 @@ printf '{"name":"release-test","version":"1.2.3"}\n' >"$release_repo/package.jso
 printf '[package]\nname = "mohub"\nversion = "1.2.3"\n' >"$release_repo/apps/cli/Cargo.toml"
 touch "$release_repo/apps/cli/Cargo.lock"
 printf "setup:\n  version: latest\n" >"$release_repo/docs/cli.md"
-printf '%s\n' \
-	'#!/usr/bin/env bash' \
-	'root="$(cd "$(dirname "$0")/.." && pwd)"' \
-	'if [[ "$1" == "show" ]]; then' \
-	'  case "$2" in' \
-	'    origin/main:package.json) cat "$root/package.json" ;;' \
-	'    origin/main:apps/cli/Cargo.toml) cat "$root/apps/cli/Cargo.toml" ;;' \
-	'    origin/main:docs/cli.md) cat "$root/docs/cli.md" ;;' \
-	'    *) exit 2 ;;' \
-	'  esac' \
-	'  exit 0' \
-	'fi' \
-	'[[ "$1" != "show-ref" ]]' >"$release_repo/bin/git"
-chmod +x "$release_repo/bin/git"
-for command in cargo gh; do
-	printf '#!/usr/bin/env bash\nexit 0\n' >"$release_repo/bin/$command"
-	chmod +x "$release_repo/bin/$command"
-done
+printf '#!/usr/bin/env bash\nexit 1\n' >"$release_repo/bin/git"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$release_repo/bin/cargo"
+cat >"$release_repo/bin/gh" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$GH_CALL_LOG"
+MOCK
+chmod +x "$release_repo/bin/"*
 (
 	cd "$release_repo"
-	PATH="$release_repo/bin:$PATH" node scripts/release.mjs 1.2.4
+	GH_CALL_LOG="$temporary/gh-dispatch.log" PATH="$release_repo/bin:$PATH" node scripts/release.mjs 1.2.4
+)
+[[ "$(cat "$temporary/gh-dispatch.log")" == 'workflow run release-pr.yml --ref main -f version=1.2.4' ]] || \
+	fail 'release command did not dispatch preparation on main'
+grep -q '"version":"1.2.3"' "$release_repo/package.json" || fail 'dispatch changed local version'
+(
+	cd "$release_repo"
+	PATH="$release_repo/bin:$PATH" node scripts/prepare-release.mjs 1.2.4
 )
 grep -q '"version": "1.2.4"' "$release_repo/package.json" || fail 'package version was not updated'
 grep -q 'version = "1.2.4"' "$release_repo/apps/cli/Cargo.toml" || fail 'Cargo version was not updated'
