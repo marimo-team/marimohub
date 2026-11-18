@@ -87,6 +87,12 @@ const OWNED_INGRESS = {
 	metadata: { ...OWNED_SERVICE.metadata, uid: 'ingress-uid' },
 };
 
+function podAbsent(times = 1): void {
+	for (let i = 0; i < times; i++) {
+		k8sMock.core.readNamespacedPod.mockRejectedValueOnce({ code: 404 });
+	}
+}
+
 beforeEach(() => {
 	for (const fn of [
 		k8sMock.core.createNamespacedPod,
@@ -116,6 +122,7 @@ describe('createK8sClient', () => {
 	it.each([true, false])(
 		'creates pod identity annotations only when supplied (%s)',
 		async (supplied) => {
+			podAbsent();
 			const title = `Example notebook — Δ measurements / ${'x'.repeat(70)}`;
 			const extraLabels = {
 				'marimohub.io/project-id': 'spoofed-project',
@@ -236,6 +243,7 @@ describe('createK8sClient', () => {
 	});
 
 	it('sends template fields to Kubernetes without changing the Service or Ingress', async () => {
+		podAbsent(2);
 		const client = createK8sClient({ namespace: 'kernels' });
 		const options = {
 			name: 'mh-sb',
@@ -272,7 +280,78 @@ describe('createK8sClient', () => {
 		expect(k8sMock.kubeConfigs).toHaveLength(0);
 	});
 
+	it('reconnects to an existing Pod without sending a create', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				sandboxId: SANDBOX_ID,
+				image: 'kernel-image:v1',
+				ports: [{ port: 2718, host: '' }],
+				namespace: 'kernels',
+			}),
+		).resolves.toEqual({ createdPod: false });
+		expect(k8sMock.core.readNamespacedPod).toHaveBeenCalledWith({
+			name: 'mh-sb',
+			namespace: 'kernels',
+		});
+		expect(k8sMock.core.createNamespacedPod).not.toHaveBeenCalled();
+	});
+
+	it('reads Pod existence on every ensure after creation and deletion', async () => {
+		podAbsent();
+		const client = createK8sClient({ namespace: 'kernels' });
+		const options = {
+			name: 'mh-sb',
+			sandboxId: SANDBOX_ID,
+			image: 'kernel-image:v1',
+			ports: [{ port: 2718, host: '' }],
+			namespace: 'kernels',
+		};
+
+		await expect(client.ensure(options)).resolves.toEqual({ createdPod: true });
+		await expect(client.ensure(options)).resolves.toEqual({ createdPod: false });
+		podAbsent();
+		await expect(client.ensure(options)).resolves.toEqual({ createdPod: true });
+		expect(k8sMock.core.readNamespacedPod).toHaveBeenCalledTimes(3);
+		expect(k8sMock.core.createNamespacedPod).toHaveBeenCalledTimes(2);
+	});
+
+	it('propagates a Pod read transport error without creating a Pod', async () => {
+		const error = new Error('connection reset');
+		k8sMock.core.readNamespacedPod.mockRejectedValueOnce(error);
+		const client = createK8sClient({ namespace: 'kernels' });
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				sandboxId: SANDBOX_ID,
+				image: 'kernel-image:v1',
+				ports: [{ port: 2718, host: '' }],
+				namespace: 'kernels',
+			}),
+		).rejects.toBe(error);
+		expect(k8sMock.core.createNamespacedPod).not.toHaveBeenCalled();
+	});
+
+	it('creates the Pod when it does not exist yet', async () => {
+		k8sMock.core.readNamespacedPod.mockRejectedValueOnce({ code: 404 });
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				sandboxId: SANDBOX_ID,
+				image: 'kernel-image:v1',
+				ports: [{ port: 2718, host: '' }],
+				namespace: 'kernels',
+			}),
+		).resolves.toEqual({ createdPod: true });
+		expect(k8sMock.core.createNamespacedPod).toHaveBeenCalledTimes(1);
+	});
+
 	it('creates pod, service, and ingress manifests and tolerates already-exists responses', async () => {
+		podAbsent();
 		k8sMock.core.createNamespacedPod.mockRejectedValueOnce({ code: 409 });
 		const client = createK8sClient({ namespace: 'kernels' });
 
@@ -343,6 +422,7 @@ describe('createK8sClient', () => {
 	});
 
 	it('names every port and routes a rule per hosted port with multiple surfaces', async () => {
+		podAbsent();
 		const client = createK8sClient({ namespace: 'kernels' });
 		await client.ensure({
 			name: 'mh-sb',
@@ -562,6 +642,7 @@ describe('createK8sClient', () => {
 	});
 
 	it('re-reads and retries an ingress replacement conflict', async () => {
+		podAbsent();
 		k8sMock.net.createNamespacedIngress.mockRejectedValueOnce({ code: 409 });
 		k8sMock.net.readNamespacedIngress
 			.mockResolvedValueOnce({
@@ -689,6 +770,7 @@ describe('createK8sClient', () => {
 	});
 
 	it('skips ingress creation when no host is configured', async () => {
+		podAbsent();
 		const client = createK8sClient({});
 
 		await expect(
@@ -705,6 +787,7 @@ describe('createK8sClient', () => {
 	});
 
 	it('honours an explicit imagePullPolicy override', async () => {
+		podAbsent();
 		const client = createK8sClient({});
 		await client.ensure({
 			name: 'mh-sb',
@@ -720,6 +803,7 @@ describe('createK8sClient', () => {
 	});
 
 	it('defaults the pull policy per tag mutability, like Kubernetes itself', async () => {
+		podAbsent();
 		// Mutable :latest must keep refreshing — a cached stale image would
 		// otherwise be served forever under IfNotPresent.
 		const client = createK8sClient({});
@@ -743,6 +827,7 @@ describe('createK8sClient', () => {
 	});
 
 	it('spreads extra labels onto the Pod, Service, and Ingress under the managed labels', async () => {
+		podAbsent();
 		const client = createK8sClient({});
 		await client.ensure({
 			name: 'mh-sb',
@@ -775,6 +860,7 @@ describe('createK8sClient', () => {
 	});
 
 	it('omits the Pod securityContext unless a uid is configured', async () => {
+		podAbsent(3);
 		const client = createK8sClient({});
 		const base = {
 			name: 'mh-sb',
@@ -799,6 +885,7 @@ describe('createK8sClient', () => {
 	});
 
 	it('adds limits only for fields supplied by a compute profile', async () => {
+		podAbsent();
 		const client = createK8sClient({});
 		await client.ensure({
 			name: 'mh-sb',
@@ -1068,6 +1155,7 @@ describe('createK8sClient', () => {
 	});
 
 	it('rethrows a 403 RBAC-forbidden pod create (only 409 is tolerated)', async () => {
+		podAbsent();
 		k8sMock.core.createNamespacedPod.mockRejectedValueOnce({ code: 403 });
 		const client = createK8sClient({ namespace: 'kernels' });
 

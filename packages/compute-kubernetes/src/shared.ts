@@ -260,9 +260,8 @@ export interface K8sExecOptions {
  */
 export interface K8sClient {
 	/**
-	 * Create the Pod + Service and an Ingress rule per hosted port for a session if
-	 * they don't already exist. `createdPod` is false when the Pod pre-existed (a
-	 * reconnect).
+	 * Read the Pod and create it only if absent; reconcile Service and Ingress routes.
+	 * `createdPod` is false on reconnect, including a create lost to another writer.
 	 */
 	ensure(options: EnsureSandboxOptions): Promise<{ createdPod: boolean }>;
 	/** Repair Service/Ingress routing without creating or replacing the Pod. */

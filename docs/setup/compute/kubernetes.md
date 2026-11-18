@@ -6,9 +6,8 @@ the cluster is ready:
 1. **Bake the client in:** `pnpm add @kubernetes/client-node` (bring-your-own
    dependency) and rebuild your server image.
 2. **Grant RBAC:** marimohub's ServiceAccount needs `pods` and `services` in the
-   kernel namespace (`services` includes `update`, so a reconnect can reconcile
-   the Service's ports — add it when upgrading). Subdomain exposure also needs
-   `ingresses`.
+   kernel namespace, including `get` on Pods and `update` on Services.
+   Subdomain exposure also needs `ingresses`.
 3. **For subdomain exposure, configure ingress + TLS:** an ingress controller, a
    `*.{host}` DNS record, and either a matching wildcard TLS secret or an
    ingress-controller default certificate so each `{id}.{host}` kernel URL is
@@ -63,6 +62,12 @@ cluster, namespace, and Pod.
 If unset, the hub uses the template security context or leaves it unset.
 The UID must have write access to the image work directory. `fsGroup` affects
 mounted volumes only.
+
+Each sandbox ensure reads the Pod first. If the Pod exists, the hub reuses it
+without a Pod create request or changes to its specification. Only a `404`
+response triggers creation. Other read errors fail the operation. If another
+writer creates the Pod between the read and create, the hub accepts the `409`
+conflict as a reconnect. Services and Ingresses still reconcile their routes.
 
 #### Pod templates
 

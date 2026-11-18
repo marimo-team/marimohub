@@ -442,14 +442,13 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			const service = serviceManifest(o);
 			const ingress = o.ports.some((p) => p.host) ? ingressManifest(o) : undefined;
 			const { core } = await apis();
-			// Order-independent: k8s is declarative (a Service's selector / an
-			// Ingress's backend need not pre-exist), so the creates fan out. The
-			// Service and Ingress reconcile so a reconnect picks up newly reserved
-			// surface ports rather than swallowing the create conflict.
-			const [createdPod] = await Promise.all([
-				createTolerant(() => core.createNamespacedPod({ namespace, body: pod })),
-				reconcileRoutes(service, ingress),
-			]);
+			// Avoid Pod admission on reconnects; tolerate a concurrent create after the read.
+			const ensurePod = async (): Promise<boolean> =>
+				(await readOptional(() => core.readNamespacedPod({ name: o.name, namespace })))
+					? false
+					: createTolerant(() => core.createNamespacedPod({ namespace, body: pod }));
+			// Routes can reconcile before the Pod exists, including newly reserved ports.
+			const [createdPod] = await Promise.all([ensurePod(), reconcileRoutes(service, ingress)]);
 			return { createdPod };
 		},
 
