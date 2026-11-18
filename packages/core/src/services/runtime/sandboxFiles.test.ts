@@ -1874,6 +1874,271 @@ describe('workspace metadata edge cases', () => {
 });
 
 describe('readSessionArtifacts', () => {
+	it('batches small checkpoint artifacts after one listing without individual transport reads', async () => {
+		const { instance } = makeFakeSandbox();
+		const batch = vi.fn(async () => [
+			{ success: true as const, content: '\ufeff# café\r\n' },
+			readFileFailure('NOT_FOUND'),
+			readFileFailure('READ_FAILED'),
+			{ success: true as const, content: '{"version":1}' },
+		]);
+		const listing = vi.fn(instance.listFiles);
+		const single = vi.fn(instance.readFileBounded);
+		const artifacts = await readSessionArtifacts(
+			{ ...instance, listFiles: listing, readFileBounded: single, readFilesBounded: batch },
+			MOUNT,
+			undefined,
+			'nested/app.py',
+			undefined,
+			true,
+		);
+		expect(artifacts).toEqual({
+			code: '\ufeff# café\r\n',
+			deps: undefined,
+			html: undefined,
+			session: '{"version":1}',
+		});
+		expect(batch).toHaveBeenCalledExactlyOnceWith(
+			[
+				'/workspace/nested/app.py',
+				'/workspace/pyproject.toml',
+				'/workspace/nested/__marimo__/app.html',
+				'/workspace/nested/__marimo__/session/app.py.json',
+			],
+			{ maxBytes: MAX_ARTIFACT_BYTES, maxTotalBytes: MAX_ARTIFACT_BYTES, timeoutMs: 10000 },
+		);
+		expect(listing).toHaveBeenCalledOnce();
+		expect(single).not.toHaveBeenCalled();
+	});
+
+	it.each(['code', 'deps', 'session'])('rejects failed critical %s in a batch', async (field) => {
+		const { instance } = makeFakeSandbox();
+		const fields = ['code', 'deps', 'html', 'session'];
+		const readFilesBounded = async () =>
+			fields.map((name) =>
+				name === field
+					? readFileFailure('BACKEND_ERROR')
+					: { success: true as const, content: 'data' },
+			);
+		await expect(
+			readSessionArtifacts(
+				{ ...instance, readFilesBounded },
+				MOUNT,
+				undefined,
+				'notebook.py',
+				undefined,
+				true,
+			),
+		).rejects.toMatchObject({
+			code: 'BACKEND_ERROR',
+			object: field === 'code' ? 'notebook.py' : field,
+		});
+	});
+
+	it('rejects a missing batch response without falling back to individual reads', async () => {
+		const { instance } = makeFakeSandbox();
+		const single = vi.fn(instance.readFileBounded);
+		const readFilesBounded = vi.fn();
+		await expect(
+			readSessionArtifacts(
+				{ ...instance, readFilesBounded, readFileBounded: single },
+				MOUNT,
+				undefined,
+				'notebook.py',
+				undefined,
+				true,
+			),
+		).rejects.toThrow('Incomplete bounded read batch');
+		expect(single).not.toHaveBeenCalled();
+	});
+
+	it('refuses an incomplete batch instead of treating omitted results as missing files', async () => {
+		const { instance } = makeFakeSandbox();
+		const readFilesBounded = async () => [{ success: true as const, content: 'source' }];
+		await expect(
+			readSessionArtifacts(
+				{ ...instance, readFilesBounded },
+				MOUNT,
+				undefined,
+				'notebook.py',
+				undefined,
+				true,
+			),
+		).rejects.toThrow('Incomplete bounded read batch');
+	});
+
+	it('rejects malformed encoded critical content from a batch without retrying individual reads', async () => {
+		const { instance } = makeFakeSandbox();
+		const single = vi.fn(instance.readFileBounded);
+		const readFilesBounded = async () => [
+			{ success: true as const, content: '!!!!', encoding: 'base64' as const },
+			...Array.from({ length: 3 }, () => readFileFailure('NOT_FOUND')),
+		];
+		await expect(
+			readSessionArtifacts(
+				{ ...instance, readFileBounded: single, readFilesBounded },
+				MOUNT,
+				undefined,
+				'notebook.py',
+				undefined,
+				true,
+			),
+		).rejects.toMatchObject({ code: 'READ_FAILED', object: 'notebook.py' });
+		expect(single).not.toHaveBeenCalled();
+	});
+
+	it('uses individual reads when four maximum-sized artifacts exceed the batch budget', async () => {
+		const { instance } = makeFsSandbox({
+			files: {
+				'notebook.py': 'code',
+				'pyproject.toml': 'deps',
+				'__marimo__/notebook.html': 'html',
+				'__marimo__/session/notebook.py.json': 'session',
+			},
+			sizes: {
+				'notebook.py': MAX_ARTIFACT_BYTES,
+				'pyproject.toml': MAX_ARTIFACT_BYTES,
+				'__marimo__/notebook.html': MAX_ARTIFACT_BYTES,
+				'__marimo__/session/notebook.py.json': MAX_ARTIFACT_BYTES,
+			},
+		});
+		const readFilesBounded = vi.fn();
+		const single = vi.fn(instance.readFileBounded);
+		expect(
+			await readSessionArtifacts(
+				{ ...instance, readFilesBounded, readFileBounded: single },
+				MOUNT,
+				undefined,
+				'notebook.py',
+				undefined,
+				true,
+			),
+		).toEqual({ code: 'code', deps: 'deps', html: 'html', session: 'session' });
+		expect(readFilesBounded).not.toHaveBeenCalled();
+		expect(single).toHaveBeenCalledTimes(4);
+	});
+
+	it('does not trust a present artifact with an unknown listed size for batch eligibility', async () => {
+		const { instance } = makeFsSandbox({ files: { 'notebook.py': 'code' } });
+		const listed = await instance.listFiles(MOUNT);
+		if (!listed.success) throw new Error('Fixture listing failed');
+		const readFilesBounded = vi.fn();
+		const listFiles = async () => ({
+			success: true as const,
+			files: listed.files.map((file) => ({ ...file, size: undefined as unknown as number })),
+		});
+		expect(
+			await readSessionArtifacts(
+				{ ...instance, readFilesBounded, listFiles },
+				MOUNT,
+				undefined,
+				'notebook.py',
+				undefined,
+				true,
+			),
+		).toMatchObject({ code: 'code' });
+		expect(readFilesBounded).not.toHaveBeenCalled();
+	});
+
+	it('rejects actual aggregate bytes that exceed the budget despite a successful empty listing', async () => {
+		const { instance } = makeFakeSandbox();
+		const content = 'x'.repeat(MAX_ARTIFACT_BYTES / 2 + 1);
+		const readFilesBounded = async () => [
+			{ success: true as const, content },
+			{ success: true as const, content },
+			readFileFailure('NOT_FOUND'),
+			readFileFailure('NOT_FOUND'),
+		];
+		const single = vi.fn(instance.readFileBounded);
+		await expect(
+			readSessionArtifacts(
+				{ ...instance, readFilesBounded, readFileBounded: single },
+				MOUNT,
+				undefined,
+				'notebook.py',
+				undefined,
+				true,
+			),
+		).rejects.toThrow('Bounded read batch exceeds byte limit');
+		expect(single).not.toHaveBeenCalled();
+	});
+
+	it('uses individual reads when the listing cannot establish batch eligibility', async () => {
+		const { instance } = makeFakeSandbox({ files: { '/workspace/notebook.py': 'code' } });
+		const readFilesBounded = vi.fn();
+		const listFiles = vi.fn(async () => listFilesFailure('BACKEND_ERROR'));
+		expect(
+			await readSessionArtifacts(
+				{ ...instance, readFilesBounded, listFiles },
+				MOUNT,
+				undefined,
+				'notebook.py',
+				undefined,
+				true,
+			),
+		).toMatchObject({ code: 'code' });
+		expect(readFilesBounded).not.toHaveBeenCalled();
+	});
+
+	it('does not retry individual reads after a batch transport failure', async () => {
+		const { instance } = makeFakeSandbox();
+		const single = vi.fn(instance.readFileBounded);
+		const readFilesBounded = vi.fn(async () => {
+			throw new Error('transport offline');
+		});
+		await expect(
+			readSessionArtifacts(
+				{ ...instance, readFilesBounded, readFileBounded: single },
+				MOUNT,
+				undefined,
+				'notebook.py',
+				undefined,
+				true,
+			),
+		).rejects.toThrow('transport offline');
+		expect(single).not.toHaveBeenCalled();
+	});
+
+	it('reports a missing critical source without replacing it with optional contents', async () => {
+		const { instance } = makeFakeSandbox();
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const readFilesBounded = async () => [
+				readFileFailure('NOT_FOUND'),
+				...Array.from({ length: 3 }, () => ({ success: true as const, content: 'optional' })),
+			];
+			expect(
+				await readSessionArtifacts(
+					{ ...instance, readFilesBounded },
+					MOUNT,
+					undefined,
+					'notebook.py',
+					undefined,
+					true,
+				),
+			).toMatchObject({ code: undefined, deps: 'optional', session: 'optional' });
+			expect(error).toHaveBeenCalledOnce();
+		} finally {
+			error.mockRestore();
+		}
+	});
+
+	it('keeps individual bounded reads for providers without the batch capability', async () => {
+		const { instance } = makeFakeSandbox({ files: { '/workspace/notebook.py': 'source' } });
+		const readFileBounded = vi.fn(instance.readFileBounded);
+		expect(
+			await readSessionArtifacts(
+				{ ...instance, readFileBounded },
+				MOUNT,
+				undefined,
+				'notebook.py',
+				undefined,
+				true,
+			),
+		).toMatchObject({ code: 'source' });
+		expect(readFileBounded).toHaveBeenCalledTimes(4);
+	});
+
 	describe.each(['utf-8', 'base64'] as const)('%s notebook transport', (encoding) => {
 		it.each([
 			{ name: 'BOM, CRLF, and Unicode', code: '\ufeff# café α 🐍\r\n' },

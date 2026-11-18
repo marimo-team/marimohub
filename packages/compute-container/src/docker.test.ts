@@ -56,6 +56,33 @@ describe('DockerCompute', () => {
 		expect(runCall!.args).not.toContain('my-image');
 	});
 
+	it('reads checkpoint artifacts through a single bounded exec', async () => {
+		const { runner, calls } = fakeRunner((args) => {
+			if (args[0] === 'exec' && args.at(-1)?.includes('paths, limit, budget'))
+				return {
+					stdout: JSON.stringify([{ content: btoa('code') }, { reason: 'not_found' }]),
+					stderr: '',
+					exitCode: 0,
+				};
+			return defaultHandler(args);
+		});
+		const sandbox = new DockerCompute({}, runner).create(SANDBOX_ID);
+		expect(
+			await sandbox.readFilesBounded!(['/workspace/notebook.py', '/workspace/pyproject.toml'], {
+				maxBytes: 100,
+				maxTotalBytes: 100,
+				timeoutMs: 1000,
+			}),
+		).toEqual([
+			{ success: true, content: btoa('code'), encoding: 'base64' },
+			{ success: false, content: '', error: { code: 'NOT_FOUND', reason: 'not_found' } },
+		]);
+		const commands = calls.filter((call) => call.args[0] === 'exec');
+		expect(commands).toHaveLength(1);
+		expect(commands[0].args).toContain('python3');
+		expect(commands[0].args.at(-1)).toContain('/workspace/notebook.py');
+	});
+
 	it('writeFiles: mkdir -p the parents then pipe content via stdin', async () => {
 		const { runner, calls } = fakeRunner(defaultHandler);
 		const sb = new DockerCompute({}, runner).create(SANDBOX_ID);

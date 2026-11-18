@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { START_PROCESS, KILL_PROCESS } from './process';
 import {
 	readBoundedFile,
+	readBoundedFiles,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
 	buildLaunchCommand,
@@ -30,6 +31,7 @@ import {
 import { SandboxId } from '@marimo-hub/core/ids';
 import type {
 	BoundedReadOptions,
+	BoundedBatchReadOptions,
 	ActiveSandbox,
 	ComputeResources,
 	CreateSandboxOptions,
@@ -311,6 +313,13 @@ class ContainerSandboxInstance implements SandboxInstance {
 
 	async readFileBounded(path: string, options: BoundedReadOptions): Promise<ReadFileResult> {
 		return readBoundedFile(path, options, (command, limits) => this.exec(command, limits));
+	}
+
+	async readFilesBounded(
+		paths: readonly string[],
+		options: BoundedBatchReadOptions,
+	): Promise<ReadFileResult[]> {
+		return readBoundedFiles(paths, options, (command, limits) => this.exec(command, limits));
 	}
 
 	async readFile(path: string): Promise<ReadFileResult> {

@@ -5,6 +5,10 @@ export interface BoundedReadOptions {
 	timeoutMs: number;
 }
 
+export interface BoundedBatchReadOptions extends BoundedReadOptions {
+	maxTotalBytes: number;
+}
+
 const DIAGNOSTIC_LIMIT = 2048;
 const FAILURE_PREFIX = 'MARIMOHUB_BOUNDED_READ:';
 const READER_REASONS = new Set([
@@ -17,50 +21,92 @@ const READER_REASONS = new Set([
 	'io_error',
 ]);
 
-// Open every path component without following links, and use O_NONBLOCK so a
-// swapped-in FIFO cannot block before fstat rejects it.
-const READ_FILE = `import os, stat, sys, base64, signal
+// O_NOFOLLOW on every component rejects symlink parents; O_NONBLOCK prevents FIFO hangs.
+const SAFE_READER = `import os, stat, sys, base64, signal
 
-def fail(reason):
-    print('${FAILURE_PREFIX}' + reason, file=sys.stderr, flush=True)
+class ReadFailure(Exception):
+    pass
+
+class BatchLimit(Exception):
+    pass
+
+def timeout(*_):
+    print('${FAILURE_PREFIX}timeout', file=sys.stderr, flush=True)
     sys.exit(1)
 
-signal.signal(signal.SIGALRM, lambda *_: fail('timeout'))
+def read_file(path, limit, budget=None):
+    parts = path.split('/')
+    if not path.startswith('/') or '..' in parts:
+        raise ReadFailure('invalid_path')
+    fd = None
+    try:
+        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+        names = [p for p in parts if p and p != '.']
+        for i, name in enumerate(names):
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            if i < len(names) - 1:
+                flags |= os.O_DIRECTORY
+            next_fd = os.open(name, flags, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ReadFailure('not_regular')
+        if info.st_size > limit:
+            raise ReadFailure('size_limit')
+        if budget is not None and info.st_size > budget:
+            raise BatchLimit()
+        with os.fdopen(fd, 'rb', closefd=False) as source:
+            data = source.read(min(limit, budget) + 1 if budget is not None else limit + 1)
+        if len(data) > limit:
+            raise ReadFailure('size_limit')
+        if budget is not None and len(data) > budget:
+            raise BatchLimit()
+        return data
+    except FileNotFoundError:
+        raise ReadFailure('not_found') from None
+    except PermissionError:
+        raise ReadFailure('permission_denied') from None
+    except OSError:
+        raise ReadFailure('io_error') from None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+signal.signal(signal.SIGALRM, timeout)`;
+
+const READ_FILE = `${SAFE_READER}
 signal.setitimer(signal.ITIMER_REAL, float(sys.argv[3]) / 1000)
-path, limit = sys.argv[1], int(sys.argv[2])
-parts = path.split('/')
-if not path.startswith('/') or '..' in parts:
-    fail('invalid_path')
-fd = None
 try:
-    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
-    names = [p for p in parts if p and p != '.']
-    for i, name in enumerate(names):
-        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-        if i < len(names) - 1:
-            flags |= os.O_DIRECTORY
-        next_fd = os.open(name, flags, dir_fd=fd)
-        os.close(fd)
-        fd = next_fd
-    info = os.fstat(fd)
-    if not stat.S_ISREG(info.st_mode):
-        fail('not_regular')
-    if info.st_size > limit:
-        fail('size_limit')
-    with os.fdopen(fd, 'rb', closefd=False) as source:
-        data = source.read(limit + 1)
-    if len(data) > limit:
-        fail('size_limit')
-    sys.stdout.write(base64.b64encode(data).decode('ascii'))
-except FileNotFoundError:
-    fail('not_found')
-except PermissionError:
-    fail('permission_denied')
-except OSError:
-    fail('io_error')
-finally:
-    if fd is not None:
-        os.close(fd)`;
+    sys.stdout.write(base64.b64encode(read_file(sys.argv[1], int(sys.argv[2]))).decode('ascii'))
+except ReadFailure as error:
+    print('${FAILURE_PREFIX}' + str(error), file=sys.stderr, flush=True)
+    sys.exit(1)`;
+
+// Stream each result instead of retaining every raw and encoded file in the container.
+const READ_FILES = `${SAFE_READER}
+import json
+paths, limit, budget = json.loads(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
+signal.setitimer(signal.ITIMER_REAL, float(sys.argv[4]) / 1000)
+sys.stdout.write('[')
+try:
+    for index, path in enumerate(paths):
+        if index:
+            sys.stdout.write(',')
+        try:
+            data = read_file(path, limit, budget)
+        except ReadFailure as error:
+            json.dump({'reason': str(error)}, sys.stdout, separators=(',', ':'))
+            continue
+        budget -= len(data)
+        sys.stdout.write('{"content":"')
+        sys.stdout.write(base64.b64encode(data).decode('ascii'))
+        sys.stdout.write('"}')
+        del data
+    sys.stdout.write(']')
+except BatchLimit:
+    print('${FAILURE_PREFIX}batch_size_limit', file=sys.stderr, flush=True)
+    sys.exit(1)`;
 
 interface ReadExecResult {
 	success: boolean;
@@ -90,6 +136,88 @@ function boundedReadFailure(reason: string, result?: ReadExecResult) {
 			}),
 		},
 	} as const;
+}
+
+/** Each result corresponds to its input path; all encoded output shares one transport budget. */
+export async function readBoundedFiles(
+	paths: readonly string[],
+	options: BoundedBatchReadOptions,
+	execute: (
+		command: string,
+		options: { timeout: number; maxOutputBytes: number },
+	) => Promise<ReadExecResult>,
+): Promise<Awaited<ReturnType<typeof readBoundedFile>>[]> {
+	if (paths.length === 0) return [];
+	const failed = (reason: string) => paths.map(() => boundedReadFailure(reason));
+	const encodedBytes = 4 * Math.ceil(options.maxBytes / 3);
+	const totalBudget = Math.min(options.maxTotalBytes, paths.length * options.maxBytes);
+	const maxOutputBytes = 4 * Math.ceil(totalBudget / 3) + paths.length * 128 + 2;
+	if (
+		paths.length > 16 ||
+		paths.some((path) => typeof path !== 'string' || path.length > 4096) ||
+		!Number.isSafeInteger(options.maxBytes) ||
+		options.maxBytes < 0 ||
+		!Number.isSafeInteger(options.maxTotalBytes) ||
+		options.maxTotalBytes < 0 ||
+		!Number.isSafeInteger(encodedBytes) ||
+		!Number.isSafeInteger(maxOutputBytes) ||
+		!Number.isFinite(options.timeoutMs) ||
+		options.timeoutMs <= 0 ||
+		options.timeoutMs > 2 ** 31 - 1
+	)
+		return failed('invalid_options');
+	let result: ReadExecResult;
+	try {
+		const timeout = Math.ceil(options.timeoutMs);
+		result = await execute(
+			`python3 -I -c ${shellQuote(READ_FILES)} ${shellQuote(JSON.stringify(paths))} ${options.maxBytes} ${options.maxTotalBytes} ${timeout}`,
+			{ timeout, maxOutputBytes },
+		);
+	} catch (error) {
+		return failed(
+			executionFailureReason(error instanceof Error ? error.message : '', 'transport_error'),
+		);
+	}
+	if (!result.success) {
+		if (
+			result.error?.code === 'COMMAND_FAILED' &&
+			result.stderr.trim() === `${FAILURE_PREFIX}batch_size_limit`
+		)
+			return failed('size_limit');
+		return failed(executionFailureReason(result.stderr, 'exec_failed'));
+	}
+	if (result.stdout.length + new TextEncoder().encode(result.stderr).byteLength > maxOutputBytes)
+		return failed('output_limit');
+	if (/\P{ASCII}/u.test(result.stdout)) return failed('invalid_batch');
+	let entries: unknown;
+	try {
+		entries = JSON.parse(result.stdout);
+	} catch {
+		return failed('invalid_batch');
+	}
+	if (!Array.isArray(entries) || entries.length !== paths.length) return failed('invalid_batch');
+	const files: Awaited<ReturnType<typeof readBoundedFile>>[] = [];
+	const batch: unknown[] = entries;
+	let totalBytes = 0;
+	for (const entry of batch) {
+		if (entry === null || typeof entry !== 'object' || Object.keys(entry).length !== 1)
+			return failed('invalid_batch');
+		if ('reason' in entry && typeof entry.reason === 'string' && READER_REASONS.has(entry.reason)) {
+			files.push(boundedReadFailure(entry.reason));
+		} else if ('content' in entry && typeof entry.content === 'string') {
+			if (entry.content.length > encodedBytes) return failed('output_limit');
+			try {
+				const bytes = atob(entry.content).length;
+				if (bytes > options.maxBytes) return failed('size_limit');
+				totalBytes += bytes;
+				if (totalBytes > options.maxTotalBytes) return failed('size_limit');
+			} catch {
+				return failed('invalid_base64');
+			}
+			files.push({ success: true, content: entry.content, encoding: 'base64' });
+		} else return failed('invalid_batch');
+	}
+	return files;
 }
 
 export async function readBoundedFile(
