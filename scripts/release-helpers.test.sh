@@ -366,7 +366,7 @@ chmod +x "$release_repo/bin/"*
 	cd "$release_repo"
 	GH_CALL_LOG="$temporary/gh-dispatch.log" PATH="$release_repo/bin:$PATH" node scripts/release.mjs 1.2.4
 )
-[[ "$(cat "$temporary/gh-dispatch.log")" == 'workflow run release-pr.yml --ref main -f version=1.2.4' ]] || \
+[[ "$(cat "$temporary/gh-dispatch.log")" == 'workflow run release-pr.yml --repo marimo-team/marimohub --ref main -f version=1.2.4' ]] || \
 	fail 'release command did not dispatch preparation on main'
 grep -q '"version":"1.2.3"' "$release_repo/package.json" || fail 'dispatch changed local version'
 (
