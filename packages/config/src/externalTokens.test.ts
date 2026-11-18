@@ -167,6 +167,19 @@ describe('signed external tokens through the composition root', () => {
 		}
 	});
 
+	it('authenticates an array-scope token through a configured scope grant', async () => {
+		const app = createApi(
+			createFromEnv({
+				...env,
+				MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS: 'marimohub-prod=read',
+			}),
+		);
+		const me = (scope: unknown) =>
+			app.request('/api/v1/me', { headers: { Authorization: `Bearer ${accessToken({ scope })}` } });
+		expect((await me(['marimohub-prod', 'openid'])).status).toBe(200);
+		expect((await me(['other-api', 'openid'])).status).toBe(401);
+	});
+
 	it('rejects a combined Authorization header even with a valid browser session', async () => {
 		const app = createApi(createFromEnv(env));
 		const cookie = sessionCookie();

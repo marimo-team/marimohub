@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ProjectId } from './ids';
 import {
 	expandTokenGrantPreset,
+	externalTokenGrant,
 	TokenGrantSchema,
 	tokenGrantAllowsAction,
 	tokenGrantAllowsProject,
@@ -117,5 +118,21 @@ describe('TokenGrant', () => {
 		).toBe(false);
 		expect(tokenGrantIsSubset({ actions: '*', projects: [PROJECT_A] }, requested)).toBe(false);
 		expect(tokenGrantIsSubset({ actions: ['project.read'], projects: '*' }, requested)).toBe(false);
+	});
+});
+
+describe('externalTokenGrant', () => {
+	it('maps configured external scopes to presets on top of marimohub:<preset>', () => {
+		expect(externalTokenGrant(['marimohub-prod'])).toBeNull();
+		expect(externalTokenGrant(['marimohub-prod'], new Map([['marimohub-prod', 'full']]))).toEqual({
+			actions: '*',
+			projects: '*',
+		});
+		expect(
+			externalTokenGrant(
+				['marimohub-prod', 'marimohub:read'],
+				new Map([['marimohub-prod', 'read']]),
+			)?.actions,
+		).toEqual(['app.read', 'project.read', 'integration.read']);
 	});
 });

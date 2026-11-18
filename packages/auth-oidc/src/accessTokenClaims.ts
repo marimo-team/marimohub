@@ -1,4 +1,5 @@
 import { externalTokenGrant } from '@marimo-hub/core/token-grants';
+import type { TokenGrantPreset } from '@marimo-hub/core/token-grants';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core/ports/auth';
 import { admitOidcIdentity } from './admission';
 import type { OidcAdmissionPolicy } from './admission';
@@ -6,6 +7,7 @@ import { validSubject } from './claims';
 
 const TOKEN_TYPES = new Set(['jwt', 'at+jwt', 'application/at+jwt']);
 const MAX_SCOPE_LENGTH = 8192;
+const SCOPE_TOKEN = /^[\x21\x23-\x5b\x5d-\x7e]+$/;
 const SCOPE_LIST = /^[\x21\x23-\x5b\x5d-\x7e]+(?: [\x21\x23-\x5b\x5d-\x7e]+)*$/;
 
 export interface AccessTokenPolicy {
@@ -13,6 +15,7 @@ export interface AccessTokenPolicy {
 	browserClientId: string;
 	maxLifetimeSeconds: number;
 	admission: OidcAdmissionPolicy;
+	scopeGrants?: ReadonlyMap<string, TokenGrantPreset>;
 }
 export type AccessTokenRejection =
 	| 'invalid_token'
@@ -46,7 +49,23 @@ function tokenExpiry(
 	return new Date(expiresAt * 1000).toISOString();
 }
 
+export function isAccessTokenScope(value: string): boolean {
+	return SCOPE_TOKEN.test(value);
+}
+
+/**
+ * RFC 9068 requires a space-delimited string. IdentityServer and Duende send a JSON array,
+ * which is held to the same per-scope syntax and joined length bound.
+ */
 export function parseAccessTokenScopes(value: unknown): string[] | null {
+	if (Array.isArray(value)) {
+		if (
+			value.length === 0 ||
+			!value.every((scope) => typeof scope === 'string' && SCOPE_TOKEN.test(scope))
+		)
+			return null;
+		value = value.join(' ');
+	}
 	if (typeof value !== 'string' || value.length > MAX_SCOPE_LENGTH || !SCOPE_LIST.test(value))
 		return null;
 	return [...new Set(value.split(' '))];
@@ -78,7 +97,7 @@ export function principalFromVerifiedAccessToken(
 			return { error: 'membership_groups_exceeded', retained: admission.retained };
 		return { error: admission.error === 'auth_failed' ? 'invalid_claims' : 'admission_denied' };
 	}
-	const grant = externalTokenGrant(scopes);
+	const grant = externalTokenGrant(scopes, policy.scopeGrants);
 	if (!grant) return { error: 'missing_grant_scope' };
 	return {
 		principal: {

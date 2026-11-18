@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeAuth, projectCreationRestricted } from './auth';
+import { makeAuth, parseAccessTokenScopeGrants, projectCreationRestricted } from './auth';
 import { ConfigError } from './errors';
 
 /**
@@ -930,6 +930,68 @@ describe('external access-token configuration', () => {
 		{ MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND: 'library' },
 	])('fails startup for invalid configuration: %j', (override) => {
 		expect(() => makeAuth({ ...enabled, ...override })).toThrow(ConfigError);
+	});
+	it.each([
+		'marimohub-prod=edit',
+		' marimohub-prod = edit , reports=read ',
+		'constructor=read,__proto__=run,toString=full',
+		'api://hub=scope=full',
+	])('accepts scope grants: %j', (value) => {
+		expect(
+			makeAuth({ ...enabled, MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS: value })
+				.externalAuthenticator,
+		).toBeDefined();
+	});
+	it('parses scope grants, treating prototype names as ordinary scopes', () => {
+		expect(
+			parseAccessTokenScopeGrants({
+				MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS: 'marimohub-prod=edit, other=read',
+			}),
+		).toEqual(
+			new Map([
+				['marimohub-prod', 'edit'],
+				['other', 'read'],
+			]),
+		);
+		expect(parseAccessTokenScopeGrants({})).toBeUndefined();
+		const inherited = parseAccessTokenScopeGrants({
+			MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS: 'constructor=read,__proto__=run',
+		});
+		expect([...(inherited ?? [])]).toEqual([
+			['constructor', 'read'],
+			['__proto__', 'run'],
+		]);
+	});
+	it.each([
+		['', /not a scope=preset pair/],
+		['a=edit=x', /not a grant preset/],
+		['marimohub-prod', /not a scope=preset pair/],
+		['marimohub-prod=edit,', /not a scope=preset pair/],
+		['=edit', /not a valid OAuth scope/],
+		['hub prod=edit', /not a valid OAuth scope/],
+		['"hub"=edit', /not a valid OAuth scope/],
+		['marimohub-prod=admin', /not a grant preset/],
+		['marimohub-prod=constructor', /not a grant preset/],
+		['marimohub-prod=EDIT', /not a grant preset/],
+		['marimohub-prod=edit,marimohub-prod=edit', /listed more than once/],
+		['marimohub-prod=read,marimohub-prod=full', /listed more than once/],
+		['marimohub:read=full', /built-in scope/],
+	])('rejects invalid scope grants: %j', (value, message) => {
+		const error = getConfigError(() =>
+			makeAuth({ ...enabled, MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS: value }),
+		);
+		expect(error.message).toMatch(message);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS');
+	});
+	it('rejects orphaned scope grants', () => {
+		const error = getConfigError(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS: 'marimohub-prod=edit',
+			}),
+		);
+		expect(error.message).toMatch(/requires.*ACCESS_TOKENS=on/);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS');
 	});
 	it.each([
 		'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE',

@@ -107,10 +107,23 @@ export const EXTERNAL_TOKEN_SCOPE_PRESETS = {
 	'marimohub:full': 'full',
 } as const satisfies Record<string, TokenGrantPreset>;
 
-export function externalTokenGrant(scopes: readonly string[]): TokenGrant | null {
+export function isExternalTokenScope(
+	scope: string,
+): scope is keyof typeof EXTERNAL_TOKEN_SCOPE_PRESETS {
+	return Object.hasOwn(EXTERNAL_TOKEN_SCOPE_PRESETS, scope);
+}
+
+/** `scopeGrants` adds deployment-specific scopes; it cannot redefine the built-in ones. */
+export function externalTokenGrant(
+	scopes: readonly string[],
+	scopeGrants: ReadonlyMap<string, TokenGrantPreset> = new Map(),
+): TokenGrant | null {
 	const actions = new Set<AuthorizationAction>();
-	for (const [scope, preset] of Object.entries(EXTERNAL_TOKEN_SCOPE_PRESETS)) {
-		if (!scopes.includes(scope)) continue;
+	for (const scope of scopes) {
+		const preset = isExternalTokenScope(scope)
+			? EXTERNAL_TOKEN_SCOPE_PRESETS[scope]
+			: scopeGrants.get(scope);
+		if (!preset) continue;
 		const expanded = expandTokenGrantPreset(preset);
 		if (expanded === '*') return { actions: '*', projects: '*' };
 		for (const action of expanded) actions.add(action);

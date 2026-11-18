@@ -1,11 +1,13 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { bearerToken } from '@marimo-hub/core/bearer-token';
 import { logEvent } from '@marimo-hub/core/logs';
+import { isExternalTokenScope } from '@marimo-hub/core/token-grants';
+import type { TokenGrantPreset } from '@marimo-hub/core/token-grants';
 import type { Authenticator } from '@marimo-hub/core/ports/auth';
 import { createAdmissionPolicy } from './admission';
 import type { OidcAdmissionConfig } from './admission';
 import { createOidcDiscovery, oidcIssuerUrl } from './discovery';
-import { principalFromVerifiedAccessToken } from './accessTokenClaims';
+import { isAccessTokenScope, principalFromVerifiedAccessToken } from './accessTokenClaims';
 import type { AccessTokenRejection } from './accessTokenClaims';
 
 const SIGNING_ALGORITHMS = [
@@ -28,6 +30,8 @@ export interface OidcAccessTokenConfig extends OidcAdmissionConfig {
 	clientId: string;
 	jwksUrl?: string;
 	maxLifetimeSeconds?: number;
+	/** Issuer-specific scopes that grant a preset in addition to the built-in `marimohub:*` scopes. */
+	scopeGrants?: ReadonlyMap<string, TokenGrantPreset>;
 }
 
 function jwksUrl(value: string): URL {
@@ -56,8 +60,14 @@ export function createOidcAccessTokenAuthenticator(config: OidcAccessTokenConfig
 	) {
 		throw new Error('OIDC access-token lifetime must be between 1 and 3600 seconds');
 	}
+	for (const scope of config.scopeGrants?.keys() ?? []) {
+		if (!isAccessTokenScope(scope) || isExternalTokenScope(scope)) {
+			throw new Error(`OIDC access-token scope grant ${JSON.stringify(scope)} is invalid`);
+		}
+	}
 	const policy = {
 		audience: config.audience,
+		...(config.scopeGrants?.size ? { scopeGrants: config.scopeGrants } : {}),
 		browserClientId: config.clientId,
 		maxLifetimeSeconds,
 		admission: createAdmissionPolicy(config),
