@@ -1,3 +1,4 @@
+import { MetadataTransferError } from '@marimo-hub/core/errors';
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
@@ -30,7 +31,8 @@ export async function metadataTransferCommand(activate: boolean): Promise<void> 
 				await runMetadataTransfer(url, bucket, { ...options, writersStopped: true, activate }),
 			),
 		);
-	} catch {
+	} catch (error) {
+		if (error instanceof MetadataTransferError) throw error;
 		// Driver and schema errors can contain record data or connection credentials.
 		throw new Error(
 			'Metadata transfer stopped. Keep writers fenced; inspect transfer state before resuming with the same ID.',

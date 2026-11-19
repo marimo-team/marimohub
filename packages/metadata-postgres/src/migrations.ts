@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { migrationSources } from './schema';
 import type { Pool, PoolClient } from 'pg';
-import { MetadataStorageError, storageError } from './errors';
+import { MetadataUnavailableError, storageError } from './errors';
 
 export async function migrationFiles() {
 	return migrationSources.map((sql, index) => ({
@@ -15,7 +15,7 @@ export async function checkSchema(client: PoolClient): Promise<void> {
 	const version = await client.query<{ version: string }>(
 		"SELECT current_setting('server_version_num') AS version",
 	);
-	if (Number(version.rows[0].version) < 170000) throw new MetadataStorageError('unavailable');
+	if (Number(version.rows[0].version) < 170000) throw new MetadataUnavailableError();
 	const expected = await migrationFiles();
 	const applied = await client.query<{ version: string; checksum: string }>(
 		'SELECT version, checksum FROM hub_metadata.schema_migrations ORDER BY version',
@@ -28,7 +28,7 @@ export async function checkSchema(client: PoolClient): Promise<void> {
 				applied.rows[i].checksum !== file.checksum,
 		)
 	)
-		throw new MetadataStorageError('unavailable');
+		throw new MetadataUnavailableError();
 }
 
 export async function migrateSchema(pool: Pool): Promise<void> {
@@ -40,7 +40,7 @@ export async function migrateSchema(pool: Pool): Promise<void> {
 		const server = await client.query<{ version: string }>(
 			"SELECT current_setting('server_version_num') AS version",
 		);
-		if (Number(server.rows[0].version) < 170000) throw new MetadataStorageError('unavailable');
+		if (Number(server.rows[0].version) < 170000) throw new MetadataUnavailableError();
 		const exists = await client.query<{ name: string | null }>(
 			"SELECT to_regclass('hub_metadata.schema_migrations')::text AS name",
 		);
@@ -52,12 +52,12 @@ export async function migrateSchema(pool: Pool): Promise<void> {
 				).rows
 			: [];
 		const files = await migrationFiles();
-		if (applied.length > files.length) throw new MetadataStorageError('unavailable');
+		if (applied.length > files.length) throw new MetadataUnavailableError();
 		for (const file of files) {
 			const previous = applied[file.version - 1];
 			if (previous) {
 				if (Number(previous.version) !== file.version || previous.checksum !== file.checksum)
-					throw new MetadataStorageError('unavailable');
+					throw new MetadataUnavailableError();
 				continue;
 			}
 			await client.query(file.sql);

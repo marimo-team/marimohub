@@ -1,3 +1,4 @@
+import { MetadataTransferError } from '../errors';
 export const METADATA_MANIFEST_VERSION = 1;
 export const METADATA_BACKEND_KEY = '_system/metadata-backend.json';
 export type StoragePlacement = 'metadata' | 'artifact' | 'control';
@@ -84,5 +85,5 @@ export function classifyMetadataKey(key: string): StoragePlacement {
 			if (upload) return upload;
 		}
 	}
-	throw new Error(`Unclassified storage key: ${key}`);
+	throw new MetadataTransferError(`Unclassified storage key: ${key}`);
 }

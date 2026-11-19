@@ -1,3 +1,4 @@
+import { MetadataTransferError } from '@marimo-hub/core/errors';
 import type { PoolClient } from 'pg';
 import type { TransferIdentity, TransferLease } from './transferState';
 
@@ -15,7 +16,8 @@ export async function withTransferLease<T>(
 			WHERE namespace=$1 AND id=$2 AND lease_id=$3 AND revision=$4 AND state IN ('copying','checking')`,
 			[identity.namespace, identity.id, lease.lease_id, lease.revision],
 		);
-		if (result.rowCount !== 1) throw new Error('Transfer lease lost during reference audit');
+		if (result.rowCount !== 1)
+			throw new MetadataTransferError('Transfer lease lost during reference audit');
 	};
 	await renew();
 	let stopped = false;
@@ -25,7 +27,10 @@ export async function withTransferLease<T>(
 	const heartbeat = () => {
 		pending = renew()
 			.catch((error: unknown) => {
-				failure = error instanceof Error ? error : new Error('Transfer lease renewal failed');
+				failure =
+					error instanceof Error
+						? error
+						: new MetadataTransferError('Transfer lease renewal failed');
 			})
 			.finally(() => {
 				if (!stopped && !failure) timer = setTimeout(heartbeat, 5000);

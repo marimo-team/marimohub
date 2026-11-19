@@ -1,3 +1,4 @@
+import { MetadataTransferError } from '@marimo-hub/core/errors';
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { BucketObject } from '@marimo-hub/core/ports/bucket';
@@ -106,7 +107,7 @@ export async function checkpointTransfer(
 		],
 	);
 	if (!next.rows[0])
-		throw new Error(
+		throw new MetadataTransferError(
 			lease.direction === 'sql_to_bucket'
 				? 'Reverse transfer lease expired; keep all writers stopped'
 				: 'Transfer lease expired before checkpoint',

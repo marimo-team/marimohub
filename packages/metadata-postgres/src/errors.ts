@@ -1,8 +1,16 @@
-import { DomainError } from '@marimo-hub/core/errors';
+import { DomainError, UnavailableError } from '@marimo-hub/core/errors';
+
+export class MetadataUnavailableError extends UnavailableError {
+	readonly kind = 'unavailable';
+	constructor(readonly sqlState?: string) {
+		super('Metadata storage unavailable');
+		this.name = 'MetadataUnavailableError';
+	}
+}
 
 export class MetadataStorageError extends Error {
 	constructor(
-		readonly kind: 'unavailable' | 'corrupt' | 'serialization' | 'commit-unknown',
+		readonly kind: 'corrupt' | 'serialization' | 'commit-unknown',
 		readonly sqlState?: string,
 	) {
 		super(`Metadata storage ${kind}`);
@@ -25,12 +33,8 @@ export function storageError(error: unknown): Error {
 		/^[0-9A-Z]{5}$/.test(error.code)
 			? error.code
 			: undefined;
-	return new MetadataStorageError(
-		code === '40001' || code === '40P01'
-			? 'serialization'
-			: code?.startsWith('22') || code?.startsWith('23')
-				? 'corrupt'
-				: 'unavailable',
-		code,
-	);
+	if (code === '40001' || code === '40P01') return new MetadataStorageError('serialization', code);
+	if (code?.startsWith('22') || code?.startsWith('23'))
+		return new MetadataStorageError('corrupt', code);
+	return new MetadataUnavailableError(code);
 }

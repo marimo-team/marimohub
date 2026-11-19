@@ -110,6 +110,28 @@ describe.skipIf(!url)('offline metadata transfer', () => {
 			await takeover;
 		}
 	});
+	it('retains unchanged SQL records during the checking inventory', async () => {
+		const { bucket, namespace, transfer } = fixture();
+		await bucket.put(key, '{}');
+		await transfer.begin();
+		let lease = await transfer.claim();
+		while (lease.state === 'copying') lease = await transfer.step(lease);
+		const before = (
+			await pool.query('SELECT etag FROM hub_metadata.records WHERE namespace=$1 AND key=$2', [
+				namespace,
+				key,
+			])
+		).rows[0].etag;
+		while (lease.state !== 'ready') lease = await transfer.step(lease);
+		expect(
+			(
+				await pool.query('SELECT etag FROM hub_metadata.records WHERE namespace=$1 AND key=$2', [
+					namespace,
+					key,
+				])
+			).rows[0].etag,
+		).toBe(before);
+	});
 	it('rejects a stale importer after lease takeover without committing its page', async () => {
 		const { bucket, namespace, id, transfer } = fixture();
 		await bucket.put(key, '{}');

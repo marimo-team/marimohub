@@ -1,3 +1,4 @@
+import { MetadataTransferError } from '../errors';
 import { WarmPoolRecordSchema } from '../services/runtime/WarmPoolStore';
 import { AppPoolSchema } from '../services/runtime/AppPoolRouter';
 import { ThumbnailRecordSchema } from '../services/content/ThumbnailService';
@@ -77,41 +78,45 @@ const schemas = STORED_OBJECTS.map(({ key, schema }) => ({
 })).sort((a, b) => (a.key.match(/\{/g)?.length ?? 0) - (b.key.match(/\{/g)?.length ?? 0));
 
 export async function validateMetadataRecord(record: BucketObjectBody): Promise<void> {
-	if (classifyMetadataKey(record.key) !== 'metadata') throw new Error('Expected metadata record');
+	if (classifyMetadataKey(record.key) !== 'metadata')
+		throw new MetadataTransferError('Expected metadata record');
 	const bytes = await record.bytes();
 	if (record.key.startsWith('_system/job-deletions/')) {
 		if (!utcTimestamp().safeParse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)).success)
-			throw new Error(`Invalid job deletion marker: ${record.key}`);
+			throw new MetadataTransferError(`Invalid job deletion marker: ${record.key}`);
 		return;
 	}
 	if (
 		/\/(job-index|run-index|deep-links)\/[^/]+\.json$/.test(record.key) &&
 		!record.key.startsWith('_system/')
 	) {
-		if (bytes.length > 0) throw new Error(`Invalid empty index marker: ${record.key}`);
+		if (bytes.length > 0)
+			throw new MetadataTransferError(`Invalid empty index marker: ${record.key}`);
 		return;
 	}
 	const schema =
 		additional.find(([pattern]) => pattern.test(record.key))?.[1] ??
 		schemas.find(({ pattern }) => pattern.test(record.key))?.schema;
-	if (!schema) throw new Error(`No owner validator for metadata key: ${record.key}`);
+	if (!schema)
+		throw new MetadataTransferError(`No owner validator for metadata key: ${record.key}`);
 	try {
 		schema.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
 	} catch {
 		// Schema errors may contain secrets from the record.
-		throw new Error(`Invalid metadata record: ${record.key}`);
+		throw new MetadataTransferError(`Invalid metadata record: ${record.key}`);
 	}
 }
 
 export async function auditMetadataReferences(bucket: Bucket): Promise<void> {
 	const requireKey = async (key: string) => {
-		if (!(await bucket.head(key))) throw new Error(`Missing referenced object: ${key}`);
+		if (!(await bucket.head(key)))
+			throw new MetadataTransferError(`Missing referenced object: ${key}`);
 	};
 	const catalogObject = await bucket.get(paths.catalog);
 	if (catalogObject) {
 		const catalog = CatalogSchema.parse(await catalogObject.json());
 		if (catalog.current_snapshot_key !== paths.snapshot(catalog.current_snapshot_id))
-			throw new Error('Catalog snapshot identity mismatch');
+			throw new MetadataTransferError('Catalog snapshot identity mismatch');
 		for (const id of [catalog.current_snapshot_id, catalog.previous_snapshot_id]) {
 			if (!id) continue;
 			await requireKey(paths.snapshot(id));
@@ -132,7 +137,7 @@ export async function auditMetadataReferences(bucket: Bucket): Promise<void> {
 		for (const item of page.objects) {
 			if (classifyMetadataKey(item.key) !== 'metadata') continue;
 			const object = await bucket.get(item.key);
-			if (!object) throw new Error('Metadata changed during reference audit');
+			if (!object) throw new MetadataTransferError('Metadata changed during reference audit');
 			await validateMetadataRecord(object);
 			if (object.size > 0 && !item.key.startsWith('_system/job-deletions/')) {
 				const doc = await object.json<Record<string, unknown>>();
@@ -149,17 +154,20 @@ export async function auditMetadataReferences(bucket: Bucket): Promise<void> {
 					(/\/jobs\/[^/]+\/runs\/[^/]+\/run\.json$/.test(item.key) &&
 						['queued', 'provisioning', 'running'].includes(String(doc.status)));
 				if (blocked)
-					throw new Error(`Reconcile pending operation before metadata transfer: ${item.key}`);
+					throw new MetadataTransferError(
+						`Reconcile pending operation before metadata transfer: ${item.key}`,
+					);
 			}
 
 			if (item.key.startsWith('_system/warm-pools/')) {
 				const pool = WarmPoolRecordSchema.parse(await object.json());
 				if (pool.pools.some((entry) => entry.members.length > 0))
-					throw new Error('Drain warm pools before metadata transfer');
+					throw new MetadataTransferError('Drain warm pools before metadata transfer');
 			}
 			if (item.key.startsWith('_system/app-pools/')) {
 				const pool = AppPoolSchema.parse(await object.json());
-				if (pool.members.length > 0) throw new Error('Drain app pools before metadata transfer');
+				if (pool.members.length > 0)
+					throw new MetadataTransferError('Drain app pools before metadata transfer');
 			}
 			if (item.key.startsWith('_system/previews/')) {
 				const preview = PreviewRecordSchema.parse(await object.json());
@@ -168,7 +176,7 @@ export async function auditMetadataReferences(bucket: Bucket): Promise<void> {
 					preview.revisions.some((revision) => revision.state !== 'ready') ||
 					preview.admissions.some((admission) => !admission.committed)
 				)
-					throw new Error('Reconcile preview preparation before metadata transfer');
+					throw new MetadataTransferError('Reconcile preview preparation before metadata transfer');
 				if (preview.current) {
 					const runtime = paths.project(preview.project_id).notebook(preview.current.notebook_id);
 					await requireKey(runtime.previewMeta);
@@ -179,11 +187,11 @@ export async function auditMetadataReferences(bucket: Bucket): Promise<void> {
 				const manifest = WorkspaceManifestSchema.parse(await object.json());
 				for (const file of manifest) {
 					if (!isSafeWorkspacePath(file.path))
-						throw new Error('Invalid workspace path in metadata manifest');
+						throw new MetadataTransferError('Invalid workspace path in metadata manifest');
 					const key = `${item.key.slice(0, -'workspace-manifest.json'.length)}workspace/${file.path}`;
 					const artifact = await bucket.get(key);
 					if (!(await matchesArtifactDigest(artifact, file)))
-						throw new Error(`Invalid referenced workspace artifact: ${key}`);
+						throw new MetadataTransferError(`Invalid referenced workspace artifact: ${key}`);
 				}
 			}
 			if (item.key.endsWith('/thumbnail.json')) {
@@ -216,19 +224,19 @@ export async function auditMetadataReferences(bucket: Bucket): Promise<void> {
 						const artifact = await bucket.get(key);
 						if (!artifact && prunable) continue;
 						if (!(await matchesArtifactDigest(artifact, change)))
-							throw new Error(`Invalid referenced proposal artifact: ${key}`);
+							throw new MetadataTransferError(`Invalid referenced proposal artifact: ${key}`);
 					}
 			}
 			if (item.key.startsWith('_system/sessions/')) {
 				const session = SessionSchema.parse(await object.json());
 				if (item.key !== paths.session(session.project_id, session.session_id))
-					throw new Error('Session identity mismatch');
+					throw new MetadataTransferError('Session identity mismatch');
 				if (
 					['starting', 'running'].includes(session.status) ||
 					(session.sandbox_id && !session.sandbox_reclaimed_at) ||
 					(session.stop && !['stopped', 'retained'].includes(session.stop.outcome))
 				)
-					throw new Error('Drain and reclaim sessions before metadata transfer');
+					throw new MetadataTransferError('Drain and reclaim sessions before metadata transfer');
 			}
 			const match = /^projects\/([^/]+)\/notebooks\/([^/]+)\/source\.json$/.exec(item.key);
 			if (match) {

@@ -11,7 +11,7 @@ import type {
 	IndexedSessionRecords,
 	MetadataStore,
 } from '@marimo-hub/core/ports/metadata';
-import { MetadataStorageError, storageError } from './errors';
+import { MetadataUnavailableError, storageError } from './errors';
 import { checkSchema } from './migrations';
 import { createMetadataPool } from './pool';
 import type { PostgresConnectionOptions } from './pool';
@@ -23,7 +23,7 @@ import { guardedTransaction } from './transactions';
 import type { DeploymentIdentity } from './transactions';
 
 export type PostgresMetadataOptions = PostgresConnectionOptions & DeploymentIdentity;
-export { MetadataStorageError } from './errors';
+export { MetadataStorageError, MetadataUnavailableError } from './errors';
 export { createMetadataPool } from './pool';
 
 export class PostgresMetadataStore implements MetadataStore {
@@ -52,8 +52,7 @@ export class PostgresMetadataStore implements MetadataStore {
 		this.pool = createMetadataPool(options);
 		this.transactions = {
 			run: (scopes, work) => {
-				if (!this.initialized || this.closed)
-					return Promise.reject(new MetadataStorageError('unavailable'));
+				if (!this.initialized || this.closed) return Promise.reject(new MetadataUnavailableError());
 				return runScopedTransaction(this.pool, this.identity, scopes, work);
 			},
 		};
@@ -66,11 +65,11 @@ export class PostgresMetadataStore implements MetadataStore {
 	}
 
 	async ready(): Promise<void> {
-		if (this.closed) throw new MetadataStorageError('unavailable');
+		if (this.closed) throw new MetadataUnavailableError();
 		if (!this.initialization) {
 			this.initialization = guardedTransaction(this.pool, this.identity, checkSchema)
 				.then(() => {
-					if (this.closed) throw new MetadataStorageError('unavailable');
+					if (this.closed) throw new MetadataUnavailableError();
 					this.initialized = true;
 				})
 				.catch((error: unknown) => {
@@ -79,7 +78,7 @@ export class PostgresMetadataStore implements MetadataStore {
 				});
 		}
 		await this.initialization;
-		if (this.closed) throw new MetadataStorageError('unavailable');
+		if (this.closed) throw new MetadataUnavailableError();
 	}
 	async close(): Promise<void> {
 		this.closed = true;
@@ -88,8 +87,7 @@ export class PostgresMetadataStore implements MetadataStore {
 		await this.closing;
 	}
 	private run<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
-		if (!this.initialized || this.closed)
-			return Promise.reject(new MetadataStorageError('unavailable'));
+		if (!this.initialized || this.closed) return Promise.reject(new MetadataUnavailableError());
 		return guardedTransaction(this.pool, this.identity, work);
 	}
 	get(key: string): Promise<BucketObjectBody | null>;
