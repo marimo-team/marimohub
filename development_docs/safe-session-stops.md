@@ -8,15 +8,13 @@ Timeouts and missing notebook files do not confirm sandbox absence.
 
 ## Sandbox absence
 
-If the provider confirms that the sandbox is gone, the next lifecycle sweep releases the
-editor claim and capacity. This applies to `retained` and `uncertain` stops. It also
-applies to stops with a non-retryable failure such as `CAPTURE_UNSUPPORTED`. The sweep
-records a new stop attempt with trigger `reconcile` and links it to the previous attempt.
+If the provider confirms sandbox absence, the next lifecycle sweep releases the editor
+claim and capacity. This includes `retained` and `uncertain` stops, even after non-retryable failures.
+The sweep records a new stop attempt with trigger `reconcile` and links it to the previous attempt.
 It fences notebook publication, marks the sandbox reclaimed, and finishes as `stopped`.
 
-For a running session, the connection probe detects absence. This requires
-connection-aware reaping. For `runtime_state: 'unknown'`, the runtime status or resume
-call confirms absence when it reports that the sandbox is missing.
+With connection-aware reaping, the connection probe detects absence for running sessions.
+For `runtime_state: 'unknown'`, the runtime status or resume call can confirm absence.
 
 While the sandbox exists, automatic idle and lifetime stops follow the backoff rule in
 [Session stop and recovery](../docs/operations.md#session-stop-and-recovery).
@@ -55,8 +53,7 @@ The capture adapter supports the marimo versions listed in
 [Session stop and recovery](../docs/operations.md#session-stop-and-recovery).
 The Linux supervisor runs outside the frozen writer tree. Prepare drains accepted
 mutations and pauses the marimo process tree. The checkpoint deadline is 60 seconds.
-If the checkpoint does not finish in time, it expires: the capture fails and the processes
-resume. An abort also resumes them.
+On expiry or abort, the capture fails and the processes resume.
 Periodic snapshots, proxy save hints, and host `/save` pause the tree only while they read
 the checkpoint artifacts. The tree resumes before any bucket or catalog write.
 A stop capture keeps the tree paused through publication until the stop commits.
@@ -78,9 +75,8 @@ metrics count stop captures, periodic snapshots, and host saves.
 `sessions.stop.pending_age_ms`, `sessions.stop.retained_age_ms`, and matching `_count`
 gauges identify stalled work. Telemetry failures do not change save outcomes.
 
-Native macOS local development stays usable, but it cannot use safe capture. To test
-a successful drain and stop, use a supported Linux container. For unsupported runtimes and
-direct exposure, see
+Use a supported Linux container to test successful drain and stop. For native macOS,
+other unsupported runtimes, and direct exposure, see
 [Session stop and recovery](../docs/operations.md#session-stop-and-recovery).
 
 The hub defers background captures while VS Code or OpenCode can write the workspace. The final

@@ -463,8 +463,8 @@ Only browser sessions can manage connections. API tokens, service accounts, MCP 
 
 OAuth binds one-use state and S256 PKCE to the hub user, browser, App, origin, and callback URI.
 It uses an expiring HttpOnly cookie.
-Each user gets 30 callback attempts in 15 minutes. This limit is separate from the MCP `/authorize` rate limit.
-Above the limit, the hub redirects the browser to the account page with `connection=failed`.
+Each user can make 30 callback attempts per 15 minutes, separate from the MCP `/authorize` limit.
+Excess attempts redirect to the account page with `connection=failed`.
 Access and refresh tokens use path-bound encryption in hub storage.
 They never enter sandboxes, Git configuration, clone URLs, captured workspaces, or status responses.
 Encryption protects a bucket-only leak. Server or KEK compromise can expose credentials.

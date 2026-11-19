@@ -67,8 +67,7 @@ Each sandbox ensure reads the Pod first. Only a `404` response triggers creation
 Other read errors fail the ensure. If another writer creates the Pod between the read
 and the create, the hub accepts the `409` conflict as a reconnect.
 
-If the Pod exists, the hub reuses it. It sends no create request and does not change
-the Pod specification. The ensure fails if the existing Pod:
+The hub reuses existing Pods without a create request or specification changes. The ensure fails if the Pod:
 
 - is terminating
 - lacks the `app.kubernetes.io/managed-by=marimohub` label

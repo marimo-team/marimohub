@@ -145,13 +145,12 @@ expiry, and disconnect behavior.
 Only edit starts emit `progress`. App starts send keepalives and a final result or error, for every caller role.
 The app UI shows “Starting app…” without steps, adapter details, or a timer.
 
-Each start attempt creates a new progress reporter. `attempt` counts sandbox replacements within one start attempt.
-It starts at 1 and increments when the provisioner moves to a new sandbox. The reporter discards late callbacks from the previous sandbox.
-A retry that retires an editor and starts again is a new start attempt, so `attempt` restarts at 1.
+Each start creates a progress reporter with `attempt: 1`. Sandbox replacement increments `attempt` and discards late callbacks from the previous sandbox.
+A retry that retires the editor and starts again resets `attempt` to 1.
 `started_at` records phase entry when the callback arrives.
 The UI marks only `observed` phases complete and shows elapsed time for the current phase.
 
-The stream keeps one pending snapshot. It coalesces updates within a phase to one per second. Slow readers cannot delay provisioning.
+The stream keeps one pending snapshot and coalesces updates within a phase to one per second. Slow readers cannot delay provisioning.
 Existing authorization and publication checks apply without extra authorization reads.
 
 JSON callers keep the synchronous response, and the browser accepts JSON fallback responses.

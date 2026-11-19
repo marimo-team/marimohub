@@ -135,7 +135,7 @@ See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) for con
 
 Run **Integration IaC SDK** from the matching `vX.Y.Z` tag with `publish` selected.
 The root and IaC package versions must match the tag.
-npm cannot republish an existing version. After the first publication, each run needs a new version.
+Each publication requires a new version. npm cannot republish an existing version.
 
 The workflow builds the tarball in a job without OIDC permission.
 The publish job downloads that artifact and runs `npm publish --ignore-scripts`.

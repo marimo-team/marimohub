@@ -95,9 +95,8 @@ who started them; nobody else can read or change them, and service accounts cann
 use chat.
 
 The assistant has the same tools as the [MCP server](./mcp.md), under the caller's
-project permissions. Read-only tools run without consent, except some
-[data discovery tools](./mcp.md#discover-data). Those tools can start compute and send data
-to the model provider. That page lists them and their consent rules.
+project permissions. Read-only tools run without consent, except
+[data discovery tools](./mcp.md#discover-data) that can start compute and send data to the model provider.
 
 Tools that change something show a consent card: allow once, always allow that kind of action
 in this project, or refuse. Consent cards show the code or source that the call submits.

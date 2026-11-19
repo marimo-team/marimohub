@@ -321,8 +321,8 @@ Paged lists return `items` and `next_cursor`. To continue, pass `next_cursor` as
 
 Table search stops at 1,000 entries, 32 browse calls, or 6.5 seconds. It returns `coverage.complete` and `coverage.reason`.
 If coverage is incomplete, narrow the namespace.
-Each uncached search page uses the per-user table-search budget of 64 pages per minute.
-Cached pages use no budget. Table search does not use the browse budget.
+Table search allows 64 uncached pages per user per minute, separate from the browse budget.
+Cached pages do not count.
 Profiles cover at most 50 columns and are not whole-table estimates.
 Previews also enforce [configured byte limits](./configuration.md#integrations). Unsupported object formats return a reason.
 Image previews return content type and size. Images are visible on the Data page.
@@ -333,8 +333,8 @@ Chat can remember consent for each of the other three tools in the project.
 
 Chat caps pages at 100 items. Saved table previews fit in 2,000 characters, with at most 100 rows and 50 columns.
 They omit nested values and label partial results.
-The transcript preview and the saved conversation record redact credential-named columns, credential-named keys, and inline secrets.
-The model's tool result is not redacted. It contains the rows that the tool returned.
+Transcript previews and saved conversations redact credential-named columns and keys, plus inline secrets.
+The model receives unredacted tool results.
 
 ## Project chat
 

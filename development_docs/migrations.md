@@ -202,9 +202,8 @@ The owner-service batch returns `{ done, cursor?, progress: { delta } }`.
 Compute `delta` inside each successful domain CAS attempt, including the final batch.
 Do not increment a counter outside a retry callback. Return
 `waiting_reason: 'waiting_for_initialization'` without progress when initialization is required.
-A fixed work set can also return `progress.total`. If the total is below the committed
-visits, the runner raises it to that count. The runner logs `migration_progress_total_clamped`.
-It does not fail the batch.
+A fixed work set can also return `progress.total`. If the total is less than the committed visit count, the runner raises it to that count
+and logs `migration_progress_total_clamped` without failing the batch.
 The page and API require no migration-specific code.
 
 This runner is unsuitable for non-idempotent external effects or destructive work

@@ -149,11 +149,9 @@ Authorization expiry enforces security teardown even when the save fails.
 
 Safe capture requires the Linux lifecycle supervisor and marimo 0.24.x or 0.25.x.
 The default sandbox image includes a supported version. Native macOS runtimes and
-unsupported launch strategies cannot use safe capture, so a normal stop retains the
-editor. Users can force stop it.
+unsupported launch strategies retain the editor on a normal stop. Users can force stop it.
 Direct runtime exposure has no proxy save hints, so it relies on periodic capture.
-Proxied and direct exposure do not protect unsaved browser buffers. They do not
-prevent an external provider kill.
+Neither exposure mode protects unsaved browser buffers or prevents provider kills.
 
 Deploy the publication readers, writers, and runtime support together. Stop old hub
 writers before you admit sessions with this protocol; see [Upgrades](#upgrades). Mixed

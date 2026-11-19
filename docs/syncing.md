@@ -58,8 +58,7 @@ API tokens and sync tokens are not interchangeable.
 Set `MARIMOHUB_GIT_SANDBOX_IDENTITY=user` to use the hub profile name and email
 for local commits in new edit sessions. The default, `none`, leaves Git identity
 unchanged. App and job sessions do not receive this identity.
-If the profile name or email is not usable, the edit session starts without a Git identity.
-The hub then logs a warning.
+If the profile name or email is unusable, the hub logs a warning and starts the editor without a Git identity.
 
 This attribution is editable metadata, not a signature or GitHub authorization.
 Published commits expose the name and email. Shared editors and agents use the session creator's identity.
@@ -886,8 +885,7 @@ GitHub labels also depend on vigilant mode and repository policy.
 Retries retain their original connection and verification requirement. A replacement connection cannot take over an unfinished operation.
 If the original connection is unusable, start a new operation from the saved recovery payload.
 A [working notebook](#working-notebooks) pull request pins its actor immediately before the hub sends it to GitHub.
-If opening the pull request fails before that point, no actor is pinned. Any project manager can then retry it.
-A pinned actor does not change.
-During one publish operation, the hub reuses the user's GitHub token for up to 30 seconds.
-Thus a disconnect or suspension can take up to 30 seconds to stop a publish operation in progress.
+Before that point, any project manager can retry a failed request. Afterward, the actor cannot change.
+The hub reuses the user's GitHub token for up to 30 seconds per publish operation.
+A disconnect or suspension can therefore take up to 30 seconds to stop an active publication.
 See [Security](security.md#personal-github-publishing) for trust boundaries and [Operations](operations.md#personal-github-credentials) for configuration changes and recovery.

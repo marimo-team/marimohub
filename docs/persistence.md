@@ -16,13 +16,9 @@ See [configuration](./configuration.md) for workspace limits and exclusions.
 
 ### Workspace saves
 
-An editor session saves its full workspace at teardown in either of these cases:
-
-- `MARIMOHUB_PERSIST_WORKSPACE=workspace` is set.
-- The notebook was imported from a folder. This applies for every `MARIMOHUB_PERSIST_WORKSPACE` value.
-
-Periodic saves and host protocol `/save` requests save only the source files.
-Only teardown updates the stored workspace copy.
+Editor sessions save the full workspace at teardown when `MARIMOHUB_PERSIST_WORKSPACE=workspace`.
+Notebooks imported from folders always save their workspace at teardown, regardless of this setting.
+Periodic saves and host protocol `/save` requests save only source files.
 
 ## Shutdown and data loss
 

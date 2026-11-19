@@ -209,17 +209,15 @@ Restart starts a replacement only after the previous editor stops successfully.
 A retained editor keeps its editor claim and its capacity slot.
 The session list shows pending and retained outcomes after a page reload.
 
-Each capture pauses the marimo process tree, so running cells do not progress.
-A periodic or explicit save pauses the tree only while it reads the checkpoint.
-A stop keeps the tree paused until the stop commits.
+Each capture pauses the marimo process tree, including running cells.
+Periodic and explicit saves resume it after the checkpoint read. Stops keep it paused until commit.
 If the checkpoint does not finish in 60 seconds, the capture fails and the processes resume.
 For the stop mechanics, see
 [safe session stops](https://github.com/marimo-team/marimohub/blob/main/development_docs/safe-session-stops.md).
 
 Safe capture requires a [supported runtime](./operations.md#session-stop-and-recovery).
-An unsupported runtime stays usable. A normal stop retains it when the capture cannot be
-confirmed. You can force stop it. The guarantee does not cover external provider kills
-or edits that exist only in a browser buffer.
+Unsupported runtimes remain usable but require a force stop if capture cannot be confirmed.
+Safe capture does not protect against provider kills or loss of unsaved browser edits.
 
 ### Session cleanup
 
