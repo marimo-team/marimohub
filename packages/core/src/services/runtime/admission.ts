@@ -45,3 +45,15 @@ export function assertAdmissionRank(
 	if (rank === -1) throw new ConflictError('Session admission changed. Retry shortly.');
 	if (rank >= max) throw new ResourceExhaustedError(message);
 }
+
+export class EditorClaimLostError extends ConflictError {
+	constructor(readonly holder: SessionId) {
+		super('editor claim lost');
+		this.name = 'EditorClaimLostError';
+	}
+}
+export interface EditorAdmissionPolicy {
+	maxConcurrentSessionsPerUser?: number;
+	projectUpdatedAt: string;
+	notebookUpdatedAt: string;
+}

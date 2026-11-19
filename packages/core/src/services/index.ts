@@ -1,4 +1,4 @@
-export { admissionCaps, assertAdmissionRank } from './runtime/admission';
+export { admissionCaps, assertAdmissionRank, EditorClaimLostError } from './runtime/admission';
 import type { HubStorage } from '../ports/metadata';
 export { SourceControlAccountService } from './identity/SourceControlAccountService';
 import { MigrationService } from './catalog/MigrationService';

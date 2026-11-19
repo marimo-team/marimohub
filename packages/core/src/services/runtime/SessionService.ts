@@ -1,6 +1,8 @@
 import type { IndexedSessionRecords, MetadataTransactions } from '../../ports/metadata';
 import { metadataScope } from '../../ports/metadata';
-import { publishLocalSource } from '../content/localPublication';
+import { admissionCaps, assertAdmissionRank, EditorClaimLostError } from './admission';
+import type { EditorAdmissionPolicy } from './admission';
+import { readLocalPublication, publishLocalSource } from '../content/localPublication';
 import type { LocalPublicationToken } from '../content/localPublication';
 import { withAbortSignal } from '../../async';
 import { SingleFlight } from '../../cache';
@@ -38,6 +40,9 @@ import type { NotebookId, ProjectId, SandboxId, SessionId, UserId, VersionId } f
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import {
+	ProjectSchema,
+	NotebookMetaSchema,
+	SourceSchema,
 	AppClaimSchema,
 	EditorClaimSchema,
 	parseStored,
@@ -356,7 +361,10 @@ export class SessionService {
 		return (await this.createSessionWithEtag(input)).value;
 	}
 
-	async createSessionWithEtag(input: CreateSessionInput): Promise<KnownObject<Session>> {
+	async createSessionWithEtag(
+		input: CreateSessionInput,
+		admission?: EditorAdmissionPolicy,
+	): Promise<KnownObject<Session>> {
 		if (this.transactions) {
 			const stable = { ...input, session_id: input.session_id ?? createSessionId() };
 			return this.transactions.run(
@@ -365,14 +373,78 @@ export class SessionService {
 					metadataScope('project', input.project_id),
 					metadataScope('notebook', input.project_id, input.notebook_id),
 				],
-				async (tx) =>
-					new SessionService(
+				async (tx) => {
+					const owner = new SessionService(
 						tx.records,
 						this.metrics,
 						undefined,
 						this.indexReady,
 						tx.sessions,
-					).createSessionWithEtag(stable),
+					);
+					if (admission) {
+						if (input.mode === 'app' || input.ephemeral || input.origin || input.app_pool)
+							throw new ConflictError(
+								'This admission path requires its existing reservation protocol',
+							);
+						const projectKey = paths.project(input.project_id).meta;
+						const notebookKey = paths.project(input.project_id).notebook(input.notebook_id).meta;
+						const projectObject = await tx.records.get(projectKey);
+						const notebookObject = await tx.records.get(notebookKey);
+						if (!projectObject || !notebookObject)
+							throw new NotFoundError('Session target no longer exists');
+						const project = await readStored(ProjectSchema, projectObject, projectKey);
+						const notebook = await readStored(NotebookMetaSchema, notebookObject, notebookKey);
+						if (
+							project.status !== 'active' ||
+							notebook.status === 'deleted' ||
+							notebook.move_id ||
+							project.updated_at !== admission.projectUpdatedAt ||
+							notebook.updated_at !== admission.notebookUpdatedAt
+						)
+							throw new ConflictError('Session policy changed; retry admission');
+					}
+					const created = await owner.createSessionWithEtag(stable);
+					if (admission) {
+						for (const cap of admissionCaps('edit', admission)) {
+							if (cap.max && cap.max > 0)
+								assertAdmissionRank(
+									await owner.listActiveForUser(input.user_id),
+									created.value.session_id,
+									cap.max,
+									cap.message(cap.max),
+								);
+						}
+						const claim = await owner.claimEditor(
+							input.project_id,
+							input.notebook_id,
+							created.value.session_id,
+							input.editor_sandbox_sharing ?? 'shared',
+							input.user_id,
+						);
+						if (!claim.claimed && claim.claim.session_id)
+							throw new EditorClaimLostError(claim.claim.session_id);
+						const sourceKey = paths.project(input.project_id).notebook(input.notebook_id).source;
+						const sourceObject = await tx.records.get(sourceKey);
+						if (!sourceObject) throw new NotFoundError('Notebook source no longer exists');
+						const source = await readStored(SourceSchema, sourceObject, sourceKey);
+						if (source.type === 'local') {
+							if (input.source_version_id && input.source_version_id !== source.current_version_id)
+								throw new ConflictError('Notebook source changed; retry admission');
+							const token = await readLocalPublication(
+								tx.records,
+								input.project_id,
+								input.notebook_id,
+							);
+							await publishLocalSource(
+								tx.records,
+								token,
+								source.current_version_id,
+								token.versions,
+							);
+						}
+					}
+					return created;
+				},
 			);
 		}
 		if (input.kernel_auth_token !== undefined) {
@@ -652,6 +724,10 @@ export class SessionService {
 	 * whose sandbox is still being snapshotted while editors remain connected. */
 	async markSnapshotted(projectId: ProjectId, id: SessionId, at: string): Promise<Session> {
 		return this.mutate(projectId, id, (session) => ({ ...session, last_snapshot_at: at }));
+	}
+
+	get supportsAtomicAdmission(): boolean {
+		return this.transactions !== undefined;
 	}
 
 	get supportsAtomicCapture(): boolean {

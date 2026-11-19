@@ -31,6 +31,7 @@ import type {
 } from '@marimo-hub/core';
 import { SANDBOX_STARTUP_PHASES, STARTUP_DETAIL_MAX_LENGTH } from '@marimo-hub/core/constants';
 import {
+	EditorClaimLostError,
 	admissionCaps,
 	assertAdmissionRank,
 	previewAvailable,
@@ -700,13 +701,6 @@ function toSessionError(err: unknown): { code: string; message: string } {
 	if (err instanceof DomainError) return { code: err.code, message: err.message };
 	const e = err instanceof Error ? err : new Error(String(err));
 	return { code: 'PROVISION_FAILED', message: `Failed to provision the sandbox (${e.name})` };
-}
-
-class EditorClaimLostError extends Error {
-	constructor(readonly holder: SessionId) {
-		super('editor claim lost');
-		this.name = 'EditorClaimLostError';
-	}
 }
 
 /**
@@ -2009,9 +2003,17 @@ async function startNotebookSessionOnce(
 	let sessionRecordAttempted = false;
 	let sandboxMayExist = false;
 	let workspaceStarted = false;
-	const deferBootForAdmission = capsFor(deps, mode, pid, user.id).some(
-		({ max, preflight }) => !preflight && max !== undefined && max > 0,
-	);
+	const atomicEditorAdmission =
+		sessions.supportsAtomicAdmission &&
+		mode === 'edit' &&
+		!ephemeral &&
+		!origin &&
+		!replacingAfterTakeover;
+	const deferBootForAdmission =
+		atomicEditorAdmission ||
+		capsFor(deps, mode, pid, user.id).some(
+			({ max, preflight }) => !preflight && max !== undefined && max > 0,
+		);
 	const recordSandboxCleanup = async () => {
 		if (sessionRecordAttempted) {
 			const reclaimed = await sessions.markSandboxReclaimed(
@@ -2352,29 +2354,40 @@ async function startNotebookSessionOnce(
 			.step('session_record', async () => {
 				const create = async () => {
 					sessionRecordAttempted = true;
-					createdSession = await sessions.createSessionWithEtag({
-						session_id: sessionId,
-						...(admission ? { app_pool: true as const } : {}),
-						notebook_id: nid,
-						origin,
-						project_id: pid,
-						user_id: user.id,
-						sandbox_id: sandboxId,
-						kernel_auth_token: kernelAuthToken,
-						compute_profile: appliedComputeProfile.name,
-						compute_resources: appliedComputeProfile.resources,
-						compute_from_snapshot: restoreFilesystemSnapshot !== undefined,
-						ephemeral,
-						restricted_viewer_credentials: restrictedViewerCredentials,
-						idle_timeout_ms: isPreview ? PREVIEW_IDLE_MS : undefined,
-						mode,
-						source_version_id: sourceVersionId,
-						editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
-						authorization_expires_at: earliestDeadline(
-							authorizationExpiresAt,
-							credentialsEndpoint?.expiresAt,
-						),
-					});
+					createdSession = await sessions.createSessionWithEtag(
+						{
+							session_id: sessionId,
+							...(admission ? { app_pool: true as const } : {}),
+							notebook_id: nid,
+							origin,
+							project_id: pid,
+							user_id: user.id,
+							sandbox_id: sandboxId,
+							kernel_auth_token: kernelAuthToken,
+							compute_profile: appliedComputeProfile.name,
+							compute_resources: appliedComputeProfile.resources,
+							compute_from_snapshot: restoreFilesystemSnapshot !== undefined,
+							ephemeral,
+							restricted_viewer_credentials: restrictedViewerCredentials,
+							idle_timeout_ms: isPreview ? PREVIEW_IDLE_MS : undefined,
+							mode,
+							source_version_id: sourceVersionId,
+							editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
+							authorization_expires_at: earliestDeadline(
+								authorizationExpiresAt,
+								credentialsEndpoint?.expiresAt,
+							),
+						},
+						...(atomicEditorAdmission
+							? [
+									{
+										maxConcurrentSessionsPerUser: deps.policy.maxConcurrentSessionsPerUser,
+										projectUpdatedAt: project.updated_at,
+										notebookUpdatedAt: notebook.meta.updated_at,
+									},
+								]
+							: []),
+					);
 					return createdSession.value;
 				};
 				// Publish the starting record under the source-mutation lease. Once visible,

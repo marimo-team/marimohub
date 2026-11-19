@@ -186,7 +186,7 @@ Known serialization failures and deadlocks retry the complete callback at most t
 Uncertain commits never retry automatically. Artifact and provider operations stay outside callbacks.
 
 Session creation commits the starting record, prune-cutoff validation, and user-index registration together.
-Existing cap ranking, reuse, and compensation remain authoritative.
+Ordinary persistent-editor admission also rechecks project/notebook policy revisions, applies the existing user-cap ranking, reserves the editor claim, and fences the source in that transaction. Provider boot follows admission. Reuse, post-admission checks, and durable compensation remain in place.
 Capture commits source-head CAS and the session's durable-capture acknowledgement together after artifact upload.
 This applies to normal capture and stop capture with an explicit stop lease.
 Capture with a custom external ownership callback retains the existing protocol.

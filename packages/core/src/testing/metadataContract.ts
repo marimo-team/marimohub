@@ -396,6 +396,53 @@ export function atomicMetadataContract(makeStorage: () => Promise<HubStorage>): 
 				(await storage.metadata.head(paths.project(project.id).notebook(notebook.id).source))!.etag,
 			).toBe(token.etag);
 		});
+		it('admits one competing editor within the user cap and rolls back the loser', async () => {
+			const { storage, services, project, notebook, session } = await fixture();
+			await services.sessions.markTerminated(project.id, session.session_id);
+			await services.sessions.markSandboxReclaimed(
+				project.id,
+				session.session_id,
+				new Date().toISOString(),
+				session.sandbox_id,
+			);
+			const replica = createServices(storage);
+			const policy = {
+				maxConcurrentSessionsPerUser: 1,
+				projectUpdatedAt: project.updated_at,
+				notebookUpdatedAt: (await services.notebooks.getNotebook(project.id, notebook.id)).meta
+					.updated_at,
+			};
+			const results = await Promise.allSettled(
+				[services, replica].map((service) =>
+					service.sessions.createSessionWithEtag(
+						{
+							project_id: project.id,
+							notebook_id: notebook.id,
+							user_id: SYSTEM_ACTOR,
+							mode: 'edit',
+						},
+						policy,
+					),
+				),
+			);
+			expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+			const failed = results.find((result) => result.status === 'rejected');
+			expect(failed).toMatchObject({ reason: { code: 'RESOURCE_EXHAUSTED' } });
+			expect(await services.sessions.listActiveForUser(SYSTEM_ACTOR)).toHaveLength(1);
+		});
+		it('rejects admission after policy revisions change without inserting a session', async () => {
+			const { storage, services, project, notebook } = await fixture();
+			const before = (await storage.metadata.list({ prefix: paths.sessionsPrefix })).objects.length;
+			await expect(
+				services.sessions.createSessionWithEtag(
+					{ project_id: project.id, notebook_id: notebook.id, user_id: SYSTEM_ACTOR },
+					{ projectUpdatedAt: 'stale', notebookUpdatedAt: notebook.updated_at },
+				),
+			).rejects.toThrow('policy changed');
+			expect((await storage.metadata.list({ prefix: paths.sessionsPrefix })).objects).toHaveLength(
+				before,
+			);
+		});
 		it('rolls back session creation if index registration is corrupt', async () => {
 			const storage = await makeStorage();
 			const services = createServices(storage);
