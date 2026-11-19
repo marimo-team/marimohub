@@ -1,0 +1,116 @@
+# PostgreSQL metadata storage
+
+The PostgreSQL adapter stores metadata bytes in `hub_metadata.records`. Artifact bytes remain in the configured bucket.
+The default metadata backend remains `bucket`. The public API and stored domain formats remain unchanged.
+
+The adapter and runtime composition are implemented. Existing-bucket transfer, activation, reverse transfer, and transaction consolidation remain unfinished.
+The storage-parity release gates are not complete. Schema creation alone does not activate a deployment.
+
+## Runtime composition
+
+`packages/metadata-postgres` uses PostgreSQL 17 or later through `pg`.
+Only config imports the concrete adapter. Core services use `HubStorage` and the metadata ports.
+
+The logical bucket routes keys through the versioned placement manifest.
+Unknown keys and backend control records fail closed.
+Metadata reads never fall back to old bucket objects.
+
+Each operation holds a shared lock on its deployment row until the transaction completes.
+The deployment must remain active at the configured epoch, with the expected artifact-store identity.
+A missing deployment or an epoch mismatch is an availability error, not a missing object.
+
+The runtime keeps existing domain CAS protocols and session-index writes.
+Session scans can use indexed SQL candidates. Core still validates sessions and applies capacity and lifecycle policy.
+User admission ranking retains the existing index registration order.
+
+## Schema administration
+
+The administrative commands use `MARIMOHUB_METADATA_ADMIN_POSTGRES_URL`.
+Runtime replicas use `MARIMOHUB_METADATA_POSTGRES_URL` with a separate database role.
+Neither command prints connection URLs or record bodies.
+
+Run schema migrations with the schema-owner credential:
+
+```sh
+pnpm --filter @marimo-hub/server metadata:migrate-schema
+```
+
+The command uses an advisory lock and records each migration checksum in the same transaction.
+Startup checks these checksums. HTTP requests never apply DDL.
+
+Inspect the artifact marker, placement counts, and optional SQL deployment state:
+
+```sh
+pnpm --filter @marimo-hub/server metadata:inspect
+```
+
+Inspection counts unknown keys. It does not validate every domain record or audit artifact references.
+Those checks belong to the unfinished transfer workflow.
+
+## Runtime database role
+
+The schema owner also owns the deployment-lock function.
+The runtime role does not own the schema and cannot change deployment state.
+The following grants use `hub_runtime` as the runtime role name:
+
+```sql
+GRANT USAGE ON SCHEMA hub_metadata TO hub_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE
+    ON hub_metadata.records, hub_metadata.scopes TO hub_runtime;
+GRANT SELECT ON hub_metadata.deployments, hub_metadata.schema_migrations TO hub_runtime;
+GRANT EXECUTE ON FUNCTION
+    hub_metadata.prepare_record(),
+    hub_metadata.session_time(text),
+    hub_metadata.guard_deployment(text, bigint, uuid)
+    TO hub_runtime;
+```
+
+PostgreSQL requires update privilege for `SELECT FOR SHARE`.
+Migration 2 provides a restricted `SECURITY DEFINER` function that checks identity and acquires the shared lock.
+Its search path is fixed. The function grants no deployment-write operation to its caller.
+
+A namespace separates deployments within one database. It does not provide authorization between mutually untrusted deployments.
+Those deployments require separate database roles and databases.
+
+## Host lifecycle
+
+The Node server supplies `nodeMetadataFactory` from `@marimo-hub/config/metadata.node`.
+Embedded Node hosts must supply the same factory and await `deps.storageLifecycle.ready()` before they serve requests.
+They must stop requests and background writers before they call `deps.storageLifecycle.close()`.
+
+SQL operations fail before readiness and after shutdown.
+Readiness requires an active PostgreSQL marker in the artifact bucket, matching namespace, epoch, and artifact-store identity.
+An absent marker does not authorize SQL initialization.
+
+The Worker supports bucket metadata only. It rejects PostgreSQL configuration and incompatible backend markers before requests or scheduled writes.
+The Node factory remains outside the platform-neutral config entrypoint.
+
+## Validation
+
+For local tests without Docker, install PostgreSQL 17 or later:
+
+```sh
+brew install postgresql@17
+pnpm --filter @marimo-hub/metadata-postgres test:local
+```
+
+The command finds binaries through `PG_BINDIR`, `PATH`, or Homebrew.
+It creates a temporary cluster with a private Unix socket and random credentials.
+It checks the connection with `psql`, runs the live suite, then stops and removes the cluster.
+It does not start a persistent service or use an existing database.
+Each run supplies a unique test URL, so the task cache cannot replace the live database checks.
+
+PGlite multiplexes connections over one backend. This suite requires independent database connections for role and lock tests.
+Native PostgreSQL preserves those checks. See [PGlite socket limitations](https://pglite.dev/docs/pglite-socket).
+
+The live suite requires a disposable PostgreSQL database with permission to create test roles.
+The CI job sets `MARIMOHUB_REQUIRE_POSTGRES_TESTS=1`, so a missing database URL fails the job.
+
+```sh
+MARIMOHUB_REQUIRE_POSTGRES_TESTS=1 \
+  pnpm --filter @marimo-hub/metadata-postgres test
+```
+
+`MARIMOHUB_TEST_POSTGRES_URL` supplies the test connection URL.
+The suite exercises the shared storage contract, deployment fencing, role restrictions, pagination, session queries, and domain composition.
+The metadata interface has no streaming methods, so three shared streaming cases do not apply.

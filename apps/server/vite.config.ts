@@ -24,6 +24,8 @@ export default defineConfig({
 			'src/duckdbWorker.ts',
 			'src/postgresWorker.ts',
 			'src/catalog-recovery.ts',
+			'src/metadata-migrate-schema.ts',
+			'src/metadata-inspect.ts',
 			'src/session-index-rebuild.ts',
 			'src/project-access-rebuild.ts',
 		],

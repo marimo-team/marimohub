@@ -1,3 +1,4 @@
+import { nodeMetadataFactory } from '@marimo-hub/config/metadata.node';
 import { runMigrationAttempt } from './migrationControl';
 import { serveMarimoAssets } from './marimoAssets';
 import { serve } from '@hono/node-server';
@@ -90,10 +91,17 @@ export async function bootstrap(
 	try {
 		validatedEnv = validateServerEnv(env);
 		deps = await createDeps(validatedEnv, metrics, {
+			metadataFactory: nodeMetadataFactory,
 			tracing: otel?.tracing ?? false,
 			backgroundWork,
 			decorateBucket: requestStorage.wrap,
 		});
+		try {
+			await deps.storageLifecycle?.ready();
+		} catch (error) {
+			await deps.storageLifecycle?.close();
+			throw error;
+		}
 		await prepareDeps?.(deps);
 	} catch (err) {
 		if (isConfigError(err)) {
@@ -268,6 +276,7 @@ export async function bootstrap(
 	const closeNotifier = onceAsync(() =>
 		deps.notifier ? disposeNotifier(deps.notifier) : undefined,
 	);
+	const closeStorage = onceAsync(() => deps.storageLifecycle?.close());
 	const closeDataBrowser = onceAsync(() => deps.dataBrowser?.close?.());
 	const shutdownOtel = onceAsync(() => {
 		flushMetrics();
@@ -304,6 +313,7 @@ export async function bootstrap(
 				closed,
 			]).then(waitForBackgroundTasks);
 			const resourcesClosed = Promise.allSettled([
+				runtimeDrained.then(closeStorage),
 				closed.then(closeDataBrowser),
 				runtimeDrained.then(closeNotifier),
 				runtimeDrained.then(() => disposeCompute?.call(deps.compute)),

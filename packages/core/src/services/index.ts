@@ -1,3 +1,4 @@
+import type { HubStorage } from '../ports/metadata';
 export { SourceControlAccountService } from './identity/SourceControlAccountService';
 import { MigrationService } from './catalog/MigrationService';
 import {
@@ -546,10 +547,11 @@ export interface CreateServicesOptions {
  * a real emitter (e.g. the wide-event logger) to light up observability.
  */
 export function createServices(
-	rawBucket: Bucket,
+	storage: Bucket | HubStorage,
 	metrics: Metrics = noopMetrics,
 	options?: CreateServicesOptions,
 ) {
+	const rawBucket = 'logicalBucket' in storage ? storage.logicalBucket : storage;
 	const wrap = <T extends object>(name: string, service: T, attrs?: AttrExtractors<T>): T =>
 		options?.tracing ? traced(name, service, attrs) : service;
 
@@ -604,8 +606,12 @@ export function createServices(
 	);
 	const sessions = wrap(
 		'SessionService',
-		new SessionService(bucket, metrics, undefined, (): boolean =>
-			migrations.isComplete(SESSION_INDEX_MIGRATION),
+		new SessionService(
+			bucket,
+			metrics,
+			undefined,
+			(): boolean => migrations.isComplete(SESSION_INDEX_MIGRATION),
+			'logicalBucket' in storage ? storage.sessions : undefined,
 		),
 		{
 			createSession: (input) => ({

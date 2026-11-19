@@ -914,3 +914,31 @@ it('logs a rejected manual migration attempt instead of leaving it unhandled', a
 	await Promise.all(tasks);
 	expect(error).toHaveBeenCalledWith(expect.stringContaining('"event":"migration_attempt_failed"'));
 });
+
+it('rejects SQL configuration before creating Worker services', async () => {
+	const env = { ...makeEnv(), MARIMOHUB_METADATA_BACKEND: 'postgres' };
+	const response = await fetchApi(env);
+	expect(response.status).toBe(500);
+	expect(await response.text()).toContain('only bucket metadata');
+});
+
+it('refuses a SQL-owned artifact bucket for requests and scheduled writers', async () => {
+	const bucket = new MemoryBucket();
+	await bucket.put(
+		'_system/metadata-backend.json',
+		JSON.stringify({
+			version: 1,
+			artifact_store_id: '11111111-1111-4111-8111-111111111111',
+			backend: 'postgres',
+			epoch: 2,
+			state: 'active',
+			namespace: 'test',
+			transfer_id: null,
+		}),
+	);
+	const env = makeEnv(bucket);
+	expect((await fetchApi(env)).status).toBe(500);
+	await expect(worker.scheduled({} as ScheduledController, env, makeContext())).rejects.toThrow(
+		'incompatible',
+	);
+});

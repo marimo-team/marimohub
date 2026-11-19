@@ -4,6 +4,7 @@ import type { AssignableRole } from '@marimo-hub/core/constants';
 
 declare global {
 	interface Env extends ThemeEnv {
+		MARIMOHUB_METADATA_BACKEND?: string;
 		MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS?: string;
 		MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS?: string;
 		MARIMOHUB_APP_MAX_VISITS_PER_SESSION?: string;

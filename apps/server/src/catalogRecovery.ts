@@ -23,7 +23,7 @@ stopped through inspection and apply. Only the catalog and snapshots are written
 
 export async function runCatalogRecovery(
 	args: string[],
-	makeBucket: () => Bucket,
+	makeBucket: () => Bucket | Promise<Bucket>,
 ): Promise<unknown> {
 	const { values } = parseArgs({
 		args,
@@ -50,7 +50,7 @@ export async function runCatalogRecovery(
 	const source: CatalogRecoverySource = values.snapshot
 		? { mode: 'snapshot', snapshotId: SnapshotId.parse(values.snapshot) }
 		: { mode: 'rebuild' };
-	const bucket = makeBucket();
+	const bucket = await makeBucket();
 	const catalog = new CatalogService(bucket, undefined, new EventService(bucket));
 	if (values.apply === undefined) return catalog.planRecovery(source);
 	const snapshot = await catalog.recover(source, UserId.parse(values.actor!), {
@@ -82,7 +82,7 @@ export interface CatalogRecoveryIo {
 /** Runs the command end to end and returns the process exit code. */
 export async function catalogRecoveryMain(
 	args: string[],
-	makeBucket: () => Bucket,
+	makeBucket: () => Bucket | Promise<Bucket>,
 	io: CatalogRecoveryIo,
 ): Promise<number> {
 	try {

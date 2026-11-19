@@ -10,7 +10,9 @@
 		"session-index:rebuild": "tsx src/session-index-rebuild.ts",
 		"catalog:recover": "tsx src/catalog-recovery.ts",
 		"test": "vp run test:vitest",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"metadata:migrate-schema": "tsx src/metadata-migrate-schema.ts",
+		"metadata:inspect": "tsx src/metadata-inspect.ts"
 	},
 	"dependencies": {
 		"@hono/node-server": "catalog:",

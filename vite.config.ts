@@ -336,6 +336,7 @@ export default defineConfig({
 						{
 							patterns: [
 								'@marimo-hub/storage-*',
+								'@marimo-hub/metadata-*',
 								'@marimo-hub/compute-*',
 								'@marimo-hub/auth-*',
 								'@marimo-hub/credentials-*',
@@ -374,6 +375,7 @@ export default defineConfig({
 			{
 				files: [
 					'packages/storage-*/**',
+					'packages/metadata-*/**',
 					'packages/compute-*/**',
 					'packages/auth-*/**',
 					'packages/credentials-*/**',

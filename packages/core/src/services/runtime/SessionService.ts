@@ -1,3 +1,4 @@
+import type { IndexedSessionRecords } from '../../ports/metadata';
 import { withAbortSignal } from '../../async';
 import { SingleFlight } from '../../cache';
 import { MetadataCache } from '../content/metadataCache';
@@ -6,7 +7,7 @@ import { SessionIndex, sameSessionReferences } from './SessionIndex';
 import type { SessionReference } from './SessionIndex';
 import { copyMoveObject } from '../content/moveObjects';
 import { readForInspection } from './inspection';
-import type { Bucket, BucketObject } from '../../ports/bucket';
+import type { Bucket, BucketObject, BucketObjectBody } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { BUCKET_SCAN_CONCURRENCY, MARIMO_PORT, SANDBOX_STARTUP_PHASES } from '../../constants';
@@ -265,6 +266,7 @@ export class SessionService {
 		private metrics: Metrics = noopMetrics,
 		private readonly recordCache: EtagRecordCache<Session> = new EtagRecordCache(),
 		private readonly indexReady: () => boolean = () => false,
+		private readonly sessionRecords?: IndexedSessionRecords,
 	) {
 		this.index = new SessionIndex(bucket);
 		this.validatedRecords = new MetadataCache(bucket, undefined, recordCache, metrics, {
@@ -1281,42 +1283,68 @@ export class SessionService {
 		filter: (session: Session) => boolean = () => true,
 		signal?: AbortSignal,
 	): Promise<Awaited<T>[]> {
-		const objects = await listAllObjects(this.bucket, prefix, signal);
-		const scanned = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (obj) => {
-			signal?.throwIfAborted();
-			const cached = this.recordCache.get(obj.key, obj.etag);
-			if (cached) return filter(cached) ? handle(structuredClone(cached), obj, obj.etag) : SKIP;
-			const body = await this.bucket.get(obj.key);
-			signal?.throwIfAborted();
-			if (!body) {
-				this.recordCache.delete(obj.key);
-				return SKIP;
+		const indexed = this.sessionRecords;
+		const bucket = this.bucket;
+		async function* pages(): AsyncGenerator<(BucketObject | BucketObjectBody)[]> {
+			if (!indexed) {
+				yield await listAllObjects(bucket, prefix, signal);
+				return;
 			}
-			// Tolerant scans keep valid records when another record is corrupt.
-			let session: Session;
-			let text: string | undefined;
-			try {
-				const raw = await body.text();
-				text = raw;
-				session = await readStored(SessionSchema, { json: async () => JSON.parse(raw) }, obj.key);
-			} catch (err) {
-				if (invalidRecords === 'throw') throw err;
-				if (invalidRecords !== 'skip') {
-					// One user's corrupt record must not block every other user's admission.
-					if (text !== undefined && storedUserId(text) === invalidRecords.owner) throw err;
-					this.metrics.increment('sessions.index.unattributable');
+			let cursor: string | undefined;
+			do {
+				signal?.throwIfAborted();
+				const page = await indexed.list({
+					projectId:
+						prefix === paths.sessionsPrefix
+							? undefined
+							: (prefix.slice(paths.sessionsPrefix.length, -1) as ProjectId),
+					userId: typeof invalidRecords === 'object' ? invalidRecords.owner : undefined,
+					limit: 1000,
+					cursor,
+				});
+				yield page.records;
+				cursor = page.cursor;
+			} while (cursor);
+		}
+		const results: Awaited<T>[] = [];
+		for await (const objects of pages()) {
+			const scanned = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (obj) => {
+				signal?.throwIfAborted();
+				const cached = this.recordCache.get(obj.key, obj.etag);
+				if (cached) return filter(cached) ? handle(structuredClone(cached), obj, obj.etag) : SKIP;
+				const body = 'bytes' in obj ? obj : await this.bucket.get(obj.key);
+				signal?.throwIfAborted();
+				if (!body) {
+					this.recordCache.delete(obj.key);
+					return SKIP;
 				}
-				logOperationalError(
-					'stored_object_skipped',
-					{ operation: 'session.scan', object: obj.key },
-					err,
-				);
-				return SKIP;
-			}
-			this.recordCache.set(obj.key, body.etag, session);
-			return filter(session) ? handle(structuredClone(session), obj, body.etag) : SKIP;
-		});
-		return scanned.filter((r): r is Awaited<T> => r !== SKIP);
+				// Tolerant scans keep valid records when another record is corrupt.
+				let session: Session;
+				let text: string | undefined;
+				try {
+					const raw = await body.text();
+					text = raw;
+					session = await readStored(SessionSchema, { json: async () => JSON.parse(raw) }, obj.key);
+				} catch (err) {
+					if (invalidRecords === 'throw') throw err;
+					if (invalidRecords !== 'skip') {
+						// One user's corrupt record must not block every other user's admission.
+						if (text !== undefined && storedUserId(text) === invalidRecords.owner) throw err;
+						this.metrics.increment('sessions.index.unattributable');
+					}
+					logOperationalError(
+						'stored_object_skipped',
+						{ operation: 'session.scan', object: obj.key },
+						err,
+					);
+					return SKIP;
+				}
+				this.recordCache.set(obj.key, body.etag, session);
+				return filter(session) ? handle(structuredClone(session), obj, body.etag) : SKIP;
+			});
+			results.push(...scanned.filter((r): r is Awaited<T> => r !== SKIP));
+		}
+		return results;
 	}
 
 	async inspectSessions(): Promise<{ sessions: Session[]; incomplete: boolean }> {
