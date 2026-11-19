@@ -246,7 +246,7 @@ jobs:
         run: vp run test:release-scripts
       - name: Check default Worker bundle excludes SQL metadata
         run: |
-          vp exec wrangler deploy --dry-run --config examples/cloudflare-worker/wrangler.jsonc --outdir /tmp/hub-worker --metafile /tmp/hub-worker-meta.json
+          vp dlx wrangler@4.150.0 deploy --dry-run --config examples/cloudflare-worker/wrangler.jsonc --outdir /tmp/hub-worker --metafile /tmp/hub-worker-meta.json
           node scripts/check-worker-metadata.mjs /tmp/hub-worker-meta.json
 
       # The full tree includes build tooling that runs with repository write access.
