@@ -1,8 +1,10 @@
+import { bucketStorage } from '@marimo-hub/core/ports/metadata';
 import { ConflictError } from '@marimo-hub/core/errors';
 import type { MetadataTransaction } from '@marimo-hub/core/ports/metadata';
 import {
 	metadataCompositionContract,
 	atomicMetadataContract,
+	benchmarkMetadataCohort,
 } from '@marimo-hub/core/testing/metadata-contract';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { createLogicalStorage } from '@marimo-hub/core/storage/logical-bucket';
@@ -60,9 +62,8 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 		const password = randomUUID();
 		await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}'`);
 		await admin.query(`GRANT USAGE ON SCHEMA hub_metadata TO ${role}`);
-		await admin.query(
-			`GRANT SELECT, INSERT, UPDATE, DELETE ON hub_metadata.records, hub_metadata.scopes TO ${role}`,
-		);
+		await admin.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON hub_metadata.records TO ${role}`);
+		await admin.query(`GRANT SELECT, INSERT, UPDATE ON hub_metadata.scopes TO ${role}`);
 		await admin.query(
 			`GRANT SELECT ON hub_metadata.deployments, hub_metadata.schema_migrations TO ${role}`,
 		);
@@ -271,6 +272,9 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 				pool.query("UPDATE hub_metadata.deployments SET state='active'"),
 			).rejects.toMatchObject({ code: '42501' });
 			await expect(pool.query('TRUNCATE hub_metadata.records')).rejects.toMatchObject({
+				code: '42501',
+			});
+			await expect(pool.query('DELETE FROM hub_metadata.scopes')).rejects.toMatchObject({
 				code: '42501',
 			});
 			await expect(pool.query('DELETE FROM hub_metadata.transfers')).rejects.toMatchObject({
@@ -642,4 +646,29 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 		).rejects.toThrow();
 		await expect(store.transactions.run([], async () => {})).rejects.toThrow(RangeError);
 	});
+	it('records matched metadata cohorts without provider or artifact-latency claims', async () => {
+		const baseline = await benchmarkMetadataCohort(bucketStorage(new MemoryBucket()));
+		const compatible = await fixture();
+		const compatibilityStorage = {
+			...createLogicalStorage(new MemoryBucket(), compatible.store, {
+				namespace: compatible.namespace,
+				epoch: 1,
+			}),
+			sessions: compatible.store.sessions,
+		};
+		const compatibility = await benchmarkMetadataCohort(compatibilityStorage);
+		const consolidated = await fixture();
+		const consolidation = await benchmarkMetadataCohort({
+			...createLogicalStorage(new MemoryBucket(), consolidated.store, {
+				namespace: consolidated.namespace,
+				epoch: 1,
+			}),
+			sessions: consolidated.store.sessions,
+			transactions: consolidated.store.transactions,
+		});
+		console.log(
+			JSON.stringify({ metadataPerformance: { baseline, compatibility, consolidation } }),
+		);
+		expect(consolidation.counters.transactions).toBeGreaterThan(0);
+	}, 60000);
 });

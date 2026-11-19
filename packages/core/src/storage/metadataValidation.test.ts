@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createServices } from '../services';
-import { SYSTEM_ACTOR } from '../ids';
+import { SYSTEM_ACTOR, createProposalId, createSessionId, createVersionId } from '../ids';
+import { workspaceManifest } from '../services/content/workspaceManifest';
+import { proposalSha256 } from '../services/content/proposalUtils';
 import { paths } from '../paths';
 import { MemoryBucket } from '../testing/MemoryBucket';
 import { auditMetadataReferences, validateMetadataRecord } from './metadataValidation';
@@ -50,5 +52,86 @@ describe('offline metadata validation', () => {
 			mode: 'edit',
 		});
 		await expect(auditMetadataReferences(bucket)).rejects.toThrow('Drain and reclaim');
+	});
+	it('checks binary workspace payload sizes and hashes', async () => {
+		const { bucket, project, notebook } = await fixture();
+		const version = paths.project(project.id).notebook(notebook.id).version(createVersionId());
+		const bytes = new Uint8Array([0, 255, 128, 1]);
+		await bucket.put(
+			version.workspaceManifest,
+			JSON.stringify(await workspaceManifest(new Map([['data.bin', bytes]]))),
+		);
+		await bucket.put(version.workspaceFile('data.bin'), bytes);
+		await auditMetadataReferences(bucket);
+		await bucket.put(version.workspaceFile('data.bin'), new Uint8Array([0, 255, 128, 2]));
+		await expect(auditMetadataReferences(bucket)).rejects.toThrow(
+			'Invalid referenced workspace artifact',
+		);
+		await bucket.delete(version.workspaceFile('data.bin'));
+		await expect(auditMetadataReferences(bucket)).rejects.toThrow(
+			'Invalid referenced workspace artifact',
+		);
+	});
+	it('requires live proposal payloads but permits expired payload cleanup', async () => {
+		const { bucket, project, notebook } = await fixture();
+		const id = createProposalId();
+		const proposal = paths.project(project.id).notebook(notebook.id).proposal(id);
+		const bytes = new Uint8Array([255, 0, 128]);
+		const record = {
+			schema_version: 1,
+			proposal_id: id,
+			notebook_id: notebook.id,
+			session_id: createSessionId(),
+			author: SYSTEM_ACTOR,
+			created_at: new Date().toISOString(),
+			base_version_id: createVersionId(),
+			source: {
+				provider: 'github',
+				repo: 'owner/repo',
+				branch: 'main',
+				root_path: '',
+				commit: 'a'.repeat(40),
+				entry_notebook: 'notebook.py',
+			},
+			changes: [
+				{
+					path: 'data.bin',
+					operation: 'add',
+					size_bytes: bytes.length,
+					sha256: await proposalSha256(bytes),
+				},
+			],
+		};
+		await bucket.put(proposal.meta, JSON.stringify(record));
+		await expect(auditMetadataReferences(bucket)).rejects.toThrow(
+			'Invalid referenced proposal artifact',
+		);
+		await bucket.put(proposal.change(0), bytes);
+		await auditMetadataReferences(bucket);
+		await bucket.put(proposal.change(0), new Uint8Array([255, 0, 127]));
+		await expect(auditMetadataReferences(bucket)).rejects.toThrow(
+			'Invalid referenced proposal artifact',
+		);
+		await bucket.delete(proposal.change(0));
+		await bucket.put(
+			proposal.meta,
+			JSON.stringify({ ...record, created_at: '2020-01-01T00:00:00Z' }),
+		);
+		await auditMetadataReferences(bucket);
+	});
+
+	it('accepts raw deletion timestamps and integration name tombstones', async () => {
+		const bucket = new MemoryBucket();
+		for (const [key, value] of [
+			['_system/job-deletions/p/n/j.json', '2026-11-18T00:00:00Z'],
+			[
+				'_system/integrations/_names/name.json',
+				JSON.stringify({ integration_id: null, claimed_at: '2026-11-18T00:00:00Z' }),
+			],
+		]) {
+			await bucket.put(key, value);
+			await validateMetadataRecord((await bucket.get(key))!);
+		}
+		await auditMetadataReferences(bucket);
 	});
 });

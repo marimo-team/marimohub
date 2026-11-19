@@ -4,7 +4,7 @@ The PostgreSQL adapter stores metadata bytes in `hub_metadata.records`. Artifact
 The default metadata backend remains `bucket`. The public API and stored domain formats remain unchanged.
 
 The adapter and runtime composition are implemented. Offline bucket-to-SQL transfer and resumable activation are implemented. Reverse transfer is implemented. Scoped session creation and capture transactions are implemented; coverage is listed below.
-The storage-parity release gates are not complete. Schema creation alone does not activate a deployment.
+Schema creation alone does not activate a deployment. The verified storage and transaction coverage is listed below.
 
 ## Runtime composition
 
@@ -55,7 +55,8 @@ The following grants use `hub_runtime` as the runtime role name:
 ```sql
 GRANT USAGE ON SCHEMA hub_metadata TO hub_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE
-    ON hub_metadata.records, hub_metadata.scopes TO hub_runtime;
+    ON hub_metadata.records TO hub_runtime;
+GRANT SELECT, INSERT, UPDATE ON hub_metadata.scopes TO hub_runtime;
 GRANT SELECT ON hub_metadata.deployments, hub_metadata.schema_migrations TO hub_runtime;
 GRANT EXECUTE ON FUNCTION
     hub_metadata.prepare_record(),
@@ -195,3 +196,20 @@ Stop intent, runtime stop, provider destruction, and final receipts remain separ
 App-pool reservations, warm-pool claims, previews, jobs, hidden runtimes, and takeover coordination retain their existing protocols.
 Their session creation uses the atomic record/index operation, but admission across those reservations is not one transaction.
 No global atomic cap-enforcement or coordination-round-trip reduction is claimed for these paths.
+
+## Verification scope
+
+The shared domain contract runs against memory, filesystem, and PostgreSQL metadata with bucket artifacts.
+It covers catalog races, competing editor claims, terminal-session heartbeats, unreclaimed app accounting, unchanged capture, stale publication tokens, upload failures, lost publication replies, capture acknowledgements, notebook move/deletion, job output cleanup, job uniqueness, token revocation, and private conversation ownership.
+The SQL-only suite also tests atomic admission, policy revision checks, capture rollback, escaped transaction handles, retry limits, transfer checkpoints, lease takeover, and both transfer directions.
+The default Worker build has a bundle assertion excluding the SQL metadata adapter and driver.
+
+The live SQL suite emits matched local metadata cohorts for bucket mode, SQL with existing protocols, and SQL with scoped transactions.
+Each cohort uses 30 samples and the same in-memory artifact backend, notebook content, and retained session history.
+The report records cold, median, and p95 time, logical storage calls, and transferred metadata bytes.
+It excludes provider latency, remote object-store latency, and pool saturation. Heartbeat measurements exercise the persistence-throttled path.
+These results are diagnostics, not an end-to-end performance claim or a global admission guarantee.
+
+External adapters with undeclared key families fail closed in SQL mode and during transfer.
+They must supply a versioned placement rule and owner validation before their records can be imported.
+After reverse activation, reuse a new namespace for a subsequent forward transfer; the retired namespace retains its history.

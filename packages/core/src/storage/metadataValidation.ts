@@ -1,3 +1,13 @@
+import { WarmPoolRecordSchema } from '../services/runtime/WarmPoolStore';
+import { AppPoolSchema } from '../services/runtime/AppPoolRouter';
+import { ThumbnailRecordSchema } from '../services/content/ThumbnailService';
+import { WorkspaceManifestSchema } from '../services/content/workspaceManifest';
+import { PreviewRecordSchema } from '../services/content/notebookPreviews';
+import { proposalSha256 } from '../services/content/proposalUtils';
+import {
+	DEFAULT_PROPOSAL_PAYLOAD_RETENTION_MS,
+	DEFAULT_PROPOSAL_PAYLOAD_SWEEP_GRACE_MS,
+} from '../services/content/NotebookProposalService';
 import { z } from 'zod';
 import type { Bucket, BucketObjectBody } from '../ports/bucket';
 import { STORED_OBJECTS } from '../specs/bucketSpec';
@@ -16,12 +26,23 @@ import {
 	DeviceUserCodeClaimSchema,
 } from '../services/tokens/CliAuthorizationService';
 import { headSchema, accountSchema } from '../services/identity/SourceControlAccountService';
-import { CatalogSchema, SessionSchema, SourceSchema, SnapshotSchema } from '../schema';
+import {
+	JobRunSchema,
+	NotebookProposalSchema,
+	CatalogSchema,
+	SessionSchema,
+	SourceSchema,
+	SnapshotSchema,
+} from '../schema';
 import { paths } from '../paths';
 import { utcTimestamp } from '../stringFormats';
 import type { ProjectId, NotebookId } from '../ids';
 
 const additional: [RegExp, z.ZodType][] = [
+	[
+		/^(?:_system|projects\/[^/]+)\/integrations\/_names\//,
+		z.object({ integration_id: z.string().nullable(), claimed_at: utcTimestamp() }),
+	],
 	[/^_system\/(notebook-gc|notebook-purge|project-purge|job-prune)-cursor\.json$/, CursorSchema],
 	[/\/prune-(runs|occurrences)\.json$/, CursorSchema],
 	[/^_system\/snapshot-expiry-cursor\.json$/, SnapshotExpiryCursorSchema],
@@ -38,10 +59,7 @@ const additional: [RegExp, z.ZodType][] = [
 	[/^_system\/source-control-accounts\/[^/]+\/[^/]+\.json$/, accountSchema],
 	[/^_system\/source-control-account-cleanup\.json$/, z.object({ after: z.string().optional() })],
 	[/\/thumbnail-attempts\/[^/]+\.json$/, z.object({ started_at: utcTimestamp() })],
-	[
-		/^(?:_system\/job-(operations|deletions)\/|(?:_system|projects\/[^/]+)\/integrations\/_names\/)/,
-		z.object({ holder: z.string().nullable() }),
-	],
+	[/^_system\/job-operations\//, z.object({ holder: z.string().nullable() })],
 ];
 
 const schemas = STORED_OBJECTS.map(({ key, schema }) => ({
@@ -60,6 +78,11 @@ const schemas = STORED_OBJECTS.map(({ key, schema }) => ({
 export async function validateMetadataRecord(record: BucketObjectBody): Promise<void> {
 	if (classifyMetadataKey(record.key) !== 'metadata') throw new Error('Expected metadata record');
 	const bytes = await record.bytes();
+	if (record.key.startsWith('_system/job-deletions/')) {
+		if (!utcTimestamp().safeParse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)).success)
+			throw new Error(`Invalid job deletion marker: ${record.key}`);
+		return;
+	}
 	if (
 		/\/(job-index|run-index|deep-links)\/[^/]+\.json$/.test(record.key) &&
 		!record.key.startsWith('_system/')
@@ -110,7 +133,7 @@ export async function auditMetadataReferences(bucket: Bucket): Promise<void> {
 			const object = await bucket.get(item.key);
 			if (!object) throw new Error('Metadata changed during reference audit');
 			await validateMetadataRecord(object);
-			if (object.size > 0) {
+			if (object.size > 0 && !item.key.startsWith('_system/job-deletions/')) {
 				const doc = await object.json<Record<string, unknown>>();
 				const blocked =
 					(item.key.startsWith('_system/notebook-moves/') && doc.phase !== 'complete') ||
@@ -123,11 +146,84 @@ export async function auditMetadataReferences(bucket: Bucket): Promise<void> {
 							? !['complete', 'no_changes', 'conflict', 'expired'].includes(String(doc.state))
 							: !['ready', 'deleted'].includes(String(doc.state)) || !!doc.active_save)) ||
 					(/\/jobs\/[^/]+\/runs\/[^/]+\/run\.json$/.test(item.key) &&
-						['queued', 'running'].includes(String(doc.status)));
+						['queued', 'provisioning', 'running'].includes(String(doc.status)));
 				if (blocked)
 					throw new Error(`Reconcile pending operation before metadata transfer: ${item.key}`);
 			}
 
+			if (item.key.startsWith('_system/warm-pools/')) {
+				const pool = WarmPoolRecordSchema.parse(await object.json());
+				if (pool.pools.some((entry) => entry.members.length > 0))
+					throw new Error('Drain warm pools before metadata transfer');
+			}
+			if (item.key.startsWith('_system/app-pools/')) {
+				const pool = AppPoolSchema.parse(await object.json());
+				if (pool.members.length > 0) throw new Error('Drain app pools before metadata transfer');
+			}
+			if (item.key.startsWith('_system/previews/')) {
+				const preview = PreviewRecordSchema.parse(await object.json());
+				if (
+					preview.lease ||
+					preview.revisions.some((revision) => revision.state !== 'ready') ||
+					preview.admissions.some((admission) => !admission.committed)
+				)
+					throw new Error('Reconcile preview preparation before metadata transfer');
+				if (preview.current) {
+					const runtime = paths.project(preview.project_id).notebook(preview.current.notebook_id);
+					await requireKey(runtime.previewMeta);
+					await requireKey(runtime.version(preview.current.version_id).code);
+				}
+			}
+			if (item.key.endsWith('/workspace-manifest.json')) {
+				const manifest = WorkspaceManifestSchema.parse(await object.json());
+				for (const file of manifest) {
+					const key = `${item.key.slice(0, -'workspace-manifest.json'.length)}workspace/${file.path}`;
+					const artifact = await bucket.get(key);
+					if (
+						!artifact ||
+						artifact.size !== file.size_bytes ||
+						(await proposalSha256(await artifact.bytes())) !== file.sha256
+					)
+						throw new Error(`Invalid referenced workspace artifact: ${key}`);
+				}
+			}
+			if (item.key.endsWith('/thumbnail.json')) {
+				const thumbnail = ThumbnailRecordSchema.parse(await object.json());
+				for (const image of [thumbnail.custom, thumbnail.automatic])
+					if (image)
+						await requireKey(
+							`${item.key.slice(0, -'thumbnail.json'.length)}thumbnails/${image.id}.png`,
+						);
+			}
+			if (/\/jobs\/[^/]+\/runs\/[^/]+\/run\.json$/.test(item.key)) {
+				const run = JobRunSchema.parse(await object.json());
+				if (run.output) {
+					if (run.output.html_bytes > 0)
+						await requireKey(`${item.key.slice(0, -'run.json'.length)}output.html`);
+					if (run.output.logs_bytes !== undefined)
+						await requireKey(`${item.key.slice(0, -'run.json'.length)}logs.txt`);
+				}
+			}
+			if (item.key.endsWith('/proposal.json')) {
+				const proposal = NotebookProposalSchema.parse(await object.json());
+				const prunable =
+					Date.now() >=
+					Date.parse(proposal.created_at) +
+						DEFAULT_PROPOSAL_PAYLOAD_RETENTION_MS +
+						DEFAULT_PROPOSAL_PAYLOAD_SWEEP_GRACE_MS;
+				for (const [index, change] of proposal.changes.entries())
+					if (change.operation !== 'delete') {
+						const key = `${item.key.slice(0, -'proposal.json'.length)}changes/${index}`;
+						const artifact = await bucket.get(key);
+						if (!artifact && prunable) continue;
+						if (
+							!artifact ||
+							artifact.size !== change.size_bytes ||
+							(await proposalSha256(await artifact.bytes())) !== change.sha256
+						)
+							throw new Error(`Invalid referenced proposal artifact: ${key}`);
+					}
+			}
 			if (item.key.startsWith('_system/sessions/')) {
 				const session = SessionSchema.parse(await object.json());
 				if (item.key !== paths.session(session.project_id, session.session_id))

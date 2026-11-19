@@ -216,6 +216,52 @@ export function metadataCompositionContract(
 			);
 			expect(claims.filter((claim) => claim.claimed)).toHaveLength(1);
 		});
+		it('deletes job metadata and retained output artifacts together during cleanup', async () => {
+			const { services, storage, project, notebook } = await fixture();
+			const job = await services.jobs.createJob(
+				project.id,
+				notebook.id,
+				{ name: 'cleanup' },
+				SYSTEM_ACTOR,
+			);
+			const prefix = paths.project(project.id).notebook(notebook.id).job(job.id).base;
+			const output = `${prefix}runs/${createRunId()}/output.html`;
+			await storage.logicalBucket.put(output, '<html>result</html>');
+			await services.jobs.beginDelete(project.id, notebook.id, job.id, SYSTEM_ACTOR);
+			await services.jobs.finishDelete(project.id, notebook.id, job.id);
+			expect(await storage.artifacts.head(output)).toBeNull();
+			expect((await storage.logicalBucket.list({ prefix })).objects).toEqual([]);
+		});
+		it('moves metadata and payloads across projects and retains the deletion state', async () => {
+			const { services, storage, project, notebook, keys } = await fixture();
+			const destination = await services.projects.createProject(
+				{ name: 'destination', description: '' },
+				SYSTEM_ACTOR,
+			);
+			const moved = await services.moves.move({
+				source: project.id,
+				destination: destination.id,
+				notebookId: notebook.id,
+				actor: SYSTEM_ACTOR,
+				expectedVersion: notebook.updated_at,
+				authorize: async () => {},
+			});
+			const reopened = createServices(storage);
+			expect(await reopened.notebooks.getNotebookContent(destination.id, notebook.id)).toBe(
+				'print(1)',
+			);
+			expect((await storage.logicalBucket.list({ prefix: `${keys.base}/` })).objects).toEqual([]);
+			await reopened.notebooks.deleteNotebook(
+				destination.id,
+				notebook.id,
+				SYSTEM_ACTOR,
+				moved.updated_at,
+			);
+			const deleted = await storage.metadata.get(
+				paths.project(destination.id).notebook(notebook.id).meta,
+			);
+			expect((await deleted!.json<{ status: string }>()).status).toBe('deleted');
+		});
 		it('enforces private conversation ownership after reopening services', async () => {
 			const { storage, project } = await fixture();
 			const first = new ConversationService(storage.logicalBucket);
@@ -459,4 +505,150 @@ export function atomicMetadataContract(makeStorage: () => Promise<HubStorage>): 
 			);
 		});
 	});
+}
+
+export async function benchmarkMetadataCohort(storage: HubStorage, samples = 30) {
+	const counters = { calls: 0, writtenBytes: 0, readBytes: 0, transactions: 0, sessionPages: 0 };
+	function counted(bucket: HubStorage['metadata']): HubStorage['metadata'] {
+		return {
+			get: (async (...args: Parameters<HubStorage['metadata']['get']>) => {
+				counters.calls++;
+				const object = await bucket.get(...args);
+				if (object && !('notModified' in object)) counters.readBytes += object.size;
+				return object;
+			}) as HubStorage['metadata']['get'],
+			head: (key) => {
+				counters.calls++;
+				return bucket.head(key);
+			},
+			list: (options) => {
+				counters.calls++;
+				return bucket.list(options);
+			},
+			delete: (keys) => {
+				counters.calls++;
+				return bucket.delete(keys);
+			},
+			put: (key, value, options) => {
+				counters.calls++;
+				counters.writtenBytes +=
+					typeof value === 'string' ? new TextEncoder().encode(value).byteLength : value.byteLength;
+				return bucket.put(key, value, options);
+			},
+		};
+	}
+	const measured: HubStorage = {
+		...storage,
+		logicalBucket: counted(storage.logicalBucket),
+		metadata: counted(storage.metadata),
+		...(storage.sessions
+			? {
+					sessions: {
+						list: (query) => {
+							counters.sessionPages++;
+							return storage.sessions!.list(query);
+						},
+					},
+				}
+			: {}),
+		...(storage.transactions
+			? {
+					transactions: {
+						run: (scopes, work) => {
+							counters.transactions++;
+							return storage.transactions!.run(scopes, (tx) =>
+								work({ ...tx, records: counted(tx.records) }),
+							);
+						},
+					},
+				}
+			: {}),
+	};
+	const services = createServices(measured);
+	await services.catalog.initialize(SYSTEM_ACTOR);
+	const project = await services.projects.createProject(
+		{ name: 'benchmark', description: '' },
+		SYSTEM_ACTOR,
+	);
+	const notebook = await services.notebooks.createNotebook(
+		project.id,
+		{ title: 'benchmark', description: '', code: 'print(1)' },
+		SYSTEM_ACTOR,
+	);
+	const times: Record<string, number[]> = {};
+	async function measure<T>(name: string, work: () => Promise<T>) {
+		const start = performance.now();
+		const result = await work();
+		(times[name] ??= []).push(performance.now() - start);
+		return result;
+	}
+	for (let sample = 0; sample < samples; sample++) {
+		const session = await measure('session-create', () =>
+			services.sessions.createSession({
+				project_id: project.id,
+				notebook_id: notebook.id,
+				user_id: SYSTEM_ACTOR,
+				sandbox_id: SandboxId.create(),
+			}),
+		);
+		await services.sessions.claimEditor(
+			project.id,
+			notebook.id,
+			session.session_id,
+			'shared',
+			SYSTEM_ACTOR,
+		);
+		await services.sessions.setRunning(project.id, session.session_id, 'http://runtime.test');
+		await measure('session-list', () => services.sessions.listActiveByProject(project.id));
+		await measure('reuse', () =>
+			services.sessions.findReusableEditor(project.id, notebook.id, SYSTEM_ACTOR, 'shared', false),
+		);
+		await measure('heartbeat', () => services.sessions.heartbeat(project.id, session.session_id));
+		await measure('capture', async () => {
+			const token = await services.notebooks.beginSessionCapture(project.id, notebook.id);
+			const result = await services.notebooks.commitSession(
+				project.id,
+				notebook.id,
+				{ code: 'print(1)' },
+				SYSTEM_ACTOR,
+				token,
+				...(storage.transactions ? [{ session }] : []),
+			);
+			if (!storage.transactions)
+				await services.sessions.recordDurableCapture(
+					session,
+					new Date().toISOString(),
+					result!.versionId,
+				);
+		});
+		await measure('stop-metadata', async () => {
+			await services.sessions.markTerminated(project.id, session.session_id);
+			await services.sessions.markSandboxReclaimed(
+				project.id,
+				session.session_id,
+				new Date().toISOString(),
+				session.sandbox_id,
+			);
+		});
+		await measure('reopen', () =>
+			createServices(measured).sessions.getSession(project.id, session.session_id),
+		);
+	}
+	return {
+		samples,
+		counters,
+		milliseconds: Object.fromEntries(
+			Object.entries(times).map(([name, values]) => {
+				const sorted = values.toSorted((a, b) => a - b);
+				return [
+					name,
+					{
+						cold: values[0],
+						median: sorted[Math.floor(sorted.length / 2)],
+						p95: sorted[Math.floor(sorted.length * 0.95)],
+					},
+				];
+			}),
+		),
+	};
 }

@@ -559,7 +559,11 @@ export function createServices(
 	// Wrapped as constructed, so cross-service calls (NotebookService →
 	// CatalogService → Bucket) are traced too.
 	const bucket = wrap('Bucket', rawBucket, bucketAttrs);
-	const events = wrap('EventService', new EventService(bucket), {
+	const metadata =
+		!('logicalBucket' in storage) || storage.metadata === rawBucket
+			? bucket
+			: wrap('MetadataStore', storage.metadata, bucketAttrs);
+	const events = wrap('EventService', new EventService(metadata), {
 		append: (event) => ({ 'marimohub.event': event.event, ...user(event.actor) }),
 		getEvents: (date) => ({ 'marimohub.date': date }),
 	});
@@ -578,12 +582,12 @@ export function createServices(
 			initialize: user,
 		},
 	);
-	const identities = wrap('IdentityService', new IdentityService(bucket), {
+	const identities = wrap('IdentityService', new IdentityService(metadata), {
 		get: user,
 		isSuspended: user,
 		setSuspension: user,
 	});
-	const deepLinks = wrap('DeepLinkService', new DeepLinkService(bucket, metrics));
+	const deepLinks = wrap('DeepLinkService', new DeepLinkService(metadata, metrics));
 	const projects = wrap(
 		'ProjectService',
 		new ProjectService(
@@ -608,7 +612,7 @@ export function createServices(
 	const sessions = wrap(
 		'SessionService',
 		new SessionService(
-			bucket,
+			metadata,
 			metrics,
 			undefined,
 			(): boolean => migrations.isComplete(SESSION_INDEX_MIGRATION),
@@ -686,20 +690,20 @@ export function createServices(
 			pruneExpiredPayloads: () => ({}),
 		},
 	);
-	const tokens = wrap('TokenService', new TokenService(bucket, identities), {
+	const tokens = wrap('TokenService', new TokenService(metadata, identities), {
 		list: user,
 		revoke: (userId, tokenId) => ({ ...user(userId), 'marimohub.token_id': tokenId }),
 	});
 	const cliAuthorizations = wrap(
 		'CliAuthorizationService',
-		new CliAuthorizationService(bucket, tokens),
+		new CliAuthorizationService(metadata, tokens),
 	);
-	const oauthClients = wrap('OAuthClientStore', new OAuthClientStore(bucket));
+	const oauthClients = wrap('OAuthClientStore', new OAuthClientStore(metadata));
 	const oauthAuthorizations = wrap(
 		'OAuthAuthorizationService',
-		new OAuthAuthorizationService(bucket, tokens),
+		new OAuthAuthorizationService(metadata, tokens),
 	);
-	const oauthRateLimits = wrap('OAuthRateLimitService', new OAuthRateLimitService(bucket));
+	const oauthRateLimits = wrap('OAuthRateLimitService', new OAuthRateLimitService(metadata));
 	const jobs = wrap(
 		'JobsService',
 		new JobsService(bucket, catalog, options?.backgroundWork, metrics),
@@ -720,7 +724,7 @@ export function createServices(
 		listRunsPage: job,
 	});
 	const maintenance = wrap('MaintenanceService', new MaintenanceService(bucket, metrics));
-	const idempotency = wrap('IdempotencyService', new IdempotencyService(bucket), {
+	const idempotency = wrap('IdempotencyService', new IdempotencyService(metadata), {
 		lookup: scope,
 		record: scope,
 	});
@@ -795,7 +799,7 @@ export function createServices(
 		oauthClients,
 		oauthAuthorizations,
 		oauthRateLimits,
-		hostRetries: wrap('HostRetryStore', new HostRetryStore(bucket)),
+		hostRetries: wrap('HostRetryStore', new HostRetryStore(metadata)),
 		migrations,
 		maintenance,
 		idempotency,

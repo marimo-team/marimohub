@@ -644,6 +644,10 @@ export function createFromEnv(
 	const storage = makeStorage(env, options?.libraries);
 	const hubStorage = makeHubStorage(storage, env, options?.metadataFactory);
 	const bucket = options?.decorateBucket?.(hubStorage.logicalBucket) ?? hubStorage.logicalBucket;
+	const metadata =
+		hubStorage.metadata === hubStorage.logicalBucket
+			? bucket
+			: (options?.decorateBucket?.(hubStorage.metadata) ?? hubStorage.metadata);
 	const exposure = parseSandboxExposure(env);
 	// The same-origin isolation guard only applies to `subdomain` mode (a separate
 	// public kernel domain). `proxy` mode is intentionally same-origin and gated by
@@ -725,7 +729,7 @@ export function createFromEnv(
 	const sourceControlAccounts = makeSourceControlAccounts(env, bucket);
 	const sourceControlConfig = makeSourceControl(env, sourceControlAccounts.githubAccounts, bucket);
 	const workspaceLimits = parseWorkspaceLimits(env);
-	const services = createServices({ ...hubStorage, logicalBucket: bucket }, metrics, {
+	const services = createServices({ ...hubStorage, metadata, logicalBucket: bucket }, metrics, {
 		workspaceLimits,
 		backgroundWork: options?.backgroundWork,
 		tracing: options?.tracing,
@@ -786,13 +790,13 @@ export function createFromEnv(
 		workspaceLimits,
 		warmPool: warmPool
 			? new WarmPoolService(
-					new WarmPoolStore(bucket, warmPool.backend),
+					new WarmPoolStore(metadata, warmPool.backend),
 					compute,
 					services.sessions,
 					warmPool.config,
 					metrics,
 					undefined,
-					new AppPoolStore(bucket),
+					new AppPoolStore(metadata),
 					notebookBridgeRuntime(),
 				)
 			: undefined,
