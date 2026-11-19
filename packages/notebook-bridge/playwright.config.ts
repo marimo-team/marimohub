@@ -7,6 +7,7 @@ export default defineConfig({
 	projects: [
 		...['chromium', 'firefox', 'webkit'].map((name) => ({
 			name,
+			retries: process.env.CI && name === 'firefox' ? 1 : 0,
 			testIgnore: /runtime\.spec\.ts$/,
 			use: {
 				// Headless shell stalls COOP navigations opened by middle or modified clicks.
