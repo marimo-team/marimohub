@@ -7,6 +7,9 @@ import type { ConfigVar } from './spec';
 
 // Files that read the env surface; scanned for MARIMOHUB_*/PORT literals.
 const WIRING_SOURCES = [
+	fileURLToPath(new URL('../../../apps/server/src/metadata-migrate-schema.ts', import.meta.url)),
+	fileURLToPath(new URL('../../../apps/server/src/metadata-inspect.ts', import.meta.url)),
+	fileURLToPath(new URL('./metadata.ts', import.meta.url)),
 	fileURLToPath(new URL('./ambientS3.ts', import.meta.url)),
 	fileURLToPath(new URL('./search.ts', import.meta.url)),
 	fileURLToPath(new URL('./marimoAssets.ts', import.meta.url)),

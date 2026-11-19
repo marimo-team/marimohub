@@ -1,0 +1,38 @@
+{
+	"name": "@marimo-hub/metadata-postgres",
+	"version": "0.0.0",
+	"private": true,
+	"license": "Apache-2.0",
+	"files": [
+		"dist",
+		"sql"
+	],
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./package.json": "./package.json",
+		"./migrations": "./src/migrations.ts",
+		"./admin": "./src/admin.ts"
+	},
+	"scripts": {
+		"build": "vp pack",
+		"test": "vp run test:vitest",
+		"check": "vp check",
+		"typecheck": "tsc --noEmit",
+		"schema:generate": "node scripts/generate-schema.mjs && vp fmt src/schema.ts",
+		"test:local": "node scripts/test-local.mjs"
+	},
+	"dependencies": {
+		"@marimo-hub/core": "workspace:*",
+		"pg": "catalog:"
+	},
+	"devDependencies": {
+		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
+		"@types/node": "catalog:",
+		"@types/pg": "catalog:",
+		"typescript": "catalog:",
+		"vite-plus": "catalog:",
+		"vitest": "catalog:"
+	}
+}

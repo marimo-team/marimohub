@@ -1,3 +1,4 @@
+import { compareBucketKeys } from '@marimo-hub/core/ports/bucket';
 import { describe, it, expect, vi } from 'vitest';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
 import { bucketContract } from '@marimo-hub/core/testing/contract';
@@ -160,10 +161,12 @@ class FakeR2Bucket {
 
 		const after = [cursor, startAfter]
 			.filter((v): v is string => Boolean(v))
-			.sort()
+			.sort(compareBucketKeys)
 			.pop();
 
-		const sorted = [...this.store.keys()].filter((k) => k.startsWith(prefix)).sort();
+		const sorted = [...this.store.keys()]
+			.filter((k) => k.startsWith(prefix))
+			.sort(compareBucketKeys);
 
 		const prefixes = new Set<string>();
 		const objectKeys: string[] = [];
@@ -171,7 +174,7 @@ class FakeR2Bucket {
 		let lastConsumed: string | undefined;
 		let truncated = false;
 		for (const key of sorted) {
-			if (after && key <= after) continue;
+			if (after && compareBucketKeys(key, after) <= 0) continue;
 			if (delimiter) {
 				const rest = key.slice(prefix.length);
 				const idx = rest.indexOf(delimiter);

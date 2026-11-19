@@ -23,10 +23,7 @@ export function proposalBytesEqual(left: Uint8Array, right: Uint8Array): boolean
 	return true;
 }
 
-export async function proposalSha256(bytes: Uint8Array): Promise<string> {
-	const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes));
-	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
+export { sha256Hex as proposalSha256 } from '../../internal/sha256';
 
 export function proposalChangesEqual(
 	left: readonly ProposalChange[],

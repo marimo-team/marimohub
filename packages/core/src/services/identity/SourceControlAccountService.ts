@@ -29,7 +29,7 @@ const tokensSchema = z.object({
 	expiresAt: z.number(),
 	refreshExpiresAt: z.number(),
 });
-const headSchema = z.object({
+export const headSchema = z.object({
 	version: z.literal(1),
 	generation: z.string(),
 	connection: z.string().optional(),
@@ -45,7 +45,7 @@ const headSchema = z.object({
 	attempts: z.array(z.number()).max(CONNECT_LIMIT),
 	callbacks: z.array(z.number()).max(CALLBACK_LIMIT).default([]),
 });
-const accountSchema = z.object({
+export const accountSchema = z.object({
 	version: z.literal(1),
 	createdAt: z.number(),
 	headGeneration: z.string(),

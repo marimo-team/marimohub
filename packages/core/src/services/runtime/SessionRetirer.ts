@@ -392,6 +392,9 @@ export class SessionRetirer {
 					}
 					const result = await new SessionCaptureCoordinator(this.deps).capture(session, sandbox, {
 						retainRuntime: true,
+						...(!options.assertOwnership
+							? { stopLease: { attemptId: session.stop!.id, leaseId } }
+							: {}),
 						assertOwnership: async () => {
 							await update({});
 							if (options.assertOwnership) await options.assertOwnership();

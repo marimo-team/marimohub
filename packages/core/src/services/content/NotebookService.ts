@@ -76,6 +76,7 @@ import type {
 import { normalizeSecurityLabels } from '../../securityLabels';
 import type { ResourceSecurityLabels } from '../../securityLabels';
 import type {
+	Session,
 	FsSnapshot,
 	NotebookMeta,
 	PublicNotebookEntry,
@@ -177,7 +178,12 @@ export interface CommitSessionInput {
 	session?: string;
 }
 
+export interface CapturePublicationAuthority {
+	session: Session;
+	stopLease?: { attemptId: string; leaseId: string };
+}
 export interface CommitSessionResult {
+	captureAcknowledgedAt?: string;
 	/** The version the artifacts were attached to (new or the reused current one). */
 	versionId: VersionId;
 	/** True when the session's edits differed from the current version, so a new one was cut. */
@@ -1198,6 +1204,7 @@ export class NotebookService {
 		input: CommitSessionInput,
 		actor: UserId,
 		capture?: LocalPublicationToken,
+		authority?: CapturePublicationAuthority,
 	): Promise<CommitSessionResult | null> {
 		const { meta, source: configured } = await this.getNotebook(projectId, notebookId);
 		if (meta.preview) throw new ConflictError('Preview sessions cannot persist changes');
@@ -1289,15 +1296,20 @@ export class NotebookService {
 				),
 			]);
 		}
+		const publish = async (versions: LocalPublicationVersion[]) => {
+			if (authority)
+				await this.sessions.commitCapturePublication(token, versionId, versions, authority, now);
+			else await publishLocalSource(this.bucket, token, versionId, versions);
+		};
 		if (!changed && JSON.stringify(publication) === JSON.stringify(previous)) {
 			// Even equal bytes must fence older, already-dispatched publications.
-			await publishLocalSource(this.bucket, token, versionId, token.versions);
+			await publish(token.versions);
 		} else {
 			const versions = [
 				publication,
 				...token.versions.filter((version) => version.version_id !== versionId),
 			];
-			await publishLocalSource(this.bucket, token, versionId, versions);
+			await publish(versions);
 			if (changed)
 				await mutateObject(
 					this.bucket,
@@ -1320,6 +1332,7 @@ export class NotebookService {
 		return {
 			versionId,
 			newVersion: changed,
+			...(authority ? { captureAcknowledgedAt: now } : {}),
 			capturedHtml,
 			capturedSession: input.session !== undefined,
 		};

@@ -98,7 +98,13 @@
 		"./search/limits": "./src/search/limits.ts",
 		"./search/paths": "./src/search/paths.ts",
 		"./search/embeddings": "./src/search/embeddings.ts",
-		"./testing/search": "./src/testing/search.ts"
+		"./testing/search": "./src/testing/search.ts",
+		"./ports/metadata": "./src/ports/metadata.ts",
+		"./storage/logical-bucket": "./src/storage/logicalBucket.ts",
+		"./storage/metadata-keys": "./src/storage/metadataKeys.ts",
+		"./storage/backend-marker": "./src/storage/backendMarker.ts",
+		"./testing/metadata-contract": "./src/testing/metadataContract.ts",
+		"./storage/metadata-validation": "./src/storage/metadataValidation.ts"
 	},
 	"scripts": {
 		"build": "vp pack",

@@ -148,7 +148,7 @@ const orgIntegration = paths.orgIntegration(IID);
 // `version(n)` zero-pads to 6 digits; widen the padded 0 back into a template.
 const integrationVersionTemplate = (key: string) => key.replace('000000', '{n}');
 
-const OBJECTS: BucketObject[] = [
+export const STORED_OBJECTS: BucketObject[] = [
 	{
 		name: 'NotebookMove',
 		key: paths.notebookMove(NID),
@@ -851,7 +851,7 @@ export function buildBucketSpec(): Record<string, unknown> {
 	const specPaths: Record<string, unknown> = {};
 	const schemas: Record<string, unknown> = {};
 
-	for (const obj of OBJECTS) {
+	for (const obj of STORED_OBJECTS) {
 		schemas[obj.name] ??= jsonSchema(obj.schema);
 		const ref = { $ref: `#/components/schemas/${obj.name}` };
 		const opSuffix = obj.key

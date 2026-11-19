@@ -62,7 +62,7 @@ import {
 import type { MarimoLaunchMode, MarimoLaunchPlan, MarimoLaunchStrategyName } from './marimoLaunch';
 import { assertValidKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { shellQuote } from './shell';
-import type { NotebookService } from '../content/NotebookService';
+import type { CapturePublicationAuthority, NotebookService } from '../content/NotebookService';
 import {
 	captureWorkspace,
 	loadWorkspaceOverlay,
@@ -2001,6 +2001,7 @@ export class SandboxProvisioner {
 			publicationToken?: LocalPublicationToken;
 			/** Runs once the artifact bytes are in memory, before publication. */
 			onArtifactsRead?: () => Promise<unknown>;
+			publicationAuthority?: CapturePublicationAuthority;
 		},
 	): Promise<SessionCaptureResult> {
 		const skipped = { status: 'skipped' as const };
@@ -2102,6 +2103,7 @@ export class SandboxProvisioner {
 					artifacts,
 					actor,
 					token,
+					...(opts?.publicationAuthority ? [opts.publicationAuthority] : []),
 				);
 				if (!result) {
 					return {
@@ -2122,7 +2124,7 @@ export class SandboxProvisioner {
 				return {
 					status: 'durable',
 					publication: result,
-					capturedAt: new Date().toISOString(),
+					capturedAt: result.captureAcknowledgedAt ?? new Date().toISOString(),
 				} satisfies CriticalCaptureResult;
 			},
 			async workspace() {

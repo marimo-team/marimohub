@@ -11,7 +11,7 @@ import { parseStored, StoredObjectError } from '../../schema';
 // Callers without a loop deadline use this TTL, including scheduled Workers.
 const DEFAULT_TTL_MS = Millis.minutes(10);
 
-const LockRecordSchema = z.object({
+export const LockRecordSchema = z.object({
 	holder: z.string(),
 	expires_at: utcTimestamp(),
 });

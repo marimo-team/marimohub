@@ -445,6 +445,7 @@ export interface LoopHealthReport {
  * context (`c.get('deps')`) instead of instantiating adapters from `c.env`.
  */
 export interface ApiDeps {
+	storageLifecycle?: { ready(): Promise<void>; close(): Promise<void> };
 	/** Resolves after host registration, without waiting for migration work. */
 	requestMigrationTick?: () => Promise<void>;
 	/** Owned by one request or explicit operation. */
@@ -463,7 +464,7 @@ export interface ApiDeps {
 	 * timer; tests inject an immediate one to keep attempt counts without the wall-clock wait.
 	 */
 	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-	/** Raw bucket handle (used by ensureInitialized + the sandbox copy fallback). */
+	/** Logical storage view (used by initialization and the sandbox copy fallback). */
 	bucket: Bucket;
 	compute: SandboxProvider;
 	/** Server-side source-control publishers and readers. Provider credentials never enter a sandbox. */

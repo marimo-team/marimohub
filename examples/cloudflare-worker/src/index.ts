@@ -1,3 +1,4 @@
+import { assertBucketMetadataBackend } from '@marimo-hub/core/storage/backend-marker';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { parseTheme } from '@marimo-hub/config/theme';
 // Reference deployment: the shared API with R2 storage, Cloudflare Containers, and Access auth.
@@ -63,6 +64,8 @@ const backgroundWork: BackgroundWork = {
 // Key by env identity so binding changes get fresh dependencies.
 // Maintenance uses these resources without validating HTTP-only configuration.
 const deploymentResources = weakMemo((env: Env) => {
+	if (env.MARIMOHUB_METADATA_BACKEND && env.MARIMOHUB_METADATA_BACKEND !== 'bucket')
+		throw new Error('This Worker supports only bucket metadata storage');
 	const bucket = new R2BucketAdapter(env.NOTEBOOKS_BUCKET);
 	return {
 		bucket,
@@ -70,6 +73,18 @@ const deploymentResources = weakMemo((env: Env) => {
 		compute: new CloudflareSandboxProvider(env.SANDBOX, {
 			useTunnel: !env.SANDBOX_HOSTNAME?.trim(),
 		}),
+	};
+});
+const metadataReady = weakMemo((env: Env) => {
+	let pending: Promise<void> | undefined;
+	return () => {
+		pending ??= assertBucketMetadataBackend(deploymentResources(env).bucket).catch(
+			(error: unknown) => {
+				pending = undefined;
+				throw error;
+			},
+		);
+		return pending;
 	};
 });
 const deploymentDeps = weakMemo(createDeploymentDeps);
@@ -256,11 +271,12 @@ function createDeploymentDeps(env: Env): ApiDeps {
 }
 
 export default {
-	fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response> {
+	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		// Report configuration failures with the binding name for operators.
 		let api: ReturnType<typeof createApi>;
 		try {
 			const deps = buildDeps(request, env);
+			await metadataReady(env)();
 			api = deploymentApi(deps);
 			const refresh = deps.services.migrations.refreshCompleted();
 			if (refresh)
@@ -285,6 +301,7 @@ export default {
 	scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
 		return executionContext.run(ctx, async () => {
 			const { services } = deploymentResources(env);
+			await metadataReady(env)();
 			const results = await Promise.allSettled([
 				runScheduled(env, ctx),
 				services.migrations.tick(),

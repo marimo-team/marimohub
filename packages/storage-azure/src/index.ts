@@ -9,7 +9,7 @@ import type {
 } from '@azure/storage-blob';
 import type { TokenCredential } from '@azure/core-auth';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
-import { assertValidBucketListLimit } from '@marimo-hub/core/ports/bucket';
+import { assertValidBucketListLimit, compareBucketKeys } from '@marimo-hub/core/ports/bucket';
 import type {
 	BucketMultipart,
 	Bucket,
@@ -291,34 +291,84 @@ export class AzureStorage implements Bucket {
 		const iterable = options?.delimiter
 			? this.client.listBlobsByHierarchy(options.delimiter, { prefix: options.prefix })
 			: this.client.listBlobsFlat({ prefix: options?.prefix });
-		const pages = iterable.byPage({
-			continuationToken: options?.cursor,
-			maxPageSize: options?.limit,
-		});
-
-		for await (const page of pages) {
-			const objects = page.segment.blobItems
-				.filter((item) => !options?.startAfter || item.name > options.startAfter)
-				.map(toBucketObject);
-			const delimitedPrefixes = pagePrefixes(page).filter(
-				(prefix) => !options?.startAfter || prefix > options.startAfter,
-			);
-			if (
-				objects.length > 0 ||
-				delimitedPrefixes.length > 0 ||
-				!page.continuationToken ||
-				!options?.startAfter
-			) {
-				return {
-					objects,
-					truncated: Boolean(page.continuationToken),
-					cursor: page.continuationToken || undefined,
-					delimitedPrefixes,
-				};
+		const binding = JSON.stringify([options?.prefix ?? '', options?.delimiter ?? '']);
+		let after = options?.startAfter;
+		let serviceCursor: string | undefined;
+		let normalize = false;
+		if (options?.cursor) {
+			try {
+				const token: unknown = JSON.parse(Buffer.from(options.cursor, 'base64url').toString());
+				if (
+					!Array.isArray(token) ||
+					(token.length !== 2 && token.length !== 3) ||
+					(token.length === 3 && token[2] !== null && typeof token[2] !== 'string') ||
+					token[0] !== binding ||
+					typeof token[1] !== 'string'
+				)
+					throw new Error('Invalid cursor');
+				after = token[1];
+				serviceCursor = typeof token[2] === 'string' ? token[2] : undefined;
+				normalize = !serviceCursor;
+			} catch {
+				throw new Error('Invalid Azure storage cursor');
 			}
 		}
+		const limit = options?.limit ?? 1000;
+		type Entry = { key: string; object?: BucketObject };
+		const pageEntries = (
+			page: ContainerListBlobFlatSegmentResponse | ContainerListBlobHierarchySegmentResponse,
+		): Entry[] => [
+			...page.segment.blobItems.map((item) => ({ key: item.name, object: toBucketObject(item) })),
+			...pagePrefixes(page).map((key) => ({ key })),
+		];
+		const select = (entries: Entry[]) =>
+			entries
+				.filter((entry) => after === undefined || compareBucketKeys(entry.key, after) > 0)
+				.sort((a, b) => compareBucketKeys(a.key, b.key));
+		const result = (entries: Entry[], cursor?: string): BucketListResult => ({
+			objects: entries.flatMap((entry) => (entry.object ? [entry.object] : [])),
+			delimitedPrefixes: entries.filter((entry) => !entry.object).map((entry) => entry.key),
+			truncated: cursor !== undefined,
+			cursor,
+		});
+		const encodeCursor = (key: string, continuation: string | null) =>
+			Buffer.from(JSON.stringify([binding, key, continuation])).toString('base64url');
 
-		return { objects: [], truncated: false, delimitedPrefixes: [] };
+		if (!normalize) {
+			for await (const page of iterable.byPage({
+				continuationToken: serviceCursor,
+				maxPageSize: limit,
+			})) {
+				const entries = pageEntries(page);
+				// Supplementary characters can sort after BMP keys on later service pages.
+				if (entries.some(({ key }) => /[\uD800-\uDBFF][\uDC00-\uDFFF]/.test(key))) {
+					normalize = true;
+					break;
+				}
+				const selected = select(entries);
+				if (selected.length > 0 || !page.continuationToken)
+					return result(
+						selected,
+						page.continuationToken
+							? encodeCursor(selected.at(-1)!.key, page.continuationToken)
+							: undefined,
+					);
+				serviceCursor = page.continuationToken;
+			}
+		}
+		if (!normalize) return result([]);
+		// Once native order diverges, subsequent logical pages must use the sorted
+		// scan too: a native continuation could skip supplementary keys already read.
+		let entries: Entry[] = [];
+		for await (const page of iterable.byPage({
+			continuationToken: serviceCursor,
+			maxPageSize: 5000,
+		})) {
+			entries = select([...entries, ...pageEntries(page)]).slice(0, limit + 1);
+		}
+		const truncated = entries.length > limit;
+		const selected = entries.slice(0, limit);
+		return result(selected, truncated ? encodeCursor(selected.at(-1)!.key, null) : undefined);
 	}
 
 	async verifyConditionalWrites(): Promise<void> {

@@ -1,3 +1,5 @@
+import { makeHubStorage } from './metadata';
+import type { MetadataFactory } from './metadata';
 import { resolveMarimoAssetUrl } from './marimoAssets';
 import { makeSearch } from './search';
 import { parseWorkspaceLimits } from './workspaceLimits';
@@ -622,6 +624,7 @@ function parseSandboxExposure(env: Env): SandboxExposure {
 }
 
 export interface CreateFromEnvOptions {
+	metadataFactory?: MetadataFactory;
 	decorateBucket?: (bucket: Bucket) => Bucket;
 	backgroundWork?: BackgroundWork;
 	/** Wrap the bucket and services in OTEL spans (see `createServices`). */
@@ -639,7 +642,12 @@ export function createFromEnv(
 	const theme = parseTheme(env);
 	const serviceAccounts = serviceAccountsFromEnv(env);
 	const storage = makeStorage(env, options?.libraries);
-	const bucket = options?.decorateBucket?.(storage) ?? storage;
+	const hubStorage = makeHubStorage(storage, env, options?.metadataFactory);
+	const bucket = options?.decorateBucket?.(hubStorage.logicalBucket) ?? hubStorage.logicalBucket;
+	const metadata =
+		hubStorage.metadata === hubStorage.logicalBucket
+			? bucket
+			: (options?.decorateBucket?.(hubStorage.metadata) ?? hubStorage.metadata);
 	const exposure = parseSandboxExposure(env);
 	// The same-origin isolation guard only applies to `subdomain` mode (a separate
 	// public kernel domain). `proxy` mode is intentionally same-origin and gated by
@@ -721,13 +729,25 @@ export function createFromEnv(
 	const sourceControlAccounts = makeSourceControlAccounts(env, bucket);
 	const sourceControlConfig = makeSourceControl(env, sourceControlAccounts.githubAccounts, bucket);
 	const workspaceLimits = parseWorkspaceLimits(env);
-	const services = createServices(bucket, metrics, {
-		workspaceLimits,
-		backgroundWork: options?.backgroundWork,
-		tracing: options?.tracing,
-		repositoryHosts: sourceControlConfig.sourceControl?.repositoryHosts,
-		sourceControl: sourceControlConfig.sourceControl,
-	});
+	const services = createServices(
+		{
+			...hubStorage,
+			artifacts:
+				hubStorage.artifacts === hubStorage.logicalBucket
+					? bucket
+					: (options?.decorateBucket?.(hubStorage.artifacts) ?? hubStorage.artifacts),
+			metadata,
+			logicalBucket: bucket,
+		},
+		metrics,
+		{
+			workspaceLimits,
+			backgroundWork: options?.backgroundWork,
+			tracing: options?.tracing,
+			repositoryHosts: sourceControlConfig.sourceControl?.repositoryHosts,
+			sourceControl: sourceControlConfig.sourceControl,
+		},
+	);
 	const projectAlerts = makeProjectAlerts(env, bucket, metrics);
 	const surfaces = surfacesFromEnv(env);
 	const compute = makeCompute(env, {
@@ -778,16 +798,17 @@ export function createFromEnv(
 	);
 	const dataQuery = dataQueryFromEnv(env, duckdbHttpSessionFactory, metrics);
 	const deps: ApiDeps = {
+		storageLifecycle: { ready: () => hubStorage.ready(), close: () => hubStorage.close() },
 		workspaceLimits,
 		warmPool: warmPool
 			? new WarmPoolService(
-					new WarmPoolStore(bucket, warmPool.backend),
+					new WarmPoolStore(metadata, warmPool.backend),
 					compute,
 					services.sessions,
 					warmPool.config,
 					metrics,
 					undefined,
-					new AppPoolStore(bucket),
+					new AppPoolStore(metadata),
 					notebookBridgeRuntime(),
 				)
 			: undefined,

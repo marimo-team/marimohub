@@ -14,7 +14,9 @@
 		"./sandbox-auth": "./src/sandboxAuth.ts",
 		"./spec": "./src/spec.ts",
 		"./package.json": "./package.json",
-		"./theme": "./src/theme.ts"
+		"./theme": "./src/theme.ts",
+		"./metadata.node": "./src/metadata.node.ts",
+		"./metadata": "./src/metadata.ts"
 	},
 	"scripts": {
 		"build": "vp pack",
@@ -44,6 +46,7 @@
 		"@marimo-hub/database-browser-bigquery": "workspace:*",
 		"@marimo-hub/duckdb-wasm-runtime": "workspace:*",
 		"@marimo-hub/embeddings-http": "workspace:*",
+		"@marimo-hub/metadata-postgres": "workspace:*",
 		"@marimo-hub/notebook-bridge": "workspace:*",
 		"@marimo-hub/notify-slack": "workspace:*",
 		"@marimo-hub/notify-smtp": "workspace:*",

@@ -33,6 +33,7 @@ export class SessionCaptureCoordinator {
 			retainRuntime?: boolean;
 			includeWorkspace?: boolean;
 			assertOwnership?: () => Promise<void>;
+			stopLease?: { attemptId: string; leaseId: string };
 		} = {},
 	): Promise<SessionCaptureResult> {
 		const skipped = { status: 'skipped' as const };
@@ -96,6 +97,9 @@ export class SessionCaptureCoordinator {
 					publicationToken,
 					// A background save must not keep the kernel frozen through bucket and catalog writes.
 					onArtifactsRead: options.retainRuntime ? undefined : resume,
+					...(sessions.supportsAtomicMetadata && (!options.assertOwnership || options.stopLease)
+						? { publicationAuthority: { session, stopLease: options.stopLease } }
+						: {}),
 				},
 			);
 			if (options.includeWorkspace !== false && this.deps.persistWorkspace === 'workspace') {
@@ -118,11 +122,12 @@ export class SessionCaptureCoordinator {
 			}
 			if (result.critical.status === 'durable') {
 				try {
-					await sessions.recordDurableCapture(
-						session,
-						result.critical.capturedAt,
-						result.critical.publication.versionId,
-					);
+					if (!result.critical.publication.captureAcknowledgedAt)
+						await sessions.recordDurableCapture(
+							session,
+							result.critical.capturedAt,
+							result.critical.publication.versionId,
+						);
 					try {
 						this.deps.metrics?.increment('sessions.capture.durable');
 						if (session.save_dirty)

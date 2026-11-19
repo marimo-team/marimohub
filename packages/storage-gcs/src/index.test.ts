@@ -1,3 +1,4 @@
+import { compareBucketKeys } from '@marimo-hub/core/ports/bucket';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
 
@@ -174,10 +175,10 @@ function makeFakeGcsFetch(): typeof fetch {
 			let lastConsumed: string | undefined;
 			let truncated = false;
 			for (const [name, value] of [...store.entries()].sort(([left], [right]) =>
-				left < right ? -1 : left > right ? 1 : 0,
+				compareBucketKeys(left, right),
 			)) {
-				if (!name.startsWith(prefix) || (cursor && name <= cursor)) continue;
-				if (!cursor && startOffset && name < startOffset) continue;
+				if (!name.startsWith(prefix) || (cursor && compareBucketKeys(name, cursor) <= 0)) continue;
+				if (!cursor && startOffset && compareBucketKeys(name, startOffset) < 0) continue;
 				if (delimiter) {
 					const rest = name.slice(prefix.length);
 					const index = rest.indexOf(delimiter);

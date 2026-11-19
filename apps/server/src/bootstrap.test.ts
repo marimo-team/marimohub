@@ -105,6 +105,33 @@ describe('bootstrap', () => {
 		vi.useRealTimers();
 	});
 
+	it('does not start traffic or workers before storage is ready', async () => {
+		const gate = Promise.withResolvers<void>();
+		deps.storageLifecycle = { ready: vi.fn(() => gate.promise), close: vi.fn(async () => {}) };
+		const harness = makeHarness(deps);
+		const starting = bootstrap(BASE_ENV, harness.overrides);
+		await vi.waitFor(() => expect(deps.storageLifecycle!.ready).toHaveBeenCalledOnce());
+		expect(harness.serveFn).not.toHaveBeenCalled();
+		expect(startMigrations).not.toHaveBeenCalled();
+		gate.resolve();
+		const handle = await starting;
+		await handle!.drain();
+		expect(deps.storageLifecycle.close).toHaveBeenCalledOnce();
+	});
+
+	it('closes failed storage initialization without accepting requests', async () => {
+		deps.storageLifecycle = {
+			ready: vi.fn(async () => {
+				throw new Error('storage unavailable');
+			}),
+			close: vi.fn(async () => {}),
+		};
+		const harness = makeHarness(deps);
+		await expect(bootstrap(BASE_ENV, harness.overrides)).rejects.toThrow('storage unavailable');
+		expect(harness.serveFn).not.toHaveBeenCalled();
+		expect(deps.storageLifecycle.close).toHaveBeenCalledOnce();
+	});
+
 	it.each(['true', 'false'])(
 		'starts migrations independently of maintenance (%s)',
 		async (maintenance) => {

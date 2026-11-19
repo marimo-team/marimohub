@@ -8,7 +8,7 @@ import { parseStored, readStored, readStoredJson, SandboxIdSchema } from '../../
 import { listAllKeys } from '../catalog/storage';
 import { releaseSingletonClaim, withCasRetry } from '../catalog/cas';
 
-const SandboxDiagnosticLeaseSchema = z
+export const SandboxDiagnosticLeaseSchema = z
 	.object({
 		sandbox_id: SandboxIdSchema.nullable(),
 		expires_at: utcTimestamp().nullable(),

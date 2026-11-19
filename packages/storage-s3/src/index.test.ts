@@ -1,3 +1,4 @@
+import { compareBucketKeys } from '@marimo-hub/core/ports/bucket';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S3Client } from '@aws-sdk/client-s3';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
@@ -173,16 +174,18 @@ function installFakeS3(opts: { ignoreIfMatch?: boolean } = {}) {
 					const limit: number = input.MaxKeys ?? 1000;
 					const after = [input.ContinuationToken, input.StartAfter]
 						.filter((v): v is string => Boolean(v))
-						.sort()
+						.sort(compareBucketKeys)
 						.pop();
-					const sorted = [...store.map.keys()].filter((k) => k.startsWith(prefix)).sort();
+					const sorted = [...store.map.keys()]
+						.filter((k) => k.startsWith(prefix))
+						.sort(compareBucketKeys);
 					const prefixes = new Set<string>();
 					const keys: string[] = [];
 					let emitted = 0;
 					let lastConsumed: string | undefined;
 					let truncated = false;
 					for (const key of sorted) {
-						if (after && key <= after) continue;
+						if (after && compareBucketKeys(key, after) <= 0) continue;
 						if (delimiter) {
 							const rest = key.slice(prefix.length);
 							const idx = rest.indexOf(delimiter);
@@ -224,7 +227,7 @@ function installFakeS3(opts: { ignoreIfMatch?: boolean } = {}) {
 						}),
 						IsTruncated: truncated,
 						NextContinuationToken: truncated ? lastConsumed : undefined,
-						CommonPrefixes: [...prefixes].sort().map((Prefix) => ({ Prefix })),
+						CommonPrefixes: [...prefixes].sort(compareBucketKeys).map((Prefix) => ({ Prefix })),
 					};
 				}
 				default:

@@ -89,6 +89,47 @@ describe('Session routes', () => {
 	let pid: ProjectId;
 	let nid: NotebookId;
 
+	it('does not repeat atomic editor claims or source publication in the route', async () => {
+		const services = createServices({
+			artifacts: bucket,
+			metadata: bucket,
+			logicalBucket: bucket,
+			transactions: {
+				run: (_scopes, work) =>
+					work({
+						records: bucket,
+						sessions: {
+							list: async () => ({
+								records: (
+									await Promise.all(
+										(
+											await bucket.list({ prefix: '_system/sessions/' })
+										).objects.map((entry) => bucket.get(entry.key)),
+									)
+								).filter((entry) => entry !== null),
+							}),
+						},
+					}),
+			},
+		});
+		const claim = vi.spyOn(services.sessions, 'claimEditor');
+		const fence = vi.spyOn(services.notebooks, 'fenceSessionPublications');
+		const put = vi.spyOn(bucket, 'put');
+		const api = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: makeFakeCompute(),
+			deps: { services },
+		});
+		await expectOk(await api.request('POST', `/projects/${pid}/notebooks/${nid}/sessions`));
+		// Provisioning still rechecks ownership after the sandbox starts.
+		expect(claim).toHaveBeenCalledOnce();
+		expect(fence).not.toHaveBeenCalled();
+		expect(
+			put.mock.calls.filter(([key]) => key === paths.project(pid).notebook(nid).source),
+		).toHaveLength(1);
+	});
+
 	beforeEach(async () => {
 		bucket = await createInitializedBucket();
 

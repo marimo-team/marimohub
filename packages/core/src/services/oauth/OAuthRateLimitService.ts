@@ -16,7 +16,7 @@ export const OAUTH_RATE_LIMITS = {
 export type OAuthRateLimitEndpoint = keyof typeof OAUTH_RATE_LIMITS;
 
 const MAX_RATE_LIMIT = Math.max(...Object.values(OAUTH_RATE_LIMITS).map(({ limit }) => limit));
-const OAuthRateLimitRecordSchema = z.strictObject({
+export const OAuthRateLimitRecordSchema = z.strictObject({
 	timestamps: z.array(z.number().int().nonnegative()).max(MAX_RATE_LIMIT),
 });
 

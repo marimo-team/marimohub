@@ -28,7 +28,7 @@ import type { BigIntStats } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
-import { assertValidBucketListLimit } from '@marimo-hub/core/ports/bucket';
+import { assertValidBucketListLimit, compareBucketKeys } from '@marimo-hub/core/ports/bucket';
 import type {
 	Bucket,
 	BucketListOptions,
@@ -406,10 +406,12 @@ export class FsStorage implements Bucket {
 		// the key; honor whichever is larger.
 		const after = [options?.cursor, options?.startAfter]
 			.filter((v): v is string => Boolean(v))
-			.sort()
+			.sort(compareBucketKeys)
 			.pop();
 
-		const sorted = (await this.walkKeys()).filter((k) => k.startsWith(prefix)).sort();
+		const sorted = (await this.walkKeys())
+			.filter((k) => k.startsWith(prefix))
+			.sort(compareBucketKeys);
 
 		const prefixes = new Set<string>();
 		const objectKeys: string[] = [];
@@ -417,7 +419,7 @@ export class FsStorage implements Bucket {
 		let lastConsumed: string | undefined;
 		let truncated = false;
 		for (const key of sorted) {
-			if (after && key <= after) continue;
+			if (after && compareBucketKeys(key, after) <= 0) continue;
 			if (delimiter) {
 				const rest = key.slice(prefix.length);
 				const idx = rest.indexOf(delimiter);
@@ -457,7 +459,7 @@ export class FsStorage implements Bucket {
 			objects,
 			truncated,
 			cursor: truncated ? lastConsumed : undefined,
-			delimitedPrefixes: [...prefixes].sort(),
+			delimitedPrefixes: [...prefixes].sort(compareBucketKeys),
 		};
 	}
 

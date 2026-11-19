@@ -326,3 +326,10 @@ export class PreviewNotReadyError extends DomainError {
 		this.name = 'PreviewNotReadyError';
 	}
 }
+
+export class MetadataTransferError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'MetadataTransferError';
+	}
+}

@@ -11,7 +11,7 @@ import { listAllObjects } from './storage';
 
 const DEFAULT_RETENTION_MS = Millis.days(1);
 
-const IdempotencyRecordSchema = z.object({
+export const IdempotencyRecordSchema = z.object({
 	schema_version: z.literal(1),
 	scope: z.string(),
 	data: z.unknown(),

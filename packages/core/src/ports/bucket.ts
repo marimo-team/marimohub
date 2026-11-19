@@ -124,3 +124,24 @@ export interface Bucket {
 	delete(key: string | string[]): Promise<void>;
 	list(options?: BucketListOptions): Promise<BucketListResult>;
 }
+
+const encoder = new TextEncoder();
+export function compareBucketKeys(a: string, b: string): number {
+	const x = encoder.encode(a);
+	const y = encoder.encode(b);
+	for (let i = 0; i < Math.min(x.length, y.length); i++) {
+		if (x[i] !== y[i]) return x[i] - y[i];
+	}
+	return x.length - y.length;
+}
+
+export function bucketMetadataFingerprint(
+	object: Pick<BucketObject, 'httpMetadata' | 'customMetadata'>,
+): string {
+	return JSON.stringify([
+		object.httpMetadata?.contentType ?? null,
+		Object.entries(object.customMetadata ?? {}).sort(([left], [right]) =>
+			compareBucketKeys(left, right),
+		),
+	]);
+}

@@ -4,7 +4,10 @@ import { logOperationalError } from '../../operationalLog';
 import { parseStored, readStoredJson } from '../../schema';
 import { putIfMatch } from './cas';
 
-const CursorSchema = z.object({ after: z.string().max(1024), next_at: z.number().optional() });
+export const CursorSchema = z.object({
+	after: z.string().max(1024),
+	next_at: z.number().optional(),
+});
 
 export interface RetentionCursor {
 	after: string;

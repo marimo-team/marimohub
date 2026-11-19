@@ -1,3 +1,9 @@
+import type { IndexedSessionRecords, MetadataTransactions } from '../../ports/metadata';
+import { metadataScope } from '../../ports/metadata';
+import { admissionCaps, assertAdmissionRank, EditorClaimLostError } from './admission';
+import type { EditorAdmissionPolicy } from './admission';
+import { readLocalPublication, publishLocalSource } from '../content/localPublication';
+import type { LocalPublicationToken } from '../content/localPublication';
 import { withAbortSignal } from '../../async';
 import { SingleFlight } from '../../cache';
 import { MetadataCache } from '../content/metadataCache';
@@ -6,7 +12,7 @@ import { SessionIndex, sameSessionReferences } from './SessionIndex';
 import type { SessionReference } from './SessionIndex';
 import { copyMoveObject } from '../content/moveObjects';
 import { readForInspection } from './inspection';
-import type { Bucket, BucketObject } from '../../ports/bucket';
+import type { Bucket, BucketObject, BucketObjectBody } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { BUCKET_SCAN_CONCURRENCY, MARIMO_PORT, SANDBOX_STARTUP_PHASES } from '../../constants';
@@ -34,6 +40,9 @@ import type { NotebookId, ProjectId, SandboxId, SessionId, UserId, VersionId } f
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import {
+	ProjectSchema,
+	NotebookMetaSchema,
+	SourceSchema,
 	AppClaimSchema,
 	EditorClaimSchema,
 	parseStored,
@@ -42,7 +51,14 @@ import {
 	SessionStartupSchema,
 	VersionPruneCutoffSchema,
 } from '../../schema';
-import type { EditorClaim, Session, SessionStopAttempt, Source, SurfaceState } from '../../schema';
+import type {
+	LocalPublicationVersion,
+	EditorClaim,
+	Session,
+	SessionStopAttempt,
+	Source,
+	SurfaceState,
+} from '../../schema';
 import type { SurfaceId } from './surfaces/types';
 import { assertValidKernelAuthToken } from './kernelAuth';
 import {
@@ -265,6 +281,8 @@ export class SessionService {
 		private metrics: Metrics = noopMetrics,
 		private readonly recordCache: EtagRecordCache<Session> = new EtagRecordCache(),
 		private readonly indexReady: () => boolean = () => false,
+		private readonly sessionRecords?: IndexedSessionRecords,
+		private readonly transactions?: MetadataTransactions,
 	) {
 		this.index = new SessionIndex(bucket);
 		this.validatedRecords = new MetadataCache(bucket, undefined, recordCache, metrics, {
@@ -343,7 +361,92 @@ export class SessionService {
 		return (await this.createSessionWithEtag(input)).value;
 	}
 
-	async createSessionWithEtag(input: CreateSessionInput): Promise<KnownObject<Session>> {
+	async createSessionWithEtag(
+		input: CreateSessionInput,
+		admission?: EditorAdmissionPolicy,
+	): Promise<KnownObject<Session>> {
+		if (this.transactions) {
+			const stable = { ...input, session_id: input.session_id ?? createSessionId() };
+			return this.transactions.run(
+				[
+					metadataScope('user', input.user_id),
+					metadataScope('project', input.project_id),
+					metadataScope('notebook', input.project_id, input.notebook_id),
+				],
+				async (tx) => {
+					const owner = new SessionService(
+						tx.records,
+						this.metrics,
+						undefined,
+						this.indexReady,
+						tx.sessions,
+					);
+					if (admission) {
+						if (input.mode === 'app' || input.ephemeral || input.origin || input.app_pool)
+							throw new ConflictError(
+								'This admission path requires its existing reservation protocol',
+							);
+						const projectKey = paths.project(input.project_id).meta;
+						const notebookKey = paths.project(input.project_id).notebook(input.notebook_id).meta;
+						const projectObject = await tx.records.get(projectKey);
+						const notebookObject = await tx.records.get(notebookKey);
+						if (!projectObject || !notebookObject)
+							throw new NotFoundError('Session target no longer exists');
+						const project = await readStored(ProjectSchema, projectObject, projectKey);
+						const notebook = await readStored(NotebookMetaSchema, notebookObject, notebookKey);
+						if (
+							project.status !== 'active' ||
+							notebook.status === 'deleted' ||
+							notebook.move_id ||
+							project.updated_at !== admission.projectUpdatedAt ||
+							notebook.updated_at !== admission.notebookUpdatedAt
+						)
+							throw new ConflictError('Session policy changed; retry admission');
+					}
+					const created = await owner.createSessionWithEtag(stable);
+					if (admission) {
+						for (const cap of admissionCaps('edit', admission)) {
+							if (cap.max && cap.max > 0)
+								assertAdmissionRank(
+									await owner.listActiveForUser(input.user_id),
+									created.value.session_id,
+									cap.max,
+									cap.message(cap.max),
+								);
+						}
+						const claim = await owner.claimEditor(
+							input.project_id,
+							input.notebook_id,
+							created.value.session_id,
+							input.editor_sandbox_sharing ?? 'shared',
+							input.user_id,
+						);
+						if (!claim.claimed && claim.claim.session_id)
+							throw new EditorClaimLostError(claim.claim.session_id);
+						const sourceKey = paths.project(input.project_id).notebook(input.notebook_id).source;
+						const sourceObject = await tx.records.get(sourceKey);
+						if (!sourceObject) throw new NotFoundError('Notebook source no longer exists');
+						const source = await readStored(SourceSchema, sourceObject, sourceKey);
+						if (source.type === 'local') {
+							if (input.source_version_id && input.source_version_id !== source.current_version_id)
+								throw new ConflictError('Notebook source changed; retry admission');
+							const token = await readLocalPublication(
+								tx.records,
+								input.project_id,
+								input.notebook_id,
+							);
+							await publishLocalSource(
+								tx.records,
+								token,
+								source.current_version_id,
+								token.versions,
+							);
+						}
+					}
+					return created;
+				},
+			);
+		}
 		if (input.kernel_auth_token !== undefined) {
 			assertValidKernelAuthToken(input.kernel_auth_token);
 		}
@@ -621,6 +724,41 @@ export class SessionService {
 	 * whose sandbox is still being snapshotted while editors remain connected. */
 	async markSnapshotted(projectId: ProjectId, id: SessionId, at: string): Promise<Session> {
 		return this.mutate(projectId, id, (session) => ({ ...session, last_snapshot_at: at }));
+	}
+
+	get supportsAtomicMetadata(): boolean {
+		return this.transactions !== undefined;
+	}
+
+	async commitCapturePublication(
+		token: LocalPublicationToken,
+		versionId: VersionId,
+		versions: LocalPublicationVersion[],
+		authority: { session: Session; stopLease?: { attemptId: string; leaseId: string } },
+		at: string,
+	): Promise<void> {
+		if (!this.transactions) throw new Error('Atomic capture requires metadata transactions');
+		const { session, stopLease } = authority;
+		if (session.project_id !== token.projectId || session.notebook_id !== token.notebookId)
+			throw new ConflictError('Capture identity mismatch');
+		await this.transactions.run(
+			[metadataScope('notebook', token.projectId, token.notebookId)],
+			async (tx) => {
+				const owner = new SessionService(
+					tx.records,
+					this.metrics,
+					undefined,
+					this.indexReady,
+					tx.sessions,
+				);
+				await owner.assertCaptureOwnership(session, stopLease);
+				const cutoff = await owner.getVersionPruneCutoff(token.projectId, token.notebookId);
+				if (cutoff && versionId <= cutoff)
+					throw new ConflictError('Captured version has been pruned');
+				await publishLocalSource(tx.records, token, versionId, versions);
+				await owner.recordDurableCapture(session, at, versionId);
+			},
+		);
 	}
 
 	async recordCaptureAttempt(session: Session): Promise<void> {
@@ -1280,43 +1418,70 @@ export class SessionService {
 		invalidRecords: InvalidRecords = 'skip',
 		filter: (session: Session) => boolean = () => true,
 		signal?: AbortSignal,
+		userId?: UserId,
 	): Promise<Awaited<T>[]> {
-		const objects = await listAllObjects(this.bucket, prefix, signal);
-		const scanned = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (obj) => {
-			signal?.throwIfAborted();
-			const cached = this.recordCache.get(obj.key, obj.etag);
-			if (cached) return filter(cached) ? handle(structuredClone(cached), obj, obj.etag) : SKIP;
-			const body = await this.bucket.get(obj.key);
-			signal?.throwIfAborted();
-			if (!body) {
-				this.recordCache.delete(obj.key);
-				return SKIP;
+		const indexed = this.sessionRecords;
+		const bucket = this.bucket;
+		async function* pages(): AsyncGenerator<(BucketObject | BucketObjectBody)[]> {
+			if (!indexed) {
+				yield await listAllObjects(bucket, prefix, signal);
+				return;
 			}
-			// Tolerant scans keep valid records when another record is corrupt.
-			let session: Session;
-			let text: string | undefined;
-			try {
-				const raw = await body.text();
-				text = raw;
-				session = await readStored(SessionSchema, { json: async () => JSON.parse(raw) }, obj.key);
-			} catch (err) {
-				if (invalidRecords === 'throw') throw err;
-				if (invalidRecords !== 'skip') {
-					// One user's corrupt record must not block every other user's admission.
-					if (text !== undefined && storedUserId(text) === invalidRecords.owner) throw err;
-					this.metrics.increment('sessions.index.unattributable');
+			let cursor: string | undefined;
+			do {
+				signal?.throwIfAborted();
+				const page = await indexed.list({
+					projectId:
+						prefix === paths.sessionsPrefix
+							? undefined
+							: (prefix.slice(paths.sessionsPrefix.length, -1) as ProjectId),
+					userId,
+					limit: 1000,
+					cursor,
+				});
+				yield page.records;
+				cursor = page.cursor;
+			} while (cursor);
+		}
+		const results: Awaited<T>[] = [];
+		for await (const objects of pages()) {
+			const scanned = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (obj) => {
+				signal?.throwIfAborted();
+				const cached = this.recordCache.get(obj.key, obj.etag);
+				if (cached) return filter(cached) ? handle(structuredClone(cached), obj, obj.etag) : SKIP;
+				const body = 'bytes' in obj ? obj : await this.bucket.get(obj.key);
+				signal?.throwIfAborted();
+				if (!body) {
+					this.recordCache.delete(obj.key);
+					return SKIP;
 				}
-				logOperationalError(
-					'stored_object_skipped',
-					{ operation: 'session.scan', object: obj.key },
-					err,
-				);
-				return SKIP;
-			}
-			this.recordCache.set(obj.key, body.etag, session);
-			return filter(session) ? handle(structuredClone(session), obj, body.etag) : SKIP;
-		});
-		return scanned.filter((r): r is Awaited<T> => r !== SKIP);
+				// Tolerant scans keep valid records when another record is corrupt.
+				let session: Session;
+				let text: string | undefined;
+				try {
+					const raw = await body.text();
+					text = raw;
+					session = await readStored(SessionSchema, { json: async () => JSON.parse(raw) }, obj.key);
+				} catch (err) {
+					if (invalidRecords === 'throw') throw err;
+					if (invalidRecords !== 'skip') {
+						// One user's corrupt record must not block every other user's admission.
+						if (text !== undefined && storedUserId(text) === invalidRecords.owner) throw err;
+						this.metrics.increment('sessions.index.unattributable');
+					}
+					logOperationalError(
+						'stored_object_skipped',
+						{ operation: 'session.scan', object: obj.key },
+						err,
+					);
+					return SKIP;
+				}
+				this.recordCache.set(obj.key, body.etag, session);
+				return filter(session) ? handle(structuredClone(session), obj, body.etag) : SKIP;
+			});
+			results.push(...scanned.filter((r): r is Awaited<T> => r !== SKIP));
+		}
+		return results;
 	}
 
 	async inspectSessions(): Promise<{ sessions: Session[]; incomplete: boolean }> {
@@ -1619,6 +1784,8 @@ export class SessionService {
 				(s) => s,
 				{ owner: userId },
 				(s) => s.user_id === userId && countsTowardCap(s, capScope),
+				undefined,
+				userId,
 			)
 		).sort(byCapOrder);
 	}
@@ -1720,6 +1887,7 @@ export class SessionService {
 			{ owner: userId },
 			(session) => session.user_id === userId,
 			signal,
+			userId,
 		);
 		return this.liveIndexReferences(
 			userId,

@@ -1,3 +1,5 @@
+import { metadataCompositionContract } from '@marimo-hub/core/testing/metadata-contract';
+import { bucketStorage } from '@marimo-hub/core/ports/metadata';
 import {
 	chmodSync,
 	existsSync,
@@ -46,6 +48,9 @@ function makeEscapingSymlink() {
 }
 
 bucketContract('FsStorage', () => new FsStorage({ root: makeRoot() }));
+metadataCompositionContract('filesystem bucket', async () =>
+	bucketStorage(new FsStorage({ root: makeRoot() })),
+);
 
 describe('FsStorage', () => {
 	it('reads metadata and validates conditional writes without reading the existing body', async () => {

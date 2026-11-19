@@ -28,12 +28,17 @@ function azureError(statusCode: number, code: string): Error {
 }
 
 function makeFakeContainer(
-	options: { ignoreConditions?: boolean; allowStaleMatches?: boolean } = {},
+	options: {
+		ignoreConditions?: boolean;
+		allowStaleMatches?: boolean;
+		servicePageSize?: number;
+	} = {},
 ) {
 	const store = new Map<string, StoredBlob>();
 	const staged = new Map<string, Uint8Array>();
 	const calls = {
 		uploads: [] as UploadCall[],
+		listPages: 0,
 		deletes: [] as string[],
 	};
 	const deleteFailures = new Set<string>();
@@ -72,12 +77,15 @@ function makeFakeContainer(
 						entries.set(`blob:${key}`, { kind: 'blob', key });
 					}
 				}
-				const ordered = [...entries.values()].sort((a, b) => a.key.localeCompare(b.key));
+				const ordered = [...entries.values()].sort((a, b) =>
+					a.key < b.key ? -1 : a.key > b.key ? 1 : 0,
+				);
 				let offset = Number(continuationToken ?? 0);
-				const pageSize = maxPageSize ?? 5000;
+				const pageSize = Math.min(maxPageSize ?? 5000, options.servicePageSize ?? 5000);
 				while (offset < ordered.length) {
 					const pageEntries = ordered.slice(offset, offset + pageSize);
 					offset += pageEntries.length;
+					calls.listPages++;
 					yield {
 						segment: {
 							blobItems: pageEntries
@@ -418,6 +426,58 @@ describe('AzureStorage error handling', () => {
 });
 
 describe('AzureStorage listing', () => {
+	it('reads one service page per BMP result page', async () => {
+		const fake = makeFakeContainer();
+		const bucket = new AzureStorage({ containerClient: fake.client });
+		const keys = ['a', 'b', 'é', '龍', '\uE000', '\uFFFD'];
+		for (const key of keys) await bucket.put(key, 'x');
+		let cursor: string | undefined;
+		const actual: string[] = [];
+		do {
+			const page = await bucket.list({ limit: 2, cursor });
+			actual.push(...page.objects.map(({ key }) => key));
+			cursor = page.cursor;
+		} while (cursor);
+		expect(actual).toEqual(keys);
+		expect(fake.calls.listPages).toBe(3);
+	});
+
+	it.each([undefined, '/'])(
+		'switches from native pagination to sorted scanning (delimiter %s)',
+		async (delimiter) => {
+			const fake = makeFakeContainer({ servicePageSize: 1 });
+			const bucket = new AzureStorage({ containerClient: fake.client });
+			const keys = ['a/', 'é/', '\uE000/', '😀/'];
+			for (const key of keys) await bucket.put(`${key}file`, 'x');
+			let cursor: string | undefined;
+			const actual: string[] = [];
+			do {
+				const page = await bucket.list({ limit: 1, cursor, delimiter, startAfter: 'a/file' });
+				actual.push(...page.objects.map(({ key }) => key), ...page.delimitedPrefixes);
+				cursor = page.cursor;
+			} while (cursor);
+			expect(actual).toEqual(keys.slice(1).map((key) => (delimiter ? key : `${key}file`)));
+		},
+	);
+
+	it('normalizes Unicode ordering across service pages and rejects mismatched cursors', async () => {
+		const fake = makeFakeContainer({ servicePageSize: 2 });
+		const bucket = new AzureStorage({ containerClient: fake.client });
+		const expected = ['é', '龍', '\uE000', '😀'];
+		for (const key of expected) await bucket.put(key, 'x');
+		const first = await bucket.list({ limit: 3 });
+		expect(first.objects.map(({ key }) => key)).toEqual(expected.slice(0, 2));
+		const last = await bucket.list({ cursor: first.cursor, limit: 3 });
+		expect(last.objects.map(({ key }) => key)).toEqual(expected.slice(2));
+		expect(last.truncated).toBe(false);
+		await expect(bucket.list({ cursor: first.cursor, prefix: 'other/' })).rejects.toThrow(
+			'Invalid Azure storage cursor',
+		);
+		await expect(bucket.list({ cursor: 'invalid' })).rejects.toThrow(
+			'Invalid Azure storage cursor',
+		);
+	});
+
 	it('maps continuation tokens and limits', async () => {
 		const fake = makeFakeContainer();
 		const bucket = new AzureStorage({ containerClient: fake.client });
@@ -427,7 +487,7 @@ describe('AzureStorage listing', () => {
 		const second = await bucket.list({ limit: 2, cursor: first.cursor });
 
 		expect(first.objects.map((item) => item.key)).toEqual(['a', 'b']);
-		expect(first).toMatchObject({ truncated: true, cursor: '2' });
+		expect(first).toMatchObject({ truncated: true, cursor: expect.any(String) });
 		expect(second.objects.map((item) => item.key)).toEqual(['c']);
 		expect(second.truncated).toBe(false);
 	});

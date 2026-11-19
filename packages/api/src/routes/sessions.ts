@@ -31,6 +31,9 @@ import type {
 } from '@marimo-hub/core';
 import { SANDBOX_STARTUP_PHASES, STARTUP_DETAIL_MAX_LENGTH } from '@marimo-hub/core/constants';
 import {
+	EditorClaimLostError,
+	admissionCaps,
+	assertAdmissionRank,
 	previewAvailable,
 	AppPoolService,
 	AppAssignmentExpiredError,
@@ -700,13 +703,6 @@ function toSessionError(err: unknown): { code: string; message: string } {
 	return { code: 'PROVISION_FAILED', message: `Failed to provision the sandbox (${e.name})` };
 }
 
-class EditorClaimLostError extends Error {
-	constructor(readonly holder: SessionId) {
-		super('editor claim lost');
-		this.name = 'EditorClaimLostError';
-	}
-}
-
 /**
  * The start gate — the `session.start` decision as a thrower, plus the session
  * classification: a viewer's admitted session is what
@@ -788,16 +784,6 @@ function entitlementAuthorizationDeadline(user: AuthUser): string | undefined {
 	return new Date(deadline).toISOString();
 }
 
-const CAP_REACHED = {
-	appsPerProject: (max: number) =>
-		`Concurrent app limit reached for this project (${max}). Stop an app before starting another.`,
-	appsPerUser: (max: number) =>
-		`Concurrent app limit reached (${max} apps started by you). Stop an app before starting another.`,
-	sessionsPerUser: (max: number) =>
-		`Concurrent session limit reached (${max}). Terminate a session before starting another.`,
-};
-
-/** App caps also apply per user so separate projects cannot bypass the cost limit. */
 function capsFor(
 	deps: ApiDeps,
 	mode: SessionMode,
@@ -806,31 +792,17 @@ function capsFor(
 	onSource?: (source: 'scan' | 'index') => void,
 ) {
 	const { sessions } = deps.services;
-	const maxSessions = deps.policy.maxConcurrentSessionsPerUser;
-	if (MODE_POLICY[mode].capScope === 'project') {
-		return [
-			{
-				max: deps.policy.maxAppsPerProject,
-				message: CAP_REACHED.appsPerProject,
-				queue: () => sessions.listActiveAppsForProject(pid),
-				preflight: true,
-			},
-			{
-				max: maxSessions,
-				message: CAP_REACHED.appsPerUser,
-				queue: () => sessions.listActiveForUser(userId, 'project', onSource),
-				preflight: false,
-			},
-		];
-	}
-	return [
-		{
-			max: maxSessions,
-			message: CAP_REACHED.sessionsPerUser,
-			queue: () => sessions.listActiveForUser(userId, 'user', onSource),
-			preflight: false,
-		},
-	];
+	return admissionCaps(mode, deps.policy).map((cap) => ({
+		...cap,
+		queue: () =>
+			cap.scope === 'project'
+				? sessions.listActiveAppsForProject(pid)
+				: sessions.listActiveForUser(
+						userId,
+						cap.scope === 'user-apps' ? 'project' : 'user',
+						onSource,
+					),
+	}));
 }
 
 /** Preserve cap precedence even when a later queue fails. */
@@ -888,10 +860,7 @@ async function assertCapAfterCreate(
 ): Promise<void> {
 	const caps = capsFor(deps, mode, pid, userId, onSource);
 	await checkCapQueues(caps, excludedSessionId, (cap) => {
-		const rank = cap.sessions.findIndex((session) => session.session_id === sessionId);
-		// Missing membership cannot prove admission: the index may have lost a live entry.
-		if (rank === -1) throw new ConflictError('Session admission changed. Retry shortly.');
-		if (rank >= cap.max) throw new ResourceExhaustedError(cap.message);
+		assertAdmissionRank(cap.sessions, sessionId, cap.max, cap.message);
 	});
 }
 
@@ -2034,9 +2003,17 @@ async function startNotebookSessionOnce(
 	let sessionRecordAttempted = false;
 	let sandboxMayExist = false;
 	let workspaceStarted = false;
-	const deferBootForAdmission = capsFor(deps, mode, pid, user.id).some(
-		({ max, preflight }) => !preflight && max !== undefined && max > 0,
-	);
+	const atomicEditorAdmission =
+		sessions.supportsAtomicMetadata &&
+		mode === 'edit' &&
+		!ephemeral &&
+		!origin &&
+		!replacingAfterTakeover;
+	const deferBootForAdmission =
+		atomicEditorAdmission ||
+		capsFor(deps, mode, pid, user.id).some(
+			({ max, preflight }) => !preflight && max !== undefined && max > 0,
+		);
 	const recordSandboxCleanup = async () => {
 		if (sessionRecordAttempted) {
 			const reclaimed = await sessions.markSandboxReclaimed(
@@ -2377,29 +2354,40 @@ async function startNotebookSessionOnce(
 			.step('session_record', async () => {
 				const create = async () => {
 					sessionRecordAttempted = true;
-					createdSession = await sessions.createSessionWithEtag({
-						session_id: sessionId,
-						...(admission ? { app_pool: true as const } : {}),
-						notebook_id: nid,
-						origin,
-						project_id: pid,
-						user_id: user.id,
-						sandbox_id: sandboxId,
-						kernel_auth_token: kernelAuthToken,
-						compute_profile: appliedComputeProfile.name,
-						compute_resources: appliedComputeProfile.resources,
-						compute_from_snapshot: restoreFilesystemSnapshot !== undefined,
-						ephemeral,
-						restricted_viewer_credentials: restrictedViewerCredentials,
-						idle_timeout_ms: isPreview ? PREVIEW_IDLE_MS : undefined,
-						mode,
-						source_version_id: sourceVersionId,
-						editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
-						authorization_expires_at: earliestDeadline(
-							authorizationExpiresAt,
-							credentialsEndpoint?.expiresAt,
-						),
-					});
+					createdSession = await sessions.createSessionWithEtag(
+						{
+							session_id: sessionId,
+							...(admission ? { app_pool: true as const } : {}),
+							notebook_id: nid,
+							origin,
+							project_id: pid,
+							user_id: user.id,
+							sandbox_id: sandboxId,
+							kernel_auth_token: kernelAuthToken,
+							compute_profile: appliedComputeProfile.name,
+							compute_resources: appliedComputeProfile.resources,
+							compute_from_snapshot: restoreFilesystemSnapshot !== undefined,
+							ephemeral,
+							restricted_viewer_credentials: restrictedViewerCredentials,
+							idle_timeout_ms: isPreview ? PREVIEW_IDLE_MS : undefined,
+							mode,
+							source_version_id: sourceVersionId,
+							editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
+							authorization_expires_at: earliestDeadline(
+								authorizationExpiresAt,
+								credentialsEndpoint?.expiresAt,
+							),
+						},
+						...(atomicEditorAdmission
+							? [
+									{
+										maxConcurrentSessionsPerUser: deps.policy.maxConcurrentSessionsPerUser,
+										projectUpdatedAt: project.updated_at,
+										notebookUpdatedAt: notebook.meta.updated_at,
+									},
+								]
+							: []),
+					);
 					return createdSession.value;
 				};
 				// Publish the starting record under the source-mutation lease. Once visible,
@@ -2448,17 +2436,19 @@ async function startNotebookSessionOnce(
 					// Settle every writer before compensation; cap errors retain precedence.
 					const checks = await allSettled({
 						cap: () =>
-							timed('cap_recheck', () =>
-								assertCapAfterCreate(
-									deps,
-									mode,
-									pid,
-									user.id,
-									sessionId,
-									temporaryToRetire?.session_id,
-									(source) => observer.tag('cap_source', source),
-								),
-							),
+							atomicEditorAdmission
+								? Promise.resolve()
+								: timed('cap_recheck', () =>
+										assertCapAfterCreate(
+											deps,
+											mode,
+											pid,
+											user.id,
+											sessionId,
+											temporaryToRetire?.session_id,
+											(source) => observer.tag('cap_source', source),
+										),
+									),
 						preview: () =>
 							timed('preview_admission_commit', async () => {
 								if (previewRecord)
@@ -2467,11 +2457,15 @@ async function startNotebookSessionOnce(
 						editor: () =>
 							timed('editor_claim', async () => {
 								if (mode !== 'edit' || ephemeral) return;
-								const result = await sessions.claimEditor(pid, nid, sessionId, sharing, user.id);
-								if (!result.claimed && result.claim.session_id)
-									throw new EditorClaimLostError(result.claim.session_id);
+								if (!atomicEditorAdmission) {
+									const result = await sessions.claimEditor(pid, nid, sessionId, sharing, user.id);
+									if (!result.claimed && result.claim.session_id)
+										throw new EditorClaimLostError(result.claim.session_id);
+								}
 								if (notebook.source.type === 'local') {
-									const fenced = await notebooks.fenceSessionPublications(pid, nid);
+									const fenced = atomicEditorAdmission
+										? await notebooks.getNotebookSource(pid, nid)
+										: await notebooks.fenceSessionPublications(pid, nid);
 									if (fenced.type !== 'local')
 										throw new ConflictError('Notebook source changed during admission');
 									launchSource = resolveNotebookLaunchSource({

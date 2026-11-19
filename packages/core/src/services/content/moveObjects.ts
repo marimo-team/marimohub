@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { Bucket, BucketObject } from '../../ports/bucket';
+import type { Bucket } from '../../ports/bucket';
+import { bucketMetadataFingerprint } from '../../ports/bucket';
 import { ConflictError, PreconditionFailedError } from '../../errors';
 import { toHex } from '../../internal/hex';
 import { forEachConcurrentUntilFailure } from '../../async';
@@ -10,15 +11,6 @@ const MOVE_COPY_CONCURRENCY = 4;
 
 const digest = async (bytes: Uint8Array) =>
 	toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes))));
-
-function metadataFingerprint(object: BucketObject): string {
-	return JSON.stringify([
-		object.httpMetadata?.contentType ?? null,
-		Object.entries(object.customMetadata ?? {}).sort(([left], [right]) =>
-			left.localeCompare(right),
-		),
-	]);
-}
 
 export async function copyMoveObject(
 	bucket: Bucket,
@@ -47,7 +39,7 @@ export async function copyMoveObject(
 			!existing ||
 			!existingMetadata ||
 			existingMetadata.etag !== existing.etag ||
-			metadataFingerprint(existingMetadata) !== metadataFingerprint(metadata) ||
+			bucketMetadataFingerprint(existingMetadata) !== bucketMetadataFingerprint(metadata) ||
 			(await digest(await existing.bytes())) !== (await digest(bytes))
 		)
 			throw new ConflictError('The move destination contains different data');

@@ -17,6 +17,19 @@ describe('sha256Hex', () => {
 });
 
 describe('sha256', () => {
+	it('hashes a byte view without including bytes outside its bounds', async () => {
+		const bytes = new Uint8Array([0, 97, 98, 99, 255]);
+		expect(await sha256Hex(bytes.subarray(1, 4))).toBe(
+			'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+		);
+		expect(bytes).toEqual(new Uint8Array([0, 97, 98, 99, 255]));
+	});
+	it('hashes arbitrary binary bytes without UTF-8 conversion', async () => {
+		expect(await sha256Hex(new Uint8Array([0, 128, 255]))).toBe(
+			'5240672d7b51756b829ad0ef8d9468b7a078afa2f410484fd3892dab47becb72',
+		);
+	});
+
 	it('returns the raw digest bytes', async () => {
 		expect(await sha256('abc')).toEqual(
 			new Uint8Array([
