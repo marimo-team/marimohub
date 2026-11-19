@@ -9,6 +9,7 @@ const Input = z.strictObject({
 	id: z.uuid(),
 	pageSize: z.number().int().min(1).max(1000).optional(),
 	fresh: z.boolean().optional(),
+	direction: z.enum(['bucket_to_sql', 'sql_to_bucket']).optional(),
 });
 export async function metadataTransferCommand(activate: boolean): Promise<void> {
 	const { values } = parseArgs({

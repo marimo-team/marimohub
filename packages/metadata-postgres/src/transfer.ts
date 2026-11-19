@@ -22,16 +22,18 @@ export interface TransferOptions {
 	id: string;
 	writersStopped: boolean;
 	pageSize?: number;
+	direction?: 'bucket_to_sql' | 'sql_to_bucket';
 }
 export interface TransferLease {
 	state: 'copying' | 'checking' | 'ready' | 'activated' | 'failed';
 	lease_id: string;
 	revision: string;
-	cursor: { after: string } | null;
+	cursor: { after: string; phase?: 'deleting' } | null;
 	scan_generation: string;
 	source_epoch: string;
 	target_epoch: string;
 	manifest_version: number;
+	direction: 'bucket_to_sql' | 'sql_to_bucket';
 }
 
 export class MetadataTransfer {
@@ -91,13 +93,18 @@ export class MetadataTransfer {
 		const current = await this.marker();
 		if (
 			current?.marker.state !== 'frozen' ||
-			current.marker.backend !== 'bucket' ||
+			current.marker.backend !==
+				(this.options.direction === 'sql_to_bucket' ? 'postgres' : 'bucket') ||
 			current.marker.transfer_id !== this.options.id
 		)
 			throw new Error('Transfer source marker is not frozen for this transfer');
 		return current;
 	}
 	async begin({ fresh = false } = {}): Promise<void> {
+		if (this.options.direction === 'sql_to_bucket') {
+			if (fresh) throw new Error('Reverse transfer cannot initialize a fresh deployment');
+			return this.beginReverse();
+		}
 		await this.transaction(async (client) => {
 			await checkSchema(client);
 			await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
@@ -190,7 +197,11 @@ export class MetadataTransfer {
 			[this.options.namespace, this.options.id],
 		);
 		const row = result.rows[0];
-		if (!row || row.manifest_version !== METADATA_MANIFEST_VERSION)
+		if (
+			!row ||
+			row.manifest_version !== METADATA_MANIFEST_VERSION ||
+			row.direction !== (this.options.direction ?? 'bucket_to_sql')
+		)
 			throw new Error('Unknown transfer or manifest version');
 		if (
 			lease &&
@@ -220,6 +231,7 @@ export class MetadataTransfer {
 		return createLogicalStorage(this.bucket, readOnly, { namespace, epoch }).logicalBucket;
 	}
 	async step(lease: TransferLease): Promise<TransferLease> {
+		if (this.options.direction === 'sql_to_bucket') return this.stepReverse(lease);
 		await this.frozenMarker();
 		const page = await this.bucket.list({ startAfter: lease.cursor?.after, limit: this.pageSize });
 		const records: BucketObjectBody[] = [];
@@ -314,6 +326,7 @@ export class MetadataTransfer {
 		});
 	}
 	async activate(): Promise<void> {
+		if (this.options.direction === 'sql_to_bucket') return this.activateReverse();
 		const target = await this.transaction(async (client) => {
 			const row = await this.lock(client);
 			if (!['ready', 'activated'].includes(row.state)) throw new Error('Transfer is not ready');
@@ -355,6 +368,203 @@ export class MetadataTransfer {
 			current.marker.artifact_store_id !== target.artifact_store_id
 		)
 			throw new Error('Activation marker changed');
+		if (JSON.stringify(current.marker) !== JSON.stringify(target))
+			await this.writeMarker(target, current.etag);
+		await this.pool.query(
+			"UPDATE hub_metadata.transfers SET state='activated',lease_id=NULL,lease_until=NULL,revision=revision+1 WHERE namespace=$1 AND id=$2 AND state IN ('ready','activated')",
+			[this.options.namespace, this.options.id],
+		);
+	}
+	private async beginReverse(): Promise<void> {
+		await this.transaction(async (client) => {
+			await checkSchema(client);
+			const deployment = (
+				await client.query<{ backend_epoch: string; state: string; artifact_store_id: string }>(
+					'SELECT * FROM hub_metadata.deployments WHERE namespace=$1 FOR UPDATE',
+					[this.options.namespace],
+				)
+			).rows[0];
+			const current = await this.marker();
+			if (
+				!deployment ||
+				current?.marker.backend !== 'postgres' ||
+				current.marker.namespace !== this.options.namespace ||
+				current.marker.artifact_store_id !== deployment.artifact_store_id ||
+				current.marker.epoch !== Number(deployment.backend_epoch)
+			)
+				throw new Error('Reverse transfer source mismatch');
+			const existing = await client.query(
+				'SELECT direction FROM hub_metadata.transfers WHERE namespace=$1 AND id=$2',
+				[this.options.namespace, this.options.id],
+			);
+			if (existing.rowCount) {
+				await this.frozenMarker();
+				return;
+			}
+			if (
+				!['active', 'frozen'].includes(deployment.state) ||
+				(current.marker.state === 'frozen' && current.marker.transfer_id !== this.options.id)
+			)
+				throw new Error('Reverse source is already frozen for another operation');
+			const target = current.marker.epoch + 1;
+			if (!Number.isSafeInteger(target)) throw new Error('Backend epoch exhausted');
+			await client.query(
+				"UPDATE hub_metadata.deployments SET state='frozen',updated_at=clock_timestamp() WHERE namespace=$1",
+				[this.options.namespace],
+			);
+			await this.writeMarker(
+				{ ...current.marker, state: 'frozen', transfer_id: this.options.id },
+				current.etag,
+			);
+			await client.query(
+				"INSERT INTO hub_metadata.transfers(namespace,id,direction,state,source_epoch,target_epoch,manifest_version) VALUES ($1,$2,'sql_to_bucket','copying',$3,$4,$5)",
+				[
+					this.options.namespace,
+					this.options.id,
+					current.marker.epoch,
+					target,
+					METADATA_MANIFEST_VERSION,
+				],
+			);
+		});
+	}
+	private async stepReverse(lease: TransferLease): Promise<TransferLease> {
+		return this.transaction(async (client) => {
+			const row = await this.lock(client, lease);
+			const marker = await this.frozenMarker();
+			const deployment = await client.query(
+				"SELECT 1 FROM hub_metadata.deployments WHERE namespace=$1 AND backend_epoch=$2 AND state='frozen' AND artifact_store_id=$3 FOR UPDATE",
+				[this.options.namespace, row.source_epoch, marker.marker.artifact_store_id],
+			);
+			if (!deployment.rowCount) throw new Error('Reverse deployment mismatch');
+			let state = row.state;
+			let generation = Number(row.scan_generation);
+			let cursor: TransferLease['cursor'] = null;
+			if (row.cursor?.phase === 'deleting') {
+				const page = await this.bucket.list({ startAfter: row.cursor.after, limit: this.pageSize });
+				for (const item of page.objects) {
+					if (classifyMetadataKey(item.key) !== 'metadata') continue;
+					if (!(await headRecord(client, this.options.namespace, item.key)))
+						await this.bucket.delete(item.key);
+				}
+				if (page.truncated) cursor = { after: page.objects.at(-1)!.key, phase: 'deleting' };
+				else {
+					await auditMetadataReferences(this.bucket);
+					state = 'ready';
+				}
+			} else {
+				const page = (
+					await client.query<RecordRow>(
+						`SELECT ${COLUMNS},body FROM hub_metadata.records WHERE namespace=$1 AND key>$2 ORDER BY key COLLATE "C" LIMIT $3`,
+						[this.options.namespace, row.cursor?.after ?? '', this.pageSize],
+					)
+				).rows;
+				for (const record of page) {
+					const source = body(record);
+					await validateMetadataRecord(source);
+					const existing = await this.bucket.get(record.key);
+					const metadata = (object: { httpMetadata?: unknown; customMetadata?: unknown }) =>
+						JSON.stringify([object.httpMetadata ?? null, object.customMetadata ?? null]);
+					const equal =
+						existing &&
+						Buffer.from(await existing.bytes()).equals(record.body) &&
+						metadata(existing) === metadata(source);
+					if (row.state === 'copying' || !equal)
+						await this.bucket.put(record.key, record.body, {
+							httpMetadata: source.httpMetadata,
+							customMetadata: source.customMetadata,
+							...(existing ? { onlyIfEtagMatches: existing.etag } : { onlyIfNotExists: true }),
+						});
+					const target = await this.bucket.get(record.key);
+					if (
+						!target ||
+						!Buffer.from(await target.bytes()).equals(record.body) ||
+						metadata(target) !== metadata(source)
+					)
+						throw new Error('Reverse transfer verification failed');
+					await client.query(
+						`INSERT INTO hub_metadata.transfer_items(namespace,transfer_id,key,source_etag,source_uploaded_at,sha256,size_bytes,target_etag,seen_generation) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+					ON CONFLICT(namespace,transfer_id,key) DO UPDATE SET target_etag=EXCLUDED.target_etag,seen_generation=EXCLUDED.seen_generation,checked_at=clock_timestamp()`,
+						[
+							this.options.namespace,
+							this.options.id,
+							record.key,
+							record.etag,
+							record.uploaded_at,
+							createHash('sha256').update(record.body).digest('hex'),
+							record.body.length,
+							target.etag,
+							generation,
+						],
+					);
+				}
+				if (page.length === this.pageSize) cursor = { after: page.at(-1)!.key };
+				else if (state === 'copying') {
+					state = 'checking';
+					generation++;
+				} else cursor = { after: '', phase: 'deleting' };
+			}
+			const next = await client.query<TransferLease>(
+				`UPDATE hub_metadata.transfers SET state=$5,cursor=$6,scan_generation=$7,revision=revision+1,lease_until=clock_timestamp()+interval '60 seconds',updated_at=clock_timestamp()
+			WHERE namespace=$1 AND id=$2 AND lease_id=$3 AND revision=$4 AND lease_until>clock_timestamp() RETURNING *`,
+				[
+					this.options.namespace,
+					this.options.id,
+					lease.lease_id,
+					lease.revision,
+					state,
+					cursor,
+					generation,
+				],
+			);
+			if (!next.rows[0])
+				throw new Error('Reverse transfer lease expired; keep all writers stopped');
+			return next.rows[0];
+		});
+	}
+	private async activateReverse(): Promise<void> {
+		const target = await this.transaction(async (client) => {
+			const row = await this.lock(client);
+			if (!['ready', 'activated'].includes(row.state))
+				throw new Error('Reverse transfer is not ready');
+			const current = await this.marker();
+			if (!current || current.marker.transfer_id !== this.options.id)
+				throw new Error('Reverse activation marker mismatch');
+			const marker = current.marker;
+			const completed =
+				marker.backend === 'bucket' &&
+				marker.state === 'active' &&
+				marker.epoch === Number(row.target_epoch);
+			if (
+				!completed &&
+				!(
+					marker.backend === 'postgres' &&
+					marker.state === 'frozen' &&
+					marker.namespace === this.options.namespace &&
+					marker.epoch === Number(row.source_epoch)
+				)
+			)
+				throw new Error('Reverse activation source mismatch');
+			const result = await client.query(
+				"UPDATE hub_metadata.deployments SET state='retired',backend_epoch=$2,updated_at=clock_timestamp() WHERE namespace=$1 AND artifact_store_id=$3 AND ((state='frozen' AND backend_epoch=$4) OR (state='retired' AND backend_epoch=$2)) RETURNING namespace",
+				[this.options.namespace, row.target_epoch, marker.artifact_store_id, row.source_epoch],
+			);
+			if (!result.rowCount) throw new Error('Reverse activation deployment mismatch');
+			return {
+				...marker,
+				backend: 'bucket' as const,
+				namespace: null,
+				state: 'active' as const,
+				epoch: Number(row.target_epoch),
+			};
+		});
+		const current = await this.marker();
+		if (
+			!current ||
+			current.marker.transfer_id !== this.options.id ||
+			current.marker.artifact_store_id !== target.artifact_store_id
+		)
+			throw new Error('Reverse activation marker changed');
 		if (JSON.stringify(current.marker) !== JSON.stringify(target))
 			await this.writeMarker(target, current.etag);
 		await this.pool.query(

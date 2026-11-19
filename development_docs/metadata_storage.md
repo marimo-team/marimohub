@@ -3,7 +3,7 @@
 The PostgreSQL adapter stores metadata bytes in `hub_metadata.records`. Artifact bytes remain in the configured bucket.
 The default metadata backend remains `bucket`. The public API and stored domain formats remain unchanged.
 
-The adapter and runtime composition are implemented. Offline bucket-to-SQL transfer and resumable activation are implemented. Reverse transfer and transaction consolidation are the next milestones.
+The adapter and runtime composition are implemented. Offline bucket-to-SQL transfer and resumable activation are implemented. Reverse transfer is implemented. Transaction consolidation is the next milestone.
 The storage-parity release gates are not complete. Schema creation alone does not activate a deployment.
 
 ## Runtime composition
@@ -148,3 +148,32 @@ Hosts remain unavailable until both records agree. Inspection shows a ready tran
 For a fresh deployment, add `"fresh":true`. The command rejects any existing bucket object or namespace.
 After an interrupted fresh initialization, remove `fresh` and resume with the same transfer ID.
 Keep old bucket metadata read-only through the rollback window. SQL never falls back to those objects.
+
+## Reverse transfer and restore
+
+After SQL has accepted writes, returning to bucket metadata requires a new transfer ID.
+Set `"direction":"sql_to_bucket"` in the input file and use the same transfer and activation commands.
+The command freezes SQL with an exclusive deployment-row lock before exporting.
+It replaces stale metadata, verifies exported bytes and object metadata, and removes metadata deleted in SQL.
+Artifacts are not rewritten. Exported metadata gets bucket-generated ETags and upload timestamps.
+SQL records and transfer receipts remain retained after the namespace is retired.
+
+Before activation, stop all transfer workers as well as runtime writers.
+Revoke credentials from abandoned exporters; a database lease cannot cancel an object-store request already in flight.
+Keep writers fenced after any uncertain object-store outcome and resume the same transfer to verify the target.
+Restart every process after activation to clear caches.
+
+Back up SQL metadata, the artifact bucket, and its backend marker as one deployment set.
+Record the namespace, artifact-store UUID, epoch, schema checksums, and backup time with that set.
+Keep artifact versions at least as long as the supported metadata restore window.
+A SQL point-in-time restore cannot recover artifact bytes deleted outside that window.
+
+Restore with all writers stopped and credentials fenced:
+
+1. Restore the matching artifact data and SQL backup to isolated targets.
+2. Restore the matching marker; verify its artifact-store UUID and epoch against SQL.
+3. Run schema inspection and a reference audit before allowing traffic.
+4. Resolve missing artifacts from the paired artifact backup. Do not start with missing published content.
+5. Configure the restored backend and restart hosts only after readiness succeeds.
+
+Never select bucket mode as an outage fallback against stale metadata.

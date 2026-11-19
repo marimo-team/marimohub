@@ -1,3 +1,4 @@
+import { PostgresMetadataStore } from './index';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
@@ -159,5 +160,82 @@ describe.skipIf(!url)('offline metadata transfer', () => {
 		await expect(transfer.step(old)).rejects.toThrow('lease');
 		const current = (await transfer.status())!;
 		expect((await transfer.step(current)).state).toBe('ready');
+	});
+	it('exports new SQL writes and deletions while retaining artifact bytes', async () => {
+		const { bucket, namespace, transfer } = fixture();
+		await bucket.put(key, '{"after":"old"}');
+		await bucket.put('_system/source-control-account-cleanup.json', '{}');
+		const artifact = 'projects/p/notebooks/n/workspace/keep.json';
+		await bucket.put(artifact, 'artifact');
+		const artifactEtag = (await bucket.head(artifact))!.etag;
+		await transfer.begin();
+		let lease = await transfer.claim();
+		while (lease.state !== 'ready') lease = await transfer.step(lease);
+		await transfer.activate();
+		const marker = (await readMetadataBackendMarker(bucket))!;
+		const store = new PostgresMetadataStore({
+			url: url!,
+			namespace,
+			epoch: 2,
+			artifactStoreId: marker.artifact_store_id,
+		});
+		try {
+			await store.ready();
+			await store.put(key, '{"after":"new"}', { customMetadata: { source: 'sql' } });
+			await store.delete('_system/source-control-account-cleanup.json');
+			await store.put('_system/working-branches/cleanup.json', '{"cursor":"new"}');
+			const reverse = new MetadataTransfer(pool, bucket, {
+				namespace,
+				id: randomUUID(),
+				direction: 'sql_to_bucket',
+				writersStopped: true,
+				pageSize: 1,
+			});
+			await reverse.begin();
+			await expect(store.put(key, '{}')).rejects.toMatchObject({ kind: 'unavailable' });
+			lease = await reverse.claim();
+			while (lease.state !== 'ready') lease = await reverse.step(lease);
+			await reverse.activate();
+			await reverse.activate();
+			expect(await (await bucket.get(key))!.text()).toBe('{"after":"new"}');
+			expect((await bucket.get(key))!.customMetadata).toEqual({ source: 'sql' });
+			expect(await bucket.get('_system/source-control-account-cleanup.json')).toBeNull();
+			expect(await bucket.get('_system/working-branches/cleanup.json')).not.toBeNull();
+			expect((await bucket.head(artifact))!.etag).toBe(artifactEtag);
+			expect(await readMetadataBackendMarker(bucket)).toMatchObject({
+				backend: 'bucket',
+				epoch: 3,
+				state: 'active',
+			});
+			await expect(store.get(key)).rejects.toMatchObject({ kind: 'unavailable' });
+		} finally {
+			await store.close();
+		}
+	});
+	it('replays a reverse page after a lost bucket write reply', async () => {
+		const { bucket, namespace, transfer } = fixture();
+		await bucket.put(key, '{}');
+		await transfer.begin();
+		let lease = await transfer.claim();
+		while (lease.state !== 'ready') lease = await transfer.step(lease);
+		await transfer.activate();
+		const reverse = new MetadataTransfer(pool, bucket, {
+			namespace,
+			id: randomUUID(),
+			direction: 'sql_to_bucket',
+			writersStopped: true,
+		});
+		await reverse.begin();
+		lease = await reverse.claim();
+		const put = bucket.put.bind(bucket);
+		vi.spyOn(bucket, 'put').mockImplementationOnce(async (...args) => {
+			await put(...args);
+			throw new Error('lost reply');
+		});
+		await expect(reverse.step(lease)).rejects.toThrow('lost reply');
+		expect((await reverse.status())!.revision).toBe(lease.revision);
+		while (lease.state !== 'ready') lease = await reverse.step(lease);
+		await reverse.activate();
+		expect(await (await bucket.get(key))!.text()).toBe('{}');
 	});
 });
