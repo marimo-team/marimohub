@@ -85,6 +85,7 @@ It preserves bytes, object metadata, and upload timestamps, with new ETags.
 A second inventory pass reconciles updates and deletions. Owner-schema and reference checks block invalid records, unsafe workspace paths, missing artifacts, and unresolved operations.
 
 A failed page leaves its SQL checkpoint unchanged. A crashed worker's lease expires after 60 seconds.
+Reference audits renew the lease while holding the transfer-row lock.
 To resume, use the same input file and transfer ID.
 
 Activation commits SQL first, then publishes the matching bucket marker. Hosts require both records to agree.

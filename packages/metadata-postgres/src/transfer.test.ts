@@ -5,6 +5,7 @@ import type { Pool } from 'pg';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { METADATA_BACKEND_KEY } from '@marimo-hub/core/storage/metadata-keys';
 import { readMetadataBackendMarker } from '@marimo-hub/core/storage/backend-marker';
+import { withTransferLease } from './transferLease';
 import { MetadataTransfer } from './transfer';
 import { createMetadataPool } from './pool';
 import { migrateSchema } from './migrations';
@@ -71,6 +72,43 @@ describe.skipIf(!url)('offline metadata transfer', () => {
 			epoch: 2,
 			namespace,
 		});
+	});
+	it('keeps an expired audit lease fenced against a competing claimant', async () => {
+		const { bucket, namespace, id, transfer } = fixture();
+		await bucket.put(key, '{}');
+		await transfer.begin();
+		const lease = await transfer.claim();
+		await pool.query(
+			"UPDATE hub_metadata.transfers SET lease_until=clock_timestamp()+interval '200 milliseconds' WHERE namespace=$1 AND id=$2",
+			[namespace, id],
+		);
+		const client = await pool.connect();
+		let takeover: Promise<unknown> | undefined;
+		try {
+			await client.query('BEGIN');
+			await client.query(
+				'SELECT 1 FROM hub_metadata.transfers WHERE namespace=$1 AND id=$2 FOR UPDATE',
+				[namespace, id],
+			);
+			await withTransferLease(client, { namespace, id }, lease, async () => {
+				await new Promise((resolve) => setTimeout(resolve, 250));
+				const settled = vi.fn();
+				takeover = transfer.claim().then(settled, (error: unknown) => {
+					settled();
+					return error;
+				});
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				expect(settled).not.toHaveBeenCalled();
+			});
+			await client.query('COMMIT');
+			expect(await takeover).toBeInstanceOf(Error);
+			expect((await transfer.status())!.lease_id).toBe(lease.lease_id);
+			await expect(transfer.step(lease)).resolves.toMatchObject({ state: 'checking' });
+		} finally {
+			await client.query('ROLLBACK');
+			client.release();
+			await takeover;
+		}
 	});
 	it('rejects a stale importer after lease takeover without committing its page', async () => {
 		const { bucket, namespace, id, transfer } = fixture();

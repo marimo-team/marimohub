@@ -16,6 +16,7 @@ import { createLogicalStorage } from '@marimo-hub/core/storage/logical-bucket';
 import { body, COLUMNS, getRecord, headRecord, listRecords, matchesRecord, UUID } from './records';
 import type { RecordRow } from './records';
 import { isValidMetadataIdentifier } from './validation';
+import { withTransferLease } from './transferLease';
 import { checkSchema } from './migrations';
 import { checkpointTransfer, insertTransfer, recordTransferItem } from './transferState';
 import type { TransferDirection, TransferIdentity, TransferLease } from './transferState';
@@ -279,7 +280,9 @@ export class MetadataTransfer {
 					'DELETE FROM hub_metadata.records r WHERE namespace=$1 AND NOT EXISTS (SELECT 1 FROM hub_metadata.transfer_items i WHERE i.namespace=r.namespace AND i.transfer_id=$2 AND i.key=r.key AND i.seen_generation=$3)',
 					[this.options.namespace, this.options.id, generation],
 				);
-				await auditMetadataReferences(this.view(client, Number(row.target_epoch)));
+				await withTransferLease(client, this.options, row, () =>
+					auditMetadataReferences(this.view(client, Number(row.target_epoch))),
+				);
 				state = 'ready';
 			}
 			return checkpointTransfer(client, this.options, lease, { state, cursor, generation });
@@ -419,7 +422,9 @@ export class MetadataTransfer {
 				}
 				if (page.truncated) cursor = { after: page.objects.at(-1)!.key, phase: 'deleting' };
 				else {
-					await auditMetadataReferences(this.bucket);
+					await withTransferLease(client, this.options, row, () =>
+						auditMetadataReferences(this.bucket),
+					);
 					state = 'ready';
 				}
 			} else {
