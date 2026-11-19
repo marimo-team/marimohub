@@ -1,56 +1,41 @@
 # PostgreSQL metadata storage
 
-The PostgreSQL adapter stores metadata bytes in `hub_metadata.records`. Artifact bytes remain in the configured bucket.
-The default metadata backend remains `bucket`. The public API and stored domain formats remain unchanged.
+PostgreSQL stores metadata in `hub_metadata.records`. Artifacts stay in the configured bucket.
+The default metadata backend is `bucket`. PostgreSQL requires a Node host, PostgreSQL 17 or later, and an activated deployment.
 
-The adapter and runtime composition are implemented. Offline bucket-to-SQL transfer and resumable activation are implemented. Reverse transfer is implemented. Scoped session creation and capture transactions are implemented; coverage is listed below.
-Schema creation alone does not activate a deployment. The verified storage and transaction coverage is listed below.
+## Configuration and schema
 
-## Runtime composition
+Set `MARIMOHUB_METADATA_BACKEND=postgres` and `MARIMOHUB_METADATA_NAMESPACE` for runtime replicas.
+Use separate database credentials:
 
-`packages/metadata-postgres` uses PostgreSQL 17 or later through `pg`.
-Only config imports the concrete adapter. Core services use `HubStorage` and the metadata ports.
+| Variable                                | Purpose                                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------------------- |
+| `MARIMOHUB_METADATA_ADMIN_POSTGRES_URL` | Schema-owner credential for administration commands. Keep it out of runtime replicas. |
+| `MARIMOHUB_METADATA_POSTGRES_URL`       | Runtime credential with the grants below.                                             |
 
-The logical bucket routes keys through the versioned placement manifest.
-Unknown keys and backend control records fail closed.
-Metadata reads never fall back to old bucket objects.
+See [configuration](../docs/configuration.md#metadata-storage) for connection limits and timeouts.
 
-Each operation holds a shared lock on its deployment row until the transaction completes.
-The deployment must remain active at the configured epoch, with the expected artifact-store identity.
-A missing deployment or an epoch mismatch is an availability error, not a missing object.
-
-The runtime keeps existing domain CAS protocols and session-index writes.
-Session scans can use indexed SQL candidates. Core still validates sessions and applies capacity and lifecycle policy.
-User admission ranking retains the existing index registration order.
-
-## Schema administration
-
-The administrative commands use `MARIMOHUB_METADATA_ADMIN_POSTGRES_URL`.
-Runtime replicas use `MARIMOHUB_METADATA_POSTGRES_URL` with a separate database role.
-Neither command prints connection URLs or record bodies.
-
-Run schema migrations with the schema-owner credential:
+Run migrations with the schema-owner credential:
 
 ```sh
 pnpm --filter @marimo-hub/server metadata:migrate-schema
 ```
 
-The command uses an advisory lock and records each migration checksum in the same transaction.
-Startup checks these checksums. HTTP requests never apply DDL.
+Migrations use an advisory lock and record checksums in the same transaction. Startup checks those checksums.
+Schema creation does not activate a deployment. HTTP requests never apply DDL.
 
-Inspect the artifact marker, placement counts, and optional SQL deployment state:
+Inspect the bucket marker, key counts, and transfer state:
 
 ```sh
 pnpm --filter @marimo-hub/server metadata:inspect
 ```
 
-Inspection counts unknown keys and reports SQL transfer state. Transfer validates records with owner schemas and checks catalog, notebook, publication, and session references before activation.
+SQL inspection requires the administrative URL and `MARIMOHUB_METADATA_NAMESPACE`.
 
 ## Runtime database role
 
-The schema owner also owns the deployment-lock function.
-The runtime role does not own the schema and cannot change deployment state.
-The following grants use `hub_runtime` as the runtime role name:
+The schema owner owns the deployment-lock function. The runtime role must not own the schema or change deployment state.
+Use these grants for a role named `hub_runtime`:
 
 ```sql
 GRANT USAGE ON SCHEMA hub_metadata TO hub_runtime;
@@ -66,69 +51,28 @@ GRANT EXECUTE ON FUNCTION
 ```
 
 PostgreSQL requires update privilege for `SELECT FOR SHARE`.
-Migration 2 provides a restricted `SECURITY DEFINER` function that checks identity and acquires the shared lock.
-Its search path is fixed. The function grants no deployment-write operation to its caller.
+The restricted `SECURITY DEFINER` function acquires this lock without granting deployment-write access. Its search path is fixed.
 
-A namespace separates deployments within one database. It does not provide authorization between mutually untrusted deployments.
-Those deployments require separate database roles and databases.
-
-## Host lifecycle
-
-The Node server supplies `nodeMetadataFactory` from `@marimo-hub/config/metadata.node`.
-Embedded Node hosts must supply the same factory and await `deps.storageLifecycle.ready()` before they serve requests.
-They must stop requests and background writers before they call `deps.storageLifecycle.close()`.
-
-SQL operations fail before readiness and after shutdown.
-Readiness requires an active PostgreSQL marker in the artifact bucket, matching namespace, epoch, and artifact-store identity.
-An absent marker does not authorize SQL initialization.
-
-The Worker supports bucket metadata only. It rejects PostgreSQL configuration and incompatible backend markers before requests or scheduled writes.
-The Node factory remains outside the platform-neutral config entrypoint.
-
-## Validation
-
-For local tests without Docker, install PostgreSQL 17 or later:
-
-```sh
-brew install postgresql@17
-pnpm --filter @marimo-hub/metadata-postgres test:local
-```
-
-The command finds binaries through `PG_BINDIR`, `PATH`, or Homebrew.
-It creates a temporary cluster with a private Unix socket and random credentials.
-It checks the connection with `psql`, runs the live suite, then stops and removes the cluster.
-It does not start a persistent service or use an existing database.
-Each run supplies a unique test URL, so the task cache cannot replace the live database checks.
-
-PGlite multiplexes connections over one backend. This suite requires independent database connections for role and lock tests.
-Native PostgreSQL preserves those checks. See [PGlite socket limitations](https://pglite.dev/docs/pglite-socket).
-
-The live suite requires a disposable PostgreSQL database with permission to create test roles.
-The CI job sets `MARIMOHUB_REQUIRE_POSTGRES_TESTS=1`, so a missing database URL fails the job.
-
-```sh
-MARIMOHUB_REQUIRE_POSTGRES_TESTS=1 \
-  pnpm --filter @marimo-hub/metadata-postgres test
-```
-
-`MARIMOHUB_TEST_POSTGRES_URL` supplies the test connection URL.
-The suite exercises the shared storage contract, deployment fencing, role restrictions, pagination, session queries, and domain composition.
-The metadata interface has no streaming methods, so three shared streaming cases do not apply.
+Namespaces separate data, not database permissions. Mutually untrusted deployments require separate roles and databases.
 
 ## Offline transfer and activation
 
-Stop requests, schedulers, maintenance, embedded hosts, and runtimes with storage credentials.
-Drain and reclaim sessions. Reconcile uploads, moves, and pending external publications.
-Deny old workloads write access with deployment controls or credential revocation.
-The marker cannot fence binaries that ignore it.
+Before either transfer direction:
 
-Create a non-secret input file with a stable transfer UUID:
+1. Stop requests, schedulers, maintenance, embedded hosts, and runtimes with storage credentials.
+2. Drain and reclaim sessions and pools.
+3. Reconcile uploads, moves, previews, and pending external publications.
+4. Deny old workloads write access through deployment controls or credential revocation.
+
+The marker cannot stop writes from binaries that ignore it. Keep writers stopped until activation completes.
+
+For bucket-to-SQL transfer, create `transfer.json` with an unused namespace and a stable transfer UUID:
 
 ```json
 { "namespace": "hub", "id": "11111111-1111-4111-8111-111111111111", "pageSize": 100 }
 ```
 
-Use the same file to resume after a failure:
+Run these commands in order:
 
 ```sh
 pnpm --filter @marimo-hub/server metadata:transfer --input transfer.json --writers-stopped
@@ -136,80 +80,119 @@ pnpm --filter @marimo-hub/server metadata:inspect
 pnpm --filter @marimo-hub/server metadata:activate --input transfer.json --writers-stopped
 ```
 
-A transfer freezes the bucket marker and creates an isolated importing namespace.
-Pages copy exact bytes, object metadata, and upload timestamps with new ETags.
-A second inventory pass reconciles updates and deletions before reference checks.
-Unknown keys, invalid records, missing references, and unresolved operations block readiness.
+The transfer freezes the bucket marker and copies metadata into an isolated SQL namespace.
+It preserves bytes, object metadata, and upload timestamps, with new ETags.
+A second inventory pass reconciles updates and deletions. Owner-schema and reference checks block invalid records, unsafe workspace paths, missing artifacts, and unresolved operations.
+
 A failed page leaves its SQL checkpoint unchanged. A crashed worker's lease expires after 60 seconds.
+To resume, use the same input file and transfer ID.
 
-Activation commits SQL first, then publishes the matching bucket marker.
-If marker publication fails, keep writers stopped and rerun activation with the same ID.
-Hosts remain unavailable until both records agree. Inspection shows a ready transfer beside an active deployment during this interval.
+Activation commits SQL first, then publishes the matching bucket marker. Hosts require both records to agree.
+If activation fails, keep writers stopped. Rerun activation with the same ID.
+Complete pending activation before starting another transfer.
 
-For a fresh deployment, add `"fresh":true`. The command rejects any existing bucket object or namespace.
-After an interrupted fresh initialization, remove `fresh` and resume with the same transfer ID.
-Keep old bucket metadata read-only through the rollback window. SQL never falls back to those objects.
+For an empty deployment, add `"fresh":true`. This rejects any existing bucket object or namespace.
+After interrupted initialization, remove `fresh` and resume with the same ID.
+Keep old bucket metadata read-only through the rollback window.
 
-## Reverse transfer and restore
+## Reverse transfer
 
-After SQL has accepted writes, returning to bucket metadata requires a new transfer ID.
-Set `"direction":"sql_to_bucket"` in the input file and use the same transfer and activation commands.
-The command freezes SQL with an exclusive deployment-row lock before exporting.
-It replaces stale metadata, verifies exported bytes and object metadata, and removes metadata deleted in SQL.
-Artifacts are not rewritten. Exported metadata gets bucket-generated ETags and upload timestamps.
-SQL records and transfer receipts remain retained after the namespace is retired.
+To return to bucket metadata, use the active SQL namespace and a new transfer ID.
+Set `"direction":"sql_to_bucket"` in the input file. Use the same transfer and activation commands.
 
-Before activation, stop all transfer workers as well as runtime writers.
-Revoke credentials from abandoned exporters; a database lease cannot cancel an object-store request already in flight.
-Keep writers fenced after any uncertain object-store outcome and resume the same transfer to verify the target.
-Restart every process after activation to clear caches.
+Reverse transfer freezes SQL under an exclusive deployment lock.
+It copies current metadata, checks bytes and object metadata, and deletes stale bucket metadata. Artifacts stay unchanged.
+Exported objects receive bucket-generated ETags and upload timestamps. Activation retires the SQL namespace but retains its records and receipts.
 
-Back up SQL metadata, the artifact bucket, and its backend marker as one deployment set.
-Record the namespace, artifact-store UUID, epoch, schema checksums, and backup time with that set.
-Keep artifact versions at least as long as the supported metadata restore window.
-A SQL point-in-time restore cannot recover artifact bytes deleted outside that window.
+Before activation, stop all transfer workers. Revoke credentials from abandoned exporters.
+A database lease cannot cancel an object-store request already in flight.
+After an uncertain write, keep writers stopped. Resume the same transfer to check the target.
+After activation, restart every process to clear caches.
+For a later bucket-to-SQL transfer, use a new namespace.
 
-Restore with all writers stopped and credentials fenced:
+## Backup and restore
 
-1. Restore the matching artifact data and SQL backup to isolated targets.
-2. Restore the matching marker; verify its artifact-store UUID and epoch against SQL.
-3. Run `metadata:inspect --audit` with the administrative DSN before allowing traffic.
-4. Resolve missing artifacts from the paired artifact backup. Do not start with missing published content.
-5. Configure the restored backend and restart hosts only after readiness succeeds.
+Back up SQL, the artifact bucket, and its backend marker as one deployment set.
+Record the namespace, artifact-store UUID, epoch, schema checksums, and backup time.
+Retain artifact versions for at least the metadata restore window. A SQL restore cannot recover deleted artifact bytes.
+
+With all writers stopped and their write access revoked:
+
+1. Restore matching artifacts and SQL data to isolated targets.
+2. Restore the matching marker.
+3. Check its artifact-store UUID and epoch against SQL.
+4. Run `metadata:inspect --audit` with the administrative URL.
+5. Recover missing artifacts from the paired backup.
+6. Configure the restored backend.
+7. After the audit passes, restart hosts. Keep traffic blocked until readiness succeeds.
 
 Never select bucket mode as an outage fallback against stale metadata.
 
+## Runtime behavior
+
+Only config imports the PostgreSQL adapter. Core services use `HubStorage` and metadata ports.
+The logical bucket routes keys through a versioned placement manifest. Unknown keys and backend control records fail closed.
+External adapters need placement rules and owner schemas. SQL reads never fall back to old bucket metadata.
+
+Each SQL operation holds a shared deployment lock until its transaction ends.
+The deployment must be active and match the configured namespace, epoch, and artifact-store identity.
+A mismatch is an availability error, not a missing object.
+SQL session queries return candidates. Core retains schema checks, lifecycle policy, user-index writes, and admission ranking.
+
+Embedded Node hosts must supply `nodeMetadataFactory` from `@marimo-hub/config/metadata.node`.
+Await `deps.storageLifecycle.ready()` before serving requests.
+Stop requests and background writers before calling `deps.storageLifecycle.close()`.
+Operations fail before readiness and after shutdown. Readiness requires a matching active marker in the artifact bucket.
+
+The Worker supports bucket metadata only. It rejects PostgreSQL configuration and incompatible markers before requests or scheduled work.
+Its default bundle excludes the PostgreSQL adapter and driver.
+
 ## Transaction coverage
 
-SQL exposes a metadata-only unit of work with sorted user, project, and notebook scopes.
-Callbacks share one connection and cannot use their handles after completion.
-Known serialization failures and deadlocks retry the complete callback at most three times.
-Uncertain commits never retry automatically. Artifact and provider operations stay outside callbacks.
+Transactions lock user, project, and notebook scopes in a stable order. When a callback ends, its handles expire.
+Serialization failures and deadlocks allow at most three attempts of the complete callback. Uncertain commits never retry automatically.
+Artifact uploads and provider calls stay outside transactions.
 
-Session creation commits the starting record, prune-cutoff validation, and user-index registration together.
-Ordinary persistent-editor admission also rechecks project/notebook policy revisions, applies the existing user-cap ranking, reserves the editor claim, and fences the source in that transaction. Provider boot follows admission. Reuse, post-admission checks, and durable compensation remain in place.
-Capture commits source-head CAS and the session's durable-capture acknowledgement together after artifact upload.
-This applies to normal capture and stop capture with an explicit stop lease.
-Capture with a custom external ownership callback retains the existing protocol.
+| Operation                                                   | Atomic metadata changes                                                                                    |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Session creation                                            | Starting record, prune-cutoff check, and user-index registration.                                          |
+| Ordinary persistent-editor admission                        | Policy-revision checks, user-cap ranking, editor claim, and source fence. Provider boot follows admission. |
+| Normal capture and stop capture with an explicit stop lease | Source-head CAS and durable-capture acknowledgement, after artifact upload.                                |
+
+App pools, warm pools, previews, jobs, hidden runtimes, and takeover retain their existing admission protocols. Their session creation is atomic.
+Capture with a custom ownership callback retains its existing protocol.
 Stop intent, runtime stop, provider destruction, and final receipts remain separate durable stages.
+These paths do not provide global atomic cap enforcement.
 
-App-pool reservations, warm-pool claims, previews, jobs, hidden runtimes, and takeover coordination retain their existing protocols.
-Their session creation uses the atomic record/index operation, but admission across those reservations is not one transaction.
-No global atomic cap-enforcement or coordination-round-trip reduction is claimed for these paths.
+## Tests and performance
 
-## Verification scope
+For local tests without Docker:
 
-The shared domain contract runs against memory, filesystem, and PostgreSQL metadata with bucket artifacts.
-It covers catalog races, competing editor claims, terminal-session heartbeats, unreclaimed app accounting, unchanged capture, stale publication tokens, upload failures, lost publication replies, capture acknowledgements, notebook move/deletion, job output cleanup, job uniqueness, token revocation, and private conversation ownership.
-The SQL-only suite also tests atomic admission, policy revision checks, capture rollback, escaped transaction handles, retry limits, transfer checkpoints, lease takeover, and both transfer directions.
-The default Worker build has a bundle assertion excluding the SQL metadata adapter and driver.
+```sh
+brew install postgresql@17
+pnpm --filter @marimo-hub/metadata-postgres test:local
+```
 
-The live SQL suite emits matched local metadata cohorts for bucket mode, SQL with existing protocols, and SQL with scoped transactions.
-Each cohort uses 30 samples and the same in-memory artifact backend, notebook content, and retained session history.
-The report records cold, median, and p95 time, logical storage calls, and transferred metadata bytes.
-It excludes provider latency, remote object-store latency, and pool saturation. Heartbeat measurements exercise the persistence-throttled path.
-These results are diagnostics, not an end-to-end performance claim or a global admission guarantee.
+The runner finds binaries through `PG_BINDIR`, `PATH`, or Homebrew.
+It creates a temporary cluster with a private Unix socket and random credentials, then checks the connection with `psql`.
+After the tests, it stops and deletes the cluster. It never uses an existing database.
+Each run uses a unique URL to prevent cached test results. Role and lock tests use independent connections.
 
-External adapters with undeclared key families fail closed in SQL mode and during transfer.
-They must supply a versioned placement rule and owner validation before their records can be imported.
-After reverse activation, reuse a new namespace for a subsequent forward transfer; the retired namespace retains its history.
+For an existing disposable database, set `MARIMOHUB_TEST_POSTGRES_URL` with permission to create test roles:
+
+```sh
+MARIMOHUB_REQUIRE_POSTGRES_TESTS=1 \
+  pnpm --filter @marimo-hub/metadata-postgres test
+```
+
+CI requires this URL. Three streaming contract cases do not apply to the metadata interface.
+The suites cover:
+
+- Storage contracts, namespace isolation, role restrictions, pagination, and SQL-injection payloads.
+- Catalog races, editor claims, session lifecycle, capture failures, notebook moves, deletion, and retained artifacts across memory, filesystem, and SQL storage.
+- Admission and capture transactions, lease takeover, stale checkpoints, interrupted activation, and both transfer directions.
+
+Local performance reports compare bucket metadata, SQL with existing protocols, and SQL with scoped transactions.
+Each cohort uses 30 samples with the same artifact backend, content, and session history.
+Reports include cold, median, and p95 time, storage calls, and metadata bytes. Heartbeat measurements use the persistence-throttled path.
+They exclude provider latency, remote storage latency, and pool saturation. These measurements do not establish an end-to-end speedup.
