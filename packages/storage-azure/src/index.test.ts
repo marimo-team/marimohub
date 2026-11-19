@@ -1,3 +1,4 @@
+import { compareBucketKeys } from '@marimo-hub/core/ports/bucket';
 import { Readable } from 'node:stream';
 import type { ContainerClient } from '@azure/storage-blob';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
@@ -60,7 +61,9 @@ function makeFakeContainer(
 			maxPageSize,
 		}: { continuationToken?: string; maxPageSize?: number } = {}) =>
 			(async function* () {
-				const keys = [...store.keys()].filter((key) => key.startsWith(prefix)).sort();
+				const keys = [...store.keys()]
+					.filter((key) => key.startsWith(prefix))
+					.sort(compareBucketKeys);
 				const entries = new Map<string, { kind: 'blob' | 'prefix'; key: string }>();
 				for (const key of keys) {
 					const rest = key.slice(prefix.length);
@@ -72,7 +75,7 @@ function makeFakeContainer(
 						entries.set(`blob:${key}`, { kind: 'blob', key });
 					}
 				}
-				const ordered = [...entries.values()].sort((a, b) => a.key.localeCompare(b.key));
+				const ordered = [...entries.values()].sort((a, b) => compareBucketKeys(a.key, b.key));
 				let offset = Number(continuationToken ?? 0);
 				const pageSize = maxPageSize ?? 5000;
 				while (offset < ordered.length) {

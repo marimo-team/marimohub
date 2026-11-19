@@ -1,5 +1,5 @@
 import { PreconditionFailedError } from '../errors';
-import { assertValidBucketListLimit } from '../ports/bucket';
+import { assertValidBucketListLimit, compareBucketKeys } from '../ports/bucket';
 import type {
 	Bucket,
 	BucketListOptions,
@@ -127,10 +127,12 @@ export class MemoryBucket implements Bucket {
 		// the key; honor whichever is larger.
 		const after = [options?.cursor, options?.startAfter]
 			.filter((v): v is string => Boolean(v))
-			.sort()
+			.sort(compareBucketKeys)
 			.pop();
 
-		const sorted = [...this.store.keys()].filter((k) => k.startsWith(prefix)).sort();
+		const sorted = [...this.store.keys()]
+			.filter((k) => k.startsWith(prefix))
+			.sort(compareBucketKeys);
 
 		const prefixes = new Set<string>();
 		const objectKeys: string[] = [];
@@ -138,7 +140,7 @@ export class MemoryBucket implements Bucket {
 		let lastConsumed: string | undefined;
 		let truncated = false;
 		for (const key of sorted) {
-			if (after && key <= after) continue;
+			if (after && compareBucketKeys(key, after) <= 0) continue;
 			if (delimiter) {
 				const rest = key.slice(prefix.length);
 				const idx = rest.indexOf(delimiter);
@@ -176,7 +178,7 @@ export class MemoryBucket implements Bucket {
 			objects,
 			truncated,
 			cursor: truncated ? lastConsumed : undefined,
-			delimitedPrefixes: [...prefixes].sort(),
+			delimitedPrefixes: [...prefixes].sort(compareBucketKeys),
 		};
 	}
 }

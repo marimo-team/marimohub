@@ -23,7 +23,7 @@ import { importPKCS8, SignJWT } from 'jose';
 import { ofetch } from 'ofetch';
 import type { $Fetch } from 'ofetch';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
-import { assertValidBucketListLimit } from '@marimo-hub/core/ports/bucket';
+import { assertValidBucketListLimit, compareBucketKeys } from '@marimo-hub/core/ports/bucket';
 import type {
 	Bucket,
 	BucketListOptions,
@@ -512,7 +512,7 @@ export class GcsStorage implements Bucket {
 			};
 			const objects = (json.items ?? [])
 				.filter((o): o is GcsObjectResource & { name: string } => Boolean(o.name))
-				.filter((o) => !startAfter || o.name > startAfter)
+				.filter((o) => !startAfter || compareBucketKeys(o.name, startAfter) > 0)
 				.map((o) => ({
 					key: o.name,
 					etag: o.generation ?? '',

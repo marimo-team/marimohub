@@ -26,6 +26,17 @@ export function bucketContract(
 			bucket = await makeBucket();
 		});
 
+		it('orders Unicode keys by UTF-8 bytes across pages and startAfter', async () => {
+			const expected = ['unicode/é', 'unicode/龍', 'unicode/\uE000', 'unicode/😀'];
+			for (const key of expected) await bucket.put(key, 'x');
+			const first = await bucket.list({ prefix: 'unicode/', limit: 3 });
+			expect(first.objects.map(({ key }) => key)).toEqual(expected.slice(0, 3));
+			const last = await bucket.list({ prefix: 'unicode/', cursor: first.cursor });
+			expect(last.objects.map(({ key }) => key)).toEqual(expected.slice(3));
+			const after = await bucket.list({ prefix: 'unicode/', startAfter: expected[2] });
+			expect(after.objects.map(({ key }) => key)).toEqual(expected.slice(3));
+		});
+
 		if (options.metadata) {
 			it('preserves HTTP and custom metadata in head reads and conditional copies', async () => {
 				const metadata = {

@@ -9,7 +9,7 @@ import type {
 } from '@azure/storage-blob';
 import type { TokenCredential } from '@azure/core-auth';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
-import { assertValidBucketListLimit } from '@marimo-hub/core/ports/bucket';
+import { assertValidBucketListLimit, compareBucketKeys } from '@marimo-hub/core/ports/bucket';
 import type {
 	BucketMultipart,
 	Bucket,
@@ -298,10 +298,12 @@ export class AzureStorage implements Bucket {
 
 		for await (const page of pages) {
 			const objects = page.segment.blobItems
-				.filter((item) => !options?.startAfter || item.name > options.startAfter)
+				.filter(
+					(item) => !options?.startAfter || compareBucketKeys(item.name, options.startAfter) > 0,
+				)
 				.map(toBucketObject);
 			const delimitedPrefixes = pagePrefixes(page).filter(
-				(prefix) => !options?.startAfter || prefix > options.startAfter,
+				(prefix) => !options?.startAfter || compareBucketKeys(prefix, options.startAfter) > 0,
 			);
 			if (
 				objects.length > 0 ||
