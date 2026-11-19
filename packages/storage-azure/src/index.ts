@@ -293,47 +293,82 @@ export class AzureStorage implements Bucket {
 			: this.client.listBlobsFlat({ prefix: options?.prefix });
 		const binding = JSON.stringify([options?.prefix ?? '', options?.delimiter ?? '']);
 		let after = options?.startAfter;
+		let serviceCursor: string | undefined;
+		let normalize = false;
 		if (options?.cursor) {
 			try {
 				const token: unknown = JSON.parse(Buffer.from(options.cursor, 'base64url').toString());
 				if (
 					!Array.isArray(token) ||
-					token.length !== 2 ||
+					(token.length !== 2 && token.length !== 3) ||
+					(token.length === 3 && token[2] !== null && typeof token[2] !== 'string') ||
 					token[0] !== binding ||
 					typeof token[1] !== 'string'
 				)
 					throw new Error('Invalid cursor');
 				after = token[1];
+				serviceCursor = typeof token[2] === 'string' ? token[2] : undefined;
+				normalize = !serviceCursor;
 			} catch {
 				throw new Error('Invalid Azure storage cursor');
 			}
 		}
 		const limit = options?.limit ?? 1000;
 		type Entry = { key: string; object?: BucketObject };
+		const pageEntries = (
+			page: ContainerListBlobFlatSegmentResponse | ContainerListBlobHierarchySegmentResponse,
+		): Entry[] => [
+			...page.segment.blobItems.map((item) => ({ key: item.name, object: toBucketObject(item) })),
+			...pagePrefixes(page).map((key) => ({ key })),
+		];
+		const select = (entries: Entry[]) =>
+			entries
+				.filter((entry) => after === undefined || compareBucketKeys(entry.key, after) > 0)
+				.sort((a, b) => compareBucketKeys(a.key, b.key));
+		const result = (entries: Entry[], cursor?: string): BucketListResult => ({
+			objects: entries.flatMap((entry) => (entry.object ? [entry.object] : [])),
+			delimitedPrefixes: entries.filter((entry) => !entry.object).map((entry) => entry.key),
+			truncated: cursor !== undefined,
+			cursor,
+		});
+		const encodeCursor = (key: string, continuation: string | null) =>
+			Buffer.from(JSON.stringify([binding, key, continuation])).toString('base64url');
+
+		if (!normalize) {
+			for await (const page of iterable.byPage({
+				continuationToken: serviceCursor,
+				maxPageSize: limit,
+			})) {
+				const entries = pageEntries(page);
+				// Supplementary characters can sort after BMP keys on later service pages.
+				if (entries.some(({ key }) => /[\uD800-\uDBFF][\uDC00-\uDFFF]/.test(key))) {
+					normalize = true;
+					break;
+				}
+				const selected = select(entries);
+				if (selected.length > 0 || !page.continuationToken)
+					return result(
+						selected,
+						page.continuationToken
+							? encodeCursor(selected.at(-1)!.key, page.continuationToken)
+							: undefined,
+					);
+				serviceCursor = page.continuationToken;
+			}
+		}
+		if (!normalize) return result([]);
+		// Once native order diverges, subsequent logical pages must use the sorted
+		// scan too: a native continuation could skip supplementary keys already read.
 		let entries: Entry[] = [];
-		// Azure's UTF-16 order differs from the port's UTF-8 order. Scan all service
-		// pages before selecting a page; sorting individual pages loses Unicode keys.
-		for await (const page of iterable.byPage({ maxPageSize: 5000 })) {
-			entries.push(
-				...page.segment.blobItems.map((item) => ({ key: item.name, object: toBucketObject(item) })),
-				...pagePrefixes(page).map((key) => ({ key })),
-			);
-			entries = entries.filter(
-				(entry) => after === undefined || compareBucketKeys(entry.key, after) > 0,
-			);
-			entries.sort((a, b) => compareBucketKeys(a.key, b.key));
-			entries.length = Math.min(entries.length, limit + 1);
+		for await (const page of iterable.byPage({
+			continuationToken: serviceCursor,
+			maxPageSize: 5000,
+		})) {
+			entries = select([...entries, ...pageEntries(page)]).slice(0, limit + 1);
 		}
 		const truncated = entries.length > limit;
 		const selected = entries.slice(0, limit);
-		return {
-			objects: selected.flatMap((entry) => (entry.object ? [entry.object] : [])),
-			delimitedPrefixes: selected.filter((entry) => !entry.object).map((entry) => entry.key),
-			truncated,
-			cursor: truncated
-				? Buffer.from(JSON.stringify([binding, selected.at(-1)!.key])).toString('base64url')
-				: undefined,
-		};
+		return result(selected, truncated ? encodeCursor(selected.at(-1)!.key, null) : undefined);
 	}
 
 	async verifyConditionalWrites(): Promise<void> {
