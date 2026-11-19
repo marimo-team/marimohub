@@ -27,9 +27,27 @@ export interface HubStorage {
 	artifacts: Bucket;
 	metadata: MetadataStore;
 	sessions?: IndexedSessionRecords;
+	transactions?: MetadataTransactions;
 	logicalBucket: Bucket;
 }
 
 export function bucketStorage(bucket: Bucket): HubStorage {
 	return { artifacts: bucket, metadata: bucket, logicalBucket: bucket };
+}
+
+export interface MetadataTransaction {
+	records: MetadataStore;
+	sessions: IndexedSessionRecords;
+}
+export interface MetadataTransactions {
+	run<T>(
+		scopes: readonly string[],
+		work: (transaction: MetadataTransaction) => Promise<T>,
+	): Promise<T>;
+}
+export function metadataScope(
+	kind: 'user' | 'project' | 'notebook',
+	...ids: readonly string[]
+): string {
+	return JSON.stringify([kind, ...ids]);
 }

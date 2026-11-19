@@ -4,6 +4,7 @@ import type {
 	HubStorage,
 	IndexedSessionRecords,
 	MetadataStore,
+	MetadataTransactions,
 } from '@marimo-hub/core/ports/metadata';
 import {
 	assertBucketMetadataBackend,
@@ -16,6 +17,7 @@ import { parseEnumOr, requiredVar } from './env';
 
 export interface MetadataRuntime extends MetadataStore {
 	sessions: IndexedSessionRecords;
+	transactions?: MetadataTransactions;
 	ready(): Promise<void>;
 	close(): Promise<void>;
 }
@@ -138,6 +140,13 @@ export function makeHubStorage(
 			list: (query) => {
 				requireTarget();
 				return runtime!.sessions.list(query);
+			},
+		},
+		transactions: {
+			run: (scopes, work) => {
+				requireTarget();
+				if (!runtime!.transactions) throw new Error('Metadata transactions unavailable');
+				return runtime!.transactions.run(scopes, work);
 			},
 		},
 		async ready() {

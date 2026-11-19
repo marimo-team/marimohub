@@ -1,4 +1,9 @@
-import { metadataCompositionContract } from '@marimo-hub/core/testing/metadata-contract';
+import { ConflictError } from '@marimo-hub/core/errors';
+import type { MetadataTransaction } from '@marimo-hub/core/ports/metadata';
+import {
+	metadataCompositionContract,
+	atomicMetadataContract,
+} from '@marimo-hub/core/testing/metadata-contract';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { createLogicalStorage } from '@marimo-hub/core/storage/logical-bucket';
 import { randomUUID } from 'node:crypto';
@@ -77,6 +82,9 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 		await admin.query('DELETE FROM hub_metadata.records WHERE namespace=ANY($1::text[])', [
 			namespaces,
 		]);
+		await admin.query('DELETE FROM hub_metadata.scopes WHERE namespace=ANY($1::text[])', [
+			namespaces,
+		]);
 		await admin.query('DELETE FROM hub_metadata.deployments WHERE namespace=ANY($1::text[])', [
 			namespaces,
 		]);
@@ -121,6 +129,16 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 		return {
 			...createLogicalStorage(new MemoryBucket(), store, { namespace, epoch: 1 }),
 			sessions: store.sessions,
+			transactions: store.transactions,
+		};
+	});
+
+	atomicMetadataContract(async () => {
+		const { store, namespace } = await fixture();
+		return {
+			...createLogicalStorage(new MemoryBucket(), store, { namespace, epoch: 1 }),
+			sessions: store.sessions,
+			transactions: store.transactions,
 		};
 	});
 
@@ -580,5 +598,48 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 		const key = 'é'.repeat(512);
 		await store.put(key, 'boundary');
 		expect(await (await store.get(key))!.text()).toBe('boundary');
+	});
+	it('rolls back a multi-record transaction and preserves domain failures', async () => {
+		const { store } = await fixture();
+		await expect(
+			store.transactions.run(['["user","one"]'], async (tx) => {
+				await tx.records.put('_system/host-retry-cleanup.json', '{}');
+				await tx.records.put('_system/source-control-account-cleanup.json', '{}');
+				throw new ConflictError('policy changed');
+			}),
+		).rejects.toThrow('policy changed');
+		expect(await store.get('_system/host-retry-cleanup.json')).toBeNull();
+		expect(await store.get('_system/source-control-account-cleanup.json')).toBeNull();
+	});
+	it('serializes overlapping scopes regardless of caller order', async () => {
+		const { store } = await fixture();
+		const key = '_system/host-retry-cleanup.json';
+		await store.put(key, '{"count":0}');
+		await Promise.all(
+			Array.from({ length: 8 }, (_, index) =>
+				store.transactions.run(index % 2 ? ['b', 'a'] : ['a', 'b'], async (tx) => {
+					const object = (await tx.records.get(key))!;
+					const { count } = await object.json<{ count: number }>();
+					await tx.records.put(key, JSON.stringify({ count: count + 1 }), {
+						onlyIfEtagMatches: object.etag,
+					});
+				}),
+			),
+		);
+		expect(await (await store.get(key))!.json()).toEqual({ count: 8 });
+	});
+	it('rejects escaped handles and artifact writes', async () => {
+		const { store } = await fixture();
+		let escaped: MetadataTransaction | undefined;
+		await store.transactions.run(['a'], async (tx) => {
+			escaped = tx;
+		});
+		await expect(escaped!.records.get('_system/catalog.json')).rejects.toThrow('ended');
+		await expect(
+			store.transactions.run(['a'], async (tx) =>
+				tx.records.put('projects/p/notebooks/n/workspace/file', 'x'),
+			),
+		).rejects.toThrow();
+		await expect(store.transactions.run([], async () => {})).rejects.toThrow(RangeError);
 	});
 });

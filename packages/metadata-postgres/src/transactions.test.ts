@@ -1,3 +1,4 @@
+import { runScopedTransaction } from './scopedTransactions';
 import type { Pool } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import { guardedTransaction } from './transactions';
@@ -65,5 +66,32 @@ describe('transaction failure boundaries', () => {
 			}),
 		).rejects.toMatchObject({ kind: 'unavailable' });
 		expect(release).toHaveBeenCalledWith(true);
+	});
+});
+
+describe('scoped transaction retries', () => {
+	it('retries a complete metadata callback at most three times after known aborts', async () => {
+		const query = vi.fn(async (_sql: string) => ({}));
+		const release = vi.fn();
+		const pool = { connect: async () => ({ query, release }) } as unknown as Pool;
+		const work = vi.fn(async () => {
+			throw Object.assign(new Error('retry'), { code: '40001' });
+		});
+		await expect(runScopedTransaction(pool, identity, ['scope'], work)).rejects.toMatchObject({
+			kind: 'serialization',
+		});
+		expect(work).toHaveBeenCalledTimes(3);
+		expect(query.mock.calls.filter(([sql]) => sql === 'ROLLBACK')).toHaveLength(3);
+	});
+	it('never retries an uncertain commit', async () => {
+		const query = vi.fn(async (sql: string) => {
+			if (sql === 'COMMIT') throw new Error('lost reply');
+		});
+		const pool = { connect: async () => ({ query, release: vi.fn() }) } as unknown as Pool;
+		const work = vi.fn(async () => 'done');
+		await expect(runScopedTransaction(pool, identity, ['scope'], work)).rejects.toMatchObject({
+			kind: 'commit-unknown',
+		});
+		expect(work).toHaveBeenCalledOnce();
 	});
 });

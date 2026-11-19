@@ -1,4 +1,4 @@
-import { PreconditionFailedError } from '@marimo-hub/core/errors';
+import { DomainError } from '@marimo-hub/core/errors';
 
 export class MetadataStorageError extends Error {
 	constructor(
@@ -13,7 +13,7 @@ export class MetadataStorageError extends Error {
 export function storageError(error: unknown): Error {
 	if (
 		error instanceof MetadataStorageError ||
-		error instanceof PreconditionFailedError ||
+		error instanceof DomainError ||
 		error instanceof RangeError
 	)
 		return error;

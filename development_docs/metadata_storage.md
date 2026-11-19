@@ -3,7 +3,7 @@
 The PostgreSQL adapter stores metadata bytes in `hub_metadata.records`. Artifact bytes remain in the configured bucket.
 The default metadata backend remains `bucket`. The public API and stored domain formats remain unchanged.
 
-The adapter and runtime composition are implemented. Offline bucket-to-SQL transfer and resumable activation are implemented. Reverse transfer is implemented. Transaction consolidation is the next milestone.
+The adapter and runtime composition are implemented. Offline bucket-to-SQL transfer and resumable activation are implemented. Reverse transfer is implemented. Scoped session creation and capture transactions are implemented; coverage is listed below.
 The storage-parity release gates are not complete. Schema creation alone does not activate a deployment.
 
 ## Runtime composition
@@ -177,3 +177,21 @@ Restore with all writers stopped and credentials fenced:
 5. Configure the restored backend and restart hosts only after readiness succeeds.
 
 Never select bucket mode as an outage fallback against stale metadata.
+
+## Transaction coverage
+
+SQL exposes a metadata-only unit of work with sorted user, project, and notebook scopes.
+Callbacks share one connection and cannot use their handles after completion.
+Known serialization failures and deadlocks retry the complete callback at most three times.
+Uncertain commits never retry automatically. Artifact and provider operations stay outside callbacks.
+
+Session creation commits the starting record, prune-cutoff validation, and user-index registration together.
+Existing cap ranking, reuse, and compensation remain authoritative.
+Capture commits source-head CAS and the session's durable-capture acknowledgement together after artifact upload.
+This applies to normal capture and stop capture with an explicit stop lease.
+Capture with a custom external ownership callback retains the existing protocol.
+Stop intent, runtime stop, provider destruction, and final receipts remain separate durable stages.
+
+App-pool reservations, warm-pool claims, previews, jobs, hidden runtimes, and takeover coordination retain their existing protocols.
+Their session creation uses the atomic record/index operation, but admission across those reservations is not one transaction.
+No global atomic cap-enforcement or coordination-round-trip reduction is claimed for these paths.

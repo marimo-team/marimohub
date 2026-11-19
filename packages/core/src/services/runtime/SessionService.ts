@@ -1,4 +1,7 @@
-import type { IndexedSessionRecords } from '../../ports/metadata';
+import type { IndexedSessionRecords, MetadataTransactions } from '../../ports/metadata';
+import { metadataScope } from '../../ports/metadata';
+import { publishLocalSource } from '../content/localPublication';
+import type { LocalPublicationToken } from '../content/localPublication';
 import { withAbortSignal } from '../../async';
 import { SingleFlight } from '../../cache';
 import { MetadataCache } from '../content/metadataCache';
@@ -43,7 +46,14 @@ import {
 	SessionStartupSchema,
 	VersionPruneCutoffSchema,
 } from '../../schema';
-import type { EditorClaim, Session, SessionStopAttempt, Source, SurfaceState } from '../../schema';
+import type {
+	LocalPublicationVersion,
+	EditorClaim,
+	Session,
+	SessionStopAttempt,
+	Source,
+	SurfaceState,
+} from '../../schema';
 import type { SurfaceId } from './surfaces/types';
 import { assertValidKernelAuthToken } from './kernelAuth';
 import {
@@ -267,6 +277,7 @@ export class SessionService {
 		private readonly recordCache: EtagRecordCache<Session> = new EtagRecordCache(),
 		private readonly indexReady: () => boolean = () => false,
 		private readonly sessionRecords?: IndexedSessionRecords,
+		private readonly transactions?: MetadataTransactions,
 	) {
 		this.index = new SessionIndex(bucket);
 		this.validatedRecords = new MetadataCache(bucket, undefined, recordCache, metrics, {
@@ -346,6 +357,24 @@ export class SessionService {
 	}
 
 	async createSessionWithEtag(input: CreateSessionInput): Promise<KnownObject<Session>> {
+		if (this.transactions) {
+			const stable = { ...input, session_id: input.session_id ?? createSessionId() };
+			return this.transactions.run(
+				[
+					metadataScope('user', input.user_id),
+					metadataScope('project', input.project_id),
+					metadataScope('notebook', input.project_id, input.notebook_id),
+				],
+				async (tx) =>
+					new SessionService(
+						tx.records,
+						this.metrics,
+						undefined,
+						this.indexReady,
+						tx.sessions,
+					).createSessionWithEtag(stable),
+			);
+		}
 		if (input.kernel_auth_token !== undefined) {
 			assertValidKernelAuthToken(input.kernel_auth_token);
 		}
@@ -623,6 +652,41 @@ export class SessionService {
 	 * whose sandbox is still being snapshotted while editors remain connected. */
 	async markSnapshotted(projectId: ProjectId, id: SessionId, at: string): Promise<Session> {
 		return this.mutate(projectId, id, (session) => ({ ...session, last_snapshot_at: at }));
+	}
+
+	get supportsAtomicCapture(): boolean {
+		return this.transactions !== undefined;
+	}
+
+	async commitCapturePublication(
+		token: LocalPublicationToken,
+		versionId: VersionId,
+		versions: LocalPublicationVersion[],
+		authority: { session: Session; stopLease?: { attemptId: string; leaseId: string } },
+		at: string,
+	): Promise<void> {
+		if (!this.transactions) throw new Error('Atomic capture requires metadata transactions');
+		const { session, stopLease } = authority;
+		if (session.project_id !== token.projectId || session.notebook_id !== token.notebookId)
+			throw new ConflictError('Capture identity mismatch');
+		await this.transactions.run(
+			[metadataScope('notebook', token.projectId, token.notebookId)],
+			async (tx) => {
+				const owner = new SessionService(
+					tx.records,
+					this.metrics,
+					undefined,
+					this.indexReady,
+					tx.sessions,
+				);
+				await owner.assertCaptureOwnership(session, stopLease);
+				const cutoff = await owner.getVersionPruneCutoff(token.projectId, token.notebookId);
+				if (cutoff && versionId <= cutoff)
+					throw new ConflictError('Captured version has been pruned');
+				await publishLocalSource(tx.records, token, versionId, versions);
+				await owner.recordDurableCapture(session, at, versionId);
+			},
+		);
 	}
 
 	async recordCaptureAttempt(session: Session): Promise<void> {

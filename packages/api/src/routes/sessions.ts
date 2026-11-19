@@ -31,6 +31,8 @@ import type {
 } from '@marimo-hub/core';
 import { SANDBOX_STARTUP_PHASES, STARTUP_DETAIL_MAX_LENGTH } from '@marimo-hub/core/constants';
 import {
+	admissionCaps,
+	assertAdmissionRank,
 	previewAvailable,
 	AppPoolService,
 	AppAssignmentExpiredError,
@@ -788,16 +790,6 @@ function entitlementAuthorizationDeadline(user: AuthUser): string | undefined {
 	return new Date(deadline).toISOString();
 }
 
-const CAP_REACHED = {
-	appsPerProject: (max: number) =>
-		`Concurrent app limit reached for this project (${max}). Stop an app before starting another.`,
-	appsPerUser: (max: number) =>
-		`Concurrent app limit reached (${max} apps started by you). Stop an app before starting another.`,
-	sessionsPerUser: (max: number) =>
-		`Concurrent session limit reached (${max}). Terminate a session before starting another.`,
-};
-
-/** App caps also apply per user so separate projects cannot bypass the cost limit. */
 function capsFor(
 	deps: ApiDeps,
 	mode: SessionMode,
@@ -806,31 +798,17 @@ function capsFor(
 	onSource?: (source: 'scan' | 'index') => void,
 ) {
 	const { sessions } = deps.services;
-	const maxSessions = deps.policy.maxConcurrentSessionsPerUser;
-	if (MODE_POLICY[mode].capScope === 'project') {
-		return [
-			{
-				max: deps.policy.maxAppsPerProject,
-				message: CAP_REACHED.appsPerProject,
-				queue: () => sessions.listActiveAppsForProject(pid),
-				preflight: true,
-			},
-			{
-				max: maxSessions,
-				message: CAP_REACHED.appsPerUser,
-				queue: () => sessions.listActiveForUser(userId, 'project', onSource),
-				preflight: false,
-			},
-		];
-	}
-	return [
-		{
-			max: maxSessions,
-			message: CAP_REACHED.sessionsPerUser,
-			queue: () => sessions.listActiveForUser(userId, 'user', onSource),
-			preflight: false,
-		},
-	];
+	return admissionCaps(mode, deps.policy).map((cap) => ({
+		...cap,
+		queue: () =>
+			cap.scope === 'project'
+				? sessions.listActiveAppsForProject(pid)
+				: sessions.listActiveForUser(
+						userId,
+						cap.scope === 'user-apps' ? 'project' : 'user',
+						onSource,
+					),
+	}));
 }
 
 /** Preserve cap precedence even when a later queue fails. */
@@ -888,10 +866,7 @@ async function assertCapAfterCreate(
 ): Promise<void> {
 	const caps = capsFor(deps, mode, pid, userId, onSource);
 	await checkCapQueues(caps, excludedSessionId, (cap) => {
-		const rank = cap.sessions.findIndex((session) => session.session_id === sessionId);
-		// Missing membership cannot prove admission: the index may have lost a live entry.
-		if (rank === -1) throw new ConflictError('Session admission changed. Retry shortly.');
-		if (rank >= cap.max) throw new ResourceExhaustedError(cap.message);
+		assertAdmissionRank(cap.sessions, sessionId, cap.max, cap.message);
 	});
 }
 

@@ -6,13 +6,18 @@ import type {
 	BucketObjectBody,
 	BucketPutOptions,
 } from '@marimo-hub/core/ports/bucket';
-import type { IndexedSessionRecords, MetadataStore } from '@marimo-hub/core/ports/metadata';
+import type {
+	MetadataTransactions,
+	IndexedSessionRecords,
+	MetadataStore,
+} from '@marimo-hub/core/ports/metadata';
 import { MetadataStorageError, storageError } from './errors';
 import { checkSchema } from './migrations';
 import { createMetadataPool } from './pool';
 import type { PostgresConnectionOptions } from './pool';
 import { deleteRecords, getRecord, headRecord, listRecords, putRecord, UUID } from './records';
 import { listSessions } from './sessions';
+import { runScopedTransaction } from './scopedTransactions';
 import { guardedTransaction } from './transactions';
 import type { DeploymentIdentity } from './transactions';
 
@@ -28,6 +33,7 @@ export class PostgresMetadataStore implements MetadataStore {
 	private closing?: Promise<void>;
 	private initialization?: Promise<void>;
 	readonly sessions: IndexedSessionRecords;
+	readonly transactions: MetadataTransactions;
 
 	constructor(options: PostgresMetadataOptions) {
 		if (
@@ -46,6 +52,13 @@ export class PostgresMetadataStore implements MetadataStore {
 			artifactStoreId: options.artifactStoreId,
 		};
 		this.pool = createMetadataPool(options);
+		this.transactions = {
+			run: (scopes, work) => {
+				if (!this.initialized || this.closed)
+					return Promise.reject(new MetadataStorageError('unavailable'));
+				return runScopedTransaction(this.pool, this.identity, scopes, work);
+			},
+		};
 		this.sessions = {
 			list: (query) =>
 				this.run((client) =>

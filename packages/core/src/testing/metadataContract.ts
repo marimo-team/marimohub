@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HubStorage } from '../ports/metadata';
 import { createServices } from '../services';
-import { SYSTEM_ACTOR, UserId, SandboxId, createRunId } from '../ids';
+import { SYSTEM_ACTOR, UserId, SandboxId, ProjectId, NotebookId, createRunId } from '../ids';
 import { ConversationService } from '../services/chat/ConversationService';
 import { paths } from '../paths';
 
@@ -284,6 +284,132 @@ export function metadataCompositionContract(
 			expect(
 				await storage.metadata.get(paths.session(project.id, session.session_id)),
 			).not.toBeNull();
+		});
+	});
+}
+
+export function atomicMetadataContract(makeStorage: () => Promise<HubStorage>): void {
+	describe('atomic metadata domain operations', () => {
+		async function fixture() {
+			const storage = await makeStorage();
+			const services = createServices(storage);
+			await services.catalog.initialize(SYSTEM_ACTOR);
+			const project = await services.projects.createProject(
+				{ name: 'atomic', description: '' },
+				SYSTEM_ACTOR,
+			);
+			const notebook = await services.notebooks.createNotebook(
+				project.id,
+				{ title: 'atomic', description: '', code: 'print(1)' },
+				SYSTEM_ACTOR,
+			);
+			const session = await services.sessions.createSession({
+				project_id: project.id,
+				notebook_id: notebook.id,
+				user_id: SYSTEM_ACTOR,
+				sandbox_id: SandboxId.create(),
+			});
+			await services.sessions.claimEditor(
+				project.id,
+				notebook.id,
+				session.session_id,
+				'shared',
+				SYSTEM_ACTOR,
+			);
+			return { storage, services, project, notebook, session };
+		}
+		it('publishes unchanged capture and its durable acknowledgement together', async () => {
+			const { storage, services, project, notebook, session } = await fixture();
+			const token = await services.notebooks.beginSessionCapture(project.id, notebook.id);
+			const result = await services.notebooks.commitSession(
+				project.id,
+				notebook.id,
+				{ code: 'print(1)' },
+				SYSTEM_ACTOR,
+				token,
+				{ session },
+			);
+			expect(result?.newVersion).toBe(false);
+			expect(result?.captureAcknowledgedAt).toBeDefined();
+			expect(
+				(await storage.metadata.head(paths.project(project.id).notebook(notebook.id).source))!.etag,
+			).not.toBe(token.etag);
+			expect(
+				(await services.sessions.getSession(project.id, session.session_id)).last_durable_capture,
+			).toEqual({ at: result!.captureAcknowledgedAt, version_id: result!.versionId });
+		});
+		it('rolls back source publication when writing its session receipt fails', async () => {
+			const { storage, services, project, notebook, session } = await fixture();
+			const token = await services.notebooks.beginSessionCapture(project.id, notebook.id);
+			const broken = createServices({
+				...storage,
+				transactions: {
+					run: (scopes, work) =>
+						storage.transactions!.run(scopes, async (tx) => {
+							const put = tx.records.put;
+							tx.records.put = (key, value, options) => {
+								if (key === paths.session(project.id, session.session_id))
+									throw new Error('receipt write failed');
+								return put(key, value, options);
+							};
+							return work(tx);
+						}),
+				},
+			});
+			await expect(
+				broken.notebooks.commitSession(
+					project.id,
+					notebook.id,
+					{ code: 'print(2)' },
+					SYSTEM_ACTOR,
+					token,
+					{ session },
+				),
+			).rejects.toThrow();
+			expect(
+				(await storage.metadata.head(paths.project(project.id).notebook(notebook.id).source))!.etag,
+			).toBe(token.etag);
+			expect(
+				(await services.sessions.getSession(project.id, session.session_id)).last_durable_capture,
+			).toBeUndefined();
+		});
+		it('rejects an old runtime after ownership changes without advancing publication', async () => {
+			const { storage, services, project, notebook, session } = await fixture();
+			const token = await services.notebooks.beginSessionCapture(project.id, notebook.id);
+			await services.sessions.markSandboxReclaimed(
+				project.id,
+				session.session_id,
+				new Date().toISOString(),
+				session.sandbox_id,
+			);
+			await expect(
+				services.notebooks.commitSession(
+					project.id,
+					notebook.id,
+					{ code: 'old' },
+					SYSTEM_ACTOR,
+					token,
+					{ session },
+				),
+			).rejects.toThrow('no longer owns');
+			expect(
+				(await storage.metadata.head(paths.project(project.id).notebook(notebook.id).source))!.etag,
+			).toBe(token.etag);
+		});
+		it('rolls back session creation if index registration is corrupt', async () => {
+			const storage = await makeStorage();
+			const services = createServices(storage);
+			await storage.metadata.put(paths.sessionIndexForUser(SYSTEM_ACTOR), '{}');
+			await expect(
+				services.sessions.createSession({
+					project_id: ProjectId.create(),
+					notebook_id: NotebookId.create(),
+					user_id: SYSTEM_ACTOR,
+				}),
+			).rejects.toThrow();
+			expect((await storage.metadata.list({ prefix: paths.sessionsPrefix })).objects).toHaveLength(
+				0,
+			);
 		});
 	});
 }

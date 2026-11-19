@@ -1,3 +1,4 @@
+export { admissionCaps, assertAdmissionRank } from './runtime/admission';
 import type { HubStorage } from '../ports/metadata';
 export { SourceControlAccountService } from './identity/SourceControlAccountService';
 import { MigrationService } from './catalog/MigrationService';
@@ -612,6 +613,7 @@ export function createServices(
 			undefined,
 			(): boolean => migrations.isComplete(SESSION_INDEX_MIGRATION),
 			'logicalBucket' in storage ? storage.sessions : undefined,
+			'logicalBucket' in storage ? storage.transactions : undefined,
 		),
 		{
 			createSession: (input) => ({
