@@ -1,3 +1,7 @@
+import { auditMetadataReferences } from '@marimo-hub/core/storage/metadata-validation';
+import { readMetadataBackendMarker } from '@marimo-hub/core/storage/backend-marker';
+import { createLogicalStorage } from '@marimo-hub/core/storage/logical-bucket';
+import { PostgresMetadataStore } from './index';
 import type { Bucket } from '@marimo-hub/core/ports/bucket';
 import { MetadataTransfer } from './transfer';
 import type { TransferOptions } from './transfer';
@@ -78,5 +82,33 @@ export async function runMetadataTransfer(
 		};
 	} finally {
 		await pool.end();
+	}
+}
+
+export async function auditMetadataDeployment(
+	url: string | undefined,
+	bucket: Bucket,
+): Promise<void> {
+	const marker = await readMetadataBackendMarker(bucket);
+	if (!marker || marker.backend === 'bucket') {
+		await auditMetadataReferences(bucket);
+		return;
+	}
+	if (!url || !marker.namespace || marker.state !== 'active')
+		throw new Error('Audit requires a matching active PostgreSQL deployment');
+	const store = new PostgresMetadataStore({
+		url,
+		namespace: marker.namespace,
+		epoch: marker.epoch,
+		artifactStoreId: marker.artifact_store_id,
+	});
+	try {
+		await store.ready();
+		await auditMetadataReferences(
+			createLogicalStorage(bucket, store, { namespace: marker.namespace, epoch: marker.epoch })
+				.logicalBucket,
+		);
+	} finally {
+		await store.close();
 	}
 }

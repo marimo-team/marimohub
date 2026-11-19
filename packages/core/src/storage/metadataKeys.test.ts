@@ -1,3 +1,4 @@
+import type { Node } from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { paths } from '../paths';
 import { buildBucketSpec } from '../specs/bucketSpec';
@@ -57,4 +58,38 @@ describe('metadata placement manifest', () => {
 		}
 		expect(classifyMetadataKey('_system/metadata-backend.json')).toBe('control');
 	});
+});
+
+it('classifies literal key families declared outside the shared path builders', async () => {
+	const { readFile, readdir } = await import('node:fs/promises');
+	const ts = await import('typescript');
+	const root = new URL('../', import.meta.url);
+	const files = await readdir(root, { recursive: true });
+	const keys = new Set<string>();
+	for (const file of files) {
+		if (
+			!file.endsWith('.ts') ||
+			file.endsWith('.test.ts') ||
+			file.startsWith('testing/') ||
+			file.startsWith('specs/') ||
+			file.startsWith('storage/')
+		)
+			continue;
+		const text = await readFile(new URL(file, root), 'utf8');
+		if (!text.includes('_system/') && !text.includes('projects/')) continue;
+		const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+		function visit(node: Node): void {
+			let key: string | undefined;
+			if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) key = node.text;
+			else if (ts.isTemplateExpression(node))
+				key =
+					node.head.text + node.templateSpans.map((span) => `fixture${span.literal.text}`).join('');
+			if (key && /^(?:_system|projects)\//.test(key) && /(?:\.json|\.lock)$/.test(key))
+				keys.add(key);
+			ts.forEachChild(node, visit);
+		}
+		visit(source);
+	}
+	expect(keys.size).toBeGreaterThan(20);
+	for (const key of keys) expect(() => classifyMetadataKey(key), key).not.toThrow();
 });

@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { HubStorage } from '../ports/metadata';
 import { createServices } from '../services';
-import { SYSTEM_ACTOR } from '../ids';
+import { SYSTEM_ACTOR, UserId, SandboxId, createRunId } from '../ids';
+import { ConversationService } from '../services/chat/ConversationService';
 import { paths } from '../paths';
 
 export function metadataCompositionContract(
@@ -9,6 +10,231 @@ export function metadataCompositionContract(
 	makeStorage: () => Promise<HubStorage>,
 ): void {
 	describe(`Metadata domain composition: ${name}`, () => {
+		async function fixture() {
+			const storage = await makeStorage();
+			const services = createServices(storage);
+			await services.catalog.initialize(SYSTEM_ACTOR);
+			const project = await services.projects.createProject(
+				{ name: 'parity', description: '' },
+				SYSTEM_ACTOR,
+			);
+			const notebook = await services.notebooks.createNotebook(
+				project.id,
+				{ title: 'parity', description: '', code: 'print(1)' },
+				SYSTEM_ACTOR,
+			);
+			return {
+				storage,
+				services,
+				replica: createServices(storage),
+				project,
+				notebook,
+				keys: paths.project(project.id).notebook(notebook.id),
+			};
+		}
+		it('elects one editor across independent service replicas', async () => {
+			const { services, replica, project, notebook } = await fixture();
+			const sessions = await Promise.all(
+				[services, replica].map((service) =>
+					service.sessions.createSession({
+						project_id: project.id,
+						notebook_id: notebook.id,
+						user_id: SYSTEM_ACTOR,
+						mode: 'edit',
+					}),
+				),
+			);
+			const claims = await Promise.all(
+				[services, replica].map((service, index) =>
+					service.sessions.claimEditor(
+						project.id,
+						notebook.id,
+						sessions[index].session_id,
+						'shared',
+						SYSTEM_ACTOR,
+					),
+				),
+			);
+			expect(claims.filter((claim) => claim.claimed)).toHaveLength(1);
+			expect(claims[0].claim.session_id).toBe(claims[1].claim.session_id);
+		});
+		it.each(['edit', 'app'] as const)(
+			'keeps %s termination authoritative against a late heartbeat',
+			async (mode) => {
+				const { services, replica, project, notebook } = await fixture();
+				const session = await services.sessions.createSession({
+					project_id: project.id,
+					notebook_id: notebook.id,
+					user_id: SYSTEM_ACTOR,
+					mode,
+				});
+				await services.sessions.markTerminated(project.id, session.session_id);
+				await replica.sessions.heartbeat(project.id, session.session_id);
+				expect((await services.sessions.getSession(project.id, session.session_id)).status).toBe(
+					'terminated',
+				);
+			},
+		);
+		it('keeps terminal app sandboxes counted until provider reclamation is recorded', async () => {
+			const { services, replica, project, notebook } = await fixture();
+			const session = await services.sessions.createSession({
+				project_id: project.id,
+				notebook_id: notebook.id,
+				user_id: SYSTEM_ACTOR,
+				mode: 'app',
+				sandbox_id: SandboxId.create(),
+			});
+			await services.sessions.markFailed(project.id, session.session_id);
+			expect(
+				(await replica.sessions.listActiveAppsForProject(project.id)).map((s) => s.session_id),
+			).toContain(session.session_id);
+			await services.sessions.markSandboxReclaimed(
+				project.id,
+				session.session_id,
+				new Date().toISOString(),
+				session.sandbox_id,
+			);
+			expect(await replica.sessions.listActiveAppsForProject(project.id)).toEqual([]);
+		});
+		it('advances the source fence for unchanged capture and rejects an older publication', async () => {
+			const { services, replica, project, notebook, storage, keys } = await fixture();
+			const token = await services.notebooks.beginSessionCapture(project.id, notebook.id);
+			await replica.notebooks.commitSession(
+				project.id,
+				notebook.id,
+				{ code: 'print(1)' },
+				SYSTEM_ACTOR,
+			);
+			expect((await storage.metadata.head(keys.source))!.etag).not.toBe(token.etag);
+			await expect(
+				services.notebooks.commitSession(
+					project.id,
+					notebook.id,
+					{ code: 'stale' },
+					SYSTEM_ACTOR,
+					token,
+				),
+			).rejects.toThrow('publication changed');
+		});
+		it('does not publish a source head when an immutable artifact upload fails', async () => {
+			const { services, project, notebook, storage, keys } = await fixture();
+			const before = (await storage.metadata.head(keys.source))!.etag;
+			const put = storage.logicalBucket.put.bind(storage.logicalBucket);
+			const fault = vi
+				.spyOn(storage.logicalBucket, 'put')
+				.mockImplementation((key, value, options) => {
+					if (key.endsWith('/notebook.py'))
+						return Promise.reject(new Error('artifact unavailable'));
+					return put(key, value, options);
+				});
+			try {
+				await expect(
+					services.notebooks.commitSession(
+						project.id,
+						notebook.id,
+						{ code: 'print(2)' },
+						SYSTEM_ACTOR,
+					),
+				).rejects.toThrow('artifact unavailable');
+			} finally {
+				fault.mockRestore();
+			}
+			expect((await storage.metadata.head(keys.source))!.etag).toBe(before);
+		});
+		it('discovers a publication whose success reply was lost', async () => {
+			const { services, replica, project, notebook, storage, keys } = await fixture();
+			const token = await services.notebooks.beginSessionCapture(project.id, notebook.id);
+			const put = storage.logicalBucket.put.bind(storage.logicalBucket);
+			const fault = vi
+				.spyOn(storage.logicalBucket, 'put')
+				.mockImplementation(async (key, value, options) => {
+					const result = await put(key, value, options);
+					if (key === keys.source) throw new Error('lost publication reply');
+					return result;
+				});
+			try {
+				await expect(
+					services.notebooks.commitSession(
+						project.id,
+						notebook.id,
+						{ code: 'print(2)' },
+						SYSTEM_ACTOR,
+						token,
+					),
+				).rejects.toThrow('lost publication reply');
+			} finally {
+				fault.mockRestore();
+			}
+			const current = await replica.notebooks.beginSessionCapture(project.id, notebook.id);
+			expect(current.etag).not.toBe(token.etag);
+			expect(
+				await (await storage.artifacts.get(
+					keys.version(current.source.current_version_id).code,
+				))!.text(),
+			).toBe('print(2)');
+		});
+		it('keeps capture acknowledgements monotonic across replicas', async () => {
+			const { services, replica, project, notebook } = await fixture();
+			const session = await services.sessions.createSession({
+				project_id: project.id,
+				notebook_id: notebook.id,
+				user_id: SYSTEM_ACTOR,
+			});
+			const capture = await services.notebooks.beginSessionCapture(project.id, notebook.id);
+			await services.sessions.recordDurableCapture(
+				session,
+				'2026-11-18T02:00:00Z',
+				capture.source.current_version_id,
+			);
+			await replica.sessions.recordDurableCapture(
+				session,
+				'2026-11-18T01:00:00Z',
+				capture.source.current_version_id,
+			);
+			expect(
+				(await services.sessions.getSession(project.id, session.session_id)).last_durable_capture
+					?.at,
+			).toBe('2026-11-18T02:00:00Z');
+		});
+		it('retains a single occurrence winner across replicas', async () => {
+			const { services, replica, project, notebook } = await fixture();
+			const job = await services.jobs.createJob(
+				project.id,
+				notebook.id,
+				{ name: 'parity' },
+				SYSTEM_ACTOR,
+			);
+			const claims = await Promise.all(
+				[services, replica].map((service) =>
+					service.jobRuns.claimOccurrence(
+						job,
+						'2026-11-18T01:00:00Z',
+						createRunId(),
+						'2026-11-18T01:00:00Z',
+					),
+				),
+			);
+			expect(claims.filter((claim) => claim.claimed)).toHaveLength(1);
+		});
+		it('enforces private conversation ownership after reopening services', async () => {
+			const { storage, project } = await fixture();
+			const first = new ConversationService(storage.logicalBucket);
+			const conversation = await first.create(project.id, SYSTEM_ACTOR);
+			const second = new ConversationService(storage.logicalBucket);
+			await expect(
+				second.get(project.id, UserId.parse('other-owner'), conversation.id),
+			).rejects.toThrow();
+			expect((await second.get(project.id, SYSTEM_ACTOR, conversation.id)).id).toBe(
+				conversation.id,
+			);
+		});
+		it('preserves token revocation across a fresh process cache', async () => {
+			const { services, storage } = await fixture();
+			const token = await services.tokens.create({ name: 'parity' }, SYSTEM_ACTOR);
+			await services.tokens.revoke(SYSTEM_ACTOR, token.record.id);
+			expect(await createServices(storage).tokens.verify(token.token)).toBeNull();
+		});
+
 		it('publishes concurrent catalog updates through the metadata pointer', async () => {
 			const storage = await makeStorage();
 			const services = createServices(storage);

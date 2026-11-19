@@ -1,5 +1,8 @@
 import { loadAdapterLibraries, makeStorage } from '@marimo-hub/config';
-import { inspectMetadataDeployment } from '@marimo-hub/config/metadata.node';
+import {
+	inspectMetadataDeployment,
+	auditMetadataDeployment,
+} from '@marimo-hub/config/metadata.node';
 import { readMetadataBackendMarker } from '@marimo-hub/core/storage/backend-marker';
 import { classifyMetadataKey } from '@marimo-hub/core/storage/metadata-keys';
 
@@ -22,4 +25,7 @@ do {
 const namespace = process.env.MARIMOHUB_METADATA_NAMESPACE;
 const url = process.env.MARIMOHUB_METADATA_ADMIN_POSTGRES_URL;
 const sql = url && namespace ? await inspectMetadataDeployment(url, namespace) : undefined;
-console.log(JSON.stringify({ marker, counts, sql }, null, 2));
+if (process.argv.includes('--audit')) await auditMetadataDeployment(url, bucket);
+console.log(
+	JSON.stringify({ marker, counts, sql, audited: process.argv.includes('--audit') }, null, 2),
+);

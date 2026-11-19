@@ -172,7 +172,7 @@ Restore with all writers stopped and credentials fenced:
 
 1. Restore the matching artifact data and SQL backup to isolated targets.
 2. Restore the matching marker; verify its artifact-store UUID and epoch against SQL.
-3. Run schema inspection and a reference audit before allowing traffic.
+3. Run `metadata:inspect --audit` with the administrative DSN before allowing traffic.
 4. Resolve missing artifacts from the paired artifact backup. Do not start with missing published content.
 5. Configure the restored backend and restart hosts only after readiness succeeds.
 
