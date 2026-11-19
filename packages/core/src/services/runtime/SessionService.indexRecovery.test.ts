@@ -247,7 +247,7 @@ describe('session index recovery', () => {
 		expect(await index.read(ACTOR)).toBeNull();
 	});
 
-	it('preserves a republished session when terminal cleanup retries its index CAS', async () => {
+	it('preserves a legacy republished session when terminal cleanup retries its index CAS', async () => {
 		const { bucket, sessions, input, index } = fixture();
 		const original = await sessions.createSession(input);
 		const entered = Promise.withResolvers<void>();
@@ -265,8 +265,16 @@ describe('session index recovery', () => {
 		const cleanup = sessions.markFailed(input.project_id, original.session_id);
 		await entered.promise;
 		try {
-			const replica = new SessionService(bucket, undefined, undefined, () => true);
-			await replica.createSession({ ...input, session_id: original.session_id });
+			const republished = await legacySessions(bucket).createSession({
+				...input,
+				session_id: original.session_id,
+			});
+			await index.register(republished, async () => [
+				{
+					session_id: original.session_id,
+					project_id: input.project_id,
+				},
+			]);
 		} finally {
 			release.resolve();
 		}

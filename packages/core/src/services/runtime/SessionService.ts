@@ -9,7 +9,7 @@ import { readForInspection } from './inspection';
 import type { Bucket, BucketObject } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
-import { BUCKET_SCAN_CONCURRENCY, MARIMO_PORT } from '../../constants';
+import { BUCKET_SCAN_CONCURRENCY, MARIMO_PORT, SANDBOX_STARTUP_PHASES } from '../../constants';
 import type { EditorSandboxSharing, SessionMode } from '../../constants';
 import { KeyedSerialQueue, mapWithConcurrency } from '../../concurrency';
 import { Millis, sleep } from '../../duration';
@@ -39,6 +39,7 @@ import {
 	parseStored,
 	readStored,
 	SessionSchema,
+	SessionStartupSchema,
 	VersionPruneCutoffSchema,
 } from '../../schema';
 import type { EditorClaim, Session, SessionStopAttempt, Source, SurfaceState } from '../../schema';
@@ -57,6 +58,26 @@ import {
 import { listAllObjects } from '../catalog/storage';
 import { AppPoolStore } from './AppPoolStore';
 import { pullSourceRootPath, sandboxWorkspaceLayout } from './workspaceLayout';
+
+export interface SessionStartupStatus {
+	session_id: SessionId;
+	status: Session['status'];
+	status_changed_at: string | null;
+	startup: Session['startup'] | null;
+	error: Session['error'] | null;
+}
+
+function advancesStartup(session: Session, next: Session['startup']): boolean {
+	if (!next || next.sandbox_id !== session.sandbox_id) return false;
+	const current = session.startup;
+	if (!current) return true;
+	if (next.attempt !== current.attempt) return next.attempt > current.attempt;
+	return (
+		next.sandbox_id === current.sandbox_id &&
+		Date.parse(next.started_at) >= Date.parse(current.started_at) &&
+		SANDBOX_STARTUP_PHASES.indexOf(next.phase) > SANDBOX_STARTUP_PHASES.indexOf(current.phase)
+	);
+}
 
 export interface CreateSessionInput {
 	origin?: Session['origin'];
@@ -268,7 +289,12 @@ export class SessionService {
 			this.bucket,
 			paths.session(projectId, id),
 			(raw) => parseStored(SessionSchema, raw, paths.session(projectId, id)),
-			apply,
+			(session) => {
+				const updated = apply(session);
+				return updated && updated.status !== session.status
+					? { ...updated, status_changed_at: new Date().toISOString() }
+					: updated;
+			},
 			{
 				known,
 				notFound: () => new NotFoundError(`Session ${id} not found`),
@@ -328,6 +354,7 @@ export class SessionService {
 			project_id: input.project_id,
 			user_id: input.user_id,
 			status: 'starting',
+			status_changed_at: now,
 			started_at: now,
 			last_heartbeat: now,
 			...(input.ephemeral ? { ephemeral: true } : {}),
@@ -353,7 +380,9 @@ export class SessionService {
 		};
 
 		const sessionPath = paths.session(input.project_id, sessionId);
-		const written = await this.bucket.put(sessionPath, JSON.stringify(session));
+		const written = await this.bucket.put(sessionPath, JSON.stringify(session), {
+			onlyIfNotExists: true,
+		});
 		if (input.source_version_id) {
 			let cutoff: VersionId | null;
 			try {
@@ -395,7 +424,12 @@ export class SessionService {
 		error: { code: string; message: string },
 	): Promise<void> {
 		try {
-			const failed: Session = { ...session, status: 'failed', error };
+			const failed: Session = {
+				...session,
+				status: 'failed',
+				status_changed_at: new Date().toISOString(),
+				error,
+			};
 			await this.bucket.put(key, JSON.stringify(failed), {
 				onlyIfEtagMatches: etag,
 			});
@@ -511,16 +545,20 @@ export class SessionService {
 		sandboxDeadlineAt?: string,
 		known?: KnownObject<Session>,
 		reconnectReference?: string,
+		startup?: NonNullable<Session['startup']>,
 	): Promise<Session> {
 		const reference = SessionSchema.shape.reconnect_reference.parse(reconnectReference);
+		const progress = startup === undefined ? undefined : SessionStartupSchema.parse(startup);
 		return this.mutate(
 			projectId,
 			id,
 			(session) => {
 				if (isTerminal(session.status) || session.status === 'terminating') return null;
+
 				return {
 					...session,
 					status: 'running',
+					...(advancesStartup(session, progress) ? { startup: progress } : {}),
 					...(reference === undefined ? {} : { reconnect_reference: reference }),
 					sandbox_url: sandboxUrl,
 					surfaces: {
@@ -1001,7 +1039,12 @@ export class SessionService {
 			if (session.status !== 'starting' || session.sandbox_id !== expectedSandboxId) {
 				throw new ConflictError('The starting session sandbox changed');
 			}
-			return { ...session, sandbox_id: sandboxId, sandbox_reclaimed_at: undefined };
+			return {
+				...session,
+				sandbox_id: sandboxId,
+				sandbox_reclaimed_at: undefined,
+				startup: undefined,
+			};
 		});
 	}
 
@@ -1135,7 +1178,9 @@ export class SessionService {
 		projectId: ProjectId,
 		id: SessionId,
 		error?: { code: string; message: string },
+		startup?: NonNullable<Session['startup']>,
 	): Promise<{ session: Session; transitioned: boolean }> {
+		const progress = startup === undefined ? undefined : SessionStartupSchema.parse(startup);
 		const path = paths.session(projectId, id);
 		const result = await mutateObjectWithOutcome<Session>(
 			this.bucket,
@@ -1144,7 +1189,13 @@ export class SessionService {
 			(session) =>
 				isTerminal(session.status) || session.status === 'terminating'
 					? null
-					: { ...session, status: 'failed' as const, ...(error ? { error } : {}) },
+					: {
+							...session,
+							status: 'failed' as const,
+							...(advancesStartup(session, progress) ? { startup: progress } : {}),
+							status_changed_at: new Date().toISOString(),
+							...(error ? { error } : {}),
+						},
 			{
 				notFound: () => new NotFoundError(`Session ${id} not found`),
 				onConflict: () => this.metrics.increment('sessions.cas.conflict'),
@@ -1156,6 +1207,49 @@ export class SessionService {
 			await this.removeFinishedIndexEntry(result.value);
 		}
 		return { session: result.value, transitioned: result.written };
+	}
+
+	async recordStartupProgress(
+		projectId: ProjectId,
+		id: SessionId,
+		progress: NonNullable<Session['startup']>,
+	): Promise<Session> {
+		const next = SessionStartupSchema.parse(progress);
+		return this.mutate(projectId, id, (session) => {
+			if (session.status !== 'starting' || !advancesStartup(session, next)) return null;
+			return { ...session, startup: next };
+		});
+	}
+
+	async getStartupStatus(projectId: ProjectId, id: SessionId): Promise<SessionStartupStatus> {
+		const session = await this.getSession(projectId, id);
+		return {
+			session_id: id,
+			status: session.status,
+			status_changed_at: session.status_changed_at ?? null,
+			startup: session.startup ?? null,
+			error: session.error ?? null,
+		};
+	}
+
+	/** Current snapshots only: storage polling closes missed-notification and reconnect races. */
+	async *watchStartupStatus(
+		projectId: ProjectId,
+		id: SessionId,
+		signal?: AbortSignal,
+	): AsyncGenerator<SessionStartupStatus> {
+		let previous: string | undefined;
+		while (true) {
+			signal?.throwIfAborted();
+			const snapshot = await withAbortSignal(this.getStartupStatus(projectId, id), signal);
+			const serialized = JSON.stringify(snapshot);
+			if (serialized !== previous) {
+				previous = serialized;
+				yield snapshot;
+			}
+			if (snapshot.status !== 'starting') return;
+			await sleep(1000, signal);
+		}
 	}
 
 	private async scanSessions<T>(
@@ -2462,9 +2556,17 @@ export class SessionService {
 			const target = nextStatus(session.status, 'expire');
 			if (!target) return { expired: 0, live: 0 };
 			try {
-				await this.bucket.put(obj.key, JSON.stringify({ ...session, status: target }), {
-					onlyIfEtagMatches: etag,
-				});
+				await this.bucket.put(
+					obj.key,
+					JSON.stringify({
+						...session,
+						status: target,
+						status_changed_at: new Date(now).toISOString(),
+					}),
+					{
+						onlyIfEtagMatches: etag,
+					},
+				);
 				await this.removeFinishedIndexEntry({ ...session, status: target });
 				return { expired: 1, live: 0 };
 			} catch (err) {

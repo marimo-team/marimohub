@@ -5,7 +5,9 @@ import type {
 	SandboxStartupSnapshot,
 } from '@marimo-hub/core/ports/sandbox';
 
-export function sessionStartupReporter(emit?: (progress: SandboxStartupSnapshot) => void) {
+export function sessionStartupReporter(
+	emit?: (progress: SandboxStartupSnapshot, sandboxId: SandboxId) => void,
+) {
 	let sandbox: SandboxId | undefined;
 	let attempt = 0;
 	let current: SandboxStartupSnapshot | undefined;
@@ -39,7 +41,7 @@ export function sessionStartupReporter(emit?: (progress: SandboxStartupSnapshot)
 					observed: [...new Set([...(current?.observed ?? []), progress.phase])],
 				};
 				try {
-					emit(current);
+					emit(current, id);
 				} catch {
 					/* Observation must not interrupt provisioning. */
 				}

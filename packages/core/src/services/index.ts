@@ -467,6 +467,7 @@ export {
 export {
 	isPastAuthorizationDeadline,
 	SessionService,
+	type SessionStartupStatus,
 	sessionWorkspaceDir,
 } from './runtime/SessionService';
 export { captureThumbnail } from './runtime/captureThumbnail';

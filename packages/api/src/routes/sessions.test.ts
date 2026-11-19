@@ -1287,7 +1287,13 @@ describe('Session routes', () => {
 		try {
 			if (deferred) await vi.waitFor(() => expect(responded).toBe(true));
 			else expect(responded).toBe(false);
-			expect(labels).toEqual(deferred ? ['audit_append', 'session.context_publication'] : []);
+			expect(new Set(labels)).toEqual(
+				new Set(
+					deferred
+						? ['session.startup_progress', 'audit_append', 'session.context_publication']
+						: [],
+				),
+			);
 		} finally {
 			releaseAudit.resolve();
 			await Promise.all(tasks);

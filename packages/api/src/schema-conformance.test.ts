@@ -190,6 +190,8 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		// `takeover_capture_completed_at`) stays internal until the UI surfaces the
 		// deadline.
 		const internalSessionFields = [
+			'startup',
+			'status_changed_at',
 			'stop_receipts',
 			'save_dirty',
 			'last_capture_attempt_at',
