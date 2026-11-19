@@ -99,6 +99,7 @@ describe('SessionService scan cache', () => {
 			expect(await sessions.getSession(created.project_id, created.session_id)).toEqual({
 				...expected,
 				status: 'expired',
+				status_changed_at: new Date().toISOString(),
 			});
 		},
 	);

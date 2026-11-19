@@ -17,6 +17,8 @@ import {
 	ROLES,
 	SESSION_MODES,
 	SESSION_STATUSES,
+	SANDBOX_STARTUP_PHASES,
+	STARTUP_DETAIL_MAX_LENGTH,
 	SOURCE_TYPES,
 } from './constants';
 import {
@@ -973,7 +975,18 @@ export const SessionStopAttemptSchema = z.object({
 });
 export type SessionStopAttempt = z.infer<typeof SessionStopAttemptSchema>;
 
+export const SessionStartupSchema = z.object({
+	sandbox_id: SandboxIdSchema,
+	phase: z.enum(SANDBOX_STARTUP_PHASES),
+	detail: z.string().max(STARTUP_DETAIL_MAX_LENGTH).optional(),
+	attempt: z.number().int().positive(),
+	started_at: utcTimestamp(),
+	observed: z.array(z.enum(SANDBOX_STARTUP_PHASES)).max(SANDBOX_STARTUP_PHASES.length),
+});
+
 export const SessionSchema = z.looseObject({
+	startup: SessionStartupSchema.optional(),
+	status_changed_at: utcTimestamp().optional(),
 	stop: SessionStopAttemptSchema.optional(),
 	stop_receipts: z.array(SessionStopAttemptSchema).max(16).optional(),
 	last_durable_capture: z.object({ at: utcTimestamp(), version_id: VersionIdSchema }).optional(),

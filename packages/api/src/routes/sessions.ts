@@ -147,6 +147,7 @@ import {
 	toComputeResourcesResponse,
 } from '../shared';
 import type { AuthzDeps } from '../shared';
+import { durableStartup } from './durableStartup';
 import { sessionStartupReporter } from './sessionStartup';
 import { sessionStartupStream } from './sessionStartupStream';
 import type { SandboxStartupSnapshot } from '@marimo-hub/core/ports/sandbox';
@@ -1967,7 +1968,21 @@ async function startNotebookSessionOnce(
 	let publicationReady = mode !== 'edit' || ephemeral || notebook.source.type !== 'local';
 	const kernelAuthToken = sandbox.auth === 'on' ? createKernelAuthToken() : undefined;
 
-	const startup = sessionStartupReporter(onProgress);
+	const progressStore = durableStartup(
+		(progress) => sessions.recordStartupProgress(pid, sessionId, progress),
+		drainsDeferredWork(deps)
+			? (task) => {
+					void deferOrAwait(deps.backgroundWork, 'session.startup_progress', task, deps.metrics, {
+						project_id: pid,
+						session_id: sessionId,
+					});
+				}
+			: undefined,
+	);
+	const startup = sessionStartupReporter((progress, sourceSandboxId) => {
+		progressStore.report({ ...progress, sandbox_id: sourceSandboxId });
+		onProgress?.(progress);
+	});
 	let createdSession: KnownObject<Session> | undefined;
 	let session: Session | undefined;
 	let sessionRecordAttempted = false;
@@ -2187,7 +2202,7 @@ async function startNotebookSessionOnce(
 			runtimeCapture: mode === 'edit' && !ephemeral && notebook.source.type === 'local',
 			bridgeParentOrigin: new URL(appBaseUrl).origin,
 			startupTimeoutMs: sandbox.startupTimeoutMs,
-			onProgress: onProgress ? startup.forSandbox(sandboxId) : undefined,
+			onProgress: startup.forSandbox(sandboxId),
 			kernelAuthToken,
 			// A second editor writes the notebook file, so marimo must reload it.
 			marimoWatch: mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
@@ -2443,6 +2458,7 @@ async function startNotebookSessionOnce(
 			})
 			.step('admitted_sandbox_boot', {
 				do: () => {
+					progressStore.enable();
 					if (!warmClaim && !bootedSandbox) {
 						bootSandbox();
 						prefetchWorkspace();
@@ -2581,6 +2597,7 @@ async function startNotebookSessionOnce(
 			})
 			.step('mark_running', async () => {
 				startup.close();
+				const finalProgress = progressStore.finish();
 				if (isPastAuthorizationDeadline(session!, Date.now())) {
 					throw new ForbiddenError('Group authorization expired while starting the session');
 				}
@@ -2601,8 +2618,11 @@ async function startNotebookSessionOnce(
 					ttlMs ? new Date(Date.now() + ttlMs).toISOString() : undefined,
 					integrationAttachments,
 					providerDeadline === undefined ? undefined : new Date(providerDeadline).toISOString(),
-					createdSession?.value === session ? createdSession : undefined,
+					!progressStore.hasWrites && createdSession?.value === session
+						? createdSession
+						: undefined,
 					provisionedSandbox.reconnectReference,
+					finalProgress,
 				);
 			})
 			// Deletion can miss a starting sandbox. Rechecks after mark_running close that race.
@@ -2627,7 +2647,7 @@ async function startNotebookSessionOnce(
 							? notebooks.getNotebook(pid, nid).then((current) => current.meta)
 							: notebooks.getNotebookMeta(pid, nid)
 						).catch(() => null),
-					project: () => projects.getProject(pid).catch(() => null),
+					project: () => projects.getProject(pid, { consistency: 'validated' }).catch(() => null),
 				});
 				if (rechecks.claim && !rechecks.claim.claimed && rechecks.claim.claim.session_id) {
 					throw new EditorClaimLostError(rechecks.claim.claim.session_id);
@@ -2638,6 +2658,18 @@ async function startNotebookSessionOnce(
 				if (!rechecks.project || rechecks.project.status === 'deleted') {
 					throw new NotFoundError(`Project ${pid} not found`);
 				}
+				const currentAuthorization = await authorizeSessionStart(
+					rechecks.project,
+					user,
+					mode,
+					deps,
+					rechecks.notebook.security_labels ?? null,
+				);
+				if (
+					currentAuthorization.ephemeral !== authorization.ephemeral ||
+					currentAuthorization.restrictedViewerCredentials !== restrictedViewerCredentials
+				)
+					throw new ForbiddenError('Session authorization changed during startup');
 			})
 			.step('app_pool_complete', async () => {
 				if (admission) {
@@ -2649,6 +2681,7 @@ async function startNotebookSessionOnce(
 			.run();
 	} catch (err) {
 		startup.close();
+		const finalProgress = progressStore.finish();
 		await contextPublication;
 		await warmProbe?.catch(() => {});
 		await workspacePrefetch?.cancel();
@@ -2720,7 +2753,7 @@ async function startNotebookSessionOnce(
 			const safeError = toSessionError(err);
 			observer.tag('provision_error_code', safeError.code);
 			const failed = await sessions
-				.markFailedWithOutcome(pid, session.session_id, safeError)
+				.markFailedWithOutcome(pid, session.session_id, safeError, finalProgress)
 				.catch(() => null);
 			if (MODE_POLICY[mode].sharedApp && failed?.transitioned) {
 				scheduleProjectAlert(

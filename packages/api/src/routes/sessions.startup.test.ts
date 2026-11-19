@@ -1,5 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createServices } from '@marimo-hub/core';
+import { backgroundWorkFrom } from '@marimo-hub/core/ports/background-work';
+import type { BackgroundWork } from '@marimo-hub/core/ports/background-work';
 import type { SessionId } from '@marimo-hub/core';
 import {
 	ACTOR,
@@ -11,7 +13,10 @@ import {
 import { createInitializedBucket, createTestApi, expectOk, expectError } from '../testing';
 import type { SessionCreateResult } from './sessionStart';
 
-async function fixture(role?: 'app-user' | 'viewer' | 'editor' | 'manager') {
+async function fixture(
+	role?: 'app-user' | 'viewer' | 'editor' | 'manager',
+	backgroundWork?: BackgroundWork,
+) {
 	const inner = await createInitializedBucket();
 	const bucket = new RecordingBucket(inner);
 	const { instance, calls } = makeFakeSandbox();
@@ -21,6 +26,7 @@ async function fixture(role?: 'app-user' | 'viewer' | 'editor' | 'manager') {
 		compute,
 		userId: role ? uid('startup-reader') : ACTOR,
 		deps: {
+			backgroundWork,
 			bucket,
 			services: createServices(bucket),
 			...(role ? { policy: { defaultRole: role, viewerMode: 'applications' as const } } : {}),
@@ -67,7 +73,7 @@ it.each(['edit', 'app'] as const)(
 		const reader = response.body!.getReader();
 		let body = '';
 		try {
-			while (!body.includes(mode === 'edit' ? 'Waiting in queue' : ': connected'))
+			while (!body.includes(mode === 'edit' ? 'event: progress' : ': connected'))
 				body += new TextDecoder().decode((await reader.read()).value);
 			expect(body).not.toContain('event: result');
 		} finally {
@@ -90,7 +96,10 @@ it.each(['edit', 'app'] as const)(
 			env.project.id,
 			result.session_id as SessionId,
 		);
-		expect(stored).not.toHaveProperty('startup');
+		expect(stored.startup).toMatchObject({
+			phase: 'starting',
+			sandbox_id: stored.sandbox_id,
+		});
 		expect(stored).not.toHaveProperty('startup_request_id');
 	},
 );
@@ -108,7 +117,7 @@ it.each(['app-user', 'viewer', 'editor', 'manager'] as const)(
 		const body = await response.text();
 		expect(resultFrom(body).status).toBe('running');
 		expect(spy).toHaveBeenCalled();
-		expect(spy.mock.calls[0][1]?.onProgress).toBeUndefined();
+		expect(spy.mock.calls[0][1]?.onProgress).toBeTypeOf('function');
 		expect(body).not.toContain('event: progress');
 		expect(body).not.toContain('Private infrastructure detail');
 	},
@@ -263,3 +272,80 @@ it('preserves the final deletion check after the stream opens', async () => {
 	expect(body).toContain('NOT_FOUND');
 	expect(body).not.toContain('event: result');
 });
+
+it.each(['before', 'after'] as const)(
+	'compensates for failure %s the running write',
+	async (timing) => {
+		const env = await fixture();
+		const sessions = env.deps.services.sessions;
+		const write = sessions.setRunning.bind(sessions);
+		const error = new Error('Private storage failure');
+		let committedStatus: string | undefined;
+		vi.spyOn(sessions, 'setRunning').mockImplementation(async (...args) => {
+			if (timing === 'after') committedStatus = (await write(...args)).status;
+			throw error;
+		});
+		const response = await env.request('POST', env.path, undefined, headers);
+		const body = await response.text();
+		expect(body).toContain('event: error');
+		expect(body).not.toContain('event: result');
+		expect(body).not.toContain(error.message);
+		expect(committedStatus).toBe(timing === 'after' ? 'running' : undefined);
+		expect(env.calls.destroy).toBeGreaterThan(0);
+		expect(await sessions.listByProject(env.project.id)).toEqual([
+			expect.objectContaining({
+				status: 'failed',
+				error: { code: 'PROVISION_FAILED', message: expect.any(String) },
+				sandbox_reclaimed_at: expect.any(String),
+				startup: expect.objectContaining({ phase: 'starting' }),
+			}),
+		]);
+	},
+);
+
+it.each(['before', 'after', 'stalled'] as const)(
+	'does not block or fail a healthy launch for progress storage failure: %s',
+	async (failure) => {
+		const work: Promise<unknown>[] = [];
+		const env = await fixture(
+			undefined,
+			backgroundWorkFrom((task) => work.push(task)),
+		);
+		const ready = Promise.withResolvers<void>();
+		const entered = Promise.withResolvers<void>();
+		const stalled = Promise.withResolvers<void>();
+		env.instance.ready = () => ready.promise;
+		const sessions = env.deps.services.sessions;
+		const write = sessions.recordStartupProgress.bind(sessions);
+		let committedStatus: string | undefined;
+		vi.spyOn(sessions, 'recordStartupProgress').mockImplementation(async (...args) => {
+			if (failure === 'after') committedStatus = (await write(...args)).status;
+			entered.resolve();
+			if (failure === 'stalled') {
+				await stalled.promise;
+				return write(...args);
+			}
+			throw new Error('Private progress storage failure');
+		});
+		const response = await env.request('POST', env.path, undefined, headers);
+		await entered.promise;
+		ready.resolve();
+		try {
+			const body = await response.text();
+			const result = resultFrom(body);
+			expect(result.status).toBe('running');
+			expect(body).not.toContain('event: error');
+			expect(body).not.toContain('Private progress storage failure');
+			expect(env.calls.destroy).toBe(0);
+			expect(committedStatus).toBe(failure === 'after' ? 'starting' : undefined);
+			expect(
+				await sessions.getStartupStatus(env.project.id, result.session_id as SessionId),
+			).toMatchObject({ status: 'running', startup: { phase: 'starting' }, error: null });
+		} finally {
+			stalled.resolve();
+			await Promise.all(work);
+		}
+		const stored = await sessions.listByProject(env.project.id);
+		expect(stored[0]).toMatchObject({ status: 'running', startup: { phase: 'starting' } });
+	},
+);

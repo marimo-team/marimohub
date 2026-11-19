@@ -3,6 +3,7 @@ import { createServices } from '@marimo-hub/core';
 import type { NotebookId, ProjectId } from '@marimo-hub/core';
 import {
 	ACTOR,
+	uid,
 	appClaimHolder,
 	fakeComputeFrom,
 	makeFakeCompute,
@@ -10,6 +11,8 @@ import {
 } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
+
+const STRANGER = uid('launch-member');
 
 /** Sentinel that must never reach a response body or a stored session record. */
 const SECRET = 'sk-live-DO-NOT-LEAK-9f3a';
@@ -77,6 +80,30 @@ describe('Session routes (app mode) — deletion, provisioning and cap races', (
 			expect(second.session_id).toBe(first.session_id);
 			expect(calls.startProcess).toHaveLength(1);
 			expect(await createServices(bucket).sessions.listSessions(nid)).toHaveLength(1);
+		},
+	);
+
+	it.each(['edit', 'app'] as const)(
+		'revocation during %s startup reclaims the runtime',
+		async (mode) => {
+			const services = createServices(bucket);
+			await services.projects.addMember(pid, { user_id: STRANGER }, 'editor', ACTOR);
+			const { compute, calls, entered, release } = pausableCompute();
+			const api = createTestApi({
+				bucket,
+				userId: STRANGER,
+				compute,
+				deps: { policy: { defaultRole: undefined } },
+			});
+			const pending = api.request('POST', sessionsPath(), { mode });
+			await entered;
+			await services.projects.removeMember(pid, STRANGER, ACTOR);
+			release();
+			await expectError(await pending, 403, 'FORBIDDEN');
+			const sessions = await services.sessions.listSessions(nid);
+			expect(sessions).toHaveLength(1);
+			expect(sessions[0].status).toBe('failed');
+			expect(calls.destroy).toBeGreaterThan(0);
 		},
 	);
 

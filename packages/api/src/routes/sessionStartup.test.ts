@@ -8,18 +8,22 @@ it('captures occurrence time, deduplicates updates, and fences replaced attempts
 	vi.useFakeTimers();
 	const emit = vi.fn();
 	const reporter = sessionStartupReporter(emit);
-	const first = reporter.forSandbox(createSandboxId());
+	const originalId = createSandboxId();
+	const first = reporter.forSandbox(originalId);
 	const at = new Date().toISOString();
 	first({ phase: 'allocating', detail: 'Queued' });
 	vi.advanceTimersByTime(5000);
 	first({ phase: 'allocating', detail: 'Pulling image' });
-	expect(emit).toHaveBeenLastCalledWith({
-		phase: 'allocating',
-		detail: 'Pulling image',
-		started_at: at,
-		attempt: 1,
-		observed: ['allocating'],
-	});
+	expect(emit).toHaveBeenLastCalledWith(
+		{
+			phase: 'allocating',
+			detail: 'Pulling image',
+			started_at: at,
+			attempt: 1,
+			observed: ['allocating'],
+		},
+		originalId,
+	);
 	first({ phase: 'allocating', detail: 'Pulling image' });
 	expect(emit).toHaveBeenCalledTimes(2);
 	first({ phase: 'starting' });
@@ -44,4 +48,20 @@ it('does not propagate observer failures', () => {
 		throw new Error('observer unavailable');
 	});
 	expect(() => reporter.forSandbox(createSandboxId())({ phase: 'allocating' })).not.toThrow();
+});
+
+it('keeps callback identity while a replacement is being prepared', () => {
+	const emit = vi.fn();
+	const reporter = sessionStartupReporter(emit);
+	const originalId = createSandboxId();
+	const original = reporter.forSandbox(originalId);
+	original({ phase: 'allocating' });
+	const replacementId = createSandboxId();
+	original({ phase: 'workspace' });
+	expect(emit.mock.lastCall?.[1]).toBe(originalId);
+	const replacement = reporter.forSandbox(replacementId);
+	replacement({ phase: 'allocating' });
+	original({ phase: 'starting' });
+	expect(emit).toHaveBeenCalledTimes(3);
+	expect(emit.mock.lastCall?.[1]).toBe(replacementId);
 });
