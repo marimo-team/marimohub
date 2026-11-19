@@ -1,5 +1,5 @@
 import { SessionCaptureCoordinator } from './SessionCaptureCoordinator';
-import { RuntimeCaptureClient } from './runtimeCapture';
+import { RuntimeCaptureClient, RuntimeMissingError } from './runtimeCapture';
 import type { SandboxProvider, SandboxInstance } from '../../ports/sandbox';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
@@ -147,6 +147,79 @@ describe('SessionLifecycleService', () => {
 		expect(RuntimeCaptureClient.prototype.commitStop).not.toHaveBeenCalled();
 		expect(RuntimeCaptureClient.prototype.resume).toHaveBeenCalledOnce();
 		expect(sandboxCalls.destroy).toBe(0);
+	});
+
+	it('releases a retained non-retryable stop once the sandbox is confirmed gone', async () => {
+		const session = await putSession({
+			expires_at: iso(60 * 60_000),
+			last_snapshot_at: iso(0),
+			last_heartbeat: iso(-IDLE_TIMEOUT_MS - 1000),
+		});
+		await sessions.claimEditor(projectId, notebookId, session.session_id, 'shared');
+		const requested = await sessions.requestStop(projectId, session.session_id, { key: 'first' });
+		const lease = crypto.randomUUID();
+		await sessions.claimStop(requested, lease);
+		await sessions.updateStop(requested, lease, {
+			outcome: 'retained',
+			runtime_state: 'running',
+			failure: { code: 'CAPTURE_UNSUPPORTED', retryable: false },
+		});
+		await sessions.releaseStopLease(requested, lease);
+		probe.mockRejectedValue(new NotFoundError('sandbox gone'));
+		vi.mocked(RuntimeCaptureClient.prototype.prepare).mockRejectedValue(
+			new RuntimeMissingError('sandbox gone'),
+		);
+
+		await makeService().sweep(now);
+
+		const current = await getStored(session);
+		expect(current.stop).toMatchObject({ outcome: 'stopped', trigger: 'reconcile' });
+		expect(current.sandbox_reclaimed_at).toBeDefined();
+		expect(await sessions.ownsEditorClaim(current)).toBe(false);
+		expect(await sessions.countActiveForUser(session.user_id)).toBe(0);
+	});
+
+	it('releases an expired record with a retained running stop once its sandbox is gone', async () => {
+		const session = await putSession({ last_heartbeat: iso(-10 * 60 * 1000) });
+		await sessions.claimEditor(projectId, notebookId, session.session_id, 'shared');
+		const requested = await sessions.requestStop(projectId, session.session_id, { key: 'first' });
+		const lease = crypto.randomUUID();
+		await sessions.claimStop(requested, lease);
+		const retained = await sessions.updateStop(requested, lease, {
+			outcome: 'retained',
+			runtime_state: 'running',
+			failure: { code: 'SOURCE_UNAVAILABLE', retryable: true },
+		});
+		await sessions.releaseStopLease(retained, lease);
+		await bucket.put(
+			paths.session(projectId, session.session_id),
+			JSON.stringify({ ...(await getStored(session)), status: 'expired' }),
+		);
+		probe.mockRejectedValue(new NotFoundError('sandbox gone'));
+		vi.mocked(RuntimeCaptureClient.prototype.prepare).mockRejectedValue(
+			new RuntimeMissingError('sandbox gone'),
+		);
+
+		expect((await makeService().sweep(now)).reclaimed).toBe(1);
+
+		const current = await getStored(session);
+		expect(current.stop).toMatchObject({
+			outcome: 'stopped',
+			trigger: 'reconcile',
+			previous_id: retained.stop!.id,
+		});
+		expect(current.sandbox_reclaimed_at).toBeDefined();
+		expect(await sessions.ownsEditorClaim(current)).toBe(false);
+		expect(await sessions.countActiveForUser(session.user_id)).toBe(0);
+	});
+
+	it('records durable capture metrics for periodic snapshots', async () => {
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		await putSession({ last_snapshot_at: iso(-SNAPSHOT_INTERVAL_MS - 1000) });
+
+		expect((await makeService({ metrics }).sweep(now)).snapshotted).toBe(1);
+
+		expect(metrics.increment).toHaveBeenCalledWith('sessions.capture.durable');
 	});
 
 	it('shares one short thumbnail deadline across a lifecycle sweep', async () => {

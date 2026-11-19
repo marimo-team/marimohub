@@ -22,6 +22,7 @@ import type {
 	V1Service,
 	V1Status,
 } from '@kubernetes/client-node';
+import { NotFoundError } from '@marimo-hub/core/errors';
 import { SandboxId } from '@marimo-hub/core/ids';
 import {
 	defaultImagePullPolicy,
@@ -443,10 +444,25 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			const ingress = o.ports.some((p) => p.host) ? ingressManifest(o) : undefined;
 			const { core } = await apis();
 			// Avoid Pod admission on reconnects; tolerate a concurrent create after the read.
-			const ensurePod = async (): Promise<boolean> =>
-				(await readOptional(() => core.readNamespacedPod({ name: o.name, namespace })))
-					? false
-					: createTolerant(() => core.createNamespacedPod({ namespace, body: pod }));
+			const ensurePod = async (): Promise<boolean> => {
+				const existing = await readOptional(() =>
+					core.readNamespacedPod({ name: o.name, namespace }),
+				);
+				if (!existing)
+					return createTolerant(() => core.createNamespacedPod({ namespace, body: pod }));
+				if (
+					existing.metadata?.labels?.[MANAGED_BY_LABEL] !== MANAGED_BY_VALUE ||
+					existing.metadata?.annotations?.[SANDBOX_ID_ANNOTATION] !== String(o.sandboxId)
+				) {
+					throw new NotFoundError(
+						`Kubernetes Pod ${o.name} does not belong to sandbox ${o.sandboxId}`,
+					);
+				}
+				if (existing.metadata?.deletionTimestamp) {
+					throw new NotFoundError(`Kubernetes sandbox ${o.sandboxId} is no longer running`);
+				}
+				return false;
+			};
 			// Routes can reconcile before the Pod exists, including newly reserved ports.
 			const [createdPod] = await Promise.all([ensurePod(), reconcileRoutes(service, ingress)]);
 			return { createdPod };

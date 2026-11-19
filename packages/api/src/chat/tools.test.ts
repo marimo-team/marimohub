@@ -81,6 +81,22 @@ describe('chat tool session', () => {
 		await tools.close();
 	});
 
+	it('redacts credential-named table columns in the stored observation only', async () => {
+		const { call, checkpoints, tools } = await session();
+		const callTool = vi.spyOn(Client.prototype, 'callTool').mockResolvedValueOnce({
+			content: [],
+			structuredContent: { columns: ['user', 'password'], rows: [['ada', 'hunter2']] },
+		});
+		const output = await call('list_catalog', {});
+		callTool.mockRestore();
+		expect(output).toMatchObject({ rows: [['ada', 'hunter2']] });
+		const stored = checkpoints.find((c) => c.type === 'tool_completed')!;
+		expect(JSON.parse((stored as { result: string }).result)).toMatchObject({
+			rows: [['ada', '[Redacted]']],
+		});
+		await tools.close();
+	});
+
 	it('skips a gated call it cannot ask about, keeps the budget, and tells the model', async () => {
 		const { call, checkpoints, chunks, tools, api, project } = await session();
 		const output = await call('create_notebook', { title: 'Nope', code: 'import marimo' });

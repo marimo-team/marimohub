@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { SourceControlAccountService, AesGcmSecretCodec } from '@marimo-hub/core';
+import {
+	SourceControlAccountService,
+	AesGcmSecretCodec,
+	OAUTH_RATE_LIMITS,
+} from '@marimo-hub/core';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import type { SourceControlAccountProvider } from '@marimo-hub/core/ports/source-control-account';
 import { createInitializedBucket, createTestApi, expectOk } from '../testing';
@@ -176,4 +180,14 @@ it('blocks account actions after the hub user is suspended', async () => {
 	}
 	expect(f.provider.exchange).not.toHaveBeenCalled();
 	expect(f.provider.revoke).not.toHaveBeenCalled();
+});
+it('completes a callback while the hub-wide MCP authorize budget is exhausted', async () => {
+	const f = await setup();
+	const limits = f.deps.services.oauthRateLimits;
+	for (let i = 0; i < OAUTH_RATE_LIMITS.authorize.limit; i++) await limits.consume('authorize');
+	expect(await limits.consume('authorize')).toBe(false);
+	const { callbackPath, headers } = await f.startConnection();
+	const callback = await f.request('GET', callbackPath, undefined, headers);
+	expect(callback.status).toBe(302);
+	expect(callback.headers.get('location')).toBe('/account/github');
 });

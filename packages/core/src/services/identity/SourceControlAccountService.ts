@@ -17,6 +17,7 @@ import { readStored, SecretEnvelopeSchema } from '../../schema';
 import { withCasRetry } from '../catalog/cas';
 import { toBase64Url } from '../../internal/base64url';
 import { logEvent } from '../../logs';
+import { logOperationalError } from '../../operationalLog';
 
 const RATE_LIMIT_WINDOW_MS = 15 * 60_000;
 const CONNECT_LIMIT = 10;
@@ -170,6 +171,8 @@ export class SourceControlAccountService {
 			binding: this.oauthBinding(),
 		};
 		await this.mutateHead(uid, (head) => {
+			if (head.connection)
+				throw new ConflictError('Disconnect the existing GitHub account before connecting another');
 			head.attempts = this.recentAttempts(head.attempts);
 			if (head.attempts.length >= CONNECT_LIMIT)
 				throw new ResourceExhaustedError('Too many GitHub connection attempts');
@@ -410,35 +413,40 @@ export class SourceControlAccountService {
 			limit: 100,
 		});
 		for (const item of page.objects) {
-			const parts = item.key.split('/');
-			const uid = UserId.parse(parts[2]);
-			if (parts[3] === 'head.json') {
-				await this.mutateHead(uid, (head) => {
-					if (head.attempt && head.attempt.expires <= this.now()) delete head.attempt;
-					head.attempts = this.recentAttempts(head.attempts);
-					head.callbacks = this.recentAttempts(head.callbacks);
+			try {
+				const parts = item.key.split('/');
+				const uid = UserId.parse(parts[2]);
+				if (parts[3] === 'head.json') {
+					await this.mutateHead(uid, (head) => {
+						if (head.attempt && head.attempt.expires <= this.now()) delete head.attempt;
+						head.attempts = this.recentAttempts(head.attempts);
+						head.callbacks = this.recentAttempts(head.callbacks);
+					});
+					continue;
+				}
+				const { account, key, object } = await this.readAccount(
+					uid,
+					parts[3].replace(/\.json$/, ''),
+					false,
+				);
+				if (!account.tokens || this.now() - account.createdAt < 15 * 60_000) continue;
+				const orphan = await this.mutateHead(uid, (head) => {
+					if (head.connection === account.id) return false;
+					if (!head.connection && head.generation === account.headGeneration)
+						head.generation = random();
+					return true;
 				});
-				continue;
+				if (!orphan) continue;
+				const accessToken = await this.revocationToken(account, key);
+				delete account.tokens;
+				delete account.refreshClaim;
+				delete account.refreshUntil;
+				await this.bucket.put(key, JSON.stringify(account), { onlyIfEtagMatches: object.etag });
+				if (accessToken) await this.revokeToken(accessToken);
+			} catch (error) {
+				// One unreadable record must not stop orphan revocation for every later account.
+				logOperationalError('source_control.account_sweep_item_failed', { key: item.key }, error);
 			}
-			const { account, key, object } = await this.readAccount(
-				uid,
-				parts[3].replace(/\.json$/, ''),
-				false,
-			);
-			if (!account.tokens || this.now() - account.createdAt < 15 * 60_000) continue;
-			const orphan = await this.mutateHead(uid, (head) => {
-				if (head.connection === account.id) return false;
-				if (!head.connection && head.generation === account.headGeneration)
-					head.generation = random();
-				return true;
-			});
-			if (!orphan) continue;
-			const accessToken = await this.revocationToken(account, key);
-			delete account.tokens;
-			delete account.refreshClaim;
-			delete account.refreshUntil;
-			await this.bucket.put(key, JSON.stringify(account), { onlyIfEtagMatches: object.etag });
-			if (accessToken) await this.revokeToken(accessToken);
 		}
 		await this.bucket.put(
 			cursorKey,

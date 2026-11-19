@@ -35,6 +35,12 @@ pub fn command() -> clap::Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            Arg::new("include-credential-files")
+                .long("include-credential-files")
+                .help("Upload files that look like credentials (.env, .netrc, *.pem, SSH keys, gha-creds-*.json) instead of skipping them")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("dry-run")
                 .long("dry-run")
                 .action(ArgAction::SetTrue),
@@ -102,7 +108,27 @@ fn repository(remote: String) -> String {
     remote.trim_end_matches(".git").to_owned()
 }
 
-fn files(checkout: &Path, root: &Path, include_git: bool) -> Result<Vec<PathBuf>, Error> {
+fn is_credential_file(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        ".env" | ".netrc" | "id_rsa" | "id_dsa" | "id_ecdsa" | "id_ed25519"
+    ) || name.starts_with(".env.")
+        || name.ends_with(".pem")
+        || (name.starts_with("gha-creds-") && name.ends_with(".json"))
+}
+
+struct Selection {
+    paths: Vec<PathBuf>,
+    skipped: Vec<PathBuf>,
+}
+
+fn files(
+    checkout: &Path,
+    root: &Path,
+    include_git: bool,
+    include_credential_files: bool,
+) -> Result<Selection, Error> {
     // Walk from the checkout so ancestor rules retain their directory-relative meaning.
     let mut builder = ignore::WalkBuilder::new(checkout);
     builder
@@ -118,6 +144,7 @@ fn files(checkout: &Path, root: &Path, include_git: bool) -> Result<Vec<PathBuf>
                     .eq_ignore_ascii_case(".git"))
     });
     let mut paths = Vec::new();
+    let mut skipped = Vec::new();
     let mut total = 0;
     for entry in builder.build() {
         let entry = entry.map_err(|error| Error::Usage(error.to_string()))?;
@@ -133,18 +160,21 @@ fn files(checkout: &Path, root: &Path, include_git: bool) -> Result<Vec<PathBuf>
                 entry.path().display()
             )));
         }
+        let relative = entry
+            .path()
+            .strip_prefix(root)
+            .expect("walk root")
+            .to_owned();
+        if !include_credential_files && is_credential_file(&entry.file_name().to_string_lossy()) {
+            skipped.push(relative);
+            continue;
+        }
         let size = entry
             .metadata()
             .map_err(|e| Error::Usage(e.to_string()))?
             .len();
         total += size;
-        paths.push(
-            entry
-                .path()
-                .strip_prefix(root)
-                .expect("walk root")
-                .to_owned(),
-        );
+        paths.push(relative);
         if size > 25 * 1024 * 1024 || total > 100 * 1024 * 1024 || paths.len() > 1000 {
             return Err(Error::Usage(
                 "workspace exceeds limits: 1,000 files, 25 MiB per file, 100 MiB total".into(),
@@ -152,10 +182,11 @@ fn files(checkout: &Path, root: &Path, include_git: bool) -> Result<Vec<PathBuf>
         }
     }
     paths.sort();
+    skipped.sort();
     if paths.is_empty() {
         return Err(Error::Usage("workspace contains no files".into()));
     }
-    Ok(paths)
+    Ok(Selection { paths, skipped })
 }
 
 fn archive(root: &Path, paths: &[PathBuf], format: &str) -> Result<File, Error> {
@@ -198,7 +229,13 @@ pub fn execute(global: &ArgMatches, args: &ArgMatches) -> Result<(), Error> {
         .get_one::<String>("output")
         .expect("defaulted by clap");
     let Some(manifest) = args.get_one::<String>("manifest") else {
-        return client::write_output(&execute_one(global, args, "MARIMOHUB_SYNC_TOKEN")?, output);
+        let plan = prepare(global, args)?;
+        let result = if args.get_flag("dry-run") {
+            plan.dry_run()
+        } else {
+            upload(global, &plan, "MARIMOHUB_SYNC_TOKEN")?
+        };
+        return client::write_output(&result, output);
     };
     let apps: Vec<App> = serde_json::from_reader(File::open(manifest)?)?;
     if apps.is_empty() || apps.len() > 256 {
@@ -250,24 +287,22 @@ pub fn execute(global: &ArgMatches, args: &ArgMatches) -> Result<(), Error> {
                 argv.extend([format!("--{name}"), value.clone()]);
             }
         }
-        let mut dry_argv = argv.clone();
-        dry_argv.push("--dry-run".into());
-        let dry = command()
-            .try_get_matches_from(dry_argv)
-            .map_err(|e| Error::Usage(e.to_string()))?;
-        let plan = execute_one(global, &dry, &app.secret)?;
+        if args.get_flag("include-credential-files") {
+            argv.push("--include-credential-files".into());
+        }
         let single = command()
             .try_get_matches_from(argv)
             .map_err(|e| Error::Usage(e.to_string()))?;
-        prepared.push((app, single, plan));
+        let plan = prepare(global, &single)?;
+        prepared.push((app, plan));
     }
     let mut failed = 0;
     let mut results = Vec::with_capacity(prepared.len());
-    for (app, single, plan) in prepared {
+    for (app, plan) in prepared {
         let result = if args.get_flag("dry-run") {
-            Ok(plan)
+            Ok(plan.dry_run())
         } else {
-            execute_one(global, &single, &app.secret)
+            upload(global, &plan, &app.secret)
         };
         results.push(match result {
             Ok(data) => json!({"pid": app.pid, "nid": app.nid, "success": true, "data": data}),
@@ -286,11 +321,164 @@ pub fn execute(global: &ArgMatches, args: &ArgMatches) -> Result<(), Error> {
     Ok(())
 }
 
-fn execute_one(
-    global: &ArgMatches,
-    args: &ArgMatches,
-    token_env: &str,
-) -> Result<serde_json::Value, Error> {
+/// Finds `scheme://userinfo@` in config keys as well as values: `url.<base>.insteadOf`
+/// carries its URL in the key.
+fn contains_url_credentials(text: &str) -> bool {
+    text.match_indices("://").any(|(index, _)| {
+        let scheme_start = text[..index]
+            .rfind(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-')))
+            .map_or(0, |i| i + 1);
+        let scheme = text[scheme_start..index].to_ascii_lowercase();
+        let rest = &text[index + 3..];
+        let authority = &rest[..rest
+            .find(|c: char| matches!(c, '/' | '?' | '#') || c.is_whitespace())
+            .unwrap_or(rest.len())];
+        let Some((userinfo, _)) = authority.rsplit_once('@') else {
+            return false;
+        };
+        // SSH user names such as `git@` are not secrets; HTTP user names are commonly tokens.
+        userinfo.contains(':')
+            || (matches!(scheme.as_str(), "http" | "https") && !userinfo.is_empty())
+    })
+}
+
+fn normalize(path: &Path) -> PathBuf {
+    if let Ok(path) = path.canonicalize() {
+        return path;
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => normalized.push(other),
+        }
+    }
+    normalized
+}
+
+fn git_config_files(git_dir: &Path, configs: &mut Vec<PathBuf>) {
+    for name in ["config", "config.worktree"] {
+        let path = git_dir.join(name);
+        if path.is_file() {
+            configs.push(path);
+        }
+    }
+    submodule_config_files(&git_dir.join("modules"), configs);
+}
+
+// Submodule names may contain slashes, so their git directories can sit at any depth.
+fn submodule_config_files(directory: &Path, configs: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let path = entry.path();
+        if path.join("HEAD").is_file() {
+            git_config_files(&path, configs);
+        } else {
+            submodule_config_files(&path, configs);
+        }
+    }
+}
+
+/// Rejects `.git` content that would ship a credential with the archive. Archived configs are
+/// read with includes; an include that points inside `.git` is rejected outright because the
+/// included file is archived too.
+fn screen_git_credentials(root: &Path) -> Result<(), Error> {
+    let git_dir = root.join(".git").canonicalize()?;
+    let mut configs = Vec::new();
+    git_config_files(&git_dir, &mut configs);
+    for config in configs {
+        let label = config
+            .strip_prefix(root)
+            .unwrap_or(&config)
+            .display()
+            .to_string();
+        let output = Command::new("git")
+            .current_dir(root)
+            .args([
+                "config",
+                "--includes",
+                "--show-origin",
+                "--null",
+                "--list",
+                "--file",
+            ])
+            .arg(&config)
+            .output()?;
+        if !output.status.success() {
+            return Err(Error::Usage(format!(
+                "cannot read {label}; fix it before including .git"
+            )));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut fields = stdout.split('\0');
+        while let (Some(origin), Some(entry)) = (fields.next(), fields.next()) {
+            let (key, value) = entry.split_once('\n').unwrap_or((entry, ""));
+            let key = key.to_ascii_lowercase();
+            if (key.starts_with("http.") && key.ends_with(".extraheader"))
+                || key.starts_with("credential.")
+            {
+                return Err(Error::Usage(format!(
+                    "{label}: remove checkout credentials before including .git; use persist-credentials: false"
+                )));
+            }
+            if contains_url_credentials(entry) {
+                return Err(Error::Usage(format!(
+                    "{label}: remove credentials from Git remote URLs and url.*.insteadOf rules before including .git"
+                )));
+            }
+            if (key.starts_with("include.") || key.starts_with("includeif."))
+                && key.ends_with(".path")
+            {
+                let origin = origin.strip_prefix("file:").map(PathBuf::from);
+                let base = origin
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .unwrap_or(config.parent().expect("config has a parent"));
+                let target = value.strip_prefix(":(optional)").unwrap_or(value);
+                let target = match target.strip_prefix("~/") {
+                    Some(rest) => std::env::var_os("HOME")
+                        .map(|home| Path::new(&home).join(rest))
+                        .unwrap_or_else(|| PathBuf::from(target)),
+                    None => base.join(target),
+                };
+                if normalize(&target).starts_with(&git_dir) {
+                    return Err(Error::Usage(format!(
+                        "{label}: remove the include of a file inside .git before including .git"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+struct Plan {
+    pid: Option<String>,
+    nid: Option<String>,
+    root: PathBuf,
+    format: String,
+    headers: [(&'static str, String); 5],
+    selection: Selection,
+}
+
+impl Plan {
+    fn dry_run(&self) -> serde_json::Value {
+        json!({
+            "pid": self.pid,
+            "nid": self.nid,
+            "headers": self.headers.iter().cloned().collect::<std::collections::BTreeMap<_, _>>(),
+            "files": self.selection.paths,
+            "skipped_credential_files": self.selection.skipped,
+        })
+    }
+}
+
+fn prepare(global: &ArgMatches, args: &ArgMatches) -> Result<Plan, Error> {
     for name in ["token", "token-file"] {
         if global.value_source(name) == Some(clap::parser::ValueSource::CommandLine) {
             return Err(Error::Usage(
@@ -323,48 +511,8 @@ fn execute_one(
                 .into(),
         ));
     }
-    if include_git
-        && git(
-            &root,
-            &[
-                "config",
-                "--local",
-                "--get-regexp",
-                "http\\..*extraheader|credential\\..*",
-            ],
-        )
-        .is_some()
-    {
-        return Err(Error::Usage(
-            "remove checkout credentials before including .git; use persist-credentials: false"
-                .into(),
-        ));
-    }
     if include_git {
-        let remotes = git(
-            &root,
-            &[
-                "config",
-                "--local",
-                "--get-regexp",
-                "remote\\..*\\.(url|pushurl)",
-            ],
-        )
-        .unwrap_or_default();
-        if remotes
-            .lines()
-            .filter_map(|line| line.split_once(' '))
-            .any(|(_, value)| {
-                url::Url::parse(value).is_ok_and(|url| {
-                    url.password().is_some()
-                        || (matches!(url.scheme(), "http" | "https") && !url.username().is_empty())
-                })
-            })
-        {
-            return Err(Error::Usage(
-                "remove credentials from Git remote URLs before including .git".into(),
-            ));
-        }
+        screen_git_credentials(&root)?;
     }
     let env = |names: [&str; 2]| names.map(|name| std::env::var(name).ok());
     let repo = repository(resolve(
@@ -397,7 +545,18 @@ fn execute_one(
         ));
     }
     let format = get("format").expect("defaulted by clap");
-    let paths = files(&checkout, &root, include_git)?;
+    let selection = files(
+        &checkout,
+        &root,
+        include_git,
+        args.get_flag("include-credential-files"),
+    )?;
+    for path in &selection.skipped {
+        eprintln!(
+            "skipping credential-like file {}; pass --include-credential-files to upload it",
+            path.display()
+        );
+    }
     let headers = [
         ("x-marimohub-repo", repo),
         ("x-marimohub-branch", branch),
@@ -405,11 +564,17 @@ fn execute_one(
         ("x-marimohub-root-path", root_path),
         ("x-marimohub-archive-format", format.clone()),
     ];
-    if args.get_flag("dry-run") {
-        return Ok(
-            json!({"pid": get("pid"), "nid": get("nid"), "headers": headers.into_iter().collect::<std::collections::BTreeMap<_, _>>(), "files": paths}),
-        );
-    }
+    Ok(Plan {
+        pid: get("pid"),
+        nid: get("nid"),
+        root,
+        format,
+        headers,
+        selection,
+    })
+}
+
+fn upload(global: &ArgMatches, plan: &Plan, token_env: &str) -> Result<serde_json::Value, Error> {
     let base = match global.get_one::<String>("base-url") {
         Some(base) => base.clone(),
         None => config::load_optional_profile_without_token(
@@ -427,10 +592,11 @@ fn execute_one(
     let url = format!(
         "{}/api/sync/git/v1/projects/{}/notebooks/{}",
         base.trim_end_matches('/'),
-        urlencoding::encode(&get("pid").unwrap()),
-        urlencoding::encode(&get("nid").unwrap())
+        urlencoding::encode(plan.pid.as_deref().unwrap()),
+        urlencoding::encode(plan.nid.as_deref().unwrap())
     );
-    let body = archive(&root, &paths, &format)?;
+    let format = &plan.format;
+    let body = archive(&plan.root, &plan.selection.paths, format)?;
     // Sync credentials must never follow a redirect to another origin.
     let agent = ureq::AgentBuilder::new()
         .redirects(0)
@@ -450,7 +616,7 @@ fn execute_one(
             },
         )
         .set("Content-Length", &body.metadata()?.len().to_string());
-    for (name, value) in &headers {
+    for (name, value) in &plan.headers {
         request = request.set(name, value);
     }
     let response = match request.send(body) {
@@ -479,7 +645,11 @@ fn execute_one(
     if global.get_flag("raw-envelope") {
         return Ok(value);
     }
-    Ok(json!({"version_id": value["data"]["version_id"], "synced": value["data"]["synced"]}))
+    Ok(json!({
+        "version_id": value["data"]["version_id"],
+        "synced": value["data"]["synced"],
+        "skipped_credential_files": plan.selection.skipped,
+    }))
 }
 
 #[cfg(test)]
@@ -538,6 +708,46 @@ mod tests {
     }
 
     #[test]
+    fn detects_userinfo_in_config_keys_and_values() {
+        for text in [
+            "url.https://x-access-token:secret@github.com/.insteadof\nhttps://github.com/",
+            "remote.origin.url\nhttps://token@example.com/org/repo.git",
+            "remote.origin.url\nssh://git:secret@example.com/org/repo.git",
+            "url.HTTPS://token@example.com/.insteadof",
+        ] {
+            assert!(contains_url_credentials(text), "{text}");
+        }
+        for text in [
+            "remote.origin.url\nssh://git@github.com/org/repo.git",
+            "remote.origin.url\ngit@github.com:org/repo.git",
+            "url.https://github.com/.insteadof\ngit@github.com:",
+            "user.email\nci@example.com",
+        ] {
+            assert!(!contains_url_credentials(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn credential_file_names() {
+        for name in [
+            ".env",
+            ".env.production",
+            ".ENV",
+            ".netrc",
+            "server.pem",
+            "id_rsa",
+            "id_ed25519",
+            "id_ecdsa",
+            "gha-creds-1a2b3c.json",
+        ] {
+            assert!(is_credential_file(name), "{name}");
+        }
+        for name in ["app.py", "env.py", ".envrc", "id_rsa.pub", "gha-creds.txt"] {
+            assert!(!is_credential_file(name), "{name}");
+        }
+    }
+
+    #[test]
     fn ignores_and_archives() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join(".git")).unwrap();
@@ -545,7 +755,7 @@ mod tests {
         std::fs::write(dir.path().join("app.py"), "print(1)").unwrap();
         std::fs::write(dir.path().join("secret"), "secret").unwrap();
         std::fs::write(dir.path().join(".marimohubignore"), "secret\n").unwrap();
-        let paths = files(dir.path(), dir.path(), false).unwrap();
+        let paths = files(dir.path(), dir.path(), false, false).unwrap().paths;
         assert_eq!(
             paths,
             [PathBuf::from(".marimohubignore"), PathBuf::from("app.py")]
@@ -557,8 +767,9 @@ mod tests {
         let tgz = archive(dir.path(), &paths, "tar.gz").unwrap();
         let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(tgz));
         assert_eq!(tar.entries().unwrap().count(), 2);
-        assert!(files(dir.path(), dir.path(), true)
+        assert!(files(dir.path(), dir.path(), true, false)
             .unwrap()
+            .paths
             .contains(&PathBuf::from(".git/config")));
     }
 }

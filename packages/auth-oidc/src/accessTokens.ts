@@ -1,7 +1,7 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { bearerToken } from '@marimo-hub/core/bearer-token';
 import { logEvent } from '@marimo-hub/core/logs';
-import { isExternalTokenScope } from '@marimo-hub/core/token-grants';
+import { isReservedAccessTokenScope } from '@marimo-hub/core/token-grants';
 import type { TokenGrantPreset } from '@marimo-hub/core/token-grants';
 import type { Authenticator } from '@marimo-hub/core/ports/auth';
 import { createAdmissionPolicy } from './admission';
@@ -61,7 +61,7 @@ export function createOidcAccessTokenAuthenticator(config: OidcAccessTokenConfig
 		throw new Error('OIDC access-token lifetime must be between 1 and 3600 seconds');
 	}
 	for (const scope of config.scopeGrants?.keys() ?? []) {
-		if (!isAccessTokenScope(scope) || isExternalTokenScope(scope)) {
+		if (!isAccessTokenScope(scope) || isReservedAccessTokenScope(scope)) {
 			throw new Error(`OIDC access-token scope grant ${JSON.stringify(scope)} is invalid`);
 		}
 	}

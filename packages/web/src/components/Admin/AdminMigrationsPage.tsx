@@ -1,4 +1,5 @@
 import { toast } from 'sonner';
+import { ApiRequestError } from '@/api/client';
 import { useAdminMigrationsQuery, useRequestMigrationAttempt } from '@/api/hooks';
 import { Button, Chip, PageContainer, PageHeader } from '@/components/ui';
 import { formatAbsolute } from '@/lib/time';
@@ -106,13 +107,13 @@ export default function AdminMigrationsPage() {
 					<div className="flex flex-wrap gap-2">
 						<Button
 							variant="default"
-							onClick={() => void query.refetch()}
+							onPress={() => void query.refetch()}
 							isDisabled={query.isFetching}
 						>
 							Refresh
 						</Button>
 						<Button
-							onClick={requestAttempt}
+							onPress={requestAttempt}
 							isDisabled={!data?.actions_available || data.action !== 'ready' || attempt.isPending}
 						>
 							Request attempt
@@ -129,7 +130,10 @@ export default function AdminMigrationsPage() {
 			{query.isPending && <output>Loading migration status…</output>}
 			{query.isError && (
 				<p role="alert">
-					Could not load migrations. Session authentication and super-admin access are required.
+					Could not load migrations.{' '}
+					{query.error instanceof ApiRequestError && [401, 403].includes(query.error.status ?? 0)
+						? 'Session authentication and super-admin access are required.'
+						: query.error.message}{' '}
 					Refresh to try again.
 				</p>
 			)}

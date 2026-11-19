@@ -267,6 +267,7 @@ function browseEndpoint<T>(
 		iid: IntegrationId;
 		user: AuthUser;
 		stateToken: string;
+		budget?: IntegrationBudgetName;
 		load: () => Promise<T>;
 		observation?: { metrics: ApiDeps['metrics']; operation: string };
 	},
@@ -285,7 +286,7 @@ function browseEndpoint<T>(
 		]),
 		options.ttlMs,
 		options.fresh ?? false,
-		() => assertIntegrationBudget(options.deps, 'browse', options.user.id),
+		() => assertIntegrationBudget(options.deps, options.budget ?? 'browse', options.user.id),
 		options.load,
 		options.observation,
 	);
@@ -295,6 +296,7 @@ const BUDGET_WINDOW_MS = 60_000;
 const integrationBudgetDefinitions = {
 	browse: { limit: 20, message: 'Too many browse requests — try again in a minute.' },
 	objectSearch: { limit: 5, message: 'Too many object searches — try again in a minute.' },
+	tableSearch: { limit: 64, message: 'Too many table searches — try again in a minute.' },
 	objectPreview: { limit: 10, message: 'Too many object previews — try again in a minute.' },
 	dataQuery: { limit: 5, message: 'Too many data queries — try again in a minute.' },
 	aiQuery: { limit: 5, message: 'Too many AI query requests — try again in a minute.' },
@@ -355,6 +357,8 @@ export interface IntegrationBrowseContext {
 	iid: IntegrationId;
 	signal?: AbortSignal;
 	request: { requestId?: string; method: string; path: string };
+	/** Set by a caller that already ran {@link authorizeCatalogBrowse} for this target. */
+	authorizedCatalog?: { stateToken: string; budget: IntegrationBudgetName };
 }
 interface BrowsePage {
 	limit: number;
@@ -367,17 +371,29 @@ async function browseCatalogMetadata<T>(
 	context: IntegrationBrowseContext,
 	options: BrowseCacheOptions & { load: (integrations: ProjectIntegrationsService) => Promise<T> },
 ) {
-	const { deps, user, pid, iid } = context;
-	const { integrations } = requireDataBrowser(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'integration.use', deps);
-	const stateToken = await assertBrowsable(integrations, pid, iid);
+	const { integrations } = requireDataBrowser(context.deps);
+	const stateToken =
+		context.authorizedCatalog?.stateToken ?? (await authorizeCatalogBrowse(context));
 	// Coalesced catalog loads must survive cancellation of an individual caller.
 	return browseEndpoint({
 		...context,
 		...options,
 		stateToken,
+		budget: context.authorizedCatalog?.budget,
 		load: () => options.load(integrations),
 	});
+}
+
+/** Asserts `integration.use` and catalog browsability; returns the cache state token. */
+export async function authorizeCatalogBrowse({
+	deps,
+	user,
+	pid,
+	iid,
+}: IntegrationBrowseContext): Promise<string> {
+	const { integrations } = requireDataBrowser(deps);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.use', deps);
+	return assertBrowsable(integrations, pid, iid);
 }
 
 async function authorizedObjectBrowse({ deps, user, pid, iid, signal }: IntegrationBrowseContext) {

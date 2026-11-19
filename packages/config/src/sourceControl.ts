@@ -32,6 +32,31 @@ import type { AuthorizeRepository, SourceControlRegistration } from './sourceCon
 const GITHUB_APP_ID_ENV = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID';
 const GITHUB_APP_PRIVATE_KEY_ENV = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY';
 
+// accessToken refreshes tokens within 60 s of expiry, so a reused token keeps at least 30 s.
+const PERSONAL_TOKEN_REUSE_MS = 30_000;
+
+/**
+ * One operation issues a GitHub request per changed file. Resolving the token for each would
+ * repeat the account reads, the GitHub identity check, and race refresh claims near expiry.
+ */
+function reusableToken(resolve: () => Promise<string>) {
+	let cached: { token: Promise<string>; until: number } | undefined;
+	return (): Promise<string> => {
+		if (cached && cached.until > Date.now()) return cached.token;
+		const entry = { token: resolve(), until: Infinity };
+		cached = entry;
+		void entry.token.then(
+			() => {
+				if (cached === entry) entry.until = Date.now() + PERSONAL_TOKEN_REUSE_MS;
+			},
+			() => {
+				if (cached === entry) cached = undefined;
+			},
+		);
+		return entry.token;
+	};
+}
+
 type SourceControlConfig = {
 	sourceControl?: SourceControlRegistry;
 };
@@ -99,15 +124,15 @@ function makeGitHubSourceControl(
 			if (actor.verification !== 'required')
 				throw new ForbiddenError('Personal publication requires verified commits');
 			const uid = UserId.parse(actor.userId);
+			const identities = new IdentityService(bucket);
 			return new GitHubUserPublisher(
 				{ appId, privateKey, url },
 				{
 					accountId: actor.accountId,
-					token: async () => {
-						if (await new IdentityService(bucket).isSuspended(uid))
-							throw new ForbiddenError('Account is suspended');
+					token: reusableToken(async () => {
+						if (await identities.isSuspended(uid)) throw new ForbiddenError('Account is suspended');
 						return accounts.accessToken(uid, actor);
-					},
+					}),
 				},
 			);
 		},

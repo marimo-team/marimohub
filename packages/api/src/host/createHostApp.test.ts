@@ -41,7 +41,7 @@ function runtimeReply(reply: Omit<HostReply, 'notebook'>): HostReply {
 	return { notebook: { id: 'local', operations: [] }, ...reply };
 }
 
-async function setup(policy: ApiDeps['policy'] = {}) {
+async function setup(policy: ApiDeps['policy'] = {}, overrides: Partial<ApiDeps> = {}) {
 	const bucket = await createInitializedBucket();
 	let principal: AuthenticatedPrincipal | null = user;
 	const deps = makeTestDeps(bucket, {
@@ -51,6 +51,7 @@ async function setup(policy: ApiDeps['policy'] = {}) {
 		}),
 		policy,
 		host: { pollIntervalMs: POLL_INTERVAL_MS },
+		...overrides,
 	});
 	const project = await deps.services.projects.createProject(
 		{ name: 'Host project', description: '' },
@@ -733,6 +734,37 @@ describe('hub host protocol', () => {
 		expect(vi.mocked(requestRuntimeHost).mock.calls[0][1].headers).toMatchObject({
 			'If-Match': 'saved',
 		});
+	});
+
+	it('saves only the source and reports capture metrics, leaving the workspace mirror to teardown', async () => {
+		const increment = vi.fn();
+		const { request, deps, id, runtime, project } = await setup(
+			{},
+			{
+				metrics: { increment, gauge: vi.fn() },
+				sandbox: {
+					bucket: { name: 'test', endpoint: '' },
+					hostname: 'localhost',
+					workdir: '/workspace',
+					persistWorkspace: 'workspace',
+				},
+			},
+		);
+		await runtime();
+		const { instance } = makeFsSandbox({
+			files: { 'notebook.py': 'saved source', 'data.csv': 'a,b\n1,2\n' },
+		});
+		vi.spyOn(deps.compute, 'create').mockReturnValue(instance);
+		vi.mocked(requestRuntimeHost).mockResolvedValue(
+			runtimeReply({
+				status: 200,
+				body: { document: { notebook_id: 'local', saved_etag: 'saved' }, cells: {} },
+			}),
+		);
+		expect((await request('POST', `/notebooks/${id}/save`, {}, 'save')).status).toBe(200);
+		const { objects } = await deps.bucket.list({ prefix: `projects/${project.id}/` });
+		expect(objects.filter((object) => object.key.endsWith('data.csv'))).toEqual([]);
+		expect(increment).toHaveBeenCalledWith('sessions.capture.durable');
 	});
 
 	it('preserves upstream conflicts and rewrites their notebook references', async () => {

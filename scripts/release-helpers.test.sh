@@ -343,14 +343,11 @@ fi
 
 release_repo="$temporary/release-script"
 mkdir -p "$release_repo/apps/cli" "$release_repo/docs" "$release_repo/scripts" "$release_repo/bin" \
-	"$release_repo/packages/iac" "$release_repo/examples/integration-iac/deno"
+	"$release_repo/packages/iac"
 for script in release-version.mjs release.mjs prepare-release.mjs prepare-iac-release.mjs iac-release.mjs; do
 	cp "$repo_root/scripts/$script" "$release_repo/scripts/$script"
 done
 printf '{"name":"@marimo-hub/iac","version":"1.2.3"}\n' >"$release_repo/packages/iac/package.json"
-printf '%s\n' \
-	'{"imports":{"@marimo-hub/iac":"npm:@marimo-hub/iac@1.2.3","@marimo-hub/iac/runner":"npm:@marimo-hub/iac@1.2.3/runner"}}' \
-	>"$release_repo/examples/integration-iac/deno/deno.json"
 printf '{"name":"release-test","version":"1.2.3"}\n' >"$release_repo/package.json"
 printf '[package]\nname = "mohub"\nversion = "1.2.3"\n' >"$release_repo/apps/cli/Cargo.toml"
 touch "$release_repo/apps/cli/Cargo.lock"
@@ -377,10 +374,6 @@ grep -q '"version": "1.2.4"' "$release_repo/package.json" || fail 'package versi
 grep -q 'version = "1.2.4"' "$release_repo/apps/cli/Cargo.toml" || fail 'Cargo version was not updated'
 grep -q "version: latest" "$release_repo/docs/cli.md" || fail 'CLI docs example was changed'
 grep -q '"version": "1.2.4"' "$release_repo/packages/iac/package.json" || fail 'IaC package version was not updated'
-grep -q '"@marimo-hub/iac": "npm:@marimo-hub/iac@1.2.4"' "$release_repo/examples/integration-iac/deno/deno.json" || \
-	fail 'Deno IaC import version was not updated'
-grep -q '"@marimo-hub/iac/runner": "npm:@marimo-hub/iac@1.2.4/runner"' "$release_repo/examples/integration-iac/deno/deno.json" || \
-	fail 'Deno IaC runner import version was not updated'
 
 for tag in v1.2.3 v0.0.0 v10.20.30; do
 	[[ "$("$repo_root/scripts/release-tag.sh" validate "$tag")" == "${tag#v}" ]] || \

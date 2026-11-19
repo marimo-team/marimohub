@@ -24,7 +24,7 @@ import { notebookBridgePaths, resolveBridgeLauncher } from './notebookBridgePath
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
 import { Millis } from '../../duration';
-import { BadRequestError, PythonEnvironmentSetupError, UnavailableError } from '../../errors';
+import { PythonEnvironmentSetupError, UnavailableError } from '../../errors';
 import type { SourceControlCommitIdentity } from '../../ports/sourceControl';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { effectivePersistenceMode } from './sessionPersistence';
@@ -1601,17 +1601,27 @@ export class SandboxProvisioner {
 		},
 	): Promise<void> {
 		const resolvedEnv = await options.sessionEnv;
-		const gitIdentity =
+		const requestedGitIdentity =
 			(options.launchMode ?? 'edit') === 'edit' ? await options.gitIdentity : undefined;
-		if (
-			gitIdentity &&
-			(!gitIdentity.name.trim() ||
-				!EmailAddressSchema.safeParse(gitIdentity.email).success ||
-				gitIdentity.name.length > 256 ||
-				/[\p{Cc}<>]/u.test(gitIdentity.name + gitIdentity.email))
-		) {
-			throw new BadRequestError('The user profile cannot be used as a Git identity');
-		}
+		const invalidGitIdentity =
+			requestedGitIdentity &&
+			(!requestedGitIdentity.name.trim() ||
+				!EmailAddressSchema.safeParse(requestedGitIdentity.email).success ||
+				requestedGitIdentity.name.length > 256 ||
+				/[\p{Cc}<>]/u.test(requestedGitIdentity.name + requestedGitIdentity.email));
+		// An unusable profile must not block editing; local commits then use the sandbox's Git config.
+		if (invalidGitIdentity)
+			logEvent(
+				{
+					level: 'warn',
+					event: 'sandbox_git_identity_skipped',
+					sandbox_id: options.sandboxId,
+					project_id: options.projectId,
+					notebook_id: options.notebookId,
+				},
+				{ channel: 'warn' },
+			);
+		const gitIdentity = invalidGitIdentity ? undefined : requestedGitIdentity;
 		const kernelAuthToken = options.kernelAuthToken;
 		if (
 			!resolvedEnv &&
@@ -1989,6 +1999,8 @@ export class SandboxProvisioner {
 			sandboxId?: SandboxId;
 			assertOwnership?: () => Promise<void>;
 			publicationToken?: LocalPublicationToken;
+			/** Runs once the artifact bytes are in memory, before publication. */
+			onArtifactsRead?: () => Promise<unknown>;
 		},
 	): Promise<SessionCaptureResult> {
 		const skipped = { status: 'skipped' as const };
@@ -2074,6 +2086,7 @@ export class SandboxProvisioner {
 						verified = undefined;
 					}
 				}
+				await opts?.onArtifactsRead?.();
 				if (artifacts.code === undefined) {
 					return {
 						status: 'failed',

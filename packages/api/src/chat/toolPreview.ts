@@ -105,22 +105,38 @@ export function redactPreviewText(value: string): string {
 	return redactSecretText(value).replaceAll(/[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi, '[URL omitted]');
 }
 
+/** Table rows are positional, so key-based redaction misses credential-named columns. */
+function redactTableRows(columns: unknown[], rows: unknown[]): unknown[] {
+	const hidden = columns.map((name) => typeof name === 'string' && isPrivateKey(name));
+	if (!hidden.includes(true)) return rows;
+	return rows.map((row) =>
+		Array.isArray(row) ? row.map((cell, index) => (hidden[index] ? '[Redacted]' : cell)) : row,
+	);
+}
+
 /**
- * Redact credential-like keys and inline secrets everywhere in a tool result,
- * keeping payloads such as code or output intact. Saved observations use this:
- * the model needs the data back on resume, but the record must not keep secrets.
+ * Redact credential-like keys, credential-named table columns, and inline
+ * secrets everywhere in a tool result, keeping payloads such as code or output
+ * intact. Saved observations use this: the model needs the data back on
+ * resume, but the record must not keep secrets.
  */
 export function redactSecrets(value: unknown, depth = 0): unknown {
 	if (depth > 12) return value;
 	if (typeof value === 'string') return redactSecretText(value);
 	if (Array.isArray(value)) return value.map((item) => redactSecrets(item, depth + 1));
-	if (value !== null && typeof value === 'object')
+	if (value !== null && typeof value === 'object') {
+		const record = value as Record<string, unknown>;
+		const table =
+			Array.isArray(record.columns) && Array.isArray(record.rows)
+				? { ...record, rows: redactTableRows(record.columns, record.rows) }
+				: record;
 		return Object.fromEntries(
-			Object.entries(value).map(([key, child]) => [
+			Object.entries(table).map(([key, child]) => [
 				key,
 				isPrivateKey(key) ? '[Redacted]' : redactSecrets(child, depth + 1),
 			]),
 		);
+	}
 	return value;
 }
 
@@ -281,13 +297,11 @@ export function toolOutputPreview(value: unknown): string {
 		return redacted.slice(0, limit);
 	};
 	const columns = data.columns.slice(0, 50).map((name) => shorten(name, 100));
-	const rows = data.rows
-		.slice(0, 100)
+	const rows = redactTableRows(data.columns, data.rows.slice(0, 100))
 		.filter((row) => Array.isArray(row))
 		.map((row) => {
 			if (row.length !== data.columns.length) contentTruncated = true;
 			return columns.map((_, index) => {
-				if (isPrivateKey(data.columns[index])) return '[Redacted]';
 				const cell = row[index];
 				if (cell === null || cell === undefined) return null;
 				if (typeof cell === 'number' || typeof cell === 'boolean') return cell;

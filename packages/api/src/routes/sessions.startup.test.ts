@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { createServices } from '@marimo-hub/core';
+import { createServices, UnavailableError } from '@marimo-hub/core';
 import { backgroundWorkFrom } from '@marimo-hub/core/ports/background-work';
 import type { BackgroundWork } from '@marimo-hub/core/ports/background-work';
 import type { SessionId } from '@marimo-hub/core';
@@ -349,3 +349,56 @@ it.each(['before', 'after', 'stalled'] as const)(
 		expect(stored[0]).toMatchObject({ status: 'running', startup: { phase: 'starting' } });
 	},
 );
+
+function errorFrom(body: string) {
+	const data = body
+		.split('\n\n')
+		.find((event) => event.startsWith('event: error\n'))!
+		.split('\ndata: ')[1];
+	return (JSON.parse(data) as { error: Record<string, unknown> }).error;
+}
+
+it('logs an unexpected in-stream failure and cites the request id', async () => {
+	const env = await fixture();
+	const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+	vi.spyOn(env.compute, 'create').mockImplementation(() => {
+		throw new Error('provider secret detail');
+	});
+	const response = await env.request('POST', env.path, undefined, {
+		...headers,
+		'X-Request-Id': 'startup-request-1',
+	});
+	expect(response.status).toBe(200);
+	const body = await response.text();
+	expect(errorFrom(body)).toEqual({
+		code: 'INTERNAL_ERROR',
+		message: 'Internal error — ref startup-request-1',
+		status: 500,
+	});
+	expect(body).not.toContain('provider secret detail');
+	const logged = log.mock.calls
+		.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+		.find((entry) => entry.event === 'request_error');
+	expect(logged).toMatchObject({
+		request_id: 'startup-request-1',
+		status: 500,
+		project_id: env.project.id,
+		notebook_id: env.notebook.id,
+		error: expect.objectContaining({ message: 'provider secret detail' }),
+	});
+});
+
+it('carries the retry hint for a retriable in-stream failure', async () => {
+	const env = await fixture();
+	vi.spyOn(console, 'log').mockImplementation(() => {});
+	vi.spyOn(env.compute, 'create').mockImplementation(() => {
+		throw new UnavailableError('No sandbox capacity');
+	});
+	const response = await env.request('POST', env.path, undefined, headers);
+	expect(errorFrom(await response.text())).toEqual({
+		code: 'SERVICE_UNAVAILABLE',
+		message: 'No sandbox capacity',
+		status: 503,
+		retry_after_ms: 2000,
+	});
+});

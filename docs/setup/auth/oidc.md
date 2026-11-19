@@ -390,12 +390,15 @@ MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS=marimohub-prod=edit,marimohub-repo
 ```
 
 Mappings are case-sensitive and add the preset's actions to the token's grants.
-Startup rejects built-in scope overrides, malformed pairs, unknown presets,
-invalid scope names, and duplicate scopes.
+Startup rejects malformed pairs, unknown presets, invalid scope names, and
+duplicate scopes. It also rejects these reserved scopes:
 
-Use dedicated Hub scopes, not identity scopes such as `openid`, `profile`, or
-`email`. Mappings apply to every otherwise-valid token with that scope,
-regardless of the requesting OAuth client.
+- any scope that starts with `marimohub:`
+- `mcp:tools`
+- the identity scopes `openid`, `profile`, `email`, and `offline_access`
+
+Use dedicated Hub scopes. A mapping applies to every otherwise-valid token with
+that scope, from any OAuth client.
 
 Discovery metadata and MCP challenges advertise only built-in scopes; clients
 must request custom scopes explicitly. MCP still requires `mcp:tools`.

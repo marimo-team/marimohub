@@ -189,6 +189,41 @@ describe('capture failure diagnostics and recovery', () => {
 		expect(f.resume).toHaveBeenCalledOnce();
 	});
 
+	it.each([false, true])(
+		'resumes a background capture before publication (retainRuntime: %s)',
+		async (retainRuntime) => {
+			const f = await coordinatorFixture();
+			const order: string[] = [];
+			f.resume.mockImplementation(async () => {
+				order.push('resume');
+			});
+			const commit = f.notebooks.commitSession.bind(f.notebooks);
+			vi.spyOn(f.notebooks, 'commitSession').mockImplementation(async (...args) => {
+				order.push('commit');
+				return commit(...args);
+			});
+			const put = f.bucket.put.bind(f.bucket);
+			vi.spyOn(f.bucket, 'put').mockImplementation((key, value, options) => {
+				if (key === f.nb.source) order.push('put');
+				return put(key, value, options);
+			});
+			const result = await f.coordinator.capture(f.session, f.instance, {
+				retainRuntime,
+				includeWorkspace: false,
+			});
+			expect(result.critical.status).toBe('durable');
+			if (retainRuntime) {
+				expect(result.runtimeState).toBe('paused');
+				expect(order).not.toContain('resume');
+			} else {
+				expect(result.runtimeState).toBe('running');
+				expect(order[0]).toBe('resume');
+				expect(order.filter((step) => step === 'resume')).toHaveLength(1);
+				expect(order).toContain('put');
+			}
+		},
+	);
+
 	it('preserves durable publication when the runtime disappears during resume', async () => {
 		const f = await coordinatorFixture();
 		const report = vi.spyOn(operationalLog, 'logOperationalError');

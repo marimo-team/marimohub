@@ -1067,8 +1067,6 @@ export class WorkingBranchService {
 				publicationActor.userId !== actor
 			)
 				throw new ForbiddenError('Only the original author can finish opening this pull request');
-			if (!record.change_request_actor && publicationActor)
-				await update((current) => ({ ...current, change_request_actor: publicationActor }));
 			const { writer } = this.provider(
 				record.provider,
 				source.repo,
@@ -1098,6 +1096,9 @@ export class WorkingBranchService {
 			const { meta } = await this.deps.notebooks.getNotebook(pid, nid);
 			await check();
 			await authorize?.();
+			// Pin only once a PR may exist, so earlier failures leave other managers free to retry.
+			if (!record.change_request_actor && publicationActor)
+				await update((current) => ({ ...current, change_request_actor: publicationActor }));
 			const result = await writer.openBranchChangeRequest({
 				repository: source.repo,
 				headBranch: source.branch,

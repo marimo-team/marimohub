@@ -207,11 +207,24 @@ describe('SandboxProvisioner', () => {
 		{ name: '', email: 'ada@example.com' },
 		{ name: 'Ada\nOther', email: 'ada@example.com' },
 		{ name: 'Ada', email: 'ada@example.com\n' },
-	])('rejects malformed Git identity', async (gitIdentity) => {
-		const { instance } = makeFakeSandbox();
-		await expect(
-			new SandboxProvisioner(fakeComputeFrom(instance)).prepare({ ...startupOptions, gitIdentity }),
-		).rejects.toThrow('cannot be used as a Git identity');
+		{ name: 'Ada <admin>', email: 'ada@example.com' },
+		{ name: 'Ada', email: '' },
+		{ name: 'Ada', email: 'proxy-user' },
+	])('starts without an unusable Git identity: %j', async (gitIdentity) => {
+		const { instance, calls } = makeFakeSandbox();
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			await new SandboxProvisioner(fakeComputeFrom(instance)).prepare({
+				...startupOptions,
+				bucketHandle: new MemoryBucket(),
+				workspaceLoadMode: 'copy-only',
+				gitIdentity,
+			});
+			expect(calls.setEnvVars.some((vars) => 'GIT_AUTHOR_NAME' in vars)).toBe(false);
+			expect(warn).toHaveBeenCalledWith(expect.stringContaining('sandbox_git_identity_skipped'));
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	it('boots before preparation and preserves cold adapter diagnostics', async () => {

@@ -95,16 +95,15 @@ who started them; nobody else can read or change them, and service accounts cann
 use chat.
 
 The assistant has the same tools as the [MCP server](./mcp.md), under the caller's
-project permissions. Read-only tools run freely, except the data preview tools below.
-Tools that change something show a consent card: allow once, always allow that kind of action in this project, or refuse.
-Consent cards show the code or source the call would submit.
-Of the read-only [data discovery tools](./mcp.md#discover-data), only `preview_table` and
-`preview_object` show a consent card. They can start preview compute and send table rows or
-object content to the model provider. Their consent can be remembered. Irreversible actions
-(`update_notebook`, `sync_notebook_source`, `delete_notebook`, `stop_session`) and
-`execute_code` always ask; the other actions can be remembered. Remembered grants are
-managed under **Permissions** on the chat page or with the `project_conversations`
-MCP tool.
+project permissions. Read-only tools run without consent, except
+[data discovery tools](./mcp.md#discover-data) that can start compute and send data to the model provider.
+
+Tools that change something show a consent card: allow once, always allow that kind of action
+in this project, or refuse. Consent cards show the code or source that the call submits.
+Irreversible actions (`update_notebook`, `sync_notebook_source`, `delete_notebook`,
+`stop_session`), `execute_code`, and `create_branch_notebook` always ask.
+Chat can remember consent for the other actions. Manage remembered grants under
+**Permissions** on the chat page or with the `project_conversations` MCP tool.
 
 Replies keep running if the browser disconnects: a reload re-attaches to the live
 stream on the same instance and otherwise shows the saved progress. Stop requests and

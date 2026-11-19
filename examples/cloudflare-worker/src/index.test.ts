@@ -894,3 +894,23 @@ it('registers manual migration work on the request invocation without awaiting i
 	gate.resolve(true);
 	await Promise.allSettled(tasks);
 });
+
+it('logs a rejected manual migration attempt instead of leaving it unhandled', async () => {
+	const env = { ...makeEnv(), MARIMOHUB_SUPER_ADMINS: ACTOR };
+	vi.spyOn(MigrationService.prototype, 'tick').mockRejectedValue(new Error('batch failed'));
+	const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+	const tasks: Promise<unknown>[] = [];
+	const ctx = makeContext(vi.fn((work) => tasks.push(work)));
+	const response = await worker.fetch(
+		new Request('https://hub.example.com/api/v1/admin/migrations/run', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: '{}',
+		}),
+		env,
+		ctx,
+	);
+	expect(response.status).toBe(202);
+	await Promise.all(tasks);
+	expect(error).toHaveBeenCalledWith(expect.stringContaining('"event":"migration_attempt_failed"'));
+});

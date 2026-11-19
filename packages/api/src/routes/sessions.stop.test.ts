@@ -82,6 +82,18 @@ it('returns a sanitized retained outcome, replays the header key, and requires a
 	expect(stored.stop?.requested_by).toBe(ACTOR);
 });
 
+it('treats a retained stop whose sandbox is already reclaimed as stopped', async () => {
+	const env = await fixture();
+	await expectError(await env.stop('first'), 409, 'SESSION_PERSISTENCE_REQUIRED');
+	await env.sessions.markSandboxReclaimed(
+		env.project.id,
+		env.session.session_id,
+		new Date().toISOString(),
+	);
+	await expectOk(await env.stop('first'), 200);
+	expect(env.calls.destroy).toBe(0);
+});
+
 it('returns 202 for an owned attempt and rejects a force upgrade while it is running', async () => {
 	const env = await fixture();
 	const pending = await env.sessions.requestStop(env.project.id, env.session.session_id, {

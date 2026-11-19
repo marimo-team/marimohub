@@ -278,18 +278,35 @@ it.each([true, false])(
 	},
 );
 
-it('rejects totals below committed visits and waiting batches that claim progress', async () => {
-	for (const result of [
-		{ done: true, progress: { delta: 3, total: 2 } },
-		{ done: false, waiting_reason: 'waiting_for_initialization', progress: { delta: 0 } },
-	] as const) {
-		const bucket = new MemoryBucket();
-		const service = new MigrationService(bucket, [
-			{ ...definition(), runBatch: async () => result },
-		]);
-		await expect(service.tick()).rejects.toThrow();
-		expect((await service.inspect()).rows[0].progress).toBeUndefined();
-	}
+it('clamps totals below committed visits without failing the batch', async () => {
+	const bucket = new MemoryBucket();
+	const batch = vi.fn<BackgroundMigration['runBatch']>(async ({ cursor }) =>
+		cursor === 'next'
+			? { done: true, progress: { delta: 1, total: 2 } }
+			: { done: false, cursor: 'next', progress: { delta: 2, total: 4 } },
+	);
+	const service = new MigrationService(bucket, [{ ...definition(), runBatch: batch }]);
+	await service.tick();
+	await service.tick();
+	const [row] = (await service.inspect()).rows;
+	expect(row.status).toBe('completed');
+	expect(row.progress).toEqual({ processed: 3, total: 3, partial: false });
+});
+
+it('rejects waiting batches that claim progress', async () => {
+	const bucket = new MemoryBucket();
+	const service = new MigrationService(bucket, [
+		{
+			...definition(),
+			runBatch: async () => ({
+				done: false,
+				waiting_reason: 'waiting_for_initialization',
+				progress: { delta: 0 },
+			}),
+		},
+	]);
+	await expect(service.tick()).rejects.toThrow();
+	expect((await service.inspect()).rows[0].progress).toBeUndefined();
 });
 
 it('stops polling when only retired history is unreadable', async () => {

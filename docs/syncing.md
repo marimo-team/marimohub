@@ -58,6 +58,7 @@ API tokens and sync tokens are not interchangeable.
 Set `MARIMOHUB_GIT_SANDBOX_IDENTITY=user` to use the hub profile name and email
 for local commits in new edit sessions. The default, `none`, leaves Git identity
 unchanged. App and job sessions do not receive this identity.
+If the profile name or email is unusable, the hub logs a warning and starts the editor without a Git identity.
 
 This attribution is editable metadata, not a signature or GitHub authorization.
 Published commits expose the name and email. Shared editors and agents use the session creator's identity.
@@ -477,10 +478,13 @@ Archives default to `tar.gz`. Use `--format zip` for ZIP.
 inherit rules from the checkout root through the selected folder. Rules remain
 relative to their own directory. `.gitignore` does not apply. Exclude secrets and build output explicitly: hidden files are included.
 The CLI excludes `.git` and rejects symlinks and special files.
+It also skips [files with credential-like names](./cli.md#push-a-checkout), such as `.env` and SSH keys.
 
 Limits are 1,000 files, 25 MiB per file, and 100 MiB total.
 To [send multi-file edits back to Git](#include-git-metadata-for-proposals), use `--include-git`
 with an empty `root-path` and a shallow checkout without stored credentials.
+The CLI [checks the Git configuration for credentials](./cli.md#push-a-checkout), but not other files in `.git`.
+Check out with `persist-credentials: false`.
 Linked worktrees are unsupported.
 
 ### Several apps in one repository
@@ -851,6 +855,8 @@ The provider identity must also have repository access. These policies do not re
 
 `MARIMOHUB_SOURCE_CONTROL_GITHUB_PUBLISH_ACTOR` selects the identity for new interactive commits and PRs.
 The default, `app`, uses the shared App installation. The `user` value requires the acting user's connected GitHub account and verified commits.
+In `user` mode, a capture or publication fails unless the acting user has a connected account.
+Service accounts cannot connect an account, so they cannot publish.
 Pull sync, previews, and background jobs retain the App identity.
 You can combine either mode with [local Git identity](#local-git-identity).
 
@@ -878,4 +884,8 @@ GitHub labels also depend on vigilant mode and repository policy.
 
 Retries retain their original connection and verification requirement. A replacement connection cannot take over an unfinished operation.
 If the original connection is unusable, start a new operation from the saved recovery payload.
+A [working notebook](#working-notebooks) pull request pins its actor immediately before the hub sends it to GitHub.
+Before that point, any project manager can retry a failed request. Afterward, the actor cannot change.
+The hub reuses the user's GitHub token for up to 30 seconds per publish operation.
+A disconnect or suspension can therefore take up to 30 seconds to stop an active publication.
 See [Security](security.md#personal-github-publishing) for trust boundaries and [Operations](operations.md#personal-github-credentials) for configuration changes and recovery.

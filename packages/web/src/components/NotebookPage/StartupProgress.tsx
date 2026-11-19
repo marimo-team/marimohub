@@ -1,6 +1,6 @@
 import { Check, LoaderCircle } from 'lucide-react';
-import type { SandboxStartupSnapshot } from '@marimo-hub/core/ports/sandbox';
 import { useNow } from '@/hooks/useNow';
+import type { StartupProgressView } from '@/hooks/useNotebookSession';
 import { cn } from '@/lib/utils';
 import { SANDBOX_STARTUP_PHASES } from '@marimo-hub/core/constants';
 import type { SandboxStartupPhase } from '@marimo-hub/core/constants';
@@ -20,7 +20,7 @@ const stages: Record<SandboxStartupPhase, { label: string; description: string }
 	},
 };
 
-export function StartupProgress({ progress }: { progress: SandboxStartupSnapshot }) {
+export function StartupProgress({ progress }: { progress: StartupProgressView }) {
 	const now = useNow();
 	const current = SANDBOX_STARTUP_PHASES.indexOf(progress.phase);
 	return (
@@ -69,11 +69,9 @@ export function StartupProgress({ progress }: { progress: SandboxStartupSnapshot
 										{stages[phase].label}
 									</span>
 									{active && (
-										<span
-											className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground tabular-nums"
-											aria-label="Time in current step"
-										>
-											{Math.max(0, Math.floor((now - Date.parse(progress.started_at)) / 1000))}s
+										<span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground tabular-nums">
+											<span className="sr-only">Time in current step: </span>
+											{Math.max(0, Math.floor((now - progress.receivedAt) / 1000))}s
 										</span>
 									)}
 								</div>

@@ -279,7 +279,8 @@ Use `stop_session` to stop a session explicitly.
 ## Discover data
 
 These read-only tools work in MCP clients and [project chat](./ai.md#project-chat).
-They share REST authorization, limits, cancellation, and audit behavior.
+They run the same authorization checks and row, byte, and time limits as the REST data browser.
+`run_query` writes the same audit event as REST SQL.
 
 | Tool                         | Purpose                                                                                    |
 | ---------------------------- | ------------------------------------------------------------------------------------------ |
@@ -297,7 +298,7 @@ They share REST authorization, limits, cancellation, and audit behavior.
 | `get_object_metadata`        | Read metadata, tags, and an available loading snippet.                                     |
 | `preview_object`             | Preview text or rows, or describe an image.                                                |
 
-`list_integrations` requires `integration.read`. SQL requires `integration.manage` (admin or above).
+`list_integrations` requires `integration.read`. SQL requires `integration.manage` (manager or above).
 Other tools require `integration.use` (editor or above). Token grants must permit the action in the selected project.
 
 Except for integration listing, these tools require the [data browser](./integrations.md#browse-data).
@@ -319,13 +320,21 @@ Paged lists return `items` and `next_cursor`. To continue, pass `next_cursor` as
 | Profile `sample_rows`                          | 20      | 100      |
 
 Table search stops at 1,000 entries, 32 browse calls, or 6.5 seconds. It returns `coverage.complete` and `coverage.reason`.
-If coverage is incomplete, narrow the namespace. Profiles cover at most 50 columns and are not whole-table estimates.
+If coverage is incomplete, narrow the namespace.
+Table search allows 64 uncached pages per user per minute, separate from the browse budget.
+Cached pages do not count.
+Profiles cover at most 50 columns and are not whole-table estimates.
 Previews also enforce [configured byte limits](./configuration.md#integrations). Unsupported object formats return a reason.
 Image previews return content type and size. Images are visible on the Data page.
 
-Chat asks for consent before SQL, profiling, or previews send data to the model. SQL asks on every call.
-Chat caps pages at 100 items. Saved table previews fit within 2,000 characters, with at most 100 rows and 50 columns.
-They redact credential-like columns and inline secrets, omit nested values, and label partial results.
+In chat, `run_query`, `profile_table`, `preview_table`, and `preview_object` ask for consent
+before they send data to the model. `run_query` asks on every call.
+Chat can remember consent for each of the other three tools in the project.
+
+Chat caps pages at 100 items. Saved table previews fit in 2,000 characters, with at most 100 rows and 50 columns.
+They omit nested values and label partial results.
+Transcript previews and saved conversations redact credential-named columns and keys, plus inline secrets.
+The model receives unredacted tool results.
 
 ## Project chat
 

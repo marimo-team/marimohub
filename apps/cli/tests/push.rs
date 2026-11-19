@@ -257,3 +257,248 @@ fn include_git_rejects_credentials_in_fetch_and_push_urls() {
             .stderr(predicate::str::contains(remote).not());
     }
 }
+
+fn git_repo(directory: &std::path::Path, commands: &[&[&str]]) {
+    for args in std::iter::once(&["init", "--quiet"][..]).chain(commands.iter().copied()) {
+        assert!(std::process::Command::new("git")
+            .current_dir(directory)
+            .args(["-c", "core.fsmonitor=false"])
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    }
+}
+
+#[test]
+fn include_git_rejects_credentials_in_insteadof_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    git_repo(
+        dir.path(),
+        &[&[
+            "config",
+            "--local",
+            "url.https://x-access-token:ghs_secret@github.com/.insteadOf",
+            "https://github.com/",
+        ]],
+    );
+    command(dir.path())
+        .args(["--include-git", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("remove credentials from Git"))
+        .stderr(predicate::str::contains("ghs_secret").not());
+}
+
+#[test]
+fn include_git_rejects_includes_inside_git_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    git_repo(
+        dir.path(),
+        &[&["config", "--local", "include.path", "creds"]],
+    );
+    std::fs::write(
+        dir.path().join(".git/creds"),
+        "[http]\n\textraheader = AUTHORIZATION: basic secret\n",
+    )
+    .unwrap();
+    command(dir.path())
+        .args(["--include-git", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "remove the include of a file inside",
+        ));
+}
+
+#[test]
+fn include_git_screens_submodule_configs() {
+    let dir = tempfile::tempdir().unwrap();
+    git_repo(dir.path(), &[]);
+    let module = dir.path().join(".git/modules/libs/inner");
+    std::fs::create_dir_all(&module).unwrap();
+    std::fs::write(module.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(
+        module.join("config"),
+        "[remote \"origin\"]\n\turl = https://token@example.com/org/inner.git\n",
+    )
+    .unwrap();
+    command(dir.path())
+        .args(["--include-git", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(".git/modules/libs/inner/config"))
+        .stderr(predicate::str::contains("token@").not());
+}
+
+#[test]
+fn include_git_accepts_clean_checkout() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("app.py"), "print(1)").unwrap();
+    git_repo(
+        dir.path(),
+        &[
+            &[
+                "config",
+                "--local",
+                "remote.origin.url",
+                "https://github.com/org/repo.git",
+            ],
+            &[
+                "-c",
+                "user.name=ci",
+                "-c",
+                "user.email=ci@example.com",
+                "add",
+                "app.py",
+            ],
+            &[
+                "-c",
+                "user.name=ci",
+                "-c",
+                "user.email=ci@example.com",
+                "commit",
+                "--quiet",
+                "-m",
+                "init",
+            ],
+        ],
+    );
+    let commit = String::from_utf8(
+        std::process::Command::new("git")
+            .current_dir(dir.path())
+            .args(["-c", "core.fsmonitor=false", "rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    cargo_bin_cmd!("mohub")
+        .current_dir(dir.path())
+        .env("MARIMOHUB_NO_UPDATE_CHECK", "true")
+        .args([
+            "--output",
+            "json",
+            "notebooks",
+            "push",
+            "--pid",
+            "proj-test",
+            "--nid",
+            "nb-test",
+            "--branch",
+            "main",
+            "--commit",
+            commit.trim(),
+            "--include-git",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(".git/config"));
+}
+
+#[test]
+fn skips_credential_files_unless_opted_in() {
+    let dir = tempfile::tempdir().unwrap();
+    for path in [
+        "app.py",
+        ".env",
+        ".env.local",
+        ".netrc",
+        "key.pem",
+        "id_ed25519",
+        "gha-creds-0123abcd.json",
+    ] {
+        std::fs::write(dir.path().join(path), "contents").unwrap();
+    }
+    let output = command(dir.path())
+        .arg("--dry-run")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "skipping credential-like file .netrc",
+        ))
+        .get_output()
+        .stdout
+        .clone();
+    let plan: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(plan["files"], serde_json::json!(["app.py"]));
+    assert_eq!(
+        plan["skipped_credential_files"],
+        serde_json::json!([
+            ".env",
+            ".env.local",
+            ".netrc",
+            "gha-creds-0123abcd.json",
+            "id_ed25519",
+            "key.pem"
+        ])
+    );
+    let output = command(dir.path())
+        .args(["--dry-run", "--include-credential-files"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("skipping").not())
+        .get_output()
+        .stdout
+        .clone();
+    let plan: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(plan["files"].as_array().unwrap().len(), 7);
+    assert_eq!(plan["skipped_credential_files"], serde_json::json!([]));
+}
+
+#[test]
+fn bulk_push_forwards_credential_file_opt_in() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("app.py"), "print(1)").unwrap();
+    std::fs::write(dir.path().join(".env"), "TOKEN=secret").unwrap();
+    std::fs::write(
+        dir.path().join("apps.json"),
+        r#"[{"path":"","pid":"p","nid":"n","secret":"SYNC_TEST"}]"#,
+    )
+    .unwrap();
+    let bulk = |extra: &[&str]| {
+        let output = cargo_bin_cmd!("mohub")
+            .current_dir(dir.path())
+            .env("MARIMOHUB_NO_UPDATE_CHECK", "true")
+            .args([
+                "--output",
+                "json",
+                "notebooks",
+                "push",
+                "--manifest",
+                "apps.json",
+            ])
+            .args([
+                "--repo",
+                "org/repo",
+                "--branch",
+                "main",
+                "--commit",
+                "abc123",
+                "--dry-run",
+            ])
+            .args(extra)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice::<serde_json::Value>(&output).unwrap()["notebooks"][0]["data"]
+            .clone()
+    };
+    let default = bulk(&[]);
+    assert_eq!(
+        default["skipped_credential_files"],
+        serde_json::json!([".env"])
+    );
+    assert!(!default["files"]
+        .as_array()
+        .unwrap()
+        .contains(&".env".into()));
+    let opted_in = bulk(&["--include-credential-files"]);
+    assert!(opted_in["files"]
+        .as_array()
+        .unwrap()
+        .contains(&".env".into()));
+}

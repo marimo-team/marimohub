@@ -15,17 +15,25 @@ export async function searchIntegrationTables(
 	const items: { integration_id: string; namespace: string[]; table: string }[] = [];
 	let calls = 0;
 	let scanned = 0;
-	let reason: 'limit' | 'bytes' | 'budget' | 'unavailable' | 'timeout' | null = null;
+	let reason: 'limit' | 'bytes' | 'budget' | 'cycle' | 'timeout' | null = null;
 	const output = () => ({
 		items,
 		coverage: { complete: reason === null, reason },
 		scanned_entries: scanned,
 		browse_calls: calls,
 	});
+	const timeout = new UnavailableError('Table search timed out');
 	try {
 		await withDeadline(
 			async (signal) => {
-				const active = { ...target, signal };
+				// Authorize once; page loads then charge the separate `tableSearch`
+				// budget so a cold search cannot exhaust the user's `browse` budget.
+				const stateToken = await browse.authorizeCatalogBrowse({ ...target, signal });
+				const active = {
+					...target,
+					signal,
+					authorizedCatalog: { stateToken, budget: 'tableSearch' as const },
+				};
 				type Work = { kind: 'namespaces' | 'tables'; namespace?: string[]; cursor?: string };
 				const queue: Work[] = input.namespace
 					? [{ kind: 'tables', namespace: input.namespace }]
@@ -42,7 +50,7 @@ export async function searchIntegrationTables(
 					const work = queue.shift()!;
 					const workKey = JSON.stringify(work);
 					if (seen.has(workKey)) {
-						reason = 'unavailable';
+						reason = 'cycle';
 						break;
 					}
 					seen.add(workKey);
@@ -103,13 +111,13 @@ export async function searchIntegrationTables(
 			{
 				timeoutMs: 6500,
 				signal: target.signal,
-				timeoutError: () => new UnavailableError('Table search timed out'),
+				timeoutError: () => timeout,
 			},
 		);
 	} catch (error) {
 		target.signal?.throwIfAborted();
 		if (error instanceof ResourceExhaustedError) reason = 'budget';
-		else if (error instanceof UnavailableError) reason = 'timeout';
+		else if (error === timeout) reason = 'timeout';
 		else throw error;
 	}
 	return boundedData(output());

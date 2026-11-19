@@ -90,8 +90,11 @@ Resource groups:
 
 - **Sessions** — list, create, inspect, heartbeat, and stop kernel sessions.
   The session routes also expose editor ownership and exclusive takeover.
+  `POST …/sessions` can [stream startup progress](#session-startup-progress).
   `DELETE …/sessions/{sid}` defaults to a non-forced stop. Send an `Idempotency-Key`
-  header for transport retries. Without `wait=true`, an accepted attempt returns `202`.
+  header for transport retries. The server also accepts the `request_key` query
+  parameter for compatibility. If you send both, they must match.
+  Without `wait=true`, an accepted attempt returns `202`.
   With `wait=true`, `200` confirms stop, `202` means pending, and
   `409 SESSION_PERSISTENCE_REQUIRED` means saving failed or remains uncertain.
   Read the session's `stop` field before choosing an action. A deliberate retry uses
@@ -133,6 +136,33 @@ Resource groups:
 
 The [MCP server](/mcp) uses `/mcp` with separate OAuth discovery and authorization
 endpoints. These endpoints follow MCP and OAuth protocols rather than the JSON API envelope.
+
+### Session startup progress
+
+`POST /projects/{pid}/notebooks/{nid}/sessions` returns JSON by default. Send
+`Accept: text/event-stream` to receive a server-sent event stream instead.
+After authorization, the stream opens with a `: connected` comment.
+It sends `: keepalive` comments after 15 seconds without data. Each event has an `event:` name
+and a JSON `data:` line, described by the OpenAPI component `SessionStartupEvent`.
+
+| Event      | Data                                                                     |
+| ---------- | ------------------------------------------------------------------------ |
+| `progress` | `{ phase, detail?, started_at, attempt, observed }`. Edit sessions only. |
+| `result`   | `{ success: true, data }`, the same session as the JSON response.        |
+| `error`    | `{ success: false, error: { code, message, status, retry_after_ms? } }`. |
+
+- `phase` is `allocating`, `workspace`, or `starting`. Ignore unknown phases and unknown events.
+- `detail` has at most 240 characters.
+- `attempt` starts at 1 and increments when the sandbox is replaced during the start.
+- `retry_after_ms` is present only for `429` and `503`, where a JSON response sends `Retry-After`.
+
+The stream ends with exactly one `result` or `error` event.
+Failures after authorization arrive as `error` events on an HTTP `200` response.
+Read `error.status` for the failure status. Failures before authorization use JSON error responses.
+After 30 minutes, the stream ends with `STREAM_EXPIRED` (status `408`).
+
+The stream does not replay events or reconnect. After a disconnect, provisioning continues.
+Poll the session for its state.
 
 ## Pagination
 

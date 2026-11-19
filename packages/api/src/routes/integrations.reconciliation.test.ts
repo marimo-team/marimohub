@@ -14,14 +14,14 @@ const desired = {
 		password: 'private-value',
 	},
 };
-async function setup() {
+async function setup(userId = ACTOR) {
 	const bucket = await createInitializedBucket();
 	const integrations = new ProjectIntegrationsStore({
 		bucket,
 		registry: defaultRegistry(),
 		codec: new AesGcmSecretCodec({ kek: 'sFjp5R6eWYvc9SGtfeYEsQQlMKB8MfP4FdFAD7JAjsw=' }),
 	});
-	const { request } = createTestApi({ bucket, userId: ACTOR, deps: { integrations } });
+	const { request } = createTestApi({ bucket, userId, deps: { integrations } });
 	const project = await expectOk<{ id: string }>(
 		await request('POST', '/projects', { name: 'P', description: '' }),
 		201,
@@ -158,4 +158,37 @@ it('rejects a stale existing revision without writing or auditing an update', as
 		await request('GET', `/projects/${pid}/events`),
 	);
 	expect(events.filter((event) => event.event === 'integration.update')).toHaveLength(1);
+});
+
+it('accepts allow_org_override as an alias and rejects conflicting values', async () => {
+	const { request, path, integrations } = await setup();
+	const plan = vi.spyOn(integrations, 'planReconciliation');
+	await expectOk(await request('POST', `${path}plan`, { ...desired, allow_org_override: true }));
+	expect(plan.mock.calls[0][1]).toMatchObject({ allowOrgOverride: true });
+	expect(plan.mock.calls[0][1]).not.toHaveProperty('allow_org_override');
+	expect(
+		(
+			await request('POST', `${path}plan`, {
+				...desired,
+				allowOrgOverride: true,
+				allow_org_override: false,
+			})
+		).status,
+	).toBe(422);
+	expect(plan).toHaveBeenCalledOnce();
+});
+it('limits plan and apply requests per user with Retry-After', async () => {
+	const { request, path } = await setup(uid('reconcile-budget'));
+	for (let index = 0; index < 119; index++)
+		expect((await request('POST', `${path}plan`, desired)).status).toBe(200);
+	expect(
+		(await request('POST', `${path}apply`, { desired, expected: { state: 'absent' } })).status,
+	).toBe(200);
+	for (const response of [
+		await request('POST', `${path}plan`, desired),
+		await request('POST', `${path}apply`, { desired, expected: { state: 'absent' } }),
+	]) {
+		expect(response.status).toBe(429);
+		expect(response.headers.get('Retry-After')).toBe('5');
+	}
 });

@@ -59,6 +59,8 @@ import {
 
 export const DEFAULT_PROPOSAL_PAYLOAD_RETENTION_MS = Millis.hours(24);
 export const DEFAULT_PROPOSAL_PAYLOAD_SWEEP_GRACE_MS = Millis.hours(1);
+const PUBLICATION_LEASE_MS = 120_000;
+const PUBLICATION_LEASE_RENEW_BELOW_MS = 60_000;
 
 export interface CaptureProposalInput {
 	projectId: ProjectId;
@@ -574,16 +576,36 @@ export class NotebookProposalService {
 		await modify((value) => {
 			if (value.publication_lease && value.publication_lease.until > Date.now())
 				throw new ConflictError('Proposal publication is already running');
-			return { ...value, publication_lease: { owner, until: Date.now() + 120_000 } };
+			return { ...value, publication_lease: { owner, until: Date.now() + PUBLICATION_LEASE_MS } };
 		});
-		const checkPublication = async () => {
-			await input.authorize?.();
-			await modify((value) => {
-				if (value.publication_lease?.owner !== owner || value.publication_lease.until <= Date.now())
-					throw new ConflictError('Proposal publication lease expired');
-				return { ...value, publication_lease: { owner, until: Date.now() + 120_000 } };
-			});
-		};
+		let pending: Promise<void> | undefined;
+		// Per-file provider requests share this fence; renewing on each would contend on one CAS record.
+		const checkPublication = () =>
+			(pending ??= (async () => {
+				try {
+					await input.authorize?.();
+					const object = await this.bucket.get(key);
+					const lease = object
+						? (await readStored(ProposalPublicationSchema, object, key)).publication_lease
+						: undefined;
+					if (object && (lease?.owner !== owner || lease.until <= Date.now()))
+						throw new ConflictError('Proposal publication lease expired');
+					if (lease && lease.until - Date.now() > PUBLICATION_LEASE_RENEW_BELOW_MS) return;
+					await modify((value) => {
+						if (
+							value.publication_lease?.owner !== owner ||
+							value.publication_lease.until <= Date.now()
+						)
+							throw new ConflictError('Proposal publication lease expired');
+						return {
+							...value,
+							publication_lease: { owner, until: Date.now() + PUBLICATION_LEASE_MS },
+						};
+					});
+				} finally {
+					pending = undefined;
+				}
+			})());
 		const preparation: PreparationCheckpoint = {
 			assertCurrent: checkPublication,
 			read: async () =>

@@ -122,6 +122,54 @@ describe('WorkingBranchService', { timeout: 60_000 }, () => {
 		expect(writer.openBranchChangeRequest).not.toHaveBeenCalled();
 	});
 
+	it('pins the PR actor only at dispatch so a failed attempt does not block other managers', async () => {
+		registry.publicationActor = vi.fn(async (_provider, userId) => ({
+			kind: 'user' as const,
+			verification: 'required' as const,
+			userId,
+			connectionId: `connection-${userId}`,
+			generation: 'generation',
+			accountId: '123',
+		}));
+		const { base_branch, source } = await new WorkingBranchStore(env.bucket).read(pid, nid);
+		const { branch } = source;
+		vi.mocked(writer.inspectBranch).mockImplementation(async ({ changeRequestNumber }) => ({
+			headCommit: 'base',
+			containsCommit: false,
+			...(changeRequestNumber
+				? {
+						changeRequest: {
+							number: changeRequestNumber,
+							url: `https://github.com/owner/repo/pull/${changeRequestNumber}`,
+							state: 'open' as const,
+							headBranch: branch,
+							baseBranch: base_branch,
+						},
+					}
+				: {}),
+		}));
+		vi.mocked(writer.inspectBranch).mockRejectedValueOnce(new Error('GitHub unavailable'));
+		await expect(service.openChangeRequest(pid, nid, ACTOR, {})).rejects.toThrow(
+			'GitHub unavailable',
+		);
+		expect((await new WorkingBranchStore(env.bucket).read(pid, nid)).change_request_actor).toBe(
+			undefined,
+		);
+		vi.mocked(writer.openBranchChangeRequest).mockResolvedValueOnce({
+			number: 2,
+			url: 'https://github.com/owner/repo/pull/2',
+			headBranch: branch,
+			headCommit: 'base',
+		});
+		const other = uid('user-other');
+		await expect(service.openChangeRequest(pid, nid, other, {})).resolves.toMatchObject({
+			number: 2,
+		});
+		expect(
+			(await new WorkingBranchStore(env.bucket).read(pid, nid)).change_request_actor,
+		).toMatchObject({ userId: other });
+	});
+
 	function write(path: string, content: string | Uint8Array) {
 		tree.set(path, typeof content === 'string' ? encode(content) : content);
 	}
@@ -242,6 +290,29 @@ describe('WorkingBranchService', { timeout: 60_000 }, () => {
 		expect(writer.advanceBranch).toHaveBeenCalledTimes(1);
 		const recovered = unzipSync(await service.recovery(pid, nid, result.id));
 		expect(new TextDecoder().decode(recovered['files/dashboard.py'])).toBe('saved remotely');
+	});
+	it('coalesces concurrent lease checks and renews only when under a minute remains', async () => {
+		const store = new WorkingBranchStore(env.bucket);
+		const key = workingBranchPaths(pid, nid).head;
+		const put = vi.spyOn(env.bucket, 'put');
+		const get = vi.spyOn(env.bucket, 'get');
+		let now = Date.now();
+		vi.spyOn(Date, 'now').mockImplementation(() => now);
+		await store.withLease(pid, nid, async (check) => {
+			const headWrites = () => put.mock.calls.filter(([target]) => target === key).length;
+			const headReads = () => get.mock.calls.filter(([target]) => target === key).length;
+			const writes = headWrites();
+			const reads = headReads();
+			await Promise.all(Array.from({ length: 40 }, () => check()));
+			expect(headWrites()).toBe(writes);
+			expect(headReads() - reads).toBe(1);
+			now += 61_000;
+			await Promise.all(Array.from({ length: 40 }, () => check()));
+			expect(headWrites()).toBe(writes + 1);
+			expect((await store.read(pid, nid)).lease!.until).toBe(now + 120_000);
+			await store.update(pid, nid, (record) => ({ ...record, state: 'deleted' }));
+			await expect(check()).rejects.toThrow('lost its claim');
+		});
 	});
 	it.each([false, true])(
 		'logs release failure without replacing callback outcome (throws=%s)',

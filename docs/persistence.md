@@ -4,19 +4,26 @@ Recovery uses the last successful save to the configured bucket. A lost sandbox 
 
 ## What is saved
 
-| Content                              | Persistence                                                                                            |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| Notebook source and `pyproject.toml` | Saved periodically and before normal stop. Imported notebooks retain their entrypoint paths.           |
-| HTML and session snapshots           | Saved when available. They may be stale; capture does not force a fresh export.                        |
-| Generated files                      | Saved at teardown with `MARIMOHUB_PERSIST_WORKSPACE=workspace`, subject to exclusions and size limits. |
-| Kernel memory                        | Not preserved. Recovery does not resume arbitrary Python objects or running computations.              |
+| Content                              | Persistence                                                                                        |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| Notebook source and `pyproject.toml` | Saved periodically and before normal stop. Imported notebooks retain their entrypoint paths.       |
+| HTML and session snapshots           | Saved when available. They may be stale; capture does not force a fresh export.                    |
+| Generated files                      | Saved at teardown, subject to exclusions and size limits. See [workspace saves](#workspace-saves). |
+| Kernel memory                        | Not preserved. Recovery does not resume arbitrary Python objects or running computations.          |
 
 App, ephemeral, and remote-source sessions do not write edits back.
 See [configuration](./configuration.md) for workspace limits and exclusions.
 
+### Workspace saves
+
+Editor sessions save the full workspace at teardown when `MARIMOHUB_PERSIST_WORKSPACE=workspace`.
+Notebooks imported from folders always save their workspace at teardown, regardless of this setting.
+Periodic saves and host protocol `/save` requests save only source files.
+
 ## Shutdown and data loss
 
-If required notebook files cannot be saved, a normal editor stop retains the sandbox. Force-stop and provider deletion can lose unsaved changes.
+If required notebook files cannot be saved, a normal editor stop retains the sandbox.
+Force stop and provider deletion can lose unsaved changes.
 Workspace capture is optional: source can be saved even if generated files are not.
 Hub shutdown does not save every live sandbox before exiting.
 

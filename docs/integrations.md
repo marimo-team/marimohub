@@ -245,7 +245,12 @@ Regional, dual-stack, and FIPS service endpoints are supported. Custom endpoints
 Read locations must use ordinary bucket names, not access-point aliases or directory buckets.
 
 The broker uses the server's AWS credential chain and refreshes temporary credentials.
-Configured read prefixes still apply. The hub's `MARIMOHUB_STORAGE_S3_BUCKET` is always blocked.
+The hub's `MARIMOHUB_STORAGE_S3_BUCKET` is always blocked.
+
+> **Security note.** With server ambient credentials on, every project manager can create an
+> integration that reads any bucket the server's AWS identity can read, except the hub bucket.
+> That manager also chooses the read prefixes, so they are not a deployment control. Keep the
+> [setting](./configuration.md#integrations) off unless project managers may use that identity.
 
 This option does not enable standalone S3 SQL, project WIF, or named integration profiles.
 Object browsing has a separate opt-in. Ambient row previews retain the Python sandbox's identity.

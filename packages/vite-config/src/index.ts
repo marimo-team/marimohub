@@ -21,6 +21,7 @@ const testEnv = [
 	'APP_PERFORMANCE_REPORT',
 	'SEARCH_BENCH',
 	'UPDATE_*',
+	'SEA_*',
 	'MODAL_*',
 	'GOOGLE_APPLICATION_CREDENTIALS',
 ];

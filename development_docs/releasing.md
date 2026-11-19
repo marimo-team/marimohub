@@ -2,9 +2,11 @@
 
 Run `pnpm release patch` (or `minor`, `major`, or a stable `X.Y.Z`) to request a release PR.
 Review and merge it to approve publication.
+The jobs that open the release PR and create the tag wait for approval in the `release` environment.
+A member of `marimo-eng` must approve each job. The person who started the run cannot approve it.
 See the [maintainer runbook](https://github.com/marimo-team/github-maintenance/blob/main/docs/releases.md) (internal) for approvals, access, and setup.
 
-The PR updates the root, CLI, IaC, and Deno import versions together.
+The PR updates the root, CLI, and IaC package versions together.
 The tag publishes containers, the Helm chart, CLI, and server binaries.
 The IaC npm package has a [separate publication step](#integration-iac-package).
 
@@ -91,14 +93,28 @@ helm upgrade --install marimohub oci://ghcr.io/marimo-team/charts/marimohub \
 
 ## Integration IaC package
 
-`pnpm release` updates the IaC package version and Deno example imports.
+`pnpm release` updates the IaC package version.
+The Deno example imports the SDK sources from a pinned commit of this repository.
+After a release, move that pin to the release commit when the SDK changed.
 The [Integration IaC SDK workflow](../.github/workflows/iac.yml) tests the packed package in Node and Deno.
 Publication requires a manual run from a matching release tag.
 
 ### Configure trusted publishing once
 
 1. Create the `npm` environment in GitHub.
-2. For a new package, publish the initial version before publisher registration.
+2. npm registers trusted publishers only for existing packages. For a new package, publish the
+   first version by hand from the release tag. Use an npm account with 2FA:
+
+   ```sh
+   git checkout vX.Y.Z
+   pnpm install --frozen-lockfile
+   pnpm --filter @marimo-hub/iac build
+   cd packages/iac
+   npm publish --access public --ignore-scripts
+   ```
+
+   Enter the one-time password when npm asks. Then run `npm view @marimo-hub/iac version`.
+
 3. Configure the package's npm trusted publisher with these values:
 
 | npm setting          | Value                      |
@@ -119,7 +135,7 @@ See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) for con
 
 Run **Integration IaC SDK** from the matching `vX.Y.Z` tag with `publish` selected.
 The root and IaC package versions must match the tag.
-After the initial publication, use a new version. npm cannot republish an existing version.
+Each publication requires a new version. npm cannot republish an existing version.
 
 The workflow builds the tarball in a job without OIDC permission.
 The publish job downloads that artifact and runs `npm publish --ignore-scripts`.

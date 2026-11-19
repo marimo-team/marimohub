@@ -209,10 +209,18 @@ it('reconciles a successful head CAS whose response was lost', async () => {
 });
 it('removes orphan credentials after the publication deadline without touching the winning account', async () => {
 	const f = fixture();
+	const gate = Promise.withResolvers<void>();
+	const exchange = f.provider.exchange;
+	f.provider.exchange = vi.fn(async (input) => {
+		f.provider.exchange = exchange;
+		await gate.promise;
+		return exchange(input);
+	});
+	const late = f.service.complete(uid, 'browser', await f.begin(), 'code');
+	await vi.waitFor(() => expect(f.provider.exchange).toBe(exchange));
 	await f.link();
-	await expect(f.service.complete(uid, 'browser', await f.begin(), 'code')).rejects.toThrow(
-		'Disconnect',
-	);
+	gate.resolve();
+	await expect(late).rejects.toThrow('Disconnect');
 	f.advance(16 * 60_000);
 	await f.service.sweep();
 	expect(await f.service.status(uid)).toMatchObject({ connected: true });
@@ -407,4 +415,36 @@ it('fences a stalled callback before orphan cleanup revokes its credentials', as
 	}
 	await rejected;
 	expect(await f.service.status(uid)).toBeNull();
+});
+
+it('rejects a new connection attempt while an account is connected', async () => {
+	const f = fixture();
+	await f.link();
+	await expect(f.begin()).rejects.toThrow('Disconnect the existing GitHub account');
+	expect(f.provider.exchange).toHaveBeenCalledOnce();
+	await f.service.disconnect(uid);
+	await f.link();
+	expect(f.provider.exchange).toHaveBeenCalledTimes(2);
+});
+
+it('skips an unreadable account record and still sweeps later accounts', async () => {
+	const f = fixture();
+	const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+	try {
+		await f.bucket.put('_system/source-control-accounts/user-aaaa/head.json', '{broken');
+		await f.bucket.put('_system/source-control-accounts/not a user/head.json', '{}');
+		const state = await f.begin();
+		f.advance(16 * 60_000);
+		await f.service.sweep();
+		const head = await (await f.bucket.get(
+			`_system/source-control-accounts/${uid}/head.json`,
+		))!.json();
+		expect(head).not.toHaveProperty('attempt');
+		await expect(f.service.complete(uid, 'browser', state, 'code')).rejects.toThrow('expired');
+		expect(log).toHaveBeenCalledWith(
+			expect.stringContaining('source_control.account_sweep_item_failed'),
+		);
+	} finally {
+		log.mockRestore();
+	}
 });

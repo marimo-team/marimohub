@@ -1,5 +1,6 @@
 import { searchIntegrationTables, profileIntegrationTable } from '../integrations/discovery';
 import { searchWorkspace } from '../search/operations';
+import { boundedData } from '../integrations/bounds';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { IntegrationId, NotFoundError, withAbortSignal } from '@marimo-hub/core';
@@ -145,7 +146,7 @@ export function registerIntegrationTools(
 	) {
 		register(
 			name,
-			`${description} Requires ${action} (${action === 'integration.manage' ? 'admin' : 'editor'} or above).`,
+			`${description} Requires ${action} (${action === 'integration.manage' ? 'manager' : 'editor'} or above).`,
 			schema,
 			action,
 			async (input, context) =>
@@ -200,7 +201,7 @@ export function registerIntegrationTools(
 					{ project_id: context.pid, q: input.table, kinds: ['code'], limit: input.limit },
 					context.signal,
 				);
-				return { ...data, integration_binding: 'unverified' };
+				return boundedData({ ...data, integration_binding: 'unverified' as const });
 			},
 		);
 	}

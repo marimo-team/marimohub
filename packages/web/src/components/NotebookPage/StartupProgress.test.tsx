@@ -6,13 +6,15 @@ afterEach(() => vi.useRealTimers());
 
 it('shows the current stage, elapsed time, and plain-text adapter details', async () => {
 	vi.useFakeTimers();
-	const time = new Date().toISOString();
+	// A skewed server clock must not shift the client-side elapsed badge.
+	const time = new Date(Date.now() + 60_000).toISOString();
 	const { unmount } = render(
 		<StartupProgress
 			progress={{
 				phase: 'workspace',
 				detail: '<b>Copying files</b>',
 				started_at: time,
+				receivedAt: Date.now(),
 				attempt: 1,
 				observed: ['allocating', 'workspace'],
 			}}
@@ -27,7 +29,9 @@ it('shows the current stage, elapsed time, and plain-text adapter details', asyn
 	await act(async () => {
 		await vi.advanceTimersByTimeAsync(2000);
 	});
-	expect(screen.getByText('2s')).toBeInTheDocument();
+	expect(
+		screen.getByText('Time in current step:', { exact: false }).parentElement,
+	).toHaveTextContent('Time in current step: 2s');
 	unmount();
 });
 
@@ -37,6 +41,7 @@ it('does not mark unobserved stages complete', () => {
 			progress={{
 				phase: 'starting',
 				started_at: new Date().toISOString(),
+				receivedAt: Date.now(),
 				attempt: 2,
 				observed: ['starting'],
 			}}

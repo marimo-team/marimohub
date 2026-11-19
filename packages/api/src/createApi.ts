@@ -67,13 +67,10 @@ import {
 	resolvePublicBaseUrl,
 	initializeForSubject,
 	rejectsMcpOnlyCredential,
+	internalErrorMessage,
 	sizedJsonResponses,
 } from './shared';
 import type { ErrorCode } from './shared';
-
-function internalErrorMessage(requestId: string | undefined): string {
-	return requestId ? `Internal error — ref ${requestId}` : 'Internal error';
-}
 
 const CHAT_STREAM_PATH = /^\/api\/v1\/projects\/[^/]+\/conversations\/[^/]+\/stream$/;
 function isChatStreamPath(path: string): boolean {

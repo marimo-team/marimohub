@@ -148,6 +148,17 @@ it('shows a forbidden response without enabling actions', async () => {
 	expect(screen.getByRole('button', { name: 'Request attempt' })).toBeDisabled();
 });
 
+it('shows the server error instead of blaming access for an outage', async () => {
+	vi.stubGlobal(
+		'fetch',
+		vi.fn(async () => jsonError('SERVICE_UNAVAILABLE', 'Bucket unreachable', 503)),
+	);
+	renderWithClient(<AdminMigrationsPage />);
+	const alert = await screen.findByRole('alert');
+	expect(alert).toHaveTextContent('Bucket unreachable');
+	expect(alert).not.toHaveTextContent('super-admin');
+});
+
 it('stops automatic polling after exhausted read failures and recovers on manual refresh', async () => {
 	vi.useFakeTimers();
 	const fetcher = vi.fn(async () => jsonError('SERVICE_UNAVAILABLE', 'Unavailable', 503));

@@ -726,7 +726,7 @@ describe('session mutation toast suppression', () => {
 	});
 
 	it('useStopSession suppresses the toast only when asked', async () => {
-		stubFetch(async () => jsonError('SERVICE_UNAVAILABLE', 'teardown failed', 503));
+		stubFetch(async () => jsonError('FORBIDDEN', 'teardown failed', 403));
 
 		const { result, client } = renderHookWithClient(
 			() => ({

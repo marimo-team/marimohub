@@ -33,6 +33,7 @@ const StreamError = z.object({
 		code: z.string(),
 		message: z.string(),
 		status: z.number().int().min(400).max(599),
+		retry_after_ms: z.number().nonnegative().optional(),
 	}),
 });
 
@@ -83,9 +84,13 @@ export function readSessionStart(
 				}
 				if (terminal.event === 'error') {
 					const error = StreamError.parse(terminal.data);
+					const headers = new Headers(response.headers);
+					const retryAfterMs = error.error.retry_after_ms;
+					if (retryAfterMs !== undefined)
+						headers.set('Retry-After', String(Math.ceil(retryAfterMs / 1000)));
 					return {
 						error,
-						response: new Response(null, { status: error.error.status, headers: response.headers }),
+						response: new Response(null, { status: error.error.status, headers }),
 					};
 				}
 				return { data: readResult(terminal.data), response };

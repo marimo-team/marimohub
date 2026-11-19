@@ -107,6 +107,8 @@ export const WorkingBranchSaveSchema = z.object({
 	error: z.string().optional(),
 });
 export type WorkingBranchSave = z.infer<typeof WorkingBranchSaveSchema>;
+const LEASE_MS = 120_000;
+const LEASE_RENEW_BELOW_MS = 60_000;
 export type WorkingBranchLease = (() => Promise<void>) & { owner: string };
 type WorkingBranchUpdate = (
 	apply: (record: WorkingBranchRecord) => WorkingBranchRecord,
@@ -197,12 +199,23 @@ export class WorkingBranchStore {
 			if (record.state === 'deleted') throw new ConflictError('Working notebook was deleted');
 			if (record.lease && record.lease.until > Date.now())
 				throw new ConflictError('Working branch operation is in progress; retry shortly');
-			return { ...record, lease: { owner, until: Date.now() + 120_000 } };
+			return { ...record, lease: { owner, until: Date.now() + LEASE_MS } };
 		});
 		const update: WorkingBranchUpdate = (apply) => this.update(pid, nid, apply, owner);
-		const check = async () => {
-			await update((record) => ({ ...record, lease: { owner, until: Date.now() + 120_000 } }));
-		};
+		let pending: Promise<void> | undefined;
+		// Per-file provider requests share this fence; renewing on each would contend on one CAS head.
+		const check = () =>
+			(pending ??= (async () => {
+				try {
+					const current = await this.read(pid, nid);
+					if (current.state === 'deleted' || current.lease?.owner !== owner)
+						throw new ConflictError('Working branch operation lost its claim');
+					if (current.lease.until - Date.now() > LEASE_RENEW_BELOW_MS) return;
+					await update((record) => ({ ...record, lease: { owner, until: Date.now() + LEASE_MS } }));
+				} finally {
+					pending = undefined;
+				}
+			})());
 		try {
 			return await run(Object.assign(check, { owner }), update, leased);
 		} finally {

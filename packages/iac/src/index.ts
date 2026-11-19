@@ -33,7 +33,12 @@ export interface HubOptions {
 	url: string;
 	token: string | (() => string | Promise<string>);
 	fetch?: typeof globalThis.fetch;
+	/**
+	 * Limit in milliseconds for each Hub request, from token acquisition to the parsed response.
+	 * Every request in a batch and every retry gets a new limit. Defaults to 20000.
+	 */
 	timeoutMs?: number;
+	/** Attempts for a retryable request, and for each direct `upsert` or `ensure`. Defaults to 3. */
 	maxAttempts?: number;
 }
 export type Precondition =
@@ -42,7 +47,8 @@ export type Precondition =
 export interface PlannedIntegration {
 	name: string;
 	kind: string;
-	action: 'create' | 'update' | 'unchanged';
+	/** Newer Hubs can add actions. Treat an unlisted action as a change that needs review. */
+	action: 'create' | 'update' | 'unchanged' | (string & {});
 	changed_paths: readonly string[];
 	precondition: Precondition;
 	org_override: boolean;
@@ -51,7 +57,8 @@ export interface IntegrationOutcome {
 	name: string;
 	kind: string;
 	id: string;
-	action: 'created' | 'updated' | 'unchanged' | 'converged';
+	/** Newer Hubs can add actions; an unlisted action is passed through unchanged. */
+	action: 'created' | 'updated' | 'unchanged' | 'converged' | (string & {});
 	current_version: number;
 	config_changed: boolean;
 }
@@ -154,13 +161,15 @@ export class IntegrationPlan {
 function record(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
+function isAction(value: unknown): value is string {
+	return typeof value === 'string' && /^[a-z][a-z_]{0,31}$/.test(value);
+}
 function isPlan(value: unknown): value is PlannedIntegration {
 	return (
 		record(value) &&
 		typeof value.name === 'string' &&
 		typeof value.kind === 'string' &&
-		typeof value.action === 'string' &&
-		['create', 'update', 'unchanged'].includes(value.action) &&
+		isAction(value.action) &&
 		Array.isArray(value.changed_paths) &&
 		value.changed_paths.every((path) => typeof path === 'string') &&
 		typeof value.org_override === 'boolean' &&
@@ -177,8 +186,7 @@ function isOutcome(value: unknown): value is IntegrationOutcome {
 		typeof value.name === 'string' &&
 		typeof value.kind === 'string' &&
 		typeof value.id === 'string' &&
-		typeof value.action === 'string' &&
-		['created', 'updated', 'unchanged'].includes(value.action) &&
+		isAction(value.action) &&
 		typeof value.current_version === 'number' &&
 		Number.isSafeInteger(value.current_version) &&
 		value.current_version >= 1 &&
@@ -266,6 +274,31 @@ const httpErrors: Partial<Record<number, { code: string; message: string }>> = {
 	},
 };
 const maxTimerMs = 2 ** 31 - 1;
+function strings(value: unknown): string[] {
+	if (typeof value === 'string') return value ? [value] : [];
+	return value && typeof value === 'object' ? Object.values(value).flatMap(strings) : [];
+}
+// Only 4xx bodies are read. Hub messages are user-safe, but a message that echoes any submitted
+// string is dropped, because the SDK cannot tell which strings are secrets.
+async function hubError(
+	response: Response,
+	sensitive: readonly string[],
+): Promise<{ code?: string; message?: string }> {
+	try {
+		const envelope: unknown = JSON.parse(await response.text());
+		if (!record(envelope) || !record(envelope.error)) return {};
+		const { code, message } = envelope.error;
+		return {
+			code: typeof code === 'string' ? code : undefined,
+			message:
+				typeof message === 'string' && !sensitive.some((value) => message.includes(value))
+					? message
+					: undefined,
+		};
+	} catch {
+		return {};
+	}
+}
 function retryDelay(value: string | null): number | undefined {
 	if (!value) return undefined;
 	const milliseconds = /^\d+$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now();
@@ -311,10 +344,12 @@ export function createHub(options: HubOptions) {
 	async function request<T>(
 		path: string,
 		body: unknown,
-		signal: AbortSignal,
+		config: unknown,
+		caller: AbortSignal | undefined,
 		parse: (value: unknown) => T | undefined,
 		mutation = false,
 	): Promise<T> {
+		const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(caller ? [caller] : [])]);
 		let token: string;
 		try {
 			signal.throwIfAborted();
@@ -352,14 +387,18 @@ export function createHub(options: HubOptions) {
 			);
 		}
 		if (!response.ok) {
-			await response.body?.cancel().catch(() => {});
+			let hub: { code?: string; message?: string } = {};
+			if (response.status >= 400 && response.status < 500)
+				hub = await hubError(response, [token, ...strings(config)]);
+			else await response.body?.cancel().catch(() => {});
 			const retryAfterMs = retryDelay(response.headers.get('Retry-After'));
 			const failure = httpErrors[response.status];
 			const rawId = response.headers.get('X-Request-Id');
 			const requestId = rawId && /^[a-zA-Z0-9_-]{1,128}$/.test(rawId) ? rawId : undefined;
 			throw new IacError(
-				failure?.code ?? 'HTTP_ERROR',
-				failure?.message ??
+				hub.code ?? failure?.code ?? 'HTTP_ERROR',
+				hub.message ??
+					failure?.message ??
 					(response.status >= 500
 						? 'Hub is unavailable. Check deployment health before retrying.'
 						: `Hub rejected the request (${response.status}).`),
@@ -385,25 +424,22 @@ export function createHub(options: HubOptions) {
 			mutation,
 		);
 	}
-	function deadline(signal?: AbortSignal) {
-		return AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
-	}
-	async function delay(error: IacError, attempt: number, signal: AbortSignal) {
+	async function delay(error: IacError, attempt: number, signal?: AbortSignal) {
 		const milliseconds = error.retryAfterMs ?? 50 * 2 ** attempt;
 		await new Promise<void>((resolve, reject) => {
-			if (signal.aborted) {
-				reject(new IacError('ABORTED', 'Reconciliation deadline reached.'));
+			if (signal?.aborted) {
+				reject(new IacError('ABORTED', 'Reconciliation was cancelled.'));
 				return;
 			}
 			const cancel = () => {
 				clearTimeout(timer);
-				reject(new IacError('ABORTED', 'Reconciliation deadline reached.'));
+				reject(new IacError('ABORTED', 'Reconciliation was cancelled.'));
 			};
 			const timer = setTimeout(() => {
-				signal.removeEventListener('abort', cancel);
+				signal?.removeEventListener('abort', cancel);
 				resolve();
 			}, milliseconds);
-			signal.addEventListener('abort', cancel, { once: true });
+			signal?.addEventListener('abort', cancel, { once: true });
 		});
 	}
 	return {
@@ -414,7 +450,7 @@ export function createHub(options: HubOptions) {
 				specs: readonly Declaration[],
 				reconcile: ReconcileOptions = {},
 			): Promise<IntegrationPlan> {
-				const signal = deadline(reconcile.signal);
+				const signal = reconcile.signal;
 				const seen = new Set<string>();
 				const desired = specs.map((spec) => {
 					if (!/^[a-z][a-z0-9-]{0,31}$/.test(spec.name) || seen.has(spec.name))
@@ -433,7 +469,7 @@ export function createHub(options: HubOptions) {
 				for (const item of desired) {
 					for (let attempt = 0; ; attempt++) {
 						try {
-							items.push(await request(`${path}plan`, item, signal, parsePlan));
+							items.push(await request(`${path}plan`, item, item.config, signal, parsePlan));
 							break;
 						} catch (error) {
 							const failure = errorFor(error);
@@ -464,7 +500,6 @@ export function createHub(options: HubOptions) {
 						'INVALID_PLAN',
 						'Apply a plan created by this project scope in this process.',
 					);
-				const signal = deadline(reconcile.signal);
 				const completed: IntegrationOutcome[] = [];
 				for (const [index, desired] of state.desired.entries()) {
 					try {
@@ -472,7 +507,8 @@ export function createHub(options: HubOptions) {
 							await request(
 								`${path}apply`,
 								{ desired, expected: plan.items[index].precondition },
-								signal,
+								desired.config,
+								reconcile.signal,
 								parseOutcome,
 								true,
 							),
@@ -501,11 +537,11 @@ export function createHub(options: HubOptions) {
 				mode: Mode,
 				settings: Omit<ReconcileOptions, 'mode'> = {},
 			): Promise<IntegrationOutcome> {
-				const signal = deadline(settings.signal);
+				const signal = settings.signal;
 				let uncertain = false;
 				for (let attempt = 0; ; attempt++) {
 					try {
-						const current = await plan([spec], { ...settings, mode, signal });
+						const current = await plan([spec], { ...settings, mode });
 						const result = (await apply(current, { signal })).completed[0];
 						return uncertain ? { ...result, action: 'converged' } : result;
 					} catch (error) {

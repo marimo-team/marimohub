@@ -9,7 +9,12 @@ export function sessionStartupStream(
 		onAuthorized: () => void;
 		onProgress: (progress: SandboxStartupSnapshot) => void;
 	}) => Promise<SessionCreateResult>,
-	publicError: (error: unknown) => { code: string; message: string; status: number },
+	publicError: (error: unknown) => {
+		code: string;
+		message: string;
+		status: number;
+		retry_after_ms?: number;
+	},
 	signal?: AbortSignal,
 ) {
 	const started = Promise.withResolvers<void>();

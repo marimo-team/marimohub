@@ -95,7 +95,7 @@ describe('present sessions for a user in a project', () => {
 	);
 
 	it.each(['owner', 'project', 'session'] as const)(
-		'rejects an indexed record with the wrong %s',
+		'falls back to the project scan when an indexed record has the wrong %s',
 		async (field) => {
 			const { bucket, writer, input, reader } = fixture();
 			const session = await writer.createSession(input);
@@ -105,9 +105,13 @@ describe('present sessions for a user in a project', () => {
 				...(field === 'project' ? { project_id: createProjectId() } : {}),
 				...(field === 'session' ? { session_id: other.session_id } : {}),
 			});
-			await expect(reader().listPresentForUser(ACTOR, input.project_id)).rejects.toThrow(
-				'Session index reference mismatch',
-			);
+			const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const list = vi.spyOn(bucket, 'list');
+			const present = await reader().listPresentForUser(ACTOR, input.project_id);
+			expect(present.map((s) => s.session_id)).toContain(other.session_id);
+			expect(present.every((s) => s.user_id === ACTOR)).toBe(true);
+			expect(list).toHaveBeenCalled();
+			expect(logged.mock.calls.flat().join(' ')).toContain('session_index_mismatch');
 		},
 	);
 
