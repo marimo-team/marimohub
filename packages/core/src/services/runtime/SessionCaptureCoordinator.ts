@@ -97,7 +97,7 @@ export class SessionCaptureCoordinator {
 					publicationToken,
 					// A background save must not keep the kernel frozen through bucket and catalog writes.
 					onArtifactsRead: options.retainRuntime ? undefined : resume,
-					...(sessions.supportsAtomicCapture && (!options.assertOwnership || options.stopLease)
+					...(sessions.supportsAtomicMetadata && (!options.assertOwnership || options.stopLease)
 						? { publicationAuthority: { session, stopLease: options.stopLease } }
 						: {}),
 				},

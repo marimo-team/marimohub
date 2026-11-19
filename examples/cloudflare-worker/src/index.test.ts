@@ -942,3 +942,30 @@ it('refuses a SQL-owned artifact bucket for requests and scheduled writers', asy
 		'incompatible',
 	);
 });
+
+it('checks the backend marker once per environment across concurrent requests', async () => {
+	const bucket = new MemoryBucket();
+	const get = vi.spyOn(bucket, 'get');
+	const env = makeEnv(bucket);
+	await Promise.all([fetchApi(env), fetchApi(env)]);
+	await fetchApi(env);
+	expect(get.mock.calls.filter(([key]) => key === '_system/metadata-backend.json')).toHaveLength(1);
+	await fetchApi(makeEnv(bucket));
+	expect(get.mock.calls.filter(([key]) => key === '_system/metadata-backend.json')).toHaveLength(2);
+});
+
+it('retries a failed marker read rather than caching an outage', async () => {
+	const bucket = new MemoryBucket();
+	const get = bucket.get.bind(bucket);
+	let failed = false;
+	vi.spyOn(bucket, 'get').mockImplementation((key, options) => {
+		if (key === '_system/metadata-backend.json' && !failed) {
+			failed = true;
+			return Promise.reject(new Error('temporary storage outage'));
+		}
+		return get(key, options);
+	});
+	const env = makeEnv(bucket);
+	expect((await fetchApi(env)).status).toBe(500);
+	expect((await fetchApi(env)).status).not.toBe(500);
+});

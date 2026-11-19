@@ -75,6 +75,18 @@ const deploymentResources = weakMemo((env: Env) => {
 		}),
 	};
 });
+const metadataReady = weakMemo((env: Env) => {
+	let pending: Promise<void> | undefined;
+	return () => {
+		pending ??= assertBucketMetadataBackend(deploymentResources(env).bucket).catch(
+			(error: unknown) => {
+				pending = undefined;
+				throw error;
+			},
+		);
+		return pending;
+	};
+});
 const deploymentDeps = weakMemo(createDeploymentDeps);
 const deploymentApi = weakMemo((deps: ApiDeps) => createApi(deps));
 
@@ -264,7 +276,7 @@ export default {
 		let api: ReturnType<typeof createApi>;
 		try {
 			const deps = buildDeps(request, env);
-			await assertBucketMetadataBackend(deps.bucket);
+			await metadataReady(env)();
 			api = deploymentApi(deps);
 			const refresh = deps.services.migrations.refreshCompleted();
 			if (refresh)
@@ -288,8 +300,8 @@ export default {
 	},
 	scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
 		return executionContext.run(ctx, async () => {
-			const { services, bucket } = deploymentResources(env);
-			await assertBucketMetadataBackend(bucket);
+			const { services } = deploymentResources(env);
+			await metadataReady(env)();
 			const results = await Promise.allSettled([
 				runScheduled(env, ctx),
 				services.migrations.tick(),

@@ -2004,7 +2004,7 @@ async function startNotebookSessionOnce(
 	let sandboxMayExist = false;
 	let workspaceStarted = false;
 	const atomicEditorAdmission =
-		sessions.supportsAtomicAdmission &&
+		sessions.supportsAtomicMetadata &&
 		mode === 'edit' &&
 		!ephemeral &&
 		!origin &&
@@ -2436,17 +2436,19 @@ async function startNotebookSessionOnce(
 					// Settle every writer before compensation; cap errors retain precedence.
 					const checks = await allSettled({
 						cap: () =>
-							timed('cap_recheck', () =>
-								assertCapAfterCreate(
-									deps,
-									mode,
-									pid,
-									user.id,
-									sessionId,
-									temporaryToRetire?.session_id,
-									(source) => observer.tag('cap_source', source),
-								),
-							),
+							atomicEditorAdmission
+								? Promise.resolve()
+								: timed('cap_recheck', () =>
+										assertCapAfterCreate(
+											deps,
+											mode,
+											pid,
+											user.id,
+											sessionId,
+											temporaryToRetire?.session_id,
+											(source) => observer.tag('cap_source', source),
+										),
+									),
 						preview: () =>
 							timed('preview_admission_commit', async () => {
 								if (previewRecord)
@@ -2455,11 +2457,15 @@ async function startNotebookSessionOnce(
 						editor: () =>
 							timed('editor_claim', async () => {
 								if (mode !== 'edit' || ephemeral) return;
-								const result = await sessions.claimEditor(pid, nid, sessionId, sharing, user.id);
-								if (!result.claimed && result.claim.session_id)
-									throw new EditorClaimLostError(result.claim.session_id);
+								if (!atomicEditorAdmission) {
+									const result = await sessions.claimEditor(pid, nid, sessionId, sharing, user.id);
+									if (!result.claimed && result.claim.session_id)
+										throw new EditorClaimLostError(result.claim.session_id);
+								}
 								if (notebook.source.type === 'local') {
-									const fenced = await notebooks.fenceSessionPublications(pid, nid);
+									const fenced = atomicEditorAdmission
+										? await notebooks.getNotebookSource(pid, nid)
+										: await notebooks.fenceSessionPublications(pid, nid);
 									if (fenced.type !== 'local')
 										throw new ConflictError('Notebook source changed during admission');
 									launchSource = resolveNotebookLaunchSource({

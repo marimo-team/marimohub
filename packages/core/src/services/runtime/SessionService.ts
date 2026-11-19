@@ -726,11 +726,7 @@ export class SessionService {
 		return this.mutate(projectId, id, (session) => ({ ...session, last_snapshot_at: at }));
 	}
 
-	get supportsAtomicAdmission(): boolean {
-		return this.transactions !== undefined;
-	}
-
-	get supportsAtomicCapture(): boolean {
+	get supportsAtomicMetadata(): boolean {
 		return this.transactions !== undefined;
 	}
 
@@ -1422,6 +1418,7 @@ export class SessionService {
 		invalidRecords: InvalidRecords = 'skip',
 		filter: (session: Session) => boolean = () => true,
 		signal?: AbortSignal,
+		userId?: UserId,
 	): Promise<Awaited<T>[]> {
 		const indexed = this.sessionRecords;
 		const bucket = this.bucket;
@@ -1438,7 +1435,7 @@ export class SessionService {
 						prefix === paths.sessionsPrefix
 							? undefined
 							: (prefix.slice(paths.sessionsPrefix.length, -1) as ProjectId),
-					userId: typeof invalidRecords === 'object' ? invalidRecords.owner : undefined,
+					userId,
 					limit: 1000,
 					cursor,
 				});
@@ -1787,6 +1784,8 @@ export class SessionService {
 				(s) => s,
 				{ owner: userId },
 				(s) => s.user_id === userId && countsTowardCap(s, capScope),
+				undefined,
+				userId,
 			)
 		).sort(byCapOrder);
 	}
@@ -1888,6 +1887,7 @@ export class SessionService {
 			{ owner: userId },
 			(session) => session.user_id === userId,
 			signal,
+			userId,
 		);
 		return this.liveIndexReferences(
 			userId,
