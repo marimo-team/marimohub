@@ -291,36 +291,49 @@ export class AzureStorage implements Bucket {
 		const iterable = options?.delimiter
 			? this.client.listBlobsByHierarchy(options.delimiter, { prefix: options.prefix })
 			: this.client.listBlobsFlat({ prefix: options?.prefix });
-		const pages = iterable.byPage({
-			continuationToken: options?.cursor,
-			maxPageSize: options?.limit,
-		});
-
-		for await (const page of pages) {
-			const objects = page.segment.blobItems
-				.filter(
-					(item) => !options?.startAfter || compareBucketKeys(item.name, options.startAfter) > 0,
+		const binding = JSON.stringify([options?.prefix ?? '', options?.delimiter ?? '']);
+		let after = options?.startAfter;
+		if (options?.cursor) {
+			try {
+				const token: unknown = JSON.parse(Buffer.from(options.cursor, 'base64url').toString());
+				if (
+					!Array.isArray(token) ||
+					token.length !== 2 ||
+					token[0] !== binding ||
+					typeof token[1] !== 'string'
 				)
-				.map(toBucketObject);
-			const delimitedPrefixes = pagePrefixes(page).filter(
-				(prefix) => !options?.startAfter || compareBucketKeys(prefix, options.startAfter) > 0,
-			);
-			if (
-				objects.length > 0 ||
-				delimitedPrefixes.length > 0 ||
-				!page.continuationToken ||
-				!options?.startAfter
-			) {
-				return {
-					objects,
-					truncated: Boolean(page.continuationToken),
-					cursor: page.continuationToken || undefined,
-					delimitedPrefixes,
-				};
+					throw new Error('Invalid cursor');
+				after = token[1];
+			} catch {
+				throw new Error('Invalid Azure storage cursor');
 			}
 		}
-
-		return { objects: [], truncated: false, delimitedPrefixes: [] };
+		const limit = options?.limit ?? 1000;
+		type Entry = { key: string; object?: BucketObject };
+		let entries: Entry[] = [];
+		// Azure's UTF-16 order differs from the port's UTF-8 order. Scan all service
+		// pages before selecting a page; sorting individual pages loses Unicode keys.
+		for await (const page of iterable.byPage({ maxPageSize: 5000 })) {
+			entries.push(
+				...page.segment.blobItems.map((item) => ({ key: item.name, object: toBucketObject(item) })),
+				...pagePrefixes(page).map((key) => ({ key })),
+			);
+			entries = entries.filter(
+				(entry) => after === undefined || compareBucketKeys(entry.key, after) > 0,
+			);
+			entries.sort((a, b) => compareBucketKeys(a.key, b.key));
+			entries.length = Math.min(entries.length, limit + 1);
+		}
+		const truncated = entries.length > limit;
+		const selected = entries.slice(0, limit);
+		return {
+			objects: selected.flatMap((entry) => (entry.object ? [entry.object] : [])),
+			delimitedPrefixes: selected.filter((entry) => !entry.object).map((entry) => entry.key),
+			truncated,
+			cursor: truncated
+				? Buffer.from(JSON.stringify([binding, selected.at(-1)!.key])).toString('base64url')
+				: undefined,
+		};
 	}
 
 	async verifyConditionalWrites(): Promise<void> {

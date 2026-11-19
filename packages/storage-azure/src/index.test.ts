@@ -1,4 +1,3 @@
-import { compareBucketKeys } from '@marimo-hub/core/ports/bucket';
 import { Readable } from 'node:stream';
 import type { ContainerClient } from '@azure/storage-blob';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
@@ -29,7 +28,11 @@ function azureError(statusCode: number, code: string): Error {
 }
 
 function makeFakeContainer(
-	options: { ignoreConditions?: boolean; allowStaleMatches?: boolean } = {},
+	options: {
+		ignoreConditions?: boolean;
+		allowStaleMatches?: boolean;
+		servicePageSize?: number;
+	} = {},
 ) {
 	const store = new Map<string, StoredBlob>();
 	const staged = new Map<string, Uint8Array>();
@@ -61,9 +64,7 @@ function makeFakeContainer(
 			maxPageSize,
 		}: { continuationToken?: string; maxPageSize?: number } = {}) =>
 			(async function* () {
-				const keys = [...store.keys()]
-					.filter((key) => key.startsWith(prefix))
-					.sort(compareBucketKeys);
+				const keys = [...store.keys()].filter((key) => key.startsWith(prefix)).sort();
 				const entries = new Map<string, { kind: 'blob' | 'prefix'; key: string }>();
 				for (const key of keys) {
 					const rest = key.slice(prefix.length);
@@ -75,9 +76,11 @@ function makeFakeContainer(
 						entries.set(`blob:${key}`, { kind: 'blob', key });
 					}
 				}
-				const ordered = [...entries.values()].sort((a, b) => compareBucketKeys(a.key, b.key));
+				const ordered = [...entries.values()].sort((a, b) =>
+					a.key < b.key ? -1 : a.key > b.key ? 1 : 0,
+				);
 				let offset = Number(continuationToken ?? 0);
-				const pageSize = maxPageSize ?? 5000;
+				const pageSize = Math.min(maxPageSize ?? 5000, options.servicePageSize ?? 5000);
 				while (offset < ordered.length) {
 					const pageEntries = ordered.slice(offset, offset + pageSize);
 					offset += pageEntries.length;
@@ -421,6 +424,24 @@ describe('AzureStorage error handling', () => {
 });
 
 describe('AzureStorage listing', () => {
+	it('normalizes Unicode ordering across service pages and rejects mismatched cursors', async () => {
+		const fake = makeFakeContainer({ servicePageSize: 2 });
+		const bucket = new AzureStorage({ containerClient: fake.client });
+		const expected = ['é', '龍', '\uE000', '😀'];
+		for (const key of expected) await bucket.put(key, 'x');
+		const first = await bucket.list({ limit: 3 });
+		expect(first.objects.map(({ key }) => key)).toEqual(expected.slice(0, 3));
+		const last = await bucket.list({ cursor: first.cursor, limit: 3 });
+		expect(last.objects.map(({ key }) => key)).toEqual(expected.slice(3));
+		expect(last.truncated).toBe(false);
+		await expect(bucket.list({ cursor: first.cursor, prefix: 'other/' })).rejects.toThrow(
+			'Invalid Azure storage cursor',
+		);
+		await expect(bucket.list({ cursor: 'invalid' })).rejects.toThrow(
+			'Invalid Azure storage cursor',
+		);
+	});
+
 	it('maps continuation tokens and limits', async () => {
 		const fake = makeFakeContainer();
 		const bucket = new AzureStorage({ containerClient: fake.client });
@@ -430,7 +451,7 @@ describe('AzureStorage listing', () => {
 		const second = await bucket.list({ limit: 2, cursor: first.cursor });
 
 		expect(first.objects.map((item) => item.key)).toEqual(['a', 'b']);
-		expect(first).toMatchObject({ truncated: true, cursor: '2' });
+		expect(first).toMatchObject({ truncated: true, cursor: expect.any(String) });
 		expect(second.objects.map((item) => item.key)).toEqual(['c']);
 		expect(second.truncated).toBe(false);
 	});

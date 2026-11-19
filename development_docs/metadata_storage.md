@@ -141,6 +141,9 @@ Each SQL operation holds a shared deployment lock until its transaction ends.
 The deployment must be active and match the configured namespace, epoch, and artifact-store identity.
 A mismatch is an availability error, not a missing object. Unavailable storage returns HTTP 503.
 Uncertain commits still fail without automatic retries.
+
+Azure listings normalize service ordering to UTF-8 before pagination. Each listing scans the matching service pages and retains only the requested page plus one entry. Use narrow prefixes and delimiters to bound that scan.
+
 SQL session queries return candidates. Core retains schema checks, lifecycle policy, user-index writes, and admission ranking.
 
 Embedded Node hosts must supply `nodeMetadataFactory` from `@marimo-hub/config/metadata.node`.
