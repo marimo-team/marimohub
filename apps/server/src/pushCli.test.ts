@@ -80,8 +80,16 @@ describe.skipIf(!binary)('CLI archive push against filesystem storage', () => {
 					(await exec(resolve(binary!), [...args, ...extra], { cwd: checkout, env })).stdout,
 				);
 			const first = await push();
-			expect(first).toEqual({ version_id: expect.any(String), synced: true });
-			expect(await push(['--format', 'zip'])).toEqual({ version_id: null, synced: false });
+			expect(first).toEqual({
+				version_id: expect.any(String),
+				synced: true,
+				skipped_credential_files: [],
+			});
+			expect(await push(['--format', 'zip'])).toEqual({
+				version_id: null,
+				synced: false,
+				skipped_credential_files: [],
+			});
 			await expect(
 				exec(
 					resolve(binary!),
@@ -165,13 +173,13 @@ describe.skipIf(!binary)('CLI archive push against filesystem storage', () => {
 						pid: project.id,
 						nid: notebook.meta.id,
 						success: true,
-						data: { synced: true, version_id: expect.any(String) },
+						data: { synced: true, version_id: expect.any(String), skipped_credential_files: [] },
 					},
 					{
 						pid: secondProject.id,
 						nid: secondNotebook.meta.id,
 						success: true,
-						data: { synced: true, version_id: expect.any(String) },
+						data: { synced: true, version_id: expect.any(String), skipped_credential_files: [] },
 					},
 				],
 			});
