@@ -13,7 +13,7 @@ import {
 import { z } from 'zod';
 import type { Bucket, BucketObjectBody } from '../ports/bucket';
 import { STORED_OBJECTS } from '../specs/bucketSpec';
-import { classifyMetadataKey } from './metadataKeys';
+import { classifyMetadataKey, MAINTENANCE_LOCK_KEY_PATTERN } from './metadataKeys';
 import { CursorSchema } from '../services/catalog/retentionCursor';
 import { SnapshotExpiryCursorSchema } from '../services/catalog/MaintenanceService';
 import { LockRecordSchema } from '../services/catalog/MaintenanceLock';
@@ -48,7 +48,7 @@ const additional: [RegExp, z.ZodType][] = [
 	[/^_system\/(notebook-gc|notebook-purge|project-purge|job-prune)-cursor\.json$/, CursorSchema],
 	[/\/prune-(runs|occurrences)\.json$/, CursorSchema],
 	[/^_system\/snapshot-expiry-cursor\.json$/, SnapshotExpiryCursorSchema],
-	[/^_system\/(?:_\w+\.lock|search\/lock\.json)$/, LockRecordSchema],
+	[MAINTENANCE_LOCK_KEY_PATTERN, LockRecordSchema],
 	[/^_system\/idempotency\/[^/]+\.json$/, IdempotencyRecordSchema],
 	[/^_system\/reconcile\/orphans\/[^/]+\.json$/, OrphanMarkerSchema],
 	[/^_system\/sandbox-diagnostics\/[^/]+\.json$/, SandboxDiagnosticLeaseSchema],
