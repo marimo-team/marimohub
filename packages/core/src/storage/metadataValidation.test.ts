@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createServices } from '../services';
 import { SYSTEM_ACTOR, createProposalId, createSessionId, createVersionId } from '../ids';
 import { workspaceManifest } from '../services/content/workspaceManifest';
@@ -72,6 +72,23 @@ describe('offline metadata validation', () => {
 			'Invalid referenced workspace artifact',
 		);
 	});
+	it.each(['../secret', 'data/../../secret', '/absolute', 'dir\\secret', 'a//b', 'a/./b', 'a\0b'])(
+		'rejects unsafe workspace artifact paths before reading: %j',
+		async (path) => {
+			const { bucket, project, notebook } = await fixture();
+			const version = paths.project(project.id).notebook(notebook.id).version(createVersionId());
+			const bytes = new Uint8Array([1, 2, 3]);
+			await bucket.put(
+				version.workspaceManifest,
+				JSON.stringify(await workspaceManifest(new Map([[path, bytes]]))),
+			);
+			const unsafeKey = version.workspaceFile(path);
+			await bucket.put(unsafeKey, bytes);
+			const read = vi.spyOn(bucket, 'get');
+			await expect(auditMetadataReferences(bucket)).rejects.toThrow('workspace path');
+			expect(read.mock.calls.some(([key]) => key === unsafeKey)).toBe(false);
+		},
+	);
 	it('requires live proposal payloads but permits expired payload cleanup', async () => {
 		const { bucket, project, notebook } = await fixture();
 		const id = createProposalId();

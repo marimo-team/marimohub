@@ -3,6 +3,7 @@ import { AppPoolSchema } from '../services/runtime/AppPoolRouter';
 import { ThumbnailRecordSchema } from '../services/content/ThumbnailService';
 import { WorkspaceManifestSchema } from '../services/content/workspaceManifest';
 import { PreviewRecordSchema } from '../services/content/notebookPreviews';
+import { isSafeWorkspacePath } from '../integrations/remoteWorkspace';
 import { matchesArtifactDigest } from './artifactIntegrity';
 import {
 	DEFAULT_PROPOSAL_PAYLOAD_RETENTION_MS,
@@ -177,6 +178,8 @@ export async function auditMetadataReferences(bucket: Bucket): Promise<void> {
 			if (item.key.endsWith('/workspace-manifest.json')) {
 				const manifest = WorkspaceManifestSchema.parse(await object.json());
 				for (const file of manifest) {
+					if (!isSafeWorkspacePath(file.path))
+						throw new Error('Invalid workspace path in metadata manifest');
 					const key = `${item.key.slice(0, -'workspace-manifest.json'.length)}workspace/${file.path}`;
 					const artifact = await bucket.get(key);
 					if (!(await matchesArtifactDigest(artifact, file)))
