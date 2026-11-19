@@ -1,3 +1,4 @@
+import { CaptureTelemetry } from '../../internal/captureTelemetry';
 import { z } from 'zod';
 import { NotFoundError } from '../../errors';
 import type { SandboxId } from '../../ids';
@@ -39,9 +40,14 @@ export class RuntimeCaptureClient {
 	constructor(
 		private readonly sandbox: SandboxInstance,
 		private readonly sandboxId: SandboxId,
+		private readonly telemetry = new CaptureTelemetry(),
 	) {}
 
-	private async request(request: Record<string, unknown>) {
+	private request(request: Record<string, unknown> & { action: string }) {
+		return this.telemetry.time(`runtime_${request.action}`, () => this.send(request));
+	}
+
+	private async send(request: Record<string, unknown>) {
 		const path = `${notebookBridgePaths(this.sandboxId, 'marimo-bridge.py').directory}/lifecycle_client.py`;
 		const client = this.sandbox.resolveProcessPath?.(path) ?? path;
 		const result = await this.sandbox

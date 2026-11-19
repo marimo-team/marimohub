@@ -870,6 +870,8 @@ describe('SessionLifecycleService', () => {
 					expect.objectContaining({ code: 'edited' }),
 					s.user_id,
 					expect.anything(),
+					undefined,
+					expect.anything(),
 				);
 				expect(calls.destroy).toBe(0);
 			},

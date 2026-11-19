@@ -75,6 +75,25 @@ metrics count stop captures, periodic snapshots, and host saves.
 `sessions.stop.pending_age_ms`, `sessions.stop.retained_age_ms`, and matching `_count`
 gauges identify stalled work. Telemetry failures do not change save outcomes.
 
+Capture histograms use the `sessions.capture.` prefix:
+
+| Suffix                                    | Measurement                                                                                                                       |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `phase_ms`                                | Operation duration, labelled by `phase` and `outcome`, including failures.                                                        |
+| `artifact_bytes`                          | UTF-8 artifact payload size, labelled by `artifact`.                                                                              |
+| `uploaded_bytes`                          | Successfully uploaded payload size, labelled by `artifact`. Unchanged artifacts emit no sample.                                   |
+| `source_visible_ms`                       | Capture start to confirmed source-head publication.                                                                               |
+| `durable_ms`                              | Capture start to confirmed publication and durable receipt, excluding optional workspace work.                                    |
+| `source_visible_lag_ms`, `durable_lag_ms` | The same endpoints measured from the observed save acknowledgement, including queue delay. Requires a dirty-save acknowledgement. |
+| `total_ms`                                | Full capture duration, including workspace work and resume, labelled by critical `status` and `mode` (`background` or `stop`).    |
+
+`runtime_prepare` includes pause and checkpoint creation. `source_publish` includes the
+receipt on transactional backends. Retirement emits `runtime_commit-stop` and `destroy` phases.
+Nested phases overlap; do not sum their durations. Byte metrics exclude transport overhead.
+
+Save responses remain asynchronous and do not guarantee durability. Unchanged captures still
+advance the source fence. Metric labels exclude notebook contents and runtime error messages.
+
 Use a supported Linux container to test successful drain and stop. For native macOS,
 other unsupported runtimes, and direct exposure, see
 [Session stop and recovery](../docs/operations.md#session-stop-and-recovery).

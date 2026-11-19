@@ -531,7 +531,7 @@ export async function forwardHttp(
 }
 
 /** Mount before API and SPA routes so proxy requests cannot fall through to them. */
-const pendingSaveCaptures = deploymentState(() => new Map<string, { again: boolean }>());
+const pendingSaveCaptures = deploymentState(() => new Map<string, { again?: string }>());
 
 export async function observeRuntimeSave(
 	deps: ApiDeps,
@@ -551,16 +551,17 @@ export async function observeRuntimeSave(
 			deps.metrics?.increment(name);
 		} catch {}
 	};
+	const acknowledgedAt = new Date().toISOString();
 	metric('sessions.save.acknowledged');
 	if (!deps.backgroundWork) return;
 	const pending = pendingSaveCaptures(deps);
 	const existing = pending.get(decision.sessionId);
 	if (existing) {
-		existing.again = true;
+		existing.again = acknowledgedAt;
 		return;
 	}
 	if (pending.size >= 64) return;
-	const queued = { again: false };
+	const queued: { again?: string } = {};
 	pending.set(decision.sessionId, queued);
 	try {
 		void Promise.resolve(
@@ -569,6 +570,7 @@ export async function observeRuntimeSave(
 					const current = await deps.services.sessions.acknowledgeRuntimeSave(
 						decision.projectId!,
 						SessionId.parse(decision.sessionId),
+						acknowledgedAt,
 					);
 					if (!current.save_dirty || current.status !== 'running' || !sessionPersistsEdits(current))
 						return;
@@ -587,6 +589,7 @@ export async function observeRuntimeSave(
 						await deps.services.sessions.acknowledgeRuntimeSave(
 							current.project_id,
 							current.session_id,
+							queued.again,
 						);
 				} catch {
 					metric('sessions.save.hint_failed');

@@ -910,6 +910,8 @@ describe('ReconciliationService', () => {
 			expect.anything(),
 			ACTOR,
 			expect.anything(),
+			undefined,
+			expect.anything(),
 		);
 		expect(compute.destroyed).toContain(terminalId);
 	});

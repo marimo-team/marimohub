@@ -122,3 +122,32 @@ it('bounds the process-local coalescer independently of notebook cardinality', a
 	await env.background.runAll();
 	expect(env.capture).toHaveBeenCalledTimes(64);
 });
+
+it('preserves observation time across queue delay and a coalesced later save', async () => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	try {
+		const env = fixture();
+		const first = '2026-01-01T00:00:00.000Z';
+		const next = '2026-01-01T00:00:01.000Z';
+		vi.setSystemTime(new Date(first));
+		await observeRuntimeSave(env.deps, env.request, env.response, env.decision);
+		vi.setSystemTime(new Date(next));
+		await observeRuntimeSave(env.deps, env.request, env.response, env.decision);
+		vi.setSystemTime(new Date('2026-01-01T00:01:00Z'));
+		await env.background.runAll();
+		expect(env.acknowledge).toHaveBeenNthCalledWith(
+			1,
+			env.decision.projectId,
+			env.decision.sessionId,
+			first,
+		);
+		expect(env.acknowledge).toHaveBeenNthCalledWith(
+			2,
+			env.decision.projectId,
+			env.decision.sessionId,
+			next,
+		);
+	} finally {
+		vi.useRealTimers();
+	}
+});

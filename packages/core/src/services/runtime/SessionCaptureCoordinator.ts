@@ -1,3 +1,4 @@
+import { CaptureTelemetry } from '../../internal/captureTelemetry';
 import type { Bucket } from '../../ports/bucket';
 import type { SandboxInstance, SandboxProvider } from '../../ports/sandbox';
 import type { Session } from '../../schema';
@@ -36,6 +37,7 @@ export class SessionCaptureCoordinator {
 			stopLease?: { attemptId: string; leaseId: string };
 		} = {},
 	): Promise<SessionCaptureResult> {
+		const telemetry = new CaptureTelemetry(this.deps.metrics, session.save_dirty?.acknowledged_at);
 		const skipped = { status: 'skipped' as const };
 		if (!sessionPersistsEdits(session))
 			return { critical: { status: 'not_required', reason: 'discard' }, workspace: skipped };
@@ -46,30 +48,38 @@ export class SessionCaptureCoordinator {
 		let outcome: SessionCaptureResult | undefined;
 		let resumed: Promise<SessionCaptureResult['runtimeState']> | undefined;
 		const resume = () =>
-			(resumed ??= runtime!.resume(checkpoint!).then(
-				() => 'running' as const,
-				(error: unknown) => {
-					logOperationalError(
-						'session_capture_resume_failed',
-						{ operation: 'session.capture_resume', session_id: session.session_id },
-						error,
-					);
-					return error instanceof RuntimeMissingError ? ('missing' as const) : ('unknown' as const);
-				},
-			));
+			(resumed ??= telemetry
+				.time('resume', () => runtime!.resume(checkpoint!))
+				.then(
+					() => 'running' as const,
+					(error: unknown) => {
+						logOperationalError(
+							'session_capture_resume_failed',
+							{ operation: 'session.capture_resume', session_id: session.session_id },
+							error,
+						);
+						return error instanceof RuntimeMissingError
+							? ('missing' as const)
+							: ('unknown' as const);
+					},
+				));
 		try {
-			const { source } = await notebooks.getNotebook(session.project_id, session.notebook_id);
+			const { source } = await telemetry.time('notebook_read', () =>
+				notebooks.getNotebook(session.project_id, session.notebook_id),
+			);
 			if (source.type !== 'local')
 				return {
 					critical: { status: 'not_required', reason: 'remote_source' },
 					workspace: skipped,
 				};
-			const publicationToken = await notebooks.beginSessionCapture(
-				session.project_id,
-				session.notebook_id,
+			const publicationToken = await telemetry.time('publication_token', () =>
+				notebooks.beginSessionCapture(session.project_id, session.notebook_id),
 			);
-			await (options.assertOwnership?.() ?? sessions.assertCaptureOwnership(session));
-			await sessions.recordCaptureAttempt(session);
+			await telemetry.time(
+				'ownership',
+				() => options.assertOwnership?.() ?? sessions.assertCaptureOwnership(session),
+			);
+			await telemetry.time('attempt', () => sessions.recordCaptureAttempt(session));
 			if (
 				!options.retainRuntime &&
 				Object.entries(session.surfaces ?? {}).some(
@@ -79,10 +89,10 @@ export class SessionCaptureCoordinator {
 			)
 				throw new RuntimeCaptureError('CAPTURE_RUNTIME_UNSUPPORTED', 'running');
 			if (!session.sandbox_id) throw new RuntimeCaptureError('CAPTURE_RUNTIME_UNSUPPORTED');
-			runtime = new RuntimeCaptureClient(sandbox, session.sandbox_id);
+			runtime = new RuntimeCaptureClient(sandbox, session.sandbox_id, telemetry);
 			const workdir = this.deps.workdir ?? '/workspace';
 			const entry = workspaceSourcePolicy(source).entryNotebook;
-			checkpoint = await runtime.prepare(workdir, entry);
+			checkpoint = await telemetry.time('prepare', () => runtime!.prepare(workdir, entry));
 			const result = await new SandboxProvisioner(compute).captureSessionResult(
 				sandbox,
 				notebooks,
@@ -94,6 +104,7 @@ export class SessionCaptureCoordinator {
 				checkpoint.directory,
 				{
 					includeWorkspace: false,
+					telemetry,
 					publicationToken,
 					// A background save must not keep the kernel frozen through bucket and catalog writes.
 					onArtifactsRead: options.retainRuntime ? undefined : resume,
@@ -102,44 +113,18 @@ export class SessionCaptureCoordinator {
 						: {}),
 				},
 			);
-			if (options.includeWorkspace !== false && this.deps.persistWorkspace === 'workspace') {
-				try {
-					await captureWorkspace(
-						sandbox,
-						bucket,
-						session.project_id,
-						session.notebook_id,
-						workdir,
-						'workspace',
-						undefined,
-						entry,
-						notebooks.workspace.limits,
-					);
-					result.workspace = { status: 'captured' };
-				} catch (cause) {
-					result.workspace = { status: 'failed', cause };
-				}
-			}
 			if (result.critical.status === 'durable') {
+				const durable = result.critical;
 				try {
-					if (!result.critical.publication.captureAcknowledgedAt)
-						await sessions.recordDurableCapture(
-							session,
-							result.critical.capturedAt,
-							result.critical.publication.versionId,
+					if (!durable.publication.captureAcknowledgedAt)
+						await telemetry.time('receipt', () =>
+							sessions.recordDurableCapture(
+								session,
+								durable.capturedAt,
+								durable.publication.versionId,
+							),
 						);
-					try {
-						this.deps.metrics?.increment('sessions.capture.durable');
-						if (session.save_dirty)
-							this.deps.metrics?.histogram?.(
-								'sessions.capture.durable_lag_ms',
-								Math.max(
-									0,
-									Date.parse(result.critical.capturedAt) -
-										Date.parse(session.save_dirty.acknowledged_at),
-								),
-							);
-					} catch {}
+					telemetry.milestone('durable');
 					retain = !!options.retainRuntime;
 					if (retain) {
 						result.runtime = checkpoint;
@@ -152,6 +137,26 @@ export class SessionCaptureCoordinator {
 						retryable: true,
 						cause,
 					};
+				}
+			}
+			if (options.includeWorkspace !== false && this.deps.persistWorkspace === 'workspace') {
+				try {
+					await telemetry.time('workspace', () =>
+						captureWorkspace(
+							sandbox,
+							bucket,
+							session.project_id,
+							session.notebook_id,
+							workdir,
+							'workspace',
+							undefined,
+							entry,
+							notebooks.workspace.limits,
+						),
+					);
+					result.workspace = { status: 'captured' };
+				} catch (cause) {
+					result.workspace = { status: 'failed', cause };
 				}
 			}
 			outcome = result;
@@ -206,6 +211,10 @@ export class SessionCaptureCoordinator {
 				const state = await resume();
 				if (outcome) outcome.runtimeState = state;
 			}
+			telemetry.complete({
+				status: outcome?.critical.status ?? 'not_required',
+				mode: options.retainRuntime ? 'stop' : 'background',
+			});
 		}
 	}
 }

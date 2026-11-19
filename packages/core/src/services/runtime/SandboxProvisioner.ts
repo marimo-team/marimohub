@@ -1,3 +1,4 @@
+import { CaptureTelemetry } from '../../internal/captureTelemetry';
 import type { LocalPublicationToken } from '../content/localPublication';
 import { EmailAddressSchema } from '../../schema';
 import type { CriticalCaptureResult, SessionCaptureResult } from './sessionCapture';
@@ -2002,14 +2003,18 @@ export class SandboxProvisioner {
 			/** Runs once the artifact bytes are in memory, before publication. */
 			onArtifactsRead?: () => Promise<unknown>;
 			publicationAuthority?: CapturePublicationAuthority;
+			telemetry?: CaptureTelemetry;
 		},
 	): Promise<SessionCaptureResult> {
+		const telemetry = opts?.telemetry ?? new CaptureTelemetry();
 		const skipped = { status: 'skipped' as const };
 		if (opts?.persistEdits === false)
 			return { critical: { status: 'not_required', reason: 'discard' }, workspace: skipped };
 		let source;
 		try {
-			({ source } = await notebooks.getNotebook(projectId, notebookId));
+			source =
+				opts?.publicationToken?.source ??
+				(await notebooks.getNotebook(projectId, notebookId)).source;
 		} catch (cause) {
 			return {
 				critical: { status: 'failed', code: 'SOURCE_UNAVAILABLE', retryable: true, cause },
@@ -2064,13 +2069,8 @@ export class SandboxProvisioner {
 				const token =
 					opts?.publicationToken ?? (await notebooks.beginSessionCapture(projectId, notebookId));
 				await opts?.assertOwnership?.();
-				let artifacts = await readSessionArtifacts(
-					sandbox,
-					mountPath,
-					listing,
-					policy.entryNotebook,
-					hints,
-					true,
+				let artifacts = await telemetry.time('artifact_read', () =>
+					readSessionArtifacts(sandbox, mountPath, listing, policy.entryNotebook, hints, true),
 				);
 				let verified = fingerprints;
 				if (fingerprints && reusable && Object.keys(reusable).length > 0) {
@@ -2088,6 +2088,9 @@ export class SandboxProvisioner {
 					}
 				}
 				await opts?.onArtifactsRead?.();
+				for (const [artifact, content] of Object.entries(artifacts)) {
+					if (content !== undefined) telemetry.bytes('artifact_bytes', content, artifact);
+				}
 				if (artifacts.code === undefined) {
 					return {
 						status: 'failed',
@@ -2097,13 +2100,16 @@ export class SandboxProvisioner {
 					} satisfies CriticalCaptureResult;
 				}
 				publicationDispatched = true;
-				const result = await notebooks.commitSession(
-					projectId,
-					notebookId,
-					artifacts,
-					actor,
-					token,
-					...(opts?.publicationAuthority ? [opts.publicationAuthority] : []),
+				const result = await telemetry.time('publication', () =>
+					notebooks.commitSession(
+						projectId,
+						notebookId,
+						artifacts,
+						actor,
+						token,
+						opts?.publicationAuthority,
+						opts?.telemetry,
+					),
 				);
 				if (!result) {
 					return {
