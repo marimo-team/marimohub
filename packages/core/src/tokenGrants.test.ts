@@ -3,6 +3,7 @@ import { ProjectId } from './ids';
 import {
 	expandTokenGrantPreset,
 	externalTokenGrant,
+	isReservedAccessTokenScope,
 	TokenGrantSchema,
 	tokenGrantAllowsAction,
 	tokenGrantAllowsProject,
@@ -135,4 +136,19 @@ describe('externalTokenGrant', () => {
 			)?.actions,
 		).toEqual(['app.read', 'project.read', 'integration.read']);
 	});
+});
+
+describe('isReservedAccessTokenScope', () => {
+	it.each([
+		'mcp:tools',
+		'openid',
+		'profile',
+		'email',
+		'offline_access',
+		'marimohub:read',
+		'marimohub:x',
+	])('reserves %j', (scope) => expect(isReservedAccessTokenScope(scope)).toBe(true));
+	it.each(['marimohub-prod', 'api://hub/edit', 'mcp:other', 'OPENID'])('allows %j', (scope) =>
+		expect(isReservedAccessTokenScope(scope)).toBe(false),
+	);
 });

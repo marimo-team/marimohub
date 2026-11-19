@@ -1,6 +1,8 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectId } from '@marimo-hub/core/ids';
+import type { SourceControlAccountService } from '@marimo-hub/core';
+import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { GitHubAppPublisher } from '@marimo-hub/source-control-github';
 import { GitLabSourceControl } from '@marimo-hub/source-control-gitlab';
 import { makeSourceControl } from './sourceControl';
@@ -466,5 +468,61 @@ describe('GitLab source control', () => {
 				]),
 			}),
 		).toThrow('invalid GitLab repository');
+	});
+});
+
+describe('personal GitHub publisher credential', () => {
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+
+	it('resolves the user token once per reuse window across concurrent requests', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		const fetcher = vi.fn(async (_url: string, init?: RequestInit) =>
+			Response.json({ object: { sha: (JSON.parse(String(init?.body)) as { sha: string }).sha } }),
+		);
+		vi.stubGlobal('fetch', fetcher);
+		let fail = false;
+		const accessToken = vi.fn(async () => {
+			await Promise.resolve();
+			if (fail) throw new Error('refresh failed');
+			return 'user-token';
+		});
+		const accounts = { accessToken } as unknown as SourceControlAccountService;
+		const registry = makeSourceControl(
+			{
+				MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID: '123',
+				MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: privateKey(),
+				MARIMOHUB_SOURCE_CONTROL_GITHUB_PUBLISH_ACTOR: 'user',
+				MARIMOHUB_SOURCE_CONTROL_WORKING_BRANCH_ENABLED: 'true',
+			},
+			accounts,
+			new MemoryBucket(),
+		).sourceControl!;
+		const branches = registry.getPublisher('github', undefined, {
+			kind: 'user',
+			verification: 'required',
+			userId: 'u'.repeat(43),
+			connectionId: 'c'.repeat(43),
+			generation: 'g',
+			accountId: '1',
+		})!.workingBranches!;
+		const create = (index: number) =>
+			branches.createBranch({
+				repository: 'owner/repo',
+				branch: `marimohub/test-${index}`,
+				fromCommit: 'a'.repeat(40),
+			});
+		await Promise.all(Array.from({ length: 25 }, (_, index) => create(index)));
+		expect(fetcher).toHaveBeenCalledTimes(25);
+		expect(accessToken).toHaveBeenCalledTimes(1);
+
+		vi.setSystemTime(Date.now() + 31_000);
+		fail = true;
+		await expect(create(100)).rejects.toThrow('refresh failed');
+		fail = false;
+		await create(101);
+		expect(accessToken).toHaveBeenCalledTimes(3);
 	});
 });

@@ -43,6 +43,19 @@ export class SessionCaptureCoordinator {
 		let checkpoint: Awaited<ReturnType<RuntimeCaptureClient['prepare']>> | undefined;
 		let retain = false;
 		let outcome: SessionCaptureResult | undefined;
+		let resumed: Promise<SessionCaptureResult['runtimeState']> | undefined;
+		const resume = () =>
+			(resumed ??= runtime!.resume(checkpoint!).then(
+				() => 'running' as const,
+				(error: unknown) => {
+					logOperationalError(
+						'session_capture_resume_failed',
+						{ operation: 'session.capture_resume', session_id: session.session_id },
+						error,
+					);
+					return error instanceof RuntimeMissingError ? ('missing' as const) : ('unknown' as const);
+				},
+			));
 		try {
 			const { source } = await notebooks.getNotebook(session.project_id, session.notebook_id);
 			if (source.type !== 'local')
@@ -78,7 +91,12 @@ export class SessionCaptureCoordinator {
 				session.user_id,
 				this.deps.persistWorkspace,
 				checkpoint.directory,
-				{ includeWorkspace: false, publicationToken },
+				{
+					includeWorkspace: false,
+					publicationToken,
+					// A background save must not keep the kernel frozen through bucket and catalog writes.
+					onArtifactsRead: options.retainRuntime ? undefined : resume,
+				},
 			);
 			if (options.includeWorkspace !== false && this.deps.persistWorkspace === 'workspace') {
 				try {
@@ -180,18 +198,8 @@ export class SessionCaptureCoordinator {
 				});
 			}
 			if (runtime && checkpoint && !retain) {
-				try {
-					await runtime.resume(checkpoint);
-					if (outcome) outcome.runtimeState = 'running';
-				} catch (error) {
-					if (outcome)
-						outcome.runtimeState = error instanceof RuntimeMissingError ? 'missing' : 'unknown';
-					logOperationalError(
-						'session_capture_resume_failed',
-						{ operation: 'session.capture_resume', session_id: session.session_id },
-						error,
-					);
-				}
+				const state = await resume();
+				if (outcome) outcome.runtimeState = state;
 			}
 		}
 	}

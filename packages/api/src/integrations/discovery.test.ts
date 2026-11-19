@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ForbiddenError, ResourceExhaustedError, ValidationError } from '@marimo-hub/core';
+import {
+	ForbiddenError,
+	ResourceExhaustedError,
+	UnavailableError,
+	ValidationError,
+} from '@marimo-hub/core';
 import { setupDiscovery } from '../testing/integrationDiscovery';
 import { mcpPrincipal, mcpRequest } from '../testing/mcp';
 import * as browse from './browse';
@@ -7,8 +12,15 @@ import { profileIntegrationTable, searchIntegrationTables } from './discovery';
 import { DATA_MAX_BYTES, dataBytes } from './bounds';
 
 async function context() {
-	const { deps, project, catalog } = await setupDiscovery();
-	return { deps, pid: project.id, iid: catalog.id, user: mcpPrincipal, request: mcpRequest };
+	const { deps, project, catalog, listTables } = await setupDiscovery();
+	return {
+		deps,
+		pid: project.id,
+		iid: catalog.id,
+		user: mcpPrincipal,
+		request: mcpRequest,
+		listTables,
+	};
 }
 const search = { q: 'order', namespace: ['sales'], limit: 20 };
 afterEach(() => {
@@ -73,10 +85,47 @@ describe('bounded table discovery failures', () => {
 			items: [{ table: 'orders' }],
 			coverage: { complete: false, reason: 'budget' },
 		});
-		for (const error of [new ForbiddenError('Denied'), new ValidationError('Invalid cursor')]) {
+		for (const error of [
+			new ForbiddenError('Denied'),
+			new ValidationError('Invalid cursor'),
+			new UnavailableError('Catalog down'),
+		]) {
 			list.mockRejectedValue(error);
 			await expect(searchIntegrationTables(target, search)).rejects.toBe(error);
 		}
+	});
+
+	it('charges cold pages to the table-search budget and leaves the browse budget intact', async () => {
+		const target = await context();
+		let page = 0;
+		target.listTables.mockImplementation(async () => ({
+			items: [`orders_${++page}`],
+			next_cursor: String(page),
+		}));
+		const wide = { ...search, limit: 50 };
+		const exhausted = await searchIntegrationTables(target, wide);
+		expect(exhausted).toMatchObject({ coverage: { complete: false, reason: 'budget' } });
+		expect(target.listTables).toHaveBeenCalledTimes(32);
+		for (let i = 0; i < 20; i++) {
+			expect(browse.consumeIntegrationBudget(target.deps, 'browse', target.user.id)).toBe(true);
+		}
+
+		for (let i = 0; i < 27; i++) {
+			browse.consumeIntegrationBudget(target.deps, 'tableSearch', target.user.id);
+		}
+		target.listTables.mockClear();
+		const partial = await searchIntegrationTables(target, { ...wide, namespace: ['other'] });
+		expect(target.listTables).toHaveBeenCalledTimes(5);
+		expect(partial).toMatchObject({ coverage: { complete: false, reason: 'budget' } });
+		expect(partial.items).toHaveLength(5);
+	});
+
+	it('reports a repeated cursor as a cycle', async () => {
+		const target = await context();
+		target.listTables.mockResolvedValue({ items: [], next_cursor: 'same' });
+		expect(await searchIntegrationTables(target, search)).toMatchObject({
+			coverage: { complete: false, reason: 'cycle' },
+		});
 	});
 
 	it('times out uncooperative metadata calls and ignores their late result', async () => {

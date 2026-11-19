@@ -251,6 +251,37 @@ that contains this command.
   run: mohub notebooks deploy
 ```
 
+## Push a checkout
+
+`mohub notebooks push` uploads a checkout folder to a push-mode Git notebook with
+`MARIMOHUB_SYNC_TOKEN`. For options, manifests, and CI examples, see
+[Push with the CLI](./syncing.md#push-with-the-cli).
+
+Push skips files with these names, in any letter case:
+
+- `.env` and `.env.*`
+- `.netrc` and `*.pem`
+- `id_rsa`, `id_dsa`, `id_ecdsa`, and `id_ed25519`
+- `gha-creds-*.json`
+
+The command prints each skipped file to stderr. The JSON output lists them in
+`skipped_credential_files`, also with `--dry-run`. To upload them, pass
+`--include-credential-files`. Exclude other secrets with `.marimohubignore` rules.
+
+With `--include-git`, push reads these Git configuration files and the files that they include:
+
+- `.git/config` and `.git/config.worktree`
+- The `config` and `config.worktree` of each submodule under `.git/modules`
+
+Push refuses the upload if one of these files:
+
+- Sets an `http.*.extraheader` or `credential.*` key.
+- Has a URL with a password, or an HTTP(S) URL with a user name, in a key or a value.
+  This includes remote URLs and `url.*.insteadOf` rules.
+- Includes a file inside `.git`.
+
+Push does not inspect other files in `.git`.
+
 ## Profiles
 
 Use profiles to connect to more than one marimohub deployment:

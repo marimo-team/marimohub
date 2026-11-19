@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import type { Session } from '@/types';
 import { deferred } from '@/test/deferred';
-import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
+import { createTestQueryClient, jsonError, jsonOk, renderHookWithClient } from '@/test/render';
+import { userKeys } from '@/api/queryKeys';
 import {
 	SESSION_START_POLL_INTERVAL_MS,
 	SESSION_START_SLOW_POLL_AFTER_MS,
@@ -25,6 +26,12 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 		sandbox_url: 'https://sandbox.example/kernel',
 		...overrides,
 	} as Session;
+}
+
+function clientAs(userId: string) {
+	const client = createTestQueryClient();
+	client.setQueryData(userKeys.me(), { id: userId, email: `${userId}@example.com`, name: userId });
+	return client;
 }
 
 async function settleHook(): Promise<void> {
@@ -2287,6 +2294,7 @@ describe('retained stop recovery', () => {
 		const { currentStopDecision, decideStop } = await import('@/api/sessionStop');
 		const retained = makeSession({
 			notebook_id: NID,
+			user_id: 'me',
 			can: { attach: true, stop: true },
 			stop: {
 				id: crypto.randomUUID(),
@@ -2308,12 +2316,45 @@ describe('retained stop recovery', () => {
 				return jsonOk(retained);
 			}),
 		);
-		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), {
+			client: clientAs('me'),
+			toaster: false,
+		});
 		await waitFor(() => expect(currentStopDecision()?.session.session_id).toBe('sess-1'));
 		act(() => decideStop('keep'));
 		await waitFor(() => expect(result.current.isRunning).toBe(true));
 		expect(result.current.session?.session_id).toBe('sess-1');
 		expect(result.current.error).toBeNull();
+	});
+
+	it("does not stop another user's retained session on a conflict", async () => {
+		const retained = makeSession({
+			notebook_id: NID,
+			user_id: 'owner',
+			can: { attach: true, stop: true },
+			stop: {
+				id: crypto.randomUUID(),
+				outcome: 'retained',
+				force: false,
+				trigger: 'interactive',
+				runtime_state: 'running',
+				requested_at: new Date().toISOString(),
+				updated_at: new Date().toISOString(),
+			},
+		});
+		const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+			if (init?.method === 'POST') return jsonError('CONFLICT', 'Editor in use', 409);
+			if (String(url).endsWith(`/projects/${PID}/sessions`)) return jsonOk({ items: [retained] });
+			return jsonOk(retained);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), {
+			client: clientAs('manager'),
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.error).toMatchObject({ code: 'CONFLICT' }));
+		expect(result.current.session).toBeNull();
+		expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
 	});
 });
 
@@ -2347,7 +2388,16 @@ it('receives progress on the start POST without issuing discovery requests', asy
 			new TextEncoder().encode(`event: progress\ndata: ${JSON.stringify(progress)}\n\n`),
 		);
 	});
-	expect(result.current.startup).toEqual(progress);
+	expect(result.current.startup).toEqual({ ...progress, receivedAt: expect.any(Number) });
+	const receivedAt = result.current.startup!.receivedAt;
+	await act(async () => {
+		stream.enqueue(
+			new TextEncoder().encode(
+				`event: progress\ndata: ${JSON.stringify({ ...progress, detail: 'Still queued' })}\n\n`,
+			),
+		);
+	});
+	expect(result.current.startup).toMatchObject({ detail: 'Still queued', receivedAt });
 	expect(result.current.session).toBeNull();
 	expect(fetchMock).toHaveBeenCalledOnce();
 	await act(async () => {

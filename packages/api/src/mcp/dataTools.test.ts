@@ -3,6 +3,7 @@ import { setupDiscovery } from '../testing/integrationDiscovery';
 import { connectMcpClient, mcpPrincipal, mcpRequest } from '../testing/mcp';
 import { queryIntegrationData } from '../integrations/browse';
 import { isGated, permissionRequest } from '../chat/permissions/policies';
+import type { SearchIndexer, SearchService } from '@marimo-hub/core/search';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -38,8 +39,35 @@ describe('MCP data tools', () => {
 			coverage: { complete: true },
 		});
 		expect((await call('search_tables', { q: 'orders' })).structuredContent).toMatchObject({
-			coverage: { complete: false },
+			coverage: { complete: false, reason: 'cycle' },
 		});
+	});
+
+	it('bounds notebook discovery output', async () => {
+		const { deps, project, catalog } = await setupDiscovery();
+		const search = vi.fn(async () => ({
+			items: [{ id: 'doc', snippet: { text: 'x'.repeat(20_000), highlights: [] } }],
+			partial: false,
+			coverage: [],
+		}));
+		const client = await connectMcpClient(
+			{
+				...deps,
+				search: { service: { search } as unknown as SearchService, indexer: {} as SearchIndexer },
+			},
+			mcpPrincipal,
+		);
+		const reply = await client.callTool({
+			name: 'find_notebooks_using_table',
+			arguments: {
+				project: project.id,
+				integration: catalog.id,
+				namespace: ['sales'],
+				table: 'orders',
+			},
+		});
+		expect(search).toHaveBeenCalledOnce();
+		expect(reply).toMatchObject({ isError: true, structuredContent: { code: 'VALIDATION_ERROR' } });
 	});
 
 	it('profiles bounded samples without returning cell values', async () => {

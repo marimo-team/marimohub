@@ -213,6 +213,10 @@ function countsTowardCap(session: Session, scope: CapScope): boolean {
 	);
 }
 
+class SessionIndexMismatchError extends Error {
+	override readonly name = 'SessionIndexMismatchError';
+}
+
 export class SessionService {
 	private readonly heartbeats = new SingleFlight<string, Session>();
 	private readonly startupReads = new SingleFlight<string, Session>();
@@ -1370,11 +1374,24 @@ export class SessionService {
 			return (await this.listActiveByProject(projectId)).filter(
 				(session) => session.user_id === userId,
 			);
-		const records = await mapWithConcurrency(
-			index.entries.filter((entry) => entry.project_id === projectId),
-			BUCKET_SCAN_CONCURRENCY,
-			(entry) => this.readIndexedSession(userId, entry),
-		);
+		let records: (Session | null)[];
+		try {
+			records = await mapWithConcurrency(
+				index.entries.filter((entry) => entry.project_id === projectId),
+				BUCKET_SCAN_CONCURRENCY,
+				(entry) => this.readIndexedSession(userId, entry),
+			);
+		} catch (error) {
+			if (!(error instanceof SessionIndexMismatchError)) throw error;
+			logOperationalError(
+				'session_index_mismatch',
+				{ operation: 'session.list_present', project_id: projectId },
+				error,
+			);
+			return (await this.listActiveByProject(projectId)).filter(
+				(session) => session.user_id === userId,
+			);
+		}
 		const present = PRESENT_STATUSES as readonly Session['status'][];
 		// Preserve project LIST order when reuse candidates have equal heartbeats.
 		return records
@@ -1678,7 +1695,7 @@ export class SessionService {
 				session.project_id !== entry.project_id ||
 				session.session_id !== entry.session_id)
 		)
-			throw new Error('Session index reference mismatch');
+			throw new SessionIndexMismatchError('Session index reference mismatch');
 		return session;
 	}
 

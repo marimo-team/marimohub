@@ -1349,7 +1349,7 @@ describe('bounded artifact reads', () => {
 				success: false,
 				error: expect.objectContaining({ code: 'READ_FAILED' }),
 			});
-	});
+	}, 20_000);
 
 	it('distinguishes permission errors from missing notebooks', async (context) => {
 		if (process.getuid?.() === 0) context.skip('Root bypasses file permissions');

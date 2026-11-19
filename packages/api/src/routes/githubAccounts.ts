@@ -1,6 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
-import { NotFoundError, ResourceExhaustedError } from '@marimo-hub/core';
+import { NotFoundError } from '@marimo-hub/core';
 import {
 	assertSessionAuthenticated,
 	createApp,
@@ -103,8 +103,6 @@ app.openapi(
 			accounts = deps.githubAccounts;
 		if (!accounts || deps.githubPublishActor !== 'user')
 			throw new NotFoundError('Personal GitHub publishing is not enabled');
-		if (!(await deps.services.oauthRateLimits.consume('authorize')))
-			throw new ResourceExhaustedError('Too many GitHub authorization callbacks');
 		const cookie = linkCookie(accounts.redirectUri);
 		const browser = getCookie(c, cookie.name);
 		const { code, state, error } = c.req.valid('query');

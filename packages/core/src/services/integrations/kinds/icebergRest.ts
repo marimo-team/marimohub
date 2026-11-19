@@ -976,7 +976,7 @@ function duckdbS3Secret(config: IcebergRestConfig, suffix: string) {
 	return brokeredS3Secret({ suffix, endpoint: endpointValue, region, urlStyle });
 }
 
-function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
+export function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
 	const r2Catalog = r2CatalogAccess(config);
 	if (r2Catalog) {
 		return {
@@ -1032,11 +1032,16 @@ function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
 	if (config.storage.scheme !== 's3' || !config.storage.endpoint) {
 		throw new ValidationError('DuckDB-Wasm requires explicit S3 storage configuration.');
 	}
+	const method = config.storage.credentials.method;
 	const credentials = config.storage.anonymous
 		? ({ method: 'anonymous' } as const)
-		: config.storage.credentials.method === 'static'
+		: method === 'static'
 			? staticS3Credentials(config.storage.credentials)
-			: ({ method: 'ambient' } as const);
+			: method === 'ambient'
+				? ({ method: 'ambient' } as const)
+				: undefined;
+	if (!credentials)
+		throw new ValidationError(`DuckDB-Wasm does not support S3 credentials method '${method}'.`);
 	return {
 		kind: 'iceberg-rest',
 		...(config.allow_insecure_transport ? { allowInsecureTransport: true } : {}),

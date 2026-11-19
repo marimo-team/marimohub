@@ -2,6 +2,7 @@
 
 Use `@marimo-hub/iac` to manage project integrations from TypeScript scripts.
 It runs in Node 24.11+ and Deno 2.5+ with no runtime dependencies.
+Each Hub release publishes an SDK with the same version. Use the SDK version of your Hub.
 
 You need an existing project and a token with `integration.read` and `integration.manage`.
 Use a [scoped PAT](./api-tokens.md) or an enabled [OIDC access token](./auth.md#external-access-tokens).
@@ -33,6 +34,14 @@ The Hub checks runtime constraints and secret policies. For plain objects, use `
 Supply the Hub URL without `/api/v1`. Deployment path prefixes are supported.
 For renewable credentials, supply an async `token` callback.
 The library does not read environment variables or print output.
+
+| `createHub` option | Default | Behavior                                                                    |
+| ------------------ | ------- | --------------------------------------------------------------------------- |
+| `timeoutMs`        | 20000   | Time limit in milliseconds for each request, including each retry.          |
+| `maxAttempts`      | 3       | Attempts for a retryable request, and for each direct `upsert` or `ensure`. |
+
+The request time limit starts at token acquisition and ends at the parsed response.
+To limit a whole batch, pass an `AbortSignal`, for example `{ signal: AbortSignal.timeout(300_000) }`.
 
 ## Choose an operation
 
@@ -70,7 +79,8 @@ Batches apply in order. A failure stops the batch and raises `ApplyError`.
 Its `report` lists completed, failed, and not-attempted items. Completed operations remain committed.
 Rerun upserts after a partial failure.
 
-Direct `upsert` and `ensure` retry conflicts within an attempt limit and shared deadline.
+Direct `upsert` and `ensure` retry each `CONFLICT`, `PRECONDITION_FAILED`, and uncertain failure until `maxAttempts`.
+A conflict from a different kind or an organization integration fails again on each attempt.
 If a response is lost, they check current state and can return `converged`.
 A strict `insert` reports an uncertain outcome instead. Inspect the integration before another insert attempt.
 
@@ -88,10 +98,25 @@ See [integration secrets](./integration-secrets.md) for resolver configuration.
 
 Reports omit values and locators. Keep raw declarations and credentials out of logs.
 
+## Errors and limits
+
+Failures raise `IacError` with a `code`, `message`, and HTTP `status`.
+For a 4xx response, the SDK uses the Hub's `error.code` and `error.message`.
+If the message contains the token or a submitted configuration value, the SDK uses a fixed message.
+For 5xx responses and network failures, the SDK uses a fixed message.
+
+Plan and apply share a budget of 120 requests per user per minute on each Hub replica.
+Above the budget, the Hub returns 429 with `Retry-After`. Planning retries a 429; apply reports it as a failure.
+
+Newer Hubs can return `action` values that the SDK does not list. The SDK passes them through.
+Treat an unlisted plan action as a change that needs review.
+
 ## Deno and pipelines
 
 Copy [the Deno example](https://github.com/marimo-team/marimohub/tree/main/examples/integration-iac/deno).
-Its `deno.json` pins the package version, which must exist on npm.
+Its `deno.json` imports the SDK sources from a commit of the marimohub repository.
+Set the commit to the release tag of your Hub, for example the commit of `v0.7.1`.
+The two URL entries map the SDK's relative imports to files, so all four entries must name the same commit.
 Run `deno install`. Commit `deno.lock`. Then run:
 
 ```sh

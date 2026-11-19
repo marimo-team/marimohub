@@ -6,6 +6,7 @@ import {
 	NotFoundError,
 	ProjectId,
 	ResourceExhaustedError,
+	ValidationError,
 	createSlidingWindowBudget,
 } from '@marimo-hub/core';
 import type {
@@ -611,8 +612,22 @@ const ReconcileInput = z
 		enabled: z.boolean().optional(),
 		mode: z.enum(['insert', 'ensure', 'upsert']).optional(),
 		allowOrgOverride: z.boolean().optional(),
+		allow_org_override: z
+			.boolean()
+			.optional()
+			.openapi({ description: 'Alias of `allowOrgOverride`. Values must match if both are set.' }),
 	})
 	.strict();
+type ReconcileBody = z.infer<typeof ReconcileInput>;
+function reconcileInput({ allow_org_override, ...input }: ReconcileBody) {
+	if (
+		allow_org_override !== undefined &&
+		input.allowOrgOverride !== undefined &&
+		allow_org_override !== input.allowOrgOverride
+	)
+		throw new ValidationError('allow_org_override and allowOrgOverride must match.');
+	return { ...input, allowOrgOverride: input.allowOrgOverride ?? allow_org_override };
+}
 const ReconcilePrecondition = z.discriminatedUnion('state', [
 	z.object({ state: z.literal('absent') }).strict(),
 	z
@@ -641,6 +656,11 @@ const planReconciliation = createRoute({
 	operationId: 'integrations.reconcile.plan',
 	tags: ['Integrations'],
 	summary: 'Preview an integration declaration without writing configuration',
+	description:
+		'Compares one declaration with the project integration of the same name and writes nothing. ' +
+		'The returned `precondition` is `absent` when no project integration has the name, or ' +
+		'`existing` with its `id` and a `revision` equal to its `updated_at`. Pass it unchanged to ' +
+		'apply. Shares a per-user request budget with apply; 429 responses carry `Retry-After`.',
 	request: { params: ProjectIdParam, body: jsonBody(ReconcileInput) },
 	responses: {
 		200: jsonContent(
@@ -657,6 +677,12 @@ const applyReconciliation = createRoute({
 	operationId: 'integrations.reconcile.apply',
 	tags: ['Integrations'],
 	summary: 'Apply an integration declaration with a required state precondition',
+	description:
+		'Creates or updates one project integration only if its current state matches `expected`, ' +
+		'the precondition returned by plan. `absent` requires that no project integration has the ' +
+		'name; `existing` requires the same `id` and an `updated_at` equal to `revision`. A mismatch ' +
+		'returns 412 without a write: create and review a new plan. Apply never deletes ' +
+		'integrations, and integrations omitted from a batch stay unchanged.',
 	request: {
 		params: ProjectIdParam,
 		body: jsonBody(z.object({ desired: ReconcileInput, expected: ReconcilePrecondition }).strict()),
@@ -675,9 +701,14 @@ const app = createApp();
 
 app.openapi(planReconciliation, async (c) => {
 	const deps = c.get('deps');
+	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(deps.services.projects, pid, c.get('user'), 'integration.manage', deps);
-	const data = await requireIntegrations(deps).planReconciliation(pid, c.req.valid('json'));
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps);
+	assertReconcileBudget(user.id);
+	const data = await requireIntegrations(deps).planReconciliation(
+		pid,
+		reconcileInput(c.req.valid('json')),
+	);
 	return c.json({ success: true as const, data }, 200);
 });
 
@@ -686,8 +717,14 @@ app.openapi(applyReconciliation, async (c) => {
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
 	await assertProjectRole(deps.services.projects, pid, user, 'integration.manage', deps);
+	assertReconcileBudget(user.id);
 	const { desired, expected } = c.req.valid('json');
-	const data = await requireIntegrations(deps).applyReconciliation(pid, desired, expected, user.id);
+	const data = await requireIntegrations(deps).applyReconciliation(
+		pid,
+		reconcileInput(desired),
+		expected,
+		user.id,
+	);
 	if (data.action !== 'unchanged') {
 		const event = data.action === 'created' ? 'integration.create' : 'integration.update';
 		await appendAudit(
@@ -861,6 +898,15 @@ function assertTestBudget(userId: string): void {
 
 export function trackedTestBudgets(): number {
 	return testBudget.tracked();
+}
+
+const reconcileBudget = createUserBudget(120);
+function assertReconcileBudget(userId: string): void {
+	assertBudget(
+		reconcileBudget,
+		userId,
+		'Too many integration plan or apply requests. Try again in a minute.',
+	);
 }
 
 app.openapi(copyIntegration, async (c) => {

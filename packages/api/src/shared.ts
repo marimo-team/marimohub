@@ -890,7 +890,11 @@ export function ok<T>(c: Context, data: T): ReturnType<typeof c.json<SuccessEnve
 }
 
 /** Backoff hint (seconds) for the retriable statuses, surfaced as `Retry-After`. */
-const RETRY_AFTER_SECONDS: Record<number, number> = { 429: 5, 503: 2 };
+export const RETRY_AFTER_SECONDS: Partial<Record<number, number>> = { 429: 5, 503: 2 };
+
+export function internalErrorMessage(requestId: string | undefined): string {
+	return requestId ? `Internal error — ref ${requestId}` : 'Internal error';
+}
 
 export interface ErrorDetail {
 	field: string;

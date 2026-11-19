@@ -337,14 +337,19 @@ describe('external OIDC access tokens', () => {
 		).toBeNull();
 	});
 
-	it.each(['marimohub:read', 'hub prod', ''])(
-		'rejects an invalid or built-in scope grant: %j',
-		(scope) => {
-			expect(() =>
-				createOidcAccessTokenAuthenticator({ ...config, scopeGrants: new Map([[scope, 'full']]) }),
-			).toThrow(/scope grant/);
-		},
-	);
+	it.each([
+		'marimohub:read',
+		'marimohub:custom',
+		'mcp:tools',
+		'openid',
+		'offline_access',
+		'hub prod',
+		'',
+	])('rejects an invalid or reserved scope grant: %j', (scope) => {
+		expect(() =>
+			createOidcAccessTokenAuthenticator({ ...config, scopeGrants: new Map([[scope, 'full']]) }),
+		).toThrow(/scope grant/);
+	});
 
 	it('does not carry group entitlements from another request', async () => {
 		const auth = createOidcAccessTokenAuthenticator({

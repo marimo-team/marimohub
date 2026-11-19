@@ -91,6 +91,7 @@ export class SessionLifecycleService {
 			sessions,
 			persistWorkspace: cfg.persistWorkspace,
 			workdir: cfg.workdir,
+			metrics: cfg.metrics,
 		});
 		this.retirer = new SessionRetirer({
 			sessions,
@@ -247,6 +248,7 @@ export class SessionLifecycleService {
 						const outcome = await this.retirer.reclaim(s, {
 							thumbnailDeadlineAt,
 							requireIdle: active !== 0,
+							sandboxGone,
 						});
 						// Only `expired` reclaims are counted: for terminated/failed records the
 						// confirm-destroy is a routine no-op, not a recovered leak.
@@ -272,7 +274,8 @@ export class SessionLifecycleService {
 					}
 
 					if (!poolMember && heartbeatStale && !hasEditors) {
-						if (await this.gracefulTeardown(s, true, thumbnailDeadlineAt)) result.reapedIdle++;
+						if (await this.gracefulTeardown(s, true, thumbnailDeadlineAt, sandboxGone))
+							result.reapedIdle++;
 						return;
 					}
 					if (pastDeadline) {
@@ -289,7 +292,8 @@ export class SessionLifecycleService {
 							result.extended++;
 						} else if (!poolMember) {
 							// Pool retirement must CAS-fence admission before teardown.
-							if (await this.gracefulTeardown(s, true, thumbnailDeadlineAt)) result.reapedExpired++;
+							if (await this.gracefulTeardown(s, true, thumbnailDeadlineAt, sandboxGone))
+								result.reapedExpired++;
 							return;
 						}
 					}
@@ -336,8 +340,18 @@ export class SessionLifecycleService {
 		s: Session,
 		captureBeforeDestroy = true,
 		thumbnailDeadlineAt?: number,
+		sandboxGone = false,
 	): Promise<boolean> {
 		if (captureBeforeDestroy && sessionPersistsEdits(s)) {
+			// Confirmed absence has nothing left to save, so retained failures must not block cleanup.
+			if (sandboxGone && s.stop) {
+				const requested = await this.sessions.requestStop(s.project_id, s.session_id, {
+					trigger: 'reconcile',
+					key: crypto.randomUUID(),
+					previousId: s.stop.id,
+				});
+				return (await this.retirer.stop(requested)).stop?.outcome === 'stopped';
+			}
 			if (
 				s.stop?.failure?.retryable === false &&
 				(!s.last_durable_capture ||

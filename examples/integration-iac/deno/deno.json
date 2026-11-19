@@ -1,7 +1,9 @@
 {
 	"imports": {
-		"@marimo-hub/iac": "npm:@marimo-hub/iac@0.7.1",
-		"@marimo-hub/iac/runner": "npm:@marimo-hub/iac@0.7.1/runner"
+		"@marimo-hub/iac": "https://raw.githubusercontent.com/marimo-team/marimohub/3347be5f36a4f6714bb0b69ccaa26a370b935b84/packages/iac/src/index.ts",
+		"@marimo-hub/iac/runner": "https://raw.githubusercontent.com/marimo-team/marimohub/3347be5f36a4f6714bb0b69ccaa26a370b935b84/packages/iac/src/runner.ts",
+		"https://raw.githubusercontent.com/marimo-team/marimohub/3347be5f36a4f6714bb0b69ccaa26a370b935b84/packages/iac/src/index": "https://raw.githubusercontent.com/marimo-team/marimohub/3347be5f36a4f6714bb0b69ccaa26a370b935b84/packages/iac/src/index.ts",
+		"https://raw.githubusercontent.com/marimo-team/marimohub/3347be5f36a4f6714bb0b69ccaa26a370b935b84/packages/iac/src/generated": "https://raw.githubusercontent.com/marimo-team/marimohub/3347be5f36a4f6714bb0b69ccaa26a370b935b84/packages/iac/src/generated.ts"
 	},
 	"tasks": {
 		"plan": "deno run --no-prompt --frozen --allow-net --allow-env=MARIMOHUB_URL,MARIMOHUB_TOKEN,MARIMOHUB_PROJECT_ID,WAREHOUSE_HOST integrations.ts --plan",

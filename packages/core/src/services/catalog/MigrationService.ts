@@ -298,15 +298,29 @@ export class MigrationService {
 			if (Date.now() >= expiresAt) return false;
 			if (result.waiting_reason && result.progress)
 				throw new Error('Waiting batches cannot publish progress');
-			const progress = result.progress
-				? MigrationProgressSchema.parse({
-						processed:
-							(state?.progress?.processed ?? 0) +
-							z.number().int().nonnegative().parse(result.progress.delta),
-						total: result.progress.total,
-						partial: state?.progress?.partial ?? state?.cursor !== undefined,
-					})
-				: state?.progress;
+			let progress = state?.progress;
+			if (result.progress) {
+				const processed =
+					(state?.progress?.processed ?? 0) +
+					z.number().int().nonnegative().parse(result.progress.delta);
+				let total = result.progress.total;
+				// The batch already committed; a shrinking total is telemetry and must not fail it.
+				if (total !== undefined && total < processed) {
+					logEvent({
+						level: 'warn',
+						event: 'migration_progress_total_clamped',
+						migration: migration.id,
+						processed,
+						total,
+					});
+					total = processed;
+				}
+				progress = MigrationProgressSchema.parse({
+					processed,
+					total,
+					partial: state?.progress?.partial ?? state?.cursor !== undefined,
+				});
+			}
 			const checkpoint = {
 				...pending,
 				progress,

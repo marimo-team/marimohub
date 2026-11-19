@@ -975,13 +975,20 @@ describe('external access-token configuration', () => {
 		['marimohub-prod=EDIT', /not a grant preset/],
 		['marimohub-prod=edit,marimohub-prod=edit', /listed more than once/],
 		['marimohub-prod=read,marimohub-prod=full', /listed more than once/],
-		['marimohub:read=full', /built-in scope/],
+		['marimohub:read=full', /reserved scope/],
+		['marimohub:custom=read', /reserved scope/],
+		['mcp:tools=full', /reserved scope/],
+		['openid=full', /reserved scope/],
+		['profile=read', /reserved scope/],
+		['email=read', /reserved scope/],
+		['offline_access=run', /reserved scope/],
 	])('rejects invalid scope grants: %j', (value, message) => {
 		const error = getConfigError(() =>
 			makeAuth({ ...enabled, MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS: value }),
 		);
 		expect(error.message).toMatch(message);
 		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_SCOPE_GRANTS');
+		expect(error.opts.docs).toBe('docs/auth.md#scope-grants');
 	});
 	it('rejects orphaned scope grants', () => {
 		const error = getConfigError(() =>

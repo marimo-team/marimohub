@@ -131,28 +131,34 @@ This keeps each drain budget within its pod termination grace.
 
 ## Session stop and recovery
 
-Normal stops save persistent local editors before stopping their writers. If saving
-fails, the runtime remains available when resume is confirmed. The editor offers
+A normal stop saves a persistent local editor before it stops the writers. If the save
+fails and resume is confirmed, the runtime stays available. The editor offers
 **Retry save**, **Keep running**, and a separately confirmed **Force stop**.
-Force can discard changes since the last confirmed capture. Restart waits for a
-successful stop before starting a replacement.
+Force stop can discard changes made after the last confirmed capture. Restart waits
+for a successful stop before it starts a replacement.
 
 [The API reference](./api.md#endpoints) defines the stop status codes and retry keys.
-A pending attempt retains its editor claim and capacity slot. Maintenance reconciles
-unfinished attempts; it does not replay an abandoned interactive failure.
-Automatic idle and lifetime attempts recheck eligibility and back off after failure.
-Authorization expiry still enforces security teardown independently of saving.
+A pending stop keeps its editor claim and capacity slot. Maintenance reconciles
+unfinished stops. It does not replay an abandoned interactive failure.
 
-Safe capture requires the Linux lifecycle supervisor and the supported marimo 0.24.x
-adapter. Native macOS runtimes and unsupported launch strategies retain the editor
-when safe capture is unavailable. Users can explicitly force stop them.
-Direct runtime exposure has no proxy save observation and relies on periodic capture.
-Neither mode protects unsaved browser buffers or prevents an external provider kill.
+Automatic idle and lifetime stops recheck eligibility before each attempt.
+After a failed stop, the next automatic attempt waits 1 minute × 2^n, to a maximum of
+1 hour. Here n is the number of consecutive automatic attempts.
+A non-retryable failure blocks automatic attempts until a newer capture succeeds.
+Authorization expiry enforces security teardown even when the save fails.
 
-Deploy the publication readers, writers, and runtime support together. Drain old hub
-writers before admitting sessions with this protocol. Mixed workers can bypass the
-publication fence or destroy a runtime after a failed save. Back up each source head
-and its referenced immutable payloads together.
+Safe capture requires the Linux lifecycle supervisor and marimo 0.24.x or 0.25.x.
+The default sandbox image includes a supported version. Native macOS runtimes and
+unsupported launch strategies cannot use safe capture, so a normal stop retains the
+editor. Users can force stop it.
+Direct runtime exposure has no proxy save hints, so it relies on periodic capture.
+Proxied and direct exposure do not protect unsaved browser buffers. They do not
+prevent an external provider kill.
+
+Deploy the publication readers, writers, and runtime support together. Stop old hub
+writers before you admit sessions with this protocol; see [Upgrades](#upgrades). Mixed
+workers can bypass the publication fence or destroy a runtime after a failed save.
+Back up each source head together with its referenced immutable payloads.
 
 ## Background loops
 
@@ -362,7 +368,12 @@ The image and Helm chart are released together on every `v*` tag (chart version,
 `appVersion`, and image tag all match), so pinning a chart version pins
 everything.
 
+If the release notes say that the writer protocol changes, do not use a rolling upgrade.
+Old and new replicas must not write at the same time. Before you upgrade, scale the old
+API and maintenance deployments to zero. Then run `helm upgrade`.
+
 ```bash
+kubectl scale deployment marimohub marimohub-maintenance --replicas=0   # writer protocol changes only
 helm upgrade marimohub oci://ghcr.io/marimo-team/charts/marimohub \
   --version <VERSION> -n marimohub -f values.yaml
 helm history marimohub -n marimohub      # what's running

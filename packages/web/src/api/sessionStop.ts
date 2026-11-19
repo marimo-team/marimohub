@@ -1,5 +1,6 @@
+import { sleep } from '@marimo-hub/core/duration';
 import type { Session } from '@/types';
-import { apiClient, apiData } from './client';
+import { apiClient, apiData, ApiRequestError } from './client';
 import { isNotFoundError } from './request';
 
 export type StopDecision = 'retry' | 'keep' | 'force';
@@ -39,6 +40,7 @@ export async function stopSessionSafely(
 	notebookId: string,
 	sessionId: string,
 	decision = ask,
+	signal?: AbortSignal,
 ): Promise<void> {
 	const path = { pid: projectId, nid: notebookId, sid: sessionId };
 	let previousId: string | undefined;
@@ -60,11 +62,13 @@ export async function stopSessionSafely(
 						header: { 'idempotency-key': key },
 					},
 					timeout: 120_000,
+					signal,
 				},
 			);
 			await apiData(Promise.resolve(result));
 			if (result.response.status === 200) return;
 		} catch (cause) {
+			signal?.throwIfAborted();
 			if (isNotFoundError(cause)) return;
 			error = cause;
 		}
@@ -74,12 +78,20 @@ export async function stopSessionSafely(
 			const session = await apiData(
 				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}', {
 					params: { path },
+					signal,
 				}),
-			).catch((cause) => {
+			).catch((cause: unknown) => {
+				signal?.throwIfAborted();
 				if (isNotFoundError(cause)) return null;
+				// The stop may already be accepted; a transient server error is not an answer.
+				if (cause instanceof ApiRequestError && (cause.status ?? 0) >= 500) return;
 				throw cause;
 			});
-			if (!session) return;
+			if (session === null) return;
+			if (session === undefined) {
+				await sleep(1000, signal);
+				continue;
+			}
 			if (session.stop?.outcome === 'stopped' || (session.status === 'terminated' && !session.stop))
 				return;
 			if (session.stop && ['retained', 'uncertain'].includes(session.stop.outcome)) {
@@ -88,9 +100,7 @@ export async function stopSessionSafely(
 			}
 			if (!session.stop)
 				throw error instanceof Error ? error : new Error('Stop was not accepted. Retry shortly.');
-			await new Promise((resolve) => {
-				setTimeout(resolve, 1000);
-			});
+			await sleep(1000, signal);
 		}
 		if (!retained)
 			throw new Error(

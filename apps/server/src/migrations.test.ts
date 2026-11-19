@@ -161,7 +161,14 @@ it('holds manual work until it settles after deadline and shares the runner guar
 		return { done: true as const };
 	});
 	deps.services.migrations = new MigrationService(bucket, [{ id: 'manual-v1', runBatch: batch }]);
+	// Fake timers do not drive AbortSignal.timeout.
+	const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+		const deadline = new AbortController();
+		setTimeout(() => deadline.abort(new DOMException('Deadline', 'TimeoutError')), ms);
+		return deadline.signal;
+	});
 	const first = runMigrationAttempt(deps, new AbortController().signal);
+	expect(timeout).toHaveBeenCalledWith(55_000);
 	const rejected = expect(first).rejects.toMatchObject({ name: 'TimeoutError' });
 	await vi.advanceTimersByTimeAsync(55_000);
 	const scheduled = deps.services.migrations.tick();
@@ -172,4 +179,16 @@ it('holds manual work until it settles after deadline and shares the runner guar
 	await scheduledRejected;
 	expect(deps.services.migrations.isComplete('manual-v1')).toBe(false);
 	expect(await deps.services.migrations.tick()).toBe(true);
+});
+
+it('passes shutdown cancellation through the manual attempt deadline', async () => {
+	const { runMigrationAttempt } = await import('./migrationControl');
+	const deps = makeTestDeps(await createInitializedBucket());
+	const tick = vi.spyOn(deps.services.migrations, 'tick').mockResolvedValue(true);
+	const shutdown = new AbortController();
+	await runMigrationAttempt(deps, shutdown.signal);
+	const signal = tick.mock.calls[0][0]!;
+	expect(signal.aborted).toBe(false);
+	shutdown.abort(new Error('shutdown'));
+	expect(signal.reason).toBe(shutdown.signal.reason);
 });

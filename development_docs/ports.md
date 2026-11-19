@@ -138,26 +138,25 @@ options?.onProgress?.({ phase: 'allocating', detail: 'Waiting in queue' });
 Detail text is public and limited to 240 characters. It must exclude credentials, infrastructure identifiers, and raw logs.
 The provisioner reports `allocating`, `workspace`, and `starting`. The last phase includes dependency installation and notebook launch.
 
-With `Accept: text/event-stream`, the session-creation POST opens a stream after initial authorization:
+The session-creation POST can stream these phases to clients.
+[The API reference](../docs/api.md#session-startup-progress) defines the events, keepalives,
+expiry, and disconnect behavior.
 
-- `progress`: `{ phase, detail?, started_at, attempt, observed }`.
-- `result`: the normal `{ success: true, data }` response, including app assignments.
-- `error`: `{ success: false, error: { code, message, status } }` with a public error message.
-
-Only edit starts emit `progress`. App starts send keepalives and a final result or error, regardless of the caller's role.
+Only edit starts emit `progress`. App starts send keepalives and a final result or error, for every caller role.
 The app UI shows “Starting app…” without steps, adapter details, or a timer.
 
-`started_at` records phase entry at callback receipt. Sandbox replacement increments `attempt` and discards late callbacks from the previous sandbox.
+Each start attempt creates a new progress reporter. `attempt` counts sandbox replacements within one start attempt.
+It starts at 1 and increments when the provisioner moves to a new sandbox. The reporter discards late callbacks from the previous sandbox.
+A retry that retires an editor and starts again is a new start attempt, so `attempt` restarts at 1.
+`started_at` records phase entry when the callback arrives.
 The UI marks only `observed` phases complete and shows elapsed time for the current phase.
 
-The stream retains one pending snapshot and coalesces updates within a phase once per second. Slow readers cannot delay provisioning.
-When the reader can receive data, comment heartbeats arrive every 15 seconds.
-Observation expires after 30 minutes. Disconnects and expiry leave provisioning active.
+The stream keeps one pending snapshot. It coalesces updates within a phase to one per second. Slow readers cannot delay provisioning.
 Existing authorization and publication checks apply without extra authorization reads.
 
-JSON callers retain the synchronous response, and the browser accepts JSON fallback responses.
+JSON callers keep the synchronous response, and the browser accepts JSON fallback responses.
 Reused sessions return a result without progress. A broken stream does not trigger an automatic POST retry.
-Progress has no replay or cross-replica subscription. Startup still depends on the server lifetime and hard proxy request limits.
+Progress has no cross-replica subscription. Startup still depends on the server lifetime and hard proxy request limits.
 
 ### Warm-pool support
 

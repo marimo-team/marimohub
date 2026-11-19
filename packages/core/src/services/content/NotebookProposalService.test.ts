@@ -844,6 +844,81 @@ describe('NotebookProposalService', () => {
 		expect(openChangeRequest).toHaveBeenCalledOnce();
 	});
 
+	it('shares lease checks across concurrent per-file requests and renews only near expiry', async () => {
+		const { instance } = makeFsSandbox({ files: { 'dashboard.py': 'print("personal")' } });
+		const proposal = await capture(instance);
+		const publicationKey = paths
+			.project(projectId)
+			.notebook(notebookId)
+			.proposal(proposal.proposal_id).publication;
+		const stored = await (await env.bucket.get(publicationKey))!.json<Record<string, unknown>>();
+		await env.bucket.put(
+			publicationKey,
+			JSON.stringify({
+				...stored,
+				publication_actor: {
+					kind: 'user',
+					verification: 'required',
+					userId: ACTOR,
+					connectionId: 'original',
+					generation: 'generation',
+					accountId: '123',
+				},
+			}),
+		);
+		const put = vi.spyOn(env.bucket, 'put');
+		const leaseWrites = () =>
+			put.mock.calls.filter(
+				([key, body]) => key === publicationKey && String(body).includes('publication_lease'),
+			).length;
+		let now = Date.now();
+		const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+		try {
+			const openChangeRequest = vi.fn<SourceControlPublisher['openChangeRequest']>(
+				async (input) => {
+					for (let batch = 0; batch < 5; batch++)
+						await Promise.all(Array.from({ length: 8 }, () => input.preparation!.assertCurrent!()));
+					expect(leaseWrites()).toBe(1);
+					now += 61_000;
+					await Promise.all(Array.from({ length: 8 }, () => input.preparation!.assertCurrent!()));
+					expect(leaseWrites()).toBe(2);
+					return {
+						number: 17,
+						url: 'https://github.com/owner/repo/pull/17',
+						headBranch: input.headBranch,
+						headCommit: 'personal',
+						verification: {
+							status: 'verified',
+							commit: 'personal',
+							url: 'https://github.com/owner/repo/commit/personal',
+						},
+					};
+				},
+			);
+			const service = new NotebookProposalService(env.bucket, undefined, {
+				getPublisher: vi.fn(() => ({ provider: 'github', openChangeRequest })),
+				getReader: vi.fn<SourceControlRegistry['getReader']>(),
+				publisherProviders: () => ['github'],
+				readerProviders: () => [],
+				pullSourceProviders: () => [],
+			});
+			await expect(
+				service.publishChangeRequest({
+					projectId,
+					notebookId,
+					proposalId: proposal.proposal_id,
+					actor: ACTOR,
+					title: 'Personal',
+					body: '',
+				}),
+			).resolves.toMatchObject({ number: 17 });
+			expect(openChangeRequest).toHaveBeenCalledOnce();
+		} finally {
+			clock.mockRestore();
+			put.mockRestore();
+		}
+	});
+
 	it('publishes a repo-relative change and returns the stored PR on retry', async () => {
 		const { instance } = makeFsSandbox({ files: { 'dashboard.py': 'print("after")' } });
 		const proposal = await capture(instance);

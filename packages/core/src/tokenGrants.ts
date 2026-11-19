@@ -113,6 +113,21 @@ export function isExternalTokenScope(
 	return Object.hasOwn(EXTERNAL_TOKEN_SCOPE_PRESETS, scope);
 }
 
+// Grant keys must not alias scopes that already carry meaning: `mcp:tools` gates MCP
+// (packages/api/src/mcp/constants.ts), the OIDC identity scopes are requested by every
+// client, and `marimohub:` is the built-in namespace.
+const RESERVED_ACCESS_TOKEN_SCOPES: ReadonlySet<string> = new Set([
+	'mcp:tools',
+	'openid',
+	'profile',
+	'email',
+	'offline_access',
+]);
+
+export function isReservedAccessTokenScope(scope: string): boolean {
+	return RESERVED_ACCESS_TOKEN_SCOPES.has(scope) || scope.startsWith('marimohub:');
+}
+
 /** `scopeGrants` adds deployment-specific scopes; it cannot redefine the built-in ones. */
 export function externalTokenGrant(
 	scopes: readonly string[],

@@ -43,13 +43,13 @@ describe('transport failures', () => {
 				new ReadableStream({
 					cancel: () => Promise.reject(new Error('private-provider')),
 				}),
-				{ status: 403 },
+				{ status: 503 },
 			),
 		);
-		await expect(scope(fetch).plan([spec])).rejects.toMatchObject({
-			code: 'FORBIDDEN',
-			status: 403,
-			uncertain: false,
+		await expect(scope(fetch, { maxAttempts: 1 }).plan([spec])).rejects.toMatchObject({
+			code: 'HTTP_ERROR',
+			status: 503,
+			message: 'Hub is unavailable. Check deployment health before retrying.',
 		});
 		expect(fetch).toHaveBeenCalledOnce();
 	});
@@ -119,6 +119,8 @@ describe('transport failures', () => {
 		{ success: false, data: planned },
 		{ success: true, data: { ...planned, changed_paths: [1] } },
 		{ success: true, data: { ...planned, precondition: { state: 'existing', id: 'i' } } },
+		{ success: true, data: { ...planned, action: 7 } },
+		{ success: true, data: { ...planned, action: 'Private Action' } },
 	])('rejects malformed plan envelopes %# without retrying', async (body) => {
 		const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json(body));
 		await expect(scope(fetch).plan([spec])).rejects.toMatchObject({
@@ -179,6 +181,110 @@ describe('transport failures', () => {
 		abort.abort();
 		await rejected;
 		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+});
+
+const hubFailure = (status: number, code: string, message: string) =>
+	Response.json({ success: false, error: { code, message } }, { status });
+
+describe('Hub error details', () => {
+	it('passes through 4xx codes and messages and retries conflicts up to maxAttempts', async () => {
+		const fetch = vi
+			.fn<typeof globalThis.fetch>()
+			.mockImplementation(async () =>
+				hubFailure(409, 'CONFLICT', 'Integration name belongs to a different kind.'),
+			);
+		await expect(scope(fetch).upsert(spec)).rejects.toMatchObject({
+			code: 'CONFLICT',
+			status: 409,
+			message: 'Integration name belongs to a different kind.',
+		});
+		expect(fetch).toHaveBeenCalledTimes(3);
+	});
+	it('retries a transient conflict', async () => {
+		const fetch = vi
+			.fn<typeof globalThis.fetch>()
+			.mockResolvedValueOnce(
+				hubFailure(409, 'CONFLICT', 'Integration name publication is in progress.'),
+			)
+			.mockResolvedValueOnce(ok(planned))
+			.mockResolvedValueOnce(ok(outcome));
+		await expect(scope(fetch).upsert(spec)).resolves.toMatchObject({ action: 'created' });
+		expect(fetch).toHaveBeenCalledTimes(3);
+	});
+	it('retries a conflict whose message was dropped for echoing a submitted value', async () => {
+		const fetch = vi
+			.fn<typeof globalThis.fetch>()
+			.mockResolvedValueOnce(hubFailure(409, 'CONFLICT', 'Integration private-config exists.'))
+			.mockResolvedValueOnce(ok(planned))
+			.mockResolvedValueOnce(ok(outcome));
+		await expect(scope(fetch).upsert(spec)).resolves.toMatchObject({ action: 'created' });
+		expect(fetch).toHaveBeenCalledTimes(3);
+	});
+	it.each([
+		['echoes a submitted value', hubFailure(422, 'VALIDATION_ERROR', 'Bad private-config')],
+		['echoes the token', hubFailure(422, 'VALIDATION_ERROR', 'Bad private-token')],
+	])('drops a 4xx message that %s', async (_, response) => {
+		const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(response);
+		const error = await scope(fetch)
+			.plan([spec])
+			.catch((error: unknown) => error);
+		expect(error).toMatchObject({ code: 'VALIDATION_ERROR', status: 422 });
+		expect(String(error)).not.toContain('private');
+	});
+	it('never passes through 5xx details', async () => {
+		const fetch = vi
+			.fn<typeof globalThis.fetch>()
+			.mockResolvedValue(hubFailure(500, 'INTERNAL_ERROR', 'private-provider'));
+		const error = await scope(fetch, { maxAttempts: 1 })
+			.plan([spec])
+			.catch((error: unknown) => error);
+		expect(error).toMatchObject({ code: 'HTTP_ERROR', status: 500 });
+		expect(String(error)).not.toContain('private');
+	});
+	it('passes through unknown actions from newer Hubs', async () => {
+		const fetch = vi
+			.fn<typeof globalThis.fetch>()
+			.mockResolvedValueOnce(ok({ ...planned, action: 'replace' }))
+			.mockResolvedValueOnce(ok({ ...outcome, action: 'replaced' }));
+		const target = scope(fetch);
+		const plan = await target.plan([spec]);
+		expect(plan.items[0].action).toBe('replace');
+		expect((await target.apply(plan)).completed[0].action).toBe('replaced');
+	});
+});
+
+describe('request timeout', () => {
+	it('applies timeoutMs to each request rather than the whole batch', async () => {
+		const names = ['one', 'two', 'three'];
+		const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (url, init) => {
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			const body = JSON.parse(String(init?.body)) as { name?: string; desired?: { name: string } };
+			const name = (body.desired ?? body).name;
+			return String(url).endsWith('/plan') ? ok({ ...planned, name }) : ok({ ...outcome, name });
+		});
+		const target = scope(fetch, { timeoutMs: 500 });
+		const plan = await target.plan(names.map((name) => ({ ...spec, name })));
+		const report = await target.apply(plan);
+		expect(report.completed.map(({ name }) => name)).toEqual(names);
+		expect(fetch).toHaveBeenCalledTimes(6);
+	});
+	it('reports a request that exceeds timeoutMs as an uncertain apply', async () => {
+		const fetch = vi
+			.fn<typeof globalThis.fetch>()
+			.mockResolvedValueOnce(ok(planned))
+			.mockImplementationOnce(
+				(_, init) =>
+					new Promise((_, reject) =>
+						init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))),
+					),
+			);
+		const target = scope(fetch, { timeoutMs: 20 });
+		await expect(target.apply(await target.plan([spec]))).rejects.toMatchObject({
+			code: 'ABORTED',
+			uncertain: true,
+			report: { failed: { name: spec.name, uncertain: true } },
+		});
 	});
 });
 

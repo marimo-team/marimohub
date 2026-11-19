@@ -3,9 +3,23 @@
 A normal stop requires durable source, dependencies, and native session outputs for
 persistent local editors. Missing or unreadable required artifacts retain the runtime.
 HTML, thumbnails, filesystem images, and the ordinary workspace mirror are optional.
-Takeover also requires the workspace capture before releasing editor ownership.
-If the provider confirms that the sandbox is gone, cleanup releases editor ownership
-and capacity. Timeouts and missing notebook files do not establish sandbox absence.
+Takeover also requires the workspace capture before it releases the editor claim.
+Timeouts and missing notebook files do not confirm sandbox absence.
+
+## Sandbox absence
+
+If the provider confirms that the sandbox is gone, the next lifecycle sweep releases the
+editor claim and capacity. This applies to `retained` and `uncertain` stops. It also
+applies to stops with a non-retryable failure such as `CAPTURE_UNSUPPORTED`. The sweep
+records a new stop attempt with trigger `reconcile` and links it to the previous attempt.
+It fences notebook publication, marks the sandbox reclaimed, and finishes as `stopped`.
+
+For a running session, the connection probe detects absence. This requires
+connection-aware reaping. For `runtime_state: 'unknown'`, the runtime status or resume
+call confirms absence when it reports that the sandbox is missing.
+
+While the sandbox exists, automatic idle and lifetime stops follow the backoff rule in
+[Session stop and recovery](../docs/operations.md#session-stop-and-recovery).
 
 ## API decisions
 
@@ -37,39 +51,43 @@ admitting a successor. Readers, restore, export, and search use the published re
 Workspace files are projections. GC lists candidates before its publication barrier
 and preserves all retained or pinned references.
 
-The capture adapter supports marimo 0.24.x and 0.25.x. Linux integration tests cover
-native saves, checkpoint restoration, and supervisor recovery with the sandbox image’s
-pinned marimo version.
-The Linux supervisor lives outside the frozen writer tree. Prepare drains accepted
-mutations and pauses writers for a bounded checkpoint. Abort or expiry resumes them.
+The capture adapter supports the marimo versions listed in
+[Session stop and recovery](../docs/operations.md#session-stop-and-recovery).
+The Linux supervisor runs outside the frozen writer tree. Prepare drains accepted
+mutations and pauses the marimo process tree. The checkpoint deadline is 60 seconds.
+If the checkpoint does not finish in time, it expires: the capture fails and the processes
+resume. An abort also resumes them.
+Periodic snapshots, proxy save hints, and host `/save` pause the tree only while they read
+the checkpoint artifacts. The tree resumes before any bucket or catalog write.
+A stop capture keeps the tree paused through publication until the stop commits.
 Commit-stop durably rejects future resume before stopping writers. A delayed token
 cannot commit after expiry. Hub recovery reconciles the recorded runtime token before
 provider destruction. A dead supervisor recovery resumes an uncommitted checkpoint and
 disables further capture until the runtime is replaced; a committed receipt never resumes.
 Unreadable local receipts fail closed.
 
-Deploy publication readers, writers, and runtime support together. Stop or drain all
-old hub writers before admitting sessions with this protocol. Mixed workers that write
-mutable source files or destroy after best-effort save cannot provide this guarantee.
-Back up publication heads and referenced immutable payloads together.
+For the deployment and backup rules, see
+[Session stop and recovery](../docs/operations.md#session-stop-and-recovery).
 
 ## Operations
 
 Monitor `sessions.save.acknowledged`, `sessions.save.hint_failed`,
-`sessions.capture.durable`, and `sessions.capture.durable_lag_ms`.
+`sessions.capture.durable`, and `sessions.capture.durable_lag_ms`. The durable-capture
+metrics count stop captures, periodic snapshots, and host saves.
 `sessions.stop.retained` and `sessions.stop.forced` count outcomes; the
 `sessions.stop.pending_age_ms`, `sessions.stop.retained_age_ms`, and matching `_count`
 gauges identify stalled work. Telemetry failures do not change save outcomes.
 
-Unsupported runtime capabilities retain the editor and permit an explicit force stop.
-Native macOS local development remains usable; use a supported Linux container to test
-successful drain and stop. Direct exposure relies on periodic capture rather than
-proxy save observation. Background captures are deferred while VS Code or OpenCode
-can write the workspace; final stop closes those surfaces before capture. If capture
-fails after a secondary surface stops, that surface can restart when the session resumes.
-A failed secondary shutdown remains visible as failed and also defers background capture.
-External provider kills and unsaved browser buffers remain outside the stop guarantee.
-Retained sessions continue to consume their capacity.
+Native macOS local development stays usable, but it cannot use safe capture. To test
+a successful drain and stop, use a supported Linux container. For unsupported runtimes and
+direct exposure, see
+[Session stop and recovery](../docs/operations.md#session-stop-and-recovery).
+
+The hub defers background captures while VS Code or OpenCode can write the workspace. The final
+stop closes those surfaces before the capture. If the capture fails after a secondary
+surface stops, that surface can restart when the session resumes. A failed secondary
+shutdown stays visible as failed and also defers background capture.
+A retained session keeps its capacity until [sandbox absence](#sandbox-absence) is confirmed.
 
 ## Verification
 

@@ -12,14 +12,6 @@ const manifest = {
 	repository: { type: 'git', url: 'https://example.com/repo.git' },
 	publishConfig: { access: 'public' },
 };
-const deno = {
-	imports: {
-		'@marimo-hub/iac': 'npm:@marimo-hub/iac@1.2.3',
-		'@marimo-hub/iac/runner': 'npm:@marimo-hub/iac@1.2.3/runner',
-		other: 'npm:other@1',
-	},
-	tasks: { plan: 'deno run script.ts' },
-};
 function write(relative: string, value: unknown) {
 	const path = join(fixture, relative);
 	mkdirSync(join(path, '..'), { recursive: true });
@@ -35,7 +27,6 @@ beforeEach(() => {
 	fixture = mkdtempSync(join(tmpdir(), 'iac-release-'));
 	write('package.json', { version: '1.2.3' });
 	write('packages/iac/package.json', manifest);
-	write('examples/integration-iac/deno/deno.json', deno);
 	mkdirSync(join(fixture, 'scripts'));
 	for (const script of [
 		'release-version.mjs',
@@ -75,45 +66,22 @@ describe('release validation', () => {
 	);
 });
 describe('release preparation', () => {
-	it('updates both pinned imports and preserves unrelated metadata', () => {
+	it('updates the package version and preserves unrelated metadata', () => {
 		write('package.json', { version: '2.0.0' });
 		expect(run('prepare-iac-release.mjs').status).toBe(0);
 		expect(JSON.parse(readFileSync(join(fixture, 'packages/iac/package.json'), 'utf8'))).toEqual({
 			...manifest,
 			version: '2.0.0',
 		});
-		expect(
-			JSON.parse(readFileSync(join(fixture, 'examples/integration-iac/deno/deno.json'), 'utf8')),
-		).toEqual({
-			...deno,
-			imports: {
-				...deno.imports,
-				'@marimo-hub/iac': 'npm:@marimo-hub/iac@2.0.0',
-				'@marimo-hub/iac/runner': 'npm:@marimo-hub/iac@2.0.0/runner',
-			},
-		});
 	});
-	it.each(['missing', 'malformed', 'imports-missing', 'imports-array'])(
-		'does not partially bump package when Deno config is %s',
-		(kind) => {
-			write('package.json', { version: '2.0.0' });
-			const path = join(fixture, 'examples/integration-iac/deno/deno.json');
-			if (kind === 'missing') rmSync(path);
-			else if (kind === 'malformed') writeFileSync(path, '{');
-			else writeFileSync(path, JSON.stringify(kind === 'imports-array' ? { imports: [] } : {}));
-			const before = readFileSync(join(fixture, 'packages/iac/package.json'), 'utf8');
-			expect(run('prepare-iac-release.mjs').status).not.toBe(0);
-			expect(readFileSync(join(fixture, 'packages/iac/package.json'), 'utf8')).toBe(before);
-		},
-	);
 	it.each([undefined, 'bad', '1.2.3-beta.1', '01.2.3'])(
-		'rejects version %s before changing either file',
+		'rejects version %s before changing the package',
 		(version) => {
 			write('package.json', { version });
-			const paths = ['packages/iac/package.json', 'examples/integration-iac/deno/deno.json'];
-			const before = paths.map((path) => readFileSync(join(fixture, path), 'utf8'));
+			const path = join(fixture, 'packages/iac/package.json');
+			const before = readFileSync(path, 'utf8');
 			expect(run('prepare-iac-release.mjs').status).not.toBe(0);
-			expect(paths.map((path) => readFileSync(join(fixture, path), 'utf8'))).toEqual(before);
+			expect(readFileSync(path, 'utf8')).toBe(before);
 		},
 	);
 });
@@ -228,12 +196,12 @@ it.each([
 	expect(result.status === 0).toBe(accepted);
 });
 it.each([{ value: null }, { value: [] }, { value: { name: 'wrong-package', version: '1.2.3' } }])(
-	'validates package identity before either release write %#',
+	'validates package identity before the release write %#',
 	({ value }) => {
 		write('packages/iac/package.json', value);
-		const paths = ['packages/iac/package.json', 'examples/integration-iac/deno/deno.json'];
-		const before = paths.map((path) => readFileSync(join(fixture, path), 'utf8'));
+		const path = join(fixture, 'packages/iac/package.json');
+		const before = readFileSync(path, 'utf8');
 		expect(run('prepare-iac-release.mjs').status).not.toBe(0);
-		expect(paths.map((path) => readFileSync(join(fixture, path), 'utf8'))).toEqual(before);
+		expect(readFileSync(path, 'utf8')).toBe(before);
 	},
 );

@@ -186,15 +186,15 @@ export class SessionRetirer {
 			session.stop.runtime_state === 'running'
 		)
 			return session;
-		const sandbox = reconnectSessionSandbox(
-			this.deps.compute,
-			session,
-			this.deps.metrics,
-			'teardown',
-		);
-		if (!sandbox) return session;
-		const runtime = new RuntimeCaptureClient(sandbox, session.sandbox_id);
 		try {
+			const sandbox = reconnectSessionSandbox(
+				this.deps.compute,
+				session,
+				this.deps.metrics,
+				'teardown',
+			);
+			if (!sandbox) return session;
+			const runtime = new RuntimeCaptureClient(sandbox, session.sandbox_id);
 			if (session.stop.runtime_token)
 				await runtime.resume({
 					token: session.stop.runtime_token,
@@ -202,10 +202,21 @@ export class SessionRetirer {
 				});
 			if ((await runtime.status()).state === 'running')
 				return await this.deps.sessions.confirmRetainedRuntimeResumed(session);
-		} catch {
+		} catch (error) {
+			// Provider-confirmed absence: `stop` fences publication before releasing ownership.
+			if (error instanceof NotFoundError) return this.stopMissingRetained(session);
 			/* The runtime watchdog remains responsible for an unconfirmed pause. */
 		}
 		return session;
+	}
+
+	private async stopMissingRetained(session: Session): Promise<Session> {
+		const requested = await this.deps.sessions.requestStop(session.project_id, session.session_id, {
+			trigger: 'reconcile',
+			key: crypto.randomUUID(),
+			previousId: session.stop!.id,
+		});
+		return this.stop(requested);
 	}
 
 	async stop(
@@ -225,7 +236,6 @@ export class SessionRetirer {
 			if (!options.preserveEditorClaim) await sessions.releaseEditorFor(current);
 			return sessions.finalizeStop(current);
 		};
-		if (selected.stop?.outcome === 'stopped') return finalize(selected);
 		const fencePublication = async () => {
 			const source = await this.deps.notebooks
 				.getNotebookSource(selected.project_id, selected.notebook_id)
@@ -239,6 +249,10 @@ export class SessionRetirer {
 					selected.notebook_id,
 				);
 		};
+		if (selected.stop?.outcome === 'stopped') {
+			if (!selected.stop.finalized_at && sessionPersistsEdits(selected)) await fencePublication();
+			return finalize(selected);
+		}
 		const leaseId = crypto.randomUUID();
 		let session = await sessions.claimStop(selected, leaseId);
 		if (!session) return sessions.getSession(selected.project_id, selected.session_id);
@@ -702,17 +716,23 @@ export class SessionRetirer {
 			thumbnailDeadlineAt,
 			thumbnail,
 			requireIdle = false,
+			sandboxGone = false,
 		}: {
 			save?: boolean;
 			thumbnailDeadlineAt?: number;
 			thumbnail?: ThumbnailPolicy;
 			requireIdle?: boolean;
+			/** The caller's probe already confirmed provider absence. */
+			sandboxGone?: boolean;
 		} = {},
 	): Promise<ReclaimOutcome> {
 		const session = await this.deps.sessions.getSession(selected.project_id, selected.session_id);
 		if (session.stop && !session.sandbox_reclaimed_at) {
 			if (['retained', 'uncertain'].includes(session.stop.outcome)) {
-				await this.reconcileRetained(session);
+				const reconciled = sandboxGone
+					? await this.stopMissingRetained(session)
+					: await this.reconcileRetained(session);
+				if (reconciled.stop?.outcome === 'stopped') return { reclaimed: true, saved: false };
 				return this.skipReclaim(session, 'persistence_required');
 			}
 			const result = await this.stop(session);

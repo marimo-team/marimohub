@@ -2732,7 +2732,7 @@ See the [secret-source guide](./integration-secrets.md).`,
 						id: 'MARIMOHUB_DATA_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS',
 						name: 'Server ambient S3 SQL credentials',
 						description:
-							'Allows Iceberg REST SQL to use the server AWS credential chain within configured read prefixes. Requires HTTPS AWS S3 service endpoints and ordinary bucket names. The control-plane bucket stays blocked. Does not enable standalone S3 SQL, project WIF, or named integration profiles.',
+							'Allows Iceberg REST SQL to use the server AWS credential chain within the read prefixes configured on each integration. Every project manager can then create an integration that reads any bucket the server AWS identity can read, except the control-plane bucket. Read prefixes are chosen by that same manager and are not a deployment control. Keep this off unless that identity is intentionally available to project managers. Requires HTTPS AWS S3 service endpoints and ordinary bucket names. Does not enable standalone S3 SQL, project WIF, or named integration profiles.',
 						default: 'false',
 					},
 					{

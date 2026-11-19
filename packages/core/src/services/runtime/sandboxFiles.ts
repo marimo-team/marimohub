@@ -698,7 +698,9 @@ export async function readSessionArtifacts(
 				{
 					maxBytes: MAX_ARTIFACT_BYTES,
 					maxTotalBytes: MAX_ARTIFACT_BYTES,
-					timeoutMs: CAPTURE_READ_TIMEOUT_MS,
+					// Individual reads each had their own deadline; one exec now reads them all.
+					timeoutMs:
+						CAPTURE_READ_TIMEOUT_MS * Math.max(1, artifactSizes.filter((size) => !!size).length),
 				},
 			)
 		: undefined;

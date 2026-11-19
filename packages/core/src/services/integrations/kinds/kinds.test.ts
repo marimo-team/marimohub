@@ -23,7 +23,7 @@ import {
 	icebergHive,
 	icebergSql,
 } from './icebergCatalogs';
-import { icebergRest } from './icebergRest';
+import { duckdbHttpAccess, icebergRest } from './icebergRest';
 import { defaultRegistry } from './index';
 import { SAMPLE_CONFIGS } from './sampleConfigs';
 import { huggingFace, wandb } from './mlPlatforms';
@@ -1553,6 +1553,22 @@ describe('kind renders (golden)', () => {
 		expect(plan).toMatchObject({ httpAccess: { storage: { credentials: { method: 'ambient' } } } });
 		expect(icebergPreviewPrograms(config)?.duckdbWasm).toBeUndefined();
 		expect(icebergPreviewPrograms(config)?.python).toBeDefined();
+	});
+
+	it('iceberg_rest never maps an S3 credentials profile to ambient DuckDB access', () => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.example.com/api',
+			auth: { method: 'none' },
+			access_delegation: 'none',
+			storage: {
+				scheme: 's3',
+				endpoint: 'https://objects.example.com',
+				credentials: { method: 'profile', profile_name: 'development' },
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+			},
+		});
+		// Readiness rejects profiles before planning; the access mapping must not fall back to ambient.
+		expect(() => duckdbHttpAccess(config)).toThrow(ValidationError);
 	});
 
 	it.each([

@@ -2654,6 +2654,7 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/integrations/reconcile/apply",
 			"summary": "Apply an integration declaration with a required state precondition",
+			"description": "Creates or updates one project integration only if its current state matches `expected`, the precondition returned by plan. `absent` requires that no project integration has the name; `existing` requires the same `id` and an `updated_at` equal to `revision`. A mismatch returns 412 without a write: create and review a new plan. Apply never deletes integrations, and integrations omitted from a batch stay unchanged.",
 			"parameters": [
 				{
 					"name": "pid",
@@ -2695,6 +2696,7 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/integrations/reconcile/plan",
 			"summary": "Preview an integration declaration without writing configuration",
+			"description": "Compares one declaration with the project integration of the same name and writes nothing. The returned `precondition` is `absent` when no project integration has the name, or `existing` with its `id` and a `revision` equal to its `updated_at`. Pass it unchanged to apply. Shares a per-user request budget with apply; 429 responses carry `Retry-After`.",
 			"parameters": [
 				{
 					"name": "pid",
@@ -2708,6 +2710,14 @@
 			"body": {
 				"required": true,
 				"properties": [
+					{
+						"name": "allow_org_override",
+						"cli_name": "allow-org-override",
+						"required": false,
+						"description": "Alias of `allowOrgOverride`. Values must match if both are set.",
+						"value_type": "boolean",
+						"repeatable": false
+					},
 					{
 						"name": "allowOrgOverride",
 						"cli_name": "allow-org-override",

@@ -7,6 +7,7 @@ import { APP_HEARTBEAT_INTERVAL_MS } from '@marimo-hub/core/constants';
 import { heartbeatRetryDelay } from '@/api/sessionRetryPolicy';
 import { useAsyncLoop } from './useAsyncLoop';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { RetainedEditorContext } from '@/context/RetainedEditorContext';
 import { apiClient, apiData, ApiRequestError } from '@/api/client';
 import {
@@ -15,9 +16,10 @@ import {
 	useStartSessionWithDefault,
 	useStopSession,
 } from '@/api/hooks';
+import { userKeys } from '@/api/queryKeys';
 import { isNotFoundError } from '@/api/request';
 import { useGeneration } from '@/hooks/useGeneration';
-import type { Session } from '@/types';
+import type { Session, User } from '@/types';
 import type { SandboxStartupSnapshot } from '@marimo-hub/core/ports/sandbox';
 import {
 	EDITOR_HEARTBEAT_INTERVAL_MS,
@@ -46,11 +48,14 @@ function toSessionError(err: Error): SessionError {
 	};
 }
 
+/** `receivedAt` is the client clock when this phase/attempt arrived; `started_at` is the server's. */
+export type StartupProgressView = SandboxStartupSnapshot & { receivedAt: number };
+
 /** Why a watched session stopped being renderable — see `ended` below. */
 export type SessionEnded = Session['status'] | 'gone' | 'access_lost' | 'takeover';
 
 export interface NotebookSession {
-	startup: SandboxStartupSnapshot | undefined;
+	startup: StartupProgressView | undefined;
 	session: Session | null;
 	diagnosticSession: Session | null;
 	error: SessionError | null;
@@ -108,6 +113,7 @@ export function useNotebookSession(
 	// Stop/restart failures render inline (session panel), never as a toast.
 	const stopSession = useStopSession(projectId, notebookId, { suppressErrorToast: true });
 	const restartApp = useRestartApp(projectId, notebookId, { suppressErrorToast: true });
+	const queryClient = useQueryClient();
 
 	const [session, setSession] = useState<Session | null>(null);
 	useSandboxPreconnect(session?.sandbox_url);
@@ -119,7 +125,7 @@ export function useNotebookSession(
 	// StrictMode can orphan the mutation observer during its mount/remount cycle,
 	// leaving `startSession.isPending` stuck. Track this request independently.
 	const [starting, setStarting] = useState(false);
-	const [startup, setStartup] = useState<SandboxStartupSnapshot>();
+	const [startup, setStartup] = useState<StartupProgressView>();
 	// Keep the loading panel visible while teardown or replacement precedes admission.
 	const [restarting, setRestarting] = useState(false);
 	const sessionRef = useRef<Session | null>(null);
@@ -204,7 +210,13 @@ export function useNotebookSession(
 					visitId: mode === 'app' ? crypto.randomUUID() : undefined,
 					onProgress: (progress) => {
 						if (mountedRef.current && generation.isCurrent(gen) && !controller.signal.aborted)
-							setStartup(progress);
+							setStartup((previous) => ({
+								...progress,
+								receivedAt:
+									previous?.phase === progress.phase && previous.attempt === progress.attempt
+										? previous.receivedAt
+										: Date.now(),
+							}));
 					},
 					timeoutMs: sessionStartupDeadlineMs(startupTimeoutSeconds ?? DEFAULT_STARTUP_TIMEOUT_S),
 					signal: controller.signal,
@@ -237,12 +249,16 @@ export function useNotebookSession(
 								}),
 							).catch(() => null);
 							if (!mountedRef.current || !generation.isCurrent(gen)) return;
+							// `can.stop` also covers managers; never resume a stop of someone else's session.
+							const userId = queryClient.getQueryData<User | null>(userKeys.me())?.id;
 							const retained = page?.items.find(
 								(item) =>
 									item.notebook_id === notebookId &&
 									item.stop &&
 									item.stop.outcome !== 'stopped' &&
-									item.can.stop,
+									item.can.stop &&
+									!!userId &&
+									item.user_id === userId,
 							);
 							if (retained) {
 								commitSession(retained);
@@ -269,6 +285,7 @@ export function useNotebookSession(
 			generation,
 			invalidateSession,
 			stopSession,
+			queryClient,
 			projectId,
 			notebookId,
 			mode,

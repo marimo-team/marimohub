@@ -1,6 +1,7 @@
 import { prepareSignedGitHubCommit } from './githubSignedCommit';
 import type { GitHubUserCredential } from './githubSignedCommit';
 import type { PreparationCheckpoint } from '@marimo-hub/core/source-control-publication';
+import { mapWithConcurrency } from '@marimo-hub/core/concurrency';
 import {
 	ConflictError,
 	ProposalRetryRequiredError,
@@ -17,6 +18,9 @@ import {
 } from './githubResponses';
 import type { GitTreeEntry } from './githubResponses';
 import { coAuthorTrailer, refPath } from './githubValidation';
+
+/** Bounds per-file GitHub requests so large changesets stay within secondary rate limits. */
+export const GITHUB_FILE_REQUEST_CONCURRENCY = 8;
 
 export class GitHubRepositoryWriter {
 	private changes?: OpenChangeRequestInput['changes'];
@@ -81,17 +85,17 @@ export class GitHubRepositoryWriter {
 		const baseEntries = input.changes.some((change) => change.operation !== 'add')
 			? await this.getBaseTreeEntries(baseTree)
 			: null;
-		await Promise.all(
-			input.changes
-				.filter((change) => change.operation === 'add')
-				.map(async (change) => {
-					const exists = baseEntries
-						? baseEntries.has(change.path)
-						: await this.pathExistsAtCommit(change.path, treeBaseCommit);
-					if (exists) {
-						throw new ConflictError(`GitHub base tree already contains ${change.path}`);
-					}
-				}),
+		await mapWithConcurrency(
+			input.changes.filter((change) => change.operation === 'add'),
+			GITHUB_FILE_REQUEST_CONCURRENCY,
+			async (change) => {
+				const exists = baseEntries
+					? baseEntries.has(change.path)
+					: await this.pathExistsAtCommit(change.path, treeBaseCommit);
+				if (exists) {
+					throw new ConflictError(`GitHub base tree already contains ${change.path}`);
+				}
+			},
 		);
 		if (
 			this.user &&
@@ -103,8 +107,10 @@ export class GitHubRepositoryWriter {
 			throw new ConflictError(
 				'Personal signed commits support changes to regular non-executable files only',
 			);
-		const tree = await Promise.all(
-			input.changes.map(async (change) => {
+		const tree = await mapWithConcurrency(
+			input.changes,
+			GITHUB_FILE_REQUEST_CONCURRENCY,
+			async (change) => {
 				const baseEntry = baseEntries?.get(change.path);
 				if (change.operation === 'delete') {
 					if (!baseEntry) {
@@ -132,7 +138,7 @@ export class GitHubRepositoryWriter {
 					type: 'blob' as const,
 					sha: stringField(await responseJson(blobResponse), 'sha'),
 				};
-			}),
+			},
 		);
 		const treeResponse = await this.client.request(
 			`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/git/trees`,

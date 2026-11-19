@@ -2052,7 +2052,10 @@ export interface paths {
 		};
 		get?: never;
 		put?: never;
-		/** Preview an integration declaration without writing configuration */
+		/**
+		 * Preview an integration declaration without writing configuration
+		 * @description Compares one declaration with the project integration of the same name and writes nothing. The returned `precondition` is `absent` when no project integration has the name, or `existing` with its `id` and a `revision` equal to its `updated_at`. Pass it unchanged to apply. Shares a per-user request budget with apply; 429 responses carry `Retry-After`.
+		 */
 		post: operations['integrations.reconcile.plan'];
 		delete?: never;
 		options?: never;
@@ -2069,7 +2072,10 @@ export interface paths {
 		};
 		get?: never;
 		put?: never;
-		/** Apply an integration declaration with a required state precondition */
+		/**
+		 * Apply an integration declaration with a required state precondition
+		 * @description Creates or updates one project integration only if its current state matches `expected`, the precondition returned by plan. `absent` requires that no project integration has the name; `existing` requires the same `id` and an `updated_at` equal to `revision`. A mismatch returns 412 without a write: create and review a new plan. Apply never deletes integrations, and integrations omitted from a batch stay unchanged.
+		 */
 		post: operations['integrations.reconcile.apply'];
 		delete?: never;
 		options?: never;
@@ -4801,6 +4807,56 @@ export interface components {
 			expected_activity: 'active' | 'idle' | 'unknown' | 'starting';
 			/** @enum {boolean} */
 			acknowledge_disruption: true;
+		};
+		/** @description One server-sent event: `event` is the SSE event name and `data` is its JSON payload. Opt in with Accept: text/event-stream. Only edit starts emit progress; app starts omit it. Clients must ignore unknown phases and unknown events. The stream ends with exactly one result or error event. Failures after authorization arrive as an error event on HTTP 200. No replay or automatic reconnect. Disconnect ends observation, not provisioning. */
+		SessionStartupEvent:
+			| {
+					/** @enum {string} */
+					event: 'progress';
+					data: components['schemas']['SessionStartupProgress'];
+			  }
+			| {
+					/** @enum {string} */
+					event: 'result';
+					data: {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['SessionCreateResult'];
+					};
+			  }
+			| {
+					/** @enum {string} */
+					event: 'error';
+					data: components['schemas']['SessionStartupError'];
+			  };
+		SessionStartupProgress: {
+			/**
+			 * @description Known values: allocating, workspace, starting. Unrecognized values normalize to unknown.
+			 * @example allocating
+			 * @enum {string}
+			 */
+			phase: 'allocating' | 'workspace' | 'starting' | 'unknown';
+			detail?: string;
+			/**
+			 * Format: date-time
+			 * @example 2025-03-05T14:00:00Z
+			 */
+			started_at: string;
+			/** @description Increments when the sandbox is replaced. */
+			attempt: number;
+			observed: ('allocating' | 'workspace' | 'starting' | 'unknown')[];
+		};
+		SessionStartupError: {
+			/** @enum {boolean} */
+			success: false;
+			error: {
+				code: string;
+				message: string;
+				/** @description The HTTP status the JSON response would carry. */
+				status: number;
+				/** @description Present when the JSON response would carry Retry-After. */
+				retry_after_ms?: number;
+			};
 		};
 		SessionCreateBody: {
 			/** @enum {string} */
@@ -19104,7 +19160,7 @@ export interface operations {
 						success: true;
 						data: components['schemas']['SessionCreateResult'];
 					};
-					'text/event-stream': string;
+					'text/event-stream': components['schemas']['SessionStartupEvent'];
 				};
 			};
 			/** @description Bad request */
@@ -20884,6 +20940,8 @@ export interface operations {
 					/** @enum {string} */
 					mode?: 'insert' | 'ensure' | 'upsert';
 					allowOrgOverride?: boolean;
+					/** @description Alias of `allowOrgOverride`. Values must match if both are set. */
+					allow_org_override?: boolean;
 				};
 			};
 		};
@@ -21019,6 +21077,8 @@ export interface operations {
 						/** @enum {string} */
 						mode?: 'insert' | 'ensure' | 'upsert';
 						allowOrgOverride?: boolean;
+						/** @description Alias of `allowOrgOverride`. Values must match if both are set. */
+						allow_org_override?: boolean;
 					};
 					expected:
 						| {

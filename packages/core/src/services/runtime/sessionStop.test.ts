@@ -704,3 +704,63 @@ it('cleans up confirmed runtime absence while resuming after a failed capture', 
 	expect(await env.sessions.ownsEditorClaim(stopped)).toBe(false);
 	expect(await env.sessions.countActiveForUser(ACTOR)).toBe(0);
 });
+
+it.each(['reconcileRetained', 'reclaim'] as const)(
+	'%s finishes an unknown-runtime retained stop once the provider confirms absence',
+	async (entry) => {
+		const env = await stopFixture();
+		const lease = crypto.randomUUID();
+		await env.sessions.claimStop(env.requested, lease);
+		const retained = await env.sessions.updateStop(env.requested, lease, {
+			outcome: 'uncertain',
+			runtime_state: 'unknown',
+			failure: { code: 'RUNTIME_CAPTURE_UNAVAILABLE', retryable: true },
+		});
+		await env.sessions.releaseStopLease(retained, lease);
+		vi.spyOn(env.instance, 'exec').mockRejectedValue(new NotFoundError('Sandbox absent'));
+		const fence = vi.spyOn(env.notebooks, 'fenceSessionPublications');
+		if (entry === 'reclaim') {
+			await env.sessions.markTerminated(env.project.id, env.session.session_id);
+			expect(await env.retirer.reclaim(retained)).toEqual({ reclaimed: true, saved: false });
+		} else {
+			await env.retirer.reconcileRetained(retained);
+		}
+		const current = await env.sessions.getSession(env.project.id, env.session.session_id);
+		expect(current.stop).toMatchObject({ outcome: 'stopped', previous_id: retained.stop!.id });
+		expect(fence).toHaveBeenCalled();
+		expect(await env.sessions.ownsEditorClaim(current)).toBe(false);
+		expect(await env.sessions.countActiveForUser(ACTOR)).toBe(0);
+		expect(env.calls.destroy).toBe(0);
+	},
+);
+
+it('fences publication before releasing a receipt finalized by sandbox reclamation', async () => {
+	const env = await stopFixture();
+	const lease = crypto.randomUUID();
+	await env.sessions.claimStop(env.requested, lease);
+	const retained = await env.sessions.updateStop(env.requested, lease, {
+		outcome: 'retained',
+		runtime_state: 'running',
+	});
+	await env.sessions.releaseStopLease(retained, lease);
+	const reclaimed = await env.sessions.markSandboxReclaimed(
+		env.project.id,
+		env.session.session_id,
+		new Date().toISOString(),
+		env.session.sandbox_id,
+	);
+	expect(reclaimed.stop?.outcome).toBe('stopped');
+	const order: string[] = [];
+	vi.spyOn(env.notebooks, 'fenceSessionPublications').mockImplementation(async () => {
+		order.push('fence');
+		return undefined as never;
+	});
+	const release = env.sessions.releaseEditorFor.bind(env.sessions);
+	vi.spyOn(env.sessions, 'releaseEditorFor').mockImplementation(async (session) => {
+		order.push('release');
+		return release(session);
+	});
+	const stopped = await env.retirer.stop(reclaimed);
+	expect(order).toEqual(['fence', 'release']);
+	expect(await env.sessions.ownsEditorClaim(stopped)).toBe(false);
+});

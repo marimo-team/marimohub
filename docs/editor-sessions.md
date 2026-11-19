@@ -206,21 +206,33 @@ stopping the editor. If saving fails, choose one of these actions:
   captured successfully.
 
 Restart starts a replacement only after the previous editor stops successfully.
-A retained editor still holds its ownership claim and consumes its capacity slot.
-The session list exposes pending and retained outcomes after a page reload.
+A retained editor keeps its editor claim and its capacity slot.
+The session list shows pending and retained outcomes after a page reload.
 
-Safe capture requires the supported Linux supervisor and marimo 0.24.x adapter.
-Unsupported runtimes remain usable, but a normal stop retains them when capture
-cannot be confirmed. Force stop remains an explicit choice. External provider kills
-and edits that exist only in a browser buffer are outside this guarantee.
+Each capture pauses the marimo process tree, so running cells do not progress.
+A periodic or explicit save pauses the tree only while it reads the checkpoint.
+A stop keeps the tree paused until the stop commits.
+If the checkpoint does not finish in 60 seconds, the capture fails and the processes resume.
+For the stop mechanics, see
+[safe session stops](https://github.com/marimo-team/marimohub/blob/main/development_docs/safe-session-stops.md).
+
+Safe capture requires a [supported runtime](./operations.md#session-stop-and-recovery).
+An unsupported runtime stays usable. A normal stop retains it when the capture cannot be
+confirmed. You can force stop it. The guarantee does not cover external provider kills
+or edits that exist only in a browser buffer.
 
 ### Session cleanup
 
 Pending cleanup blocks a new persistent editor until the compute provider confirms
-reclamation. Maintenance reconciles interrupted attempts. Failed captures preserve
-runtime ownership; stale heartbeats alone cannot release it. Automatic idle and
-lifetime stops recheck eligibility and back off after failures. Authorization expiry
-can require teardown even when saving fails.
+reclamation. Maintenance reconciles interrupted stops. A failed capture keeps the editor
+claim. Stale heartbeats alone cannot release it.
+Automatic idle and lifetime stops back off after failures; see
+[session stop and recovery](./operations.md#session-stop-and-recovery).
+Authorization expiry can require teardown even when the save fails.
+
+If the compute provider confirms that the sandbox is gone, the next lifecycle sweep
+releases the editor claim and capacity. This also applies to retained stops.
+The stop then finishes as `stopped`.
 
 ## Changing the sharing mode
 
@@ -262,7 +274,8 @@ Clients can inspect ownership with
 `GET /api/v1/projects/{pid}/notebooks/{nid}/editor-session`. In exclusive mode,
 a normal create request returns `409 EDIT_SESSION_OWNED` when another editor
 owns the sandbox. Send `edit_intent: "temporary"` to create a discard-only
-editor sandbox.
+editor sandbox. To observe startup progress, send `Accept: text/event-stream`.
+See [session startup progress](./api.md#session-startup-progress).
 
 To take over an exclusive session:
 

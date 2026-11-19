@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { readSessionStart } from './sessionStartupStream';
 import { retrySessionAdmission } from './sessionRetry';
+import { admissionRetryDelay } from './sessionRetryPolicy';
 
 const session = { session_id: 'sess-1', status: 'running' };
 const progress = {
@@ -168,4 +169,13 @@ it('preserves a completed result even when cancelling the reader rejects', async
 	});
 	expect(await readSessionStart(Promise.resolve({ response: res }))).toEqual(session);
 	expect(res.body!.locked).toBe(false);
+});
+
+it('carries the error frame retry hint into the admission delay', async () => {
+	const body = `event: error\ndata: ${JSON.stringify({ success: false, error: { code: 'RATE_LIMITED', message: 'Slow down', status: 429, retry_after_ms: 2500 } })}\n\n`;
+	const error = await readSessionStart(Promise.resolve({ response: response(body) })).catch(
+		(cause: unknown) => cause,
+	);
+	expect(error).toMatchObject({ status: 429, retryAfterMs: 3000 });
+	expect(admissionRetryDelay(error, 0)).toBe(3000);
 });

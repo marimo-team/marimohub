@@ -7,6 +7,7 @@ import type { SandboxId } from '@marimo-hub/core/ids';
 import { createK8sClient } from './client';
 import { parsePodTemplate, validatePodTemplate } from './podTemplate';
 import { projectedToken } from './podTemplate.testUtils';
+import { MANAGED_BY_LABEL, MANAGED_BY_VALUE, SANDBOX_ID_ANNOTATION } from './shared';
 import type { EnsureSandboxOptions } from './shared';
 
 const options: EnsureSandboxOptions = {
@@ -151,17 +152,42 @@ describe('pod templates over the Kubernetes SDK HTTP transport', () => {
 		},
 	);
 
-	it('treats an existing Pod as a reconnect without sending a create', async () => {
-		const { client, requests, reads } = await cluster(201, {
-			apiVersion: 'v1',
-			kind: 'Pod',
-			metadata: { name: options.name, namespace: 'kernels' },
-		});
+	const ownedPod = (metadata: object = {}) => ({
+		apiVersion: 'v1',
+		kind: 'Pod',
+		metadata: {
+			name: options.name,
+			namespace: 'kernels',
+			labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+			annotations: { [SANDBOX_ID_ANNOTATION]: options.sandboxId },
+			...metadata,
+		},
+	});
+
+	it('treats an existing owned Pod as a reconnect without sending a create', async () => {
+		const { client, requests, reads } = await cluster(201, ownedPod());
 		await expect(
 			client.ensure({ ...options, podTemplate: { spec: { serviceAccountName: 'new-account' } } }),
 		).resolves.toEqual({ createdPod: false });
 		expect(reads).toContain(`/api/v1/namespaces/kernels/pods/${options.name}`);
 		expect(requests.map((r) => r.path)).toEqual(['/api/v1/namespaces/kernels/services']);
+	});
+
+	it.each([
+		['an unmanaged Pod', { labels: {} }, /does not belong to sandbox/],
+		[
+			"another sandbox's Pod",
+			{
+				labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+				annotations: { [SANDBOX_ID_ANNOTATION]: 'sb-other' },
+			},
+			/does not belong to sandbox/,
+		],
+		['a terminating Pod', { deletionTimestamp: '2026-11-18T00:00:00Z' }, /no longer running/],
+	])('refuses to reuse %s', async (_name, metadata, message) => {
+		const { client, requests } = await cluster(201, ownedPod(metadata));
+		await expect(client.ensure(options)).rejects.toThrow(message);
+		expect(requests.filter((r) => r.path.endsWith('/pods'))).toEqual([]);
 	});
 
 	it('treats a create that loses the race to another writer as a reconnect', async () => {

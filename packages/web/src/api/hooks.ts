@@ -2287,15 +2287,6 @@ function startSessionRequest(
 	);
 }
 
-function stopSessionRequest(
-	projectId: string,
-	notebookId: string,
-	sessionId: string,
-	_wait = true,
-) {
-	return stopSessionSafely(projectId, notebookId, sessionId);
-}
-
 function useStartSessionRequest(
 	projectId: string,
 	notebookId: string,
@@ -2343,7 +2334,7 @@ async function restartEditorSessionRequest(
 	sessionId: string,
 ) {
 	try {
-		await stopSessionRequest(projectId, notebookId, sessionId, true);
+		await stopSessionSafely(projectId, notebookId, sessionId);
 	} catch (err) {
 		// A reaped session is already stopped, so the requested restart can continue.
 		if (!isNotFoundError(err)) throw err;
@@ -2386,7 +2377,7 @@ export function useStopSession(
 	const invalidate = useInvalidate();
 	return useApiMutation(
 		async (sessionId: string) => {
-			await stopSessionRequest(projectId, notebookId, sessionId).finally(() =>
+			await stopSessionSafely(projectId, notebookId, sessionId).finally(() =>
 				invalidate(sessionKeys.listByProject(projectId), sessionKeys.editor(projectId, notebookId)),
 			);
 		},

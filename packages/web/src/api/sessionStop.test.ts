@@ -126,4 +126,39 @@ describe('safe session stop decisions', () => {
 		expect(get).toHaveBeenCalledOnce();
 		expect(decision).not.toHaveBeenCalled();
 	});
+	it('keeps polling through a transient server error after the stop was accepted', async () => {
+		vi.useFakeTimers();
+		const stop = vi.spyOn(apiClient, 'DELETE').mockResolvedValue(success(202));
+		const get = vi
+			.spyOn(apiClient, 'GET')
+			.mockResolvedValueOnce({
+				error: { success: false, error: { code: 'SERVICE_UNAVAILABLE', message: 'Busy' } },
+				response: new Response(null, { status: 503 }),
+			} as never)
+			.mockResolvedValueOnce(
+				state({ ...retained, stop: { ...retained.stop!, outcome: 'stopped' } }),
+			);
+		const completed = stopSessionSafely('p', 'n', 's', vi.fn());
+		await vi.advanceTimersByTimeAsync(1000);
+		await expect(completed).resolves.toBeUndefined();
+		expect(get).toHaveBeenCalledTimes(2);
+		expect(stop).toHaveBeenCalledOnce();
+	});
+
+	it('stops polling when aborted', async () => {
+		vi.useFakeTimers();
+		vi.spyOn(apiClient, 'DELETE').mockResolvedValue(success(202));
+		const get = vi
+			.spyOn(apiClient, 'GET')
+			.mockResolvedValue(state({ ...retained, stop: { ...retained.stop!, outcome: 'capturing' } }));
+		const controller = new AbortController();
+		const rejected = expect(
+			stopSessionSafely('p', 'n', 's', vi.fn(), controller.signal),
+		).rejects.toMatchObject({ name: 'AbortError' });
+		await vi.advanceTimersByTimeAsync(0);
+		controller.abort();
+		await rejected;
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(get).toHaveBeenCalledOnce();
+	});
 });

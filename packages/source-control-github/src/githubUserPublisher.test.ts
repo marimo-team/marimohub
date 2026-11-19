@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SignedPreparation } from '@marimo-hub/core/source-control-publication';
+import { GITHUB_FILE_REQUEST_CONCURRENCY } from './githubRepository';
 import { GitHubUserPublisher } from './githubUserPublisher';
 import { testPrivateKey } from './testing/fakeGitHub';
 const parent = 'a'.repeat(40),
@@ -289,4 +290,38 @@ it('rechecks authorization after credential resolution and before signing mutati
 		}),
 	).rejects.toThrow('role revoked');
 	expect(f.writes).toEqual([]);
+});
+
+it('bounds per-file GitHub requests for large personal changesets', async () => {
+	const f = fixture();
+	const fetcher = f.fetcher.getMockImplementation()!;
+	let inFlight = 0;
+	let peak = 0;
+	const perFile: string[] = [];
+	f.fetcher.mockImplementation(async (url, init) => {
+		const path = new URL(url).pathname;
+		const fileRequest = path.endsWith('/git/blobs') || path.includes('/contents/');
+		if (!fileRequest) return fetcher(url, init);
+		perFile.push(path);
+		inFlight++;
+		peak = Math.max(peak, inFlight);
+		await new Promise((resolve) => setTimeout(resolve, 1));
+		inFlight--;
+		return path.includes('/contents/')
+			? new Response('', { status: 404 })
+			: Response.json({ sha: 'blob-new' });
+	});
+	const assertCurrent = vi.fn(async () => {});
+	const changes = Array.from({ length: 30 }, (_, index) => ({
+		operation: 'add' as const,
+		path: `new-${index}.py`,
+		content: new TextEncoder().encode(`print(${index})`),
+	}));
+	await f.publisher.openChangeRequest({
+		...f.input,
+		changes,
+		preparation: { ...f.input.preparation, assertCurrent },
+	});
+	expect(perFile).toHaveLength(60);
+	expect(peak).toBe(GITHUB_FILE_REQUEST_CONCURRENCY);
 });

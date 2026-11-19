@@ -63,11 +63,18 @@ If unset, the hub uses the template security context or leaves it unset.
 The UID must have write access to the image work directory. `fsGroup` affects
 mounted volumes only.
 
-Each sandbox ensure reads the Pod first. If the Pod exists, the hub reuses it
-without a Pod create request or changes to its specification. Only a `404`
-response triggers creation. Other read errors fail the operation. If another
-writer creates the Pod between the read and create, the hub accepts the `409`
-conflict as a reconnect. Services and Ingresses still reconcile their routes.
+Each sandbox ensure reads the Pod first. Only a `404` response triggers creation.
+Other read errors fail the ensure. If another writer creates the Pod between the read
+and the create, the hub accepts the `409` conflict as a reconnect.
+
+If the Pod exists, the hub reuses it. It sends no create request and does not change
+the Pod specification. The ensure fails if the existing Pod:
+
+- is terminating
+- lacks the `app.kubernetes.io/managed-by=marimohub` label
+- has a different `marimohub.io/sandbox-id` annotation
+
+Services and Ingresses reconcile their routes on every ensure.
 
 #### Pod templates
 

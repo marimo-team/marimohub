@@ -29,6 +29,7 @@ import type {
 	UserId,
 	WorkloadRef,
 } from '@marimo-hub/core';
+import { SANDBOX_STARTUP_PHASES, STARTUP_DETAIL_MAX_LENGTH } from '@marimo-hub/core/constants';
 import {
 	previewAvailable,
 	AppPoolService,
@@ -103,7 +104,7 @@ import {
 import { previewAppPoolPolicy, previewIdleTimeout, PREVIEW_MAX_SESSIONS } from '../previewPolicy';
 import { checkComputeProfile } from '../computeProfile';
 import { logObserver } from '../saga';
-import { appendAudit, errorMetadata, logEvent } from '../log';
+import { appendAudit, describeError, errorMetadata, logEvent } from '../log';
 import { sessionClientFor } from '../sessionClient';
 import {
 	assertNotificationMutationAllowed,
@@ -139,6 +140,9 @@ import {
 	ProjectIdParam,
 	resolvePublicBaseUrl,
 	SessionIdParam,
+	extensibleResponseEnum,
+	internalErrorMessage,
+	RETRY_AFTER_SECONDS,
 	sessionGrantsFor,
 	SessionResponseSchema,
 	SurfaceResponseSchema,
@@ -236,6 +240,54 @@ export const SessionCreateBodySchema = z
 	})
 	.openapi('SessionCreateBody');
 
+const SessionStartupPhaseSchema = extensibleResponseEnum(SANDBOX_STARTUP_PHASES, 'allocating');
+
+export const SessionStartupProgressSchema = z
+	.object({
+		phase: SessionStartupPhaseSchema,
+		detail: z.string().max(STARTUP_DETAIL_MAX_LENGTH).optional(),
+		started_at: z.string().openapi({ format: 'date-time', example: '2025-03-05T14:00:00Z' }),
+		attempt: z.number().int().min(1).describe('Increments when the sandbox is replaced.'),
+		observed: z.array(SessionStartupPhaseSchema),
+	})
+	.openapi('SessionStartupProgress');
+
+export const SessionStartupErrorSchema = z
+	.object({
+		success: z.literal(false),
+		error: z.object({
+			code: z.string(),
+			message: z.string(),
+			status: z.number().int().describe('The HTTP status the JSON response would carry.'),
+			retry_after_ms: z
+				.number()
+				.int()
+				.positive()
+				.optional()
+				.describe('Present when the JSON response would carry Retry-After.'),
+		}),
+	})
+	.openapi('SessionStartupError');
+
+export const SessionStartupEventSchema = z
+	.discriminatedUnion('event', [
+		z.object({ event: z.literal('progress'), data: SessionStartupProgressSchema }),
+		z.object({
+			event: z.literal('result'),
+			data: z.object({ success: z.literal(true), data: SessionCreateResponseSchema }),
+		}),
+		z.object({ event: z.literal('error'), data: SessionStartupErrorSchema }),
+	])
+	.openapi('SessionStartupEvent', {
+		description:
+			'One server-sent event: `event` is the SSE event name and `data` is its JSON payload. ' +
+			'Opt in with Accept: text/event-stream. Only edit starts emit progress; app starts omit it. ' +
+			'Clients must ignore unknown phases and unknown events. ' +
+			'The stream ends with exactly one result or error event. ' +
+			'Failures after authorization arrive as an error event on HTTP 200. ' +
+			'No replay or automatic reconnect. Disconnect ends observation, not provisioning.',
+	});
+
 const createSession = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/notebooks/{nid}/sessions',
@@ -264,13 +316,7 @@ const createSession = createRoute({
 				'application/json': {
 					schema: z.object({ success: z.literal(true), data: SessionCreateResponseSchema }),
 				},
-				'text/event-stream': {
-					schema: z
-						.string()
-						.describe(
-							'Opt in with Accept: text/event-stream. Only edit starts emit progress: { phase, detail?, started_at, attempt, observed }. App starts omit progress for all callers. result carries the JSON success envelope. error carries { success: false, error: { code, message, status } }. No replay or automatic reconnect. Disconnect ends observation, not provisioning.',
-						),
-				},
+				'text/event-stream': { schema: SessionStartupEventSchema },
 			},
 		},
 		...commonErrors(),
@@ -2897,10 +2943,31 @@ app.openapi(createSession, async (c) => {
 					...callbacks,
 					request: { ...input.request, signal: undefined },
 				}),
-			(error) =>
-				error instanceof DomainError
-					? { code: error.code, message: error.message, status: error.status }
-					: { code: 'INTERNAL_ERROR', message: 'The session could not start.', status: 500 },
+			(error) => {
+				const domain = error instanceof DomainError ? error : undefined;
+				const status = domain?.status ?? 500;
+				// The stream already answered 200, so `app.onError` never sees this failure.
+				if (status >= 500)
+					logEvent({
+						level: 'error',
+						event: 'request_error',
+						request_id: input.request.requestId ?? null,
+						method: input.request.method,
+						path: input.request.path,
+						user: input.user.id,
+						status,
+						project_id: pid,
+						notebook_id: nid,
+						error: describeError(error),
+					});
+				const retryAfter = RETRY_AFTER_SECONDS[status];
+				return {
+					code: domain?.code ?? 'INTERNAL_ERROR',
+					message: domain?.message ?? internalErrorMessage(input.request.requestId),
+					status,
+					...(retryAfter === undefined ? {} : { retry_after_ms: retryAfter * 1000 }),
+				};
+			},
 			c.req.raw.signal,
 		);
 		// Register provisioning so the host can drain it after a disconnect.
@@ -2965,7 +3032,10 @@ app.openapi(deleteSession, async (c) => {
 	let pending = !wait;
 	if (wait) {
 		const result = await sessionRetirer(deps).stop(requested);
-		if (result.stop?.outcome === 'retained' || result.stop?.outcome === 'uncertain')
+		if (
+			!result.sandbox_reclaimed_at &&
+			(result.stop?.outcome === 'retained' || result.stop?.outcome === 'uncertain')
+		)
 			throw new SessionPersistenceRequiredError();
 		pending = result.stop?.outcome !== 'stopped' && !result.sandbox_reclaimed_at;
 	} else {

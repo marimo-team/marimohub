@@ -179,15 +179,16 @@ function createDeploymentDeps(env: Env): ApiDeps {
 		requestMigrationTick: async () => {
 			const ctx = executionContext.getStore();
 			if (!ctx) throw new Error('Migration invocation context unavailable');
-			const deadline = new AbortController();
-			const timer = setTimeout(
-				() => deadline.abort(new DOMException('Migration deadline', 'TimeoutError')),
-				20_000,
-			);
 			ctx.waitUntil(
 				Promise.resolve()
-					.then(() => services.migrations.tick(deadline.signal))
-					.finally(() => clearTimeout(timer)),
+					.then(() => services.migrations.tick(AbortSignal.timeout(20_000)))
+					.catch((error) =>
+						logOperationalError(
+							'migration_attempt_failed',
+							{ operation: 'migration.attempt' },
+							error,
+						),
+					),
 			);
 		},
 		theme: parseTheme(env),

@@ -241,7 +241,8 @@ export async function callRuntime(
 				sessions: deps.services.sessions,
 				persistWorkspace: deps.sandbox.persistWorkspace,
 				workdir: deps.sandbox.workdir,
-			}).capture(session, sandbox);
+				metrics: deps.metrics,
+			}).capture(session, sandbox, { includeWorkspace: false });
 			if (captured.critical.status === 'not_required')
 				throw HostProblemError.unsupportedOperation(
 					'This notebook source cannot be saved by the host',

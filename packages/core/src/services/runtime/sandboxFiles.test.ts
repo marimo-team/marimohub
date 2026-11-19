@@ -1911,6 +1911,34 @@ describe('readSessionArtifacts', () => {
 		expect(single).not.toHaveBeenCalled();
 	});
 
+	it('gives a batch one read deadline per listed artifact', async () => {
+		const { instance } = makeFsSandbox({
+			files: {
+				'notebook.py': 'code',
+				'pyproject.toml': 'deps',
+				'__marimo__/session/notebook.py.json': '{}',
+			},
+		});
+		const batch = vi.fn(async () => [
+			{ success: true as const, content: 'code' },
+			{ success: true as const, content: 'deps' },
+			readFileFailure('NOT_FOUND'),
+			{ success: true as const, content: '{}' },
+		]);
+		await readSessionArtifacts(
+			{ ...instance, readFilesBounded: batch },
+			MOUNT,
+			undefined,
+			undefined,
+			undefined,
+			true,
+		);
+		expect(batch).toHaveBeenCalledWith(
+			expect.any(Array),
+			expect.objectContaining({ timeoutMs: 30_000 }),
+		);
+	});
+
 	it.each(['code', 'deps', 'session'])('rejects failed critical %s in a batch', async (field) => {
 		const { instance } = makeFakeSandbox();
 		const fields = ['code', 'deps', 'html', 'session'];
