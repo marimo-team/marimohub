@@ -50,7 +50,7 @@ const ApprovedAuthorizationSchema = {
 	expires_in_days: z.number().int().min(1).max(3650),
 };
 
-const CliAuthorizationSchema = z
+export const CliAuthorizationSchema = z
 	.discriminatedUnion('status', [
 		z.looseObject({
 			...AuthorizationCommonSchema,
@@ -89,7 +89,7 @@ const CliAuthorizationSchema = z
 		}
 	});
 
-const DeviceUserCodeClaimSchema = z.object({
+export const DeviceUserCodeClaimSchema = z.object({
 	authorization_id: z.string().refine(CliAuthorizationId.is),
 });
 

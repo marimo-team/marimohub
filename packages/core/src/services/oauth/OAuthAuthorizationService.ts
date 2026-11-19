@@ -55,7 +55,7 @@ const ApprovedAuthorizationSchema = z.looseObject({
 	expires_in_days: z.number().int().min(1).max(OAUTH_TOKEN_LIFETIME_DAYS_MAX),
 });
 
-const OAuthAuthorizationSchema = z.discriminatedUnion('status', [
+export const OAuthAuthorizationSchema = z.discriminatedUnion('status', [
 	PendingAuthorizationSchema,
 	DeniedAuthorizationSchema,
 	ApprovedAuthorizationSchema,

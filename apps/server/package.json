@@ -12,7 +12,9 @@
 		"test": "vp run test:vitest",
 		"typecheck": "tsc --noEmit",
 		"metadata:migrate-schema": "tsx src/metadata-migrate-schema.ts",
-		"metadata:inspect": "tsx src/metadata-inspect.ts"
+		"metadata:inspect": "tsx src/metadata-inspect.ts",
+		"metadata:transfer": "tsx src/metadata-transfer.ts",
+		"metadata:activate": "tsx src/metadata-activate.ts"
 	},
 	"dependencies": {
 		"@hono/node-server": "catalog:",

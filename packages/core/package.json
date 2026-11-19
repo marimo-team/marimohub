@@ -103,7 +103,8 @@
 		"./storage/logical-bucket": "./src/storage/logicalBucket.ts",
 		"./storage/metadata-keys": "./src/storage/metadataKeys.ts",
 		"./storage/backend-marker": "./src/storage/backendMarker.ts",
-		"./testing/metadata-contract": "./src/testing/metadataContract.ts"
+		"./testing/metadata-contract": "./src/testing/metadataContract.ts",
+		"./storage/metadata-validation": "./src/storage/metadataValidation.ts"
 	},
 	"scripts": {
 		"build": "vp pack",

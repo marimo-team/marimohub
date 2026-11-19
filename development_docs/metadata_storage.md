@@ -3,7 +3,7 @@
 The PostgreSQL adapter stores metadata bytes in `hub_metadata.records`. Artifact bytes remain in the configured bucket.
 The default metadata backend remains `bucket`. The public API and stored domain formats remain unchanged.
 
-The adapter and runtime composition are implemented. Existing-bucket transfer, activation, reverse transfer, and transaction consolidation remain unfinished.
+The adapter and runtime composition are implemented. Offline bucket-to-SQL transfer and resumable activation are implemented. Reverse transfer and transaction consolidation are the next milestones.
 The storage-parity release gates are not complete. Schema creation alone does not activate a deployment.
 
 ## Runtime composition
@@ -44,8 +44,7 @@ Inspect the artifact marker, placement counts, and optional SQL deployment state
 pnpm --filter @marimo-hub/server metadata:inspect
 ```
 
-Inspection counts unknown keys. It does not validate every domain record or audit artifact references.
-Those checks belong to the unfinished transfer workflow.
+Inspection counts unknown keys and reports SQL transfer state. Transfer validates records with owner schemas and checks catalog, notebook, publication, and session references before activation.
 
 ## Runtime database role
 
@@ -114,3 +113,38 @@ MARIMOHUB_REQUIRE_POSTGRES_TESTS=1 \
 `MARIMOHUB_TEST_POSTGRES_URL` supplies the test connection URL.
 The suite exercises the shared storage contract, deployment fencing, role restrictions, pagination, session queries, and domain composition.
 The metadata interface has no streaming methods, so three shared streaming cases do not apply.
+
+## Offline transfer and activation
+
+Stop requests, schedulers, maintenance, embedded hosts, and runtimes with storage credentials.
+Drain and reclaim sessions. Reconcile uploads, moves, and pending external publications.
+Deny old workloads write access with deployment controls or credential revocation.
+The marker cannot fence binaries that ignore it.
+
+Create a non-secret input file with a stable transfer UUID:
+
+```json
+{ "namespace": "hub", "id": "11111111-1111-4111-8111-111111111111", "pageSize": 100 }
+```
+
+Use the same file to resume after a failure:
+
+```sh
+pnpm --filter @marimo-hub/server metadata:transfer --input transfer.json --writers-stopped
+pnpm --filter @marimo-hub/server metadata:inspect
+pnpm --filter @marimo-hub/server metadata:activate --input transfer.json --writers-stopped
+```
+
+A transfer freezes the bucket marker and creates an isolated importing namespace.
+Pages copy exact bytes, object metadata, and upload timestamps with new ETags.
+A second inventory pass reconciles updates and deletions before reference checks.
+Unknown keys, invalid records, missing references, and unresolved operations block readiness.
+A failed page leaves its SQL checkpoint unchanged. A crashed worker's lease expires after 60 seconds.
+
+Activation commits SQL first, then publishes the matching bucket marker.
+If marker publication fails, keep writers stopped and rerun activation with the same ID.
+Hosts remain unavailable until both records agree. Inspection shows a ready transfer beside an active deployment during this interval.
+
+For a fresh deployment, add `"fresh":true`. The command rejects any existing bucket object or namespace.
+After an interrupted fresh initialization, remove `fresh` and resume with the same transfer ID.
+Keep old bucket metadata read-only through the rollback window. SQL never falls back to those objects.

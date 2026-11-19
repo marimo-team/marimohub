@@ -26,6 +26,8 @@ export default defineConfig({
 			'src/catalog-recovery.ts',
 			'src/metadata-migrate-schema.ts',
 			'src/metadata-inspect.ts',
+			'src/metadata-transfer.ts',
+			'src/metadata-activate.ts',
 			'src/session-index-rebuild.ts',
 			'src/project-access-rebuild.ts',
 		],

@@ -16,7 +16,7 @@ const MAX_GRANT_TYPES = 10;
 const MAX_RESPONSE_TYPES = 10;
 const MAX_TYPE_LENGTH = 100;
 
-const OAuthClientRecordSchema = z.looseObject({
+export const OAuthClientRecordSchema = z.looseObject({
 	client_id: z.string().refine(OAuthClientId.is),
 	client_id_issued_at: z.number().int().nonnegative(),
 	expires_at: utcTimestamp(),

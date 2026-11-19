@@ -19,7 +19,7 @@ const DEFAULT_KEEP_LAST = 20;
 
 const SNAPSHOT_CURSOR_KEY = '_system/snapshot-expiry-cursor.json';
 const SnapshotKeySchema = z.string().startsWith(paths.snapshotsPrefix);
-const SnapshotExpiryCursorSchema = z.object({
+export const SnapshotExpiryCursorSchema = z.object({
 	after: SnapshotKeySchema.optional(),
 	cutoff: z.number(),
 	retentionMs: z.number().nonnegative(),

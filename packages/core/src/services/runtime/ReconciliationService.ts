@@ -41,7 +41,7 @@ class ReclaimTimeoutError extends Error {
 	}
 }
 
-const OrphanMarkerSchema = z.object({ first_seen: z.number() });
+export const OrphanMarkerSchema = z.object({ first_seen: z.number() });
 const CLAIM_CLEANUP_PAGE_SIZE = 100;
 const CLAIM_CLEANUP_BUDGET_MS = Millis.seconds(5);
 
