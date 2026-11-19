@@ -88,7 +88,8 @@ Capture histograms use the `sessions.capture.` prefix:
 | `total_ms`                                | Full capture duration, including workspace work and resume, labelled by critical `status` and `mode` (`background` or `stop`).    |
 
 `runtime_prepare` includes pause and checkpoint creation. `source_publish` includes the
-receipt on transactional backends. Retirement emits `runtime_commit-stop` and `destroy` phases.
+receipt on transactional backends. These captures record durability at commit, before later metadata and catalog work.
+Retirement emits `runtime_commit-stop` and `destroy` phases.
 Nested phases overlap; do not sum their durations. Byte metrics exclude transport overhead.
 
 Save responses remain asynchronous and do not guarantee durability. Unchanged captures still

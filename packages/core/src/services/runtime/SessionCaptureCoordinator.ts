@@ -116,7 +116,7 @@ export class SessionCaptureCoordinator {
 			if (result.critical.status === 'durable') {
 				const durable = result.critical;
 				try {
-					if (!durable.publication.captureAcknowledgedAt)
+					if (!durable.publication.captureAcknowledgedAt) {
 						await telemetry.time('receipt', () =>
 							sessions.recordDurableCapture(
 								session,
@@ -124,7 +124,8 @@ export class SessionCaptureCoordinator {
 								durable.publication.versionId,
 							),
 						);
-					telemetry.milestone('durable');
+						telemetry.milestone('durable');
+					}
 					retain = !!options.retainRuntime;
 					if (retain) {
 						result.runtime = checkpoint;

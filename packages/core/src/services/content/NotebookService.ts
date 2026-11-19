@@ -1320,6 +1320,7 @@ export class NotebookService {
 				await this.sessions.commitCapturePublication(token, versionId, versions, authority, now);
 			else await publishLocalSource(this.bucket, token, versionId, versions);
 			telemetry.milestone('source_visible');
+			if (authority) telemetry.milestone('durable');
 		});
 		if (changed)
 			await telemetry

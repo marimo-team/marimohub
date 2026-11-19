@@ -1,3 +1,5 @@
+import { createServices } from '../index';
+import { bucketStorage } from '../../ports/metadata';
 import { NotebookService } from '../content/NotebookService';
 import { CatalogService } from '../catalog/CatalogService';
 import * as logs from '../../logs';
@@ -982,3 +984,130 @@ it.each(['wrong-attempt', 'wrong-lease', 'expired'] as const)(
 		expect(f.calls.destroy).toBe(0);
 	},
 );
+
+it.each([false, true])(
+	'records transactional durability before metadata and catalog work (stop: %s)',
+	async (retainRuntime) => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		const f = await coordinatorFixture();
+		const start = Date.now();
+		let elapsed = 0;
+		vi.spyOn(performance, 'now').mockImplementation(() => elapsed);
+		const advance = (ms: number) => {
+			elapsed += ms;
+			vi.setSystemTime(start + elapsed);
+		};
+		const services = createServices({
+			...bucketStorage(f.bucket),
+			transactions: {
+				async run(_scopes, work) {
+					const result = await work({
+						records: f.bucket,
+						sessions: { list: vi.fn().mockRejectedValue(new Error('Unexpected indexed query')) },
+					});
+					advance(200);
+					return result;
+				},
+			},
+		});
+		let session = await services.sessions.acknowledgeRuntimeSave(
+			f.project.id,
+			f.session.session_id,
+		);
+		let stopLease: { attemptId: string; leaseId: string } | undefined;
+		if (retainRuntime) {
+			session = await services.sessions.requestStop(f.project.id, session.session_id);
+			const leaseId = crypto.randomUUID();
+			session = (await services.sessions.claimStop(session, leaseId))!;
+			stopLease = { attemptId: session.stop!.id, leaseId };
+		}
+		const separateReceipt = vi.spyOn(services.sessions, 'recordDurableCapture');
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const put = f.bucket.put.bind(f.bucket);
+		vi.spyOn(f.bucket, 'put').mockImplementation(async (key, value, options) => {
+			if (key === f.nb.meta) {
+				entered.resolve();
+				await release.promise;
+				advance(500);
+			}
+			return put(key, value, options);
+		});
+		const reconcile = services.catalog.updateNotebookEntry.bind(services.catalog);
+		vi.spyOn(services.catalog, 'updateNotebookEntry').mockImplementation(async (...args) => {
+			advance(700);
+			return reconcile(...args);
+		});
+		const coordinator = new SessionCaptureCoordinator({
+			...f,
+			...services,
+			compute: fakeComputeFrom(f.instance),
+			persistWorkspace: 'source',
+			metrics: f.metrics,
+		});
+		const capture = coordinator.capture(session, f.instance, {
+			retainRuntime,
+			includeWorkspace: false,
+			stopLease,
+			...(stopLease
+				? { assertOwnership: () => services.sessions.assertCaptureOwnership(session, stopLease) }
+				: {}),
+		});
+		await entered.promise;
+		const atCommit = [...f.metrics.histogram.mock.calls];
+		release.resolve();
+		expect((await capture).critical.status).toBe('durable');
+		expect(atCommit).toContainEqual(['sessions.capture.durable_ms', 200, undefined]);
+		expect(atCommit).toContainEqual(['sessions.capture.durable_lag_ms', 200, undefined]);
+		expect(
+			f.metrics.histogram.mock.calls.filter(([name]) => name === 'sessions.capture.durable_ms'),
+		).toHaveLength(1);
+		expect(f.metrics.increment).toHaveBeenCalledExactlyOnceWith('sessions.capture.durable');
+		expect(f.metrics.histogram).toHaveBeenCalledWith(
+			'sessions.capture.total_ms',
+			1400,
+			expect.anything(),
+		);
+		expect(separateReceipt).not.toHaveBeenCalled();
+		expect((await f.storedSession()).last_durable_capture).toBeDefined();
+	},
+);
+
+it('does not report confirmed durability after a lost transaction acknowledgement', async () => {
+	const f = await coordinatorFixture();
+	const services = createServices({
+		...bucketStorage(f.bucket),
+		transactions: {
+			async run(_scopes, work) {
+				await work({
+					records: f.bucket,
+					sessions: { list: vi.fn().mockRejectedValue(new Error('Unexpected indexed query')) },
+				});
+				throw new Error('Commit acknowledgement lost');
+			},
+		},
+	});
+	const coordinator = new SessionCaptureCoordinator({
+		...f,
+		...services,
+		compute: fakeComputeFrom(f.instance),
+		persistWorkspace: 'source',
+		metrics: f.metrics,
+	});
+	expect(
+		await coordinator.capture(f.session, f.instance, {
+			retainRuntime: true,
+			includeWorkspace: false,
+		}),
+	).toMatchObject({
+		critical: { status: 'uncertain', code: 'PUBLICATION_UNCERTAIN' },
+		runtimeState: 'running',
+	});
+	expect((await f.storedSession()).last_durable_capture).toBeDefined();
+	expect(f.metrics.histogram.mock.calls.map(([name]) => name)).not.toContain(
+		'sessions.capture.durable_ms',
+	);
+	expect(f.metrics.increment).not.toHaveBeenCalledWith('sessions.capture.durable');
+	expect(f.resume).toHaveBeenCalledOnce();
+	expect(f.calls.destroy).toBe(0);
+});
