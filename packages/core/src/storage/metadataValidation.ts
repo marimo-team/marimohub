@@ -3,7 +3,7 @@ import { AppPoolSchema } from '../services/runtime/AppPoolRouter';
 import { ThumbnailRecordSchema } from '../services/content/ThumbnailService';
 import { WorkspaceManifestSchema } from '../services/content/workspaceManifest';
 import { PreviewRecordSchema } from '../services/content/notebookPreviews';
-import { proposalSha256 } from '../services/content/proposalUtils';
+import { matchesArtifactDigest } from './artifactIntegrity';
 import {
 	DEFAULT_PROPOSAL_PAYLOAD_RETENTION_MS,
 	DEFAULT_PROPOSAL_PAYLOAD_SWEEP_GRACE_MS,
@@ -179,11 +179,7 @@ export async function auditMetadataReferences(bucket: Bucket): Promise<void> {
 				for (const file of manifest) {
 					const key = `${item.key.slice(0, -'workspace-manifest.json'.length)}workspace/${file.path}`;
 					const artifact = await bucket.get(key);
-					if (
-						!artifact ||
-						artifact.size !== file.size_bytes ||
-						(await proposalSha256(await artifact.bytes())) !== file.sha256
-					)
+					if (!(await matchesArtifactDigest(artifact, file)))
 						throw new Error(`Invalid referenced workspace artifact: ${key}`);
 				}
 			}
@@ -216,11 +212,7 @@ export async function auditMetadataReferences(bucket: Bucket): Promise<void> {
 						const key = `${item.key.slice(0, -'proposal.json'.length)}changes/${index}`;
 						const artifact = await bucket.get(key);
 						if (!artifact && prunable) continue;
-						if (
-							!artifact ||
-							artifact.size !== change.size_bytes ||
-							(await proposalSha256(await artifact.bytes())) !== change.sha256
-						)
+						if (!(await matchesArtifactDigest(artifact, change)))
 							throw new Error(`Invalid referenced proposal artifact: ${key}`);
 					}
 			}
