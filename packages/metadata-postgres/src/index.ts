@@ -16,6 +16,7 @@ import { checkSchema } from './migrations';
 import { createMetadataPool } from './pool';
 import type { PostgresConnectionOptions } from './pool';
 import { deleteRecords, getRecord, headRecord, listRecords, putRecord, UUID } from './records';
+import { isValidMetadataIdentifier } from './validation';
 import { listSessions } from './sessions';
 import { runScopedTransaction } from './scopedTransactions';
 import { guardedTransaction } from './transactions';
@@ -37,10 +38,7 @@ export class PostgresMetadataStore implements MetadataStore {
 
 	constructor(options: PostgresMetadataOptions) {
 		if (
-			!options.namespace ||
-			Buffer.byteLength(options.namespace) > 128 ||
-			options.namespace.includes('\0') ||
-			Buffer.from(options.namespace).toString('utf8') !== options.namespace ||
+			!isValidMetadataIdentifier(options.namespace, 128) ||
 			!Number.isSafeInteger(options.epoch) ||
 			options.epoch < 1 ||
 			!UUID.test(options.artifactStoreId)

@@ -13,8 +13,9 @@ import {
 	validateMetadataRecord,
 } from '@marimo-hub/core/storage/metadata-validation';
 import { createLogicalStorage } from '@marimo-hub/core/storage/logical-bucket';
-import { body, COLUMNS, getRecord, headRecord, listRecords, UUID } from './records';
+import { body, COLUMNS, getRecord, headRecord, listRecords, matchesRecord, UUID } from './records';
 import type { RecordRow } from './records';
+import { isValidMetadataIdentifier } from './validation';
 import { checkSchema } from './migrations';
 import { checkpointTransfer, insertTransfer, recordTransferItem } from './transferState';
 import type { TransferDirection, TransferIdentity, TransferLease } from './transferState';
@@ -37,13 +38,7 @@ export class MetadataTransfer {
 		this.pageSize = options.pageSize ?? 100;
 		if (!options.writersStopped)
 			throw new Error('Stop and externally fence every writer before transfer');
-		if (
-			!UUID.test(options.id) ||
-			!options.namespace ||
-			Buffer.byteLength(options.namespace) > 128 ||
-			options.namespace.includes('\0') ||
-			Buffer.from(options.namespace).toString() !== options.namespace
-		)
+		if (!UUID.test(options.id) || !isValidMetadataIdentifier(options.namespace, 128))
 			throw new Error('Invalid transfer identity');
 		if (!Number.isSafeInteger(this.pageSize) || this.pageSize < 1 || this.pageSize > 1000)
 			throw new Error('Invalid transfer page size');
@@ -419,12 +414,7 @@ export class MetadataTransfer {
 					const source = body(record);
 					await validateMetadataRecord(source);
 					const existing = await this.bucket.get(record.key);
-					const metadata = (object: { httpMetadata?: unknown; customMetadata?: unknown }) =>
-						JSON.stringify([object.httpMetadata ?? null, object.customMetadata ?? null]);
-					const equal =
-						existing &&
-						Buffer.from(await existing.bytes()).equals(record.body) &&
-						metadata(existing) === metadata(source);
+					const equal = await matchesRecord(record, existing);
 					if (row.state === 'copying' || !equal)
 						await this.bucket.put(record.key, record.body, {
 							httpMetadata: source.httpMetadata,
@@ -432,11 +422,7 @@ export class MetadataTransfer {
 							...(existing ? { onlyIfEtagMatches: existing.etag } : { onlyIfNotExists: true }),
 						});
 					const target = await this.bucket.get(record.key);
-					if (
-						!target ||
-						!Buffer.from(await target.bytes()).equals(record.body) ||
-						metadata(target) !== metadata(source)
-					)
+					if (!target || !(await matchesRecord(record, target)))
 						throw new Error('Reverse transfer verification failed');
 					await recordTransferItem(client, this.options, 'sql_to_bucket', {
 						source,

@@ -10,6 +10,7 @@ import type {
 	BucketPutOptions,
 } from '@marimo-hub/core/ports/bucket';
 import type { PoolClient } from 'pg';
+import { isValidMetadataIdentifier } from './validation';
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const COLUMNS = 'key, etag, size_bytes, uploaded_at, http_metadata, custom_metadata';
@@ -42,14 +43,21 @@ export function body(row: RecordRow): BucketObjectBody {
 	};
 }
 export function validateKey(key: string): void {
-	if (
-		!key ||
-		Buffer.byteLength(key) > 1024 ||
-		key.includes('\0') ||
-		Buffer.from(key).toString() !== key
-	)
-		throw new RangeError('Invalid metadata key');
+	if (!isValidMetadataIdentifier(key, 1024)) throw new RangeError('Invalid metadata key');
 }
+
+export async function matchesRecord(
+	row: RecordRow,
+	candidate: BucketObjectBody | null,
+): Promise<boolean> {
+	return (
+		candidate !== null &&
+		Buffer.from(await candidate.bytes()).equals(row.body) &&
+		JSON.stringify([candidate.httpMetadata ?? null, candidate.customMetadata ?? null]) ===
+			JSON.stringify([row.http_metadata, row.custom_metadata])
+	);
+}
+
 export function encodeCursor(binding: string, after: string, rolled?: string): string {
 	return Buffer.from(JSON.stringify([binding, after, rolled ?? null])).toString('base64url');
 }
