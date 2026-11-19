@@ -1,3 +1,4 @@
+import { CaptureTelemetry } from '../../internal/captureTelemetry';
 import type { BackgroundWork } from '../../ports/backgroundWork';
 import type { Metrics } from '../../ports/metrics';
 import { kernelActiveConnections } from './kernelActiveConnections';
@@ -176,7 +177,11 @@ export class TakeoverRetirementError extends Error {
 
 /** Centralizes capture, destruction, and claim release for session teardown. */
 export class SessionRetirer {
-	constructor(private deps: SessionRetirerDeps) {}
+	private readonly telemetry: CaptureTelemetry;
+
+	constructor(private deps: SessionRetirerDeps) {
+		this.telemetry = new CaptureTelemetry(deps.metrics);
+	}
 
 	async reconcileRetained(session: Session): Promise<Session> {
 		if (
@@ -194,7 +199,7 @@ export class SessionRetirer {
 				'teardown',
 			);
 			if (!sandbox) return session;
-			const runtime = new RuntimeCaptureClient(sandbox, session.sandbox_id);
+			const runtime = new RuntimeCaptureClient(sandbox, session.sandbox_id, this.telemetry);
 			if (session.stop.runtime_token)
 				await runtime.resume({
 					token: session.stop.runtime_token,
@@ -302,7 +307,7 @@ export class SessionRetirer {
 					if (error instanceof NotFoundError) return await finishMissingRuntime();
 					throw error;
 				}
-				const runtime = new RuntimeCaptureClient(sandbox, session.sandbox_id);
+				const runtime = new RuntimeCaptureClient(sandbox, session.sandbox_id, this.telemetry);
 				if (!session.stop!.runtime_token && ['idle', 'lifetime'].includes(session.stop!.trigger)) {
 					const current = await sessions.getSession(session.project_id, session.session_id);
 					const eligibilityChanged =
@@ -470,7 +475,7 @@ export class SessionRetirer {
 				}
 				await update({ outcome: 'stopping' });
 				try {
-					await sandbox.destroy();
+					await this.telemetry.time('destroy', () => sandbox.destroy());
 				} catch (error) {
 					if (error instanceof NotFoundError) return await finishMissingRuntime();
 					throw error;
@@ -898,7 +903,7 @@ export class SessionRetirer {
 		try {
 			const sandbox =
 				existing ?? sessionSandbox(this.deps.compute, session, this.deps.metrics, 'teardown');
-			await sandbox.destroy();
+			await this.telemetry.time('destroy', () => sandbox.destroy());
 			return true;
 		} catch (err) {
 			logOperationalError(

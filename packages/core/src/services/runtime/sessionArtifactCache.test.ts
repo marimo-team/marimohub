@@ -166,6 +166,8 @@ describe('incremental autosave artifacts', () => {
 			expect.objectContaining({ code: 'edited' }),
 			ACTOR,
 			expect.objectContaining({ projectId: f.projectId, notebookId: f.notebookId }),
+			undefined,
+			undefined,
 		);
 	});
 

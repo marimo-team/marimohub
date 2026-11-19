@@ -783,8 +783,12 @@ export class SessionService {
 		});
 	}
 
-	async acknowledgeRuntimeSave(projectId: ProjectId, id: SessionId): Promise<Session> {
-		const dirty = { id: crypto.randomUUID(), acknowledged_at: new Date().toISOString() };
+	async acknowledgeRuntimeSave(
+		projectId: ProjectId,
+		id: SessionId,
+		acknowledgedAt = new Date().toISOString(),
+	): Promise<Session> {
+		const dirty = { id: crypto.randomUUID(), acknowledged_at: acknowledgedAt };
 		return this.mutate(projectId, id, (session) => {
 			if (!sessionPersistsEdits(session) || session.sandbox_reclaimed_at) return null;
 			return { ...session, save_dirty: dirty };

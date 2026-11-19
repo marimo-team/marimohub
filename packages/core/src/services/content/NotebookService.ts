@@ -1,3 +1,4 @@
+import { CaptureTelemetry } from '../../internal/captureTelemetry';
 import {
 	readLocalPublication,
 	publishLocalSource,
@@ -1205,21 +1206,27 @@ export class NotebookService {
 		actor: UserId,
 		capture?: LocalPublicationToken,
 		authority?: CapturePublicationAuthority,
+		telemetry = new CaptureTelemetry(this.metrics),
 	): Promise<CommitSessionResult | null> {
-		const { meta, source: configured } = await this.getNotebook(projectId, notebookId);
+		const { meta, source: configured } = await telemetry.time('publication_validation', () =>
+			this.getNotebook(projectId, notebookId),
+		);
 		if (meta.preview) throw new ConflictError('Preview sessions cannot persist changes');
 		if (meta.status === 'deleted' || configured.type !== 'local' || input.code === undefined)
 			return null;
+		const code = input.code;
 		const token = capture ?? (await this.beginSessionCapture(projectId, notebookId));
 		if (token.projectId !== projectId || token.notebookId !== notebookId)
 			throw new ConflictError('Capture belongs to another notebook');
 		const source = token.source;
 		const nb = paths.project(projectId).notebook(notebookId);
 		const current = nb.version(source.current_version_id);
-		const stored = await this.readVersionContents(current.code, current.deps);
+		const stored = await telemetry.time('version_read', () =>
+			this.readVersionContents(current.code, current.deps),
+		);
 		const deps = input.deps ?? stored.deps;
-		const existingObjects = await Promise.all(
-			[current.code, current.deps, current.meta].map((key) => this.bucket.head(key)),
+		const existingObjects = await telemetry.time('version_heads', () =>
+			Promise.all([current.code, current.deps, current.meta].map((key) => this.bucket.head(key))),
 		);
 		const changed =
 			!stored.complete ||
@@ -1243,26 +1250,29 @@ export class NotebookService {
 			try {
 				const descriptorField = field === 'html' ? 'html_snapshot' : 'session_snapshot';
 				const hash = await sha256Hex(content);
+				const size = byteLength(content);
 				const old = previous?.[descriptorField];
 				if (old) {
 					const key = publicationArtifactKey(projectId, notebookId, versionId, field, old);
 					const head = await this.bucket.head(key);
 					const same =
-						head &&
-						head.size === byteLength(content) &&
+						head?.size === size &&
 						(old.sha256 === hash || (!old.sha256 && (await this.artifactMatches(key, hash))));
 					if (same) {
 						this.metrics.increment('notebook.artifact_uploads_skipped');
 						continue;
 					}
 				}
-				await this.bucket.put(ver.capture(captureId)[field], content, {
-					onlyIfNotExists: true,
-					httpMetadata: { contentType: field === 'html' ? 'text/html' : 'application/json' },
-				});
+				await telemetry.time('artifact_upload', () =>
+					this.bucket.put(ver.capture(captureId)[field], content, {
+						onlyIfNotExists: true,
+						httpMetadata: { contentType: field === 'html' ? 'text/html' : 'application/json' },
+					}),
+				);
+				telemetry.histogram('uploaded_bytes', size, { artifact: field });
 				publication[descriptorField] = {
 					captured_at: old ? nextIsoTimestamp(old.captured_at, now) : now,
-					size_bytes: byteLength(content),
+					size_bytes: size,
 					capture_id: captureId,
 					sha256: hash,
 				};
@@ -1277,58 +1287,68 @@ export class NotebookService {
 			}
 		}
 		if (changed) {
-			await Promise.all([
-				this.bucket.put(ver.code, input.code, { onlyIfNotExists: true }),
-				this.bucket.put(ver.deps, deps, { onlyIfNotExists: true }),
-				this.bucket.put(
-					ver.meta,
-					JSON.stringify(
-						buildVersion({
-							versionId,
-							notebookId,
-							now,
-							author: actor,
-							message: 'Session edits',
-							parentId: source.current_version_id,
-						}),
+			await telemetry.time('version_upload', () =>
+				Promise.all([
+					this.bucket.put(ver.code, code, { onlyIfNotExists: true }),
+					this.bucket.put(ver.deps, deps, { onlyIfNotExists: true }),
+					this.bucket.put(
+						ver.meta,
+						JSON.stringify(
+							buildVersion({
+								versionId,
+								notebookId,
+								now,
+								author: actor,
+								message: 'Session edits',
+								parentId: source.current_version_id,
+							}),
+						),
+						{ onlyIfNotExists: true },
 					),
-					{ onlyIfNotExists: true },
-				),
-			]);
+				]),
+			);
+			telemetry.bytes('uploaded_bytes', code, 'code');
+			telemetry.bytes('uploaded_bytes', deps, 'deps');
 		}
-		const publish = async (versions: LocalPublicationVersion[]) => {
+		const versions =
+			!changed && JSON.stringify(publication) === JSON.stringify(previous)
+				? token.versions
+				: [publication, ...token.versions.filter((version) => version.version_id !== versionId)];
+		// Even equal bytes must fence older, already-dispatched publications.
+		await telemetry.time('source_publish', async () => {
 			if (authority)
 				await this.sessions.commitCapturePublication(token, versionId, versions, authority, now);
 			else await publishLocalSource(this.bucket, token, versionId, versions);
-		};
-		if (!changed && JSON.stringify(publication) === JSON.stringify(previous)) {
-			// Even equal bytes must fence older, already-dispatched publications.
-			await publish(token.versions);
-		} else {
-			const versions = [
-				publication,
-				...token.versions.filter((version) => version.version_id !== versionId),
-			];
-			await publish(versions);
-			if (changed)
-				await mutateObject(
-					this.bucket,
-					nb.meta,
-					(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
-					(current) => {
-						assertNotMoving(current, notebookId);
-						return { ...current, updated_at: nextIsoTimestamp(current.updated_at, now) };
-					},
-				).catch((error) =>
+			telemetry.milestone('source_visible');
+			if (authority) telemetry.milestone('durable');
+		});
+		if (changed)
+			await telemetry
+				.time('metadata_update', () =>
+					mutateObject(
+						this.bucket,
+						nb.meta,
+						(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
+						(current) => {
+							assertNotMoving(current, notebookId);
+							return { ...current, updated_at: nextIsoTimestamp(current.updated_at, now) };
+						},
+					),
+				)
+				.catch((error) =>
 					logOperationalError(
 						'notebook.capture_metadata_failed',
 						{ operation: 'notebook.capture_metadata', notebook_id: notebookId },
 						error,
 					),
 				);
-		}
-		await this.reconcileSavedNotebook(projectId, notebookId, actor, !changed);
-		if (changed) await this.pruneVersions(projectId, notebookId, MAX_VERSIONS, versionId);
+		await telemetry.time('reconcile', () =>
+			this.reconcileSavedNotebook(projectId, notebookId, actor, !changed),
+		);
+		if (changed)
+			await telemetry.time('prune', () =>
+				this.pruneVersions(projectId, notebookId, MAX_VERSIONS, versionId),
+			);
 		return {
 			versionId,
 			newVersion: changed,
