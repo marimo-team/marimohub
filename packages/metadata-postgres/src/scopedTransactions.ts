@@ -63,13 +63,10 @@ export async function runScopedTransaction<T>(
 				};
 				const records: MetadataStore = {
 					get: ((key, options) =>
-						invoke(async () => {
-							await client.query(
-								'SELECT key FROM hub_metadata.records WHERE namespace=$1 AND key=$2 FOR UPDATE',
-								[identity.namespace, key],
-							);
-							return getRecord(client, identity.namespace, key, options);
-						}, [key])) as MetadataStore['get'],
+						invoke(
+							() => getRecord(client, identity.namespace, key, options, true),
+							[key],
+						)) as MetadataStore['get'],
 					head: (key) => invoke(() => headRecord(client, identity.namespace, key), [key]),
 					put: (key, value, options) =>
 						invoke(() => putRecord(client, identity.namespace, key, value, options), [key]),

@@ -729,13 +729,25 @@ export function createFromEnv(
 	const sourceControlAccounts = makeSourceControlAccounts(env, bucket);
 	const sourceControlConfig = makeSourceControl(env, sourceControlAccounts.githubAccounts, bucket);
 	const workspaceLimits = parseWorkspaceLimits(env);
-	const services = createServices({ ...hubStorage, metadata, logicalBucket: bucket }, metrics, {
-		workspaceLimits,
-		backgroundWork: options?.backgroundWork,
-		tracing: options?.tracing,
-		repositoryHosts: sourceControlConfig.sourceControl?.repositoryHosts,
-		sourceControl: sourceControlConfig.sourceControl,
-	});
+	const services = createServices(
+		{
+			...hubStorage,
+			artifacts:
+				hubStorage.artifacts === hubStorage.logicalBucket
+					? bucket
+					: (options?.decorateBucket?.(hubStorage.artifacts) ?? hubStorage.artifacts),
+			metadata,
+			logicalBucket: bucket,
+		},
+		metrics,
+		{
+			workspaceLimits,
+			backgroundWork: options?.backgroundWork,
+			tracing: options?.tracing,
+			repositoryHosts: sourceControlConfig.sourceControl?.repositoryHosts,
+			sourceControl: sourceControlConfig.sourceControl,
+		},
+	);
 	const projectAlerts = makeProjectAlerts(env, bucket, metrics);
 	const surfaces = surfacesFromEnv(env);
 	const compute = makeCompute(env, {

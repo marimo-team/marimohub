@@ -22,22 +22,29 @@ export function createLogicalStorage(
 		return placement === 'metadata' ? metadata : rawArtifacts;
 	}
 
+	type Entry = { key: string; object: BucketObject } | { key: string; prefix: string };
 	async function* entries(
 		source: MetadataStore,
 		placement: 'artifact' | 'metadata',
 		options: BucketListOptions,
-	) {
+	): AsyncGenerator<Entry> {
 		let cursor: string | undefined;
 		do {
 			const page = await source.list({
 				prefix: options.prefix,
+				delimiter: options.delimiter || undefined,
 				startAfter: options.startAfter,
 				cursor,
-				limit: 1000,
+				limit: Math.min(options.limit ?? 1000, 1000),
 			});
-			for (const object of page.objects) {
-				if (classifyMetadataKey(object.key) === placement) yield object;
-			}
+			const entries: Entry[] = [
+				...page.objects
+					.filter((object) => classifyMetadataKey(object.key) === placement)
+					.map((object) => ({ key: object.key, object })),
+				...page.delimitedPrefixes.map((prefix) => ({ key: prefix, prefix })),
+			];
+			entries.sort((left, right) => compareBucketKeys(left.key, right.key));
+			for (const entry of entries) yield entry;
 			cursor = page.cursor;
 		} while (cursor);
 	}
@@ -76,8 +83,23 @@ export function createLogicalStorage(
 				throw new Error('Invalid logical storage cursor');
 			}
 		}
-		const inputs = [entries(rawArtifacts, 'artifact', { prefix, startAfter: after })];
-		if (!artifactsOnly) inputs.push(entries(metadata, 'metadata', { prefix, startAfter: after }));
+		const inputs = [
+			entries(rawArtifacts, 'artifact', {
+				prefix,
+				delimiter,
+				startAfter: after,
+				limit: options.limit,
+			}),
+		];
+		if (!artifactsOnly)
+			inputs.push(
+				entries(metadata, 'metadata', {
+					prefix,
+					delimiter,
+					startAfter: after,
+					limit: options.limit,
+				}),
+			);
 		const heads = await Promise.all(inputs.map((input) => input.next()));
 		const objects: BucketObject[] = [];
 		const delimitedPrefixes: string[] = [];
@@ -95,9 +117,8 @@ export function createLogicalStorage(
 					selected = i;
 			}
 			if (selected === -1) return { objects, delimitedPrefixes, truncated: false };
-			const object = heads[selected].value!;
-			const offset = delimiter ? object.key.indexOf(delimiter, prefix.length) : -1;
-			const rolled = offset < 0 ? undefined : object.key.slice(0, offset + delimiter.length);
+			const entry = heads[selected].value!;
+			const rolled = 'prefix' in entry ? entry.prefix : undefined;
 			if (rolled === undefined || rolled !== lastPrefix) {
 				if (objects.length + delimitedPrefixes.length === limit) {
 					return {
@@ -110,10 +131,10 @@ export function createLogicalStorage(
 					};
 				}
 				if (rolled) delimitedPrefixes.push(rolled);
-				else objects.push(object);
+				else if ('object' in entry) objects.push(entry.object);
 				lastPrefix = rolled;
 			}
-			lastKey = object.key;
+			lastKey = entry.key;
 			heads[selected] = await inputs[selected].next();
 		}
 	}

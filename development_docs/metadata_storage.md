@@ -21,6 +21,7 @@ Run migrations with the schema-owner credential:
 pnpm --filter @marimo-hub/server metadata:migrate-schema
 ```
 
+Migration sources live in `packages/metadata-postgres/sql/`.
 Migrations use an advisory lock and record checksums in the same transaction. Startup checks those checksums.
 Schema creation does not activate a deployment. HTTP requests never apply DDL.
 
@@ -82,11 +83,12 @@ pnpm --filter @marimo-hub/server metadata:activate --input transfer.json --write
 
 The transfer freezes the bucket marker and copies metadata into an isolated SQL namespace.
 It preserves bytes, object metadata, and upload timestamps, with new ETags.
-A second inventory pass reconciles updates and deletions. Owner-schema and reference checks block invalid records, unsafe workspace paths, missing artifacts, and unresolved operations.
+A second inventory pass reconciles updates and deletions without rewriting unchanged SQL records. Owner-schema and reference checks block invalid records, unsafe workspace paths, missing artifacts, and unresolved operations.
 
 A failed page leaves its SQL checkpoint unchanged. A crashed worker's lease expires after 60 seconds.
-Reference audits renew the lease while holding the transfer-row lock.
+Transfer steps renew the lease while holding the transfer-row lock, including during object reads and reference audits.
 To resume, use the same input file and transfer ID.
+The CLI reports transfer errors, such as undrained pools, and hides raw driver errors.
 
 Activation commits SQL first, then publishes the matching bucket marker. Hosts require both records to agree.
 If activation fails, keep writers stopped. Rerun activation with the same ID.
@@ -137,7 +139,8 @@ External adapters need placement rules and owner schemas. SQL reads never fall b
 
 Each SQL operation holds a shared deployment lock until its transaction ends.
 The deployment must be active and match the configured namespace, epoch, and artifact-store identity.
-A mismatch is an availability error, not a missing object.
+A mismatch is an availability error, not a missing object. Unavailable storage returns HTTP 503.
+Uncertain commits still fail without automatic retries.
 SQL session queries return candidates. Core retains schema checks, lifecycle policy, user-index writes, and admission ranking.
 
 Embedded Node hosts must supply `nodeMetadataFactory` from `@marimo-hub/config/metadata.node`.
@@ -145,7 +148,8 @@ Await `deps.storageLifecycle.ready()` before serving requests.
 Stop requests and background writers before calling `deps.storageLifecycle.close()`.
 Operations fail before readiness and after shutdown. Readiness requires a matching active marker in the artifact bucket.
 
-The Worker supports bucket metadata only. It rejects PostgreSQL configuration and incompatible markers before requests or scheduled work.
+The Worker supports bucket metadata only. It rejects PostgreSQL configuration.
+It shares the first successful marker check across requests and scheduled work for each environment. Failed checks can retry.
 Its default bundle excludes the PostgreSQL adapter and driver.
 
 ## Transaction coverage

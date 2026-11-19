@@ -92,10 +92,11 @@ export async function getRecord(
 	namespace: string,
 	key: string,
 	options?: BucketGetOptions,
+	lock = false,
 ): Promise<BucketGetResult> {
 	validateKey(key);
 	const result = await client.query<RecordRow>(
-		`SELECT ${COLUMNS}, body FROM hub_metadata.records WHERE namespace=$1 AND key=$2`,
+		`SELECT ${COLUMNS}, body FROM hub_metadata.records WHERE namespace=$1 AND key=$2${lock ? ' FOR UPDATE' : ''}`,
 		[namespace, key],
 	);
 	const row = result.rows[0];

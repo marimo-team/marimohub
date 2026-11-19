@@ -1,4 +1,4 @@
--- Run after 001-schema.sql against a disposable database, with ON_ERROR_STOP=1.
+-- Run after packages/metadata-postgres/sql/001-initial.sql against a disposable database, with ON_ERROR_STOP=1.
 -- All fixture data and helpers roll back at the end.
 BEGIN;
 CREATE FUNCTION pg_temp.assert_true(ok boolean, label text) RETURNS void

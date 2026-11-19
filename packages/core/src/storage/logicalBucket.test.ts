@@ -69,6 +69,29 @@ describe('logical storage', () => {
 		expect(actual).toEqual(expected.sort());
 	});
 
+	it.each([10, 2000])(
+		'passes bounded delimiter listing to each backend (limit %s)',
+		async (limit) => {
+			const { raw, metadata, logicalBucket } = fixture();
+			await raw.put('projects/p/notebooks/n/workspace/folder/deep/file', 'x');
+			await metadata.put(metaKey, '{}');
+			const rawList = vi.spyOn(raw, 'list');
+			const metaList = vi.spyOn(metadata, 'list');
+			const result = await logicalBucket.list({
+				prefix: 'projects/p/notebooks/n/',
+				delimiter: '/',
+				limit,
+			});
+			expect(result.delimitedPrefixes).toEqual(['projects/p/notebooks/n/workspace/']);
+			expect(result.objects.map((object) => object.key)).toEqual([metaKey]);
+			for (const spy of [rawList, metaList]) {
+				expect(spy).toHaveBeenCalledOnce();
+				expect(spy).toHaveBeenCalledWith(
+					expect.objectContaining({ delimiter: '/', limit: Math.min(limit, 1000) }),
+				);
+			}
+		},
+	);
 	it('deduplicates delimiter prefixes across stores and page boundaries', async () => {
 		const { logicalBucket } = fixture();
 		await logicalBucket.put(metaKey, 'x');
