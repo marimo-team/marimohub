@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
+import { METADATA_BACKEND_KEY } from '@marimo-hub/core/storage/metadata-keys';
 import { readMetadataBackendMarker } from '@marimo-hub/core/storage/backend-marker';
 import { MetadataTransfer } from './transfer';
 import { createMetadataPool } from './pool';
@@ -171,6 +172,84 @@ describe.skipIf(!url)('offline metadata transfer', () => {
 		},
 	);
 
+	it('reads the authoritative checkpoint instead of a forged caller cursor', async () => {
+		const { bucket, namespace, transfer } = fixture();
+		await bucket.put(key, '{}');
+		await transfer.begin();
+		let lease = await transfer.claim();
+		while (lease.state !== 'ready')
+			lease = await transfer.step({ ...lease, cursor: { after: 'zzzz' } });
+		expect(
+			(await pool.query('SELECT key FROM hub_metadata.records WHERE namespace=$1', [namespace]))
+				.rows,
+		).toEqual([{ key }]);
+	});
+	it.each(['bucket_to_sql', 'sql_to_bucket'] as const)(
+		'does not overwrite a changed marker after the %s activation transaction',
+		async (direction) => {
+			const { bucket, namespace, transfer } = fixture();
+			await transfer.begin({ fresh: true });
+			let lease = await transfer.claim();
+			while (lease.state !== 'ready') lease = await transfer.step(lease);
+			let pending = transfer;
+			if (direction === 'sql_to_bucket') {
+				await transfer.activate();
+				pending = new MetadataTransfer(pool, bucket, {
+					namespace,
+					id: randomUUID(),
+					direction,
+					writersStopped: true,
+				});
+				await pending.begin();
+				lease = await pending.claim();
+				while (lease.state !== 'ready') lease = await pending.step(lease);
+			}
+			const marker = (await readMetadataBackendMarker(bucket))!;
+			const get = bucket.get.bind(bucket);
+			let reads = 0;
+			const fault = vi.spyOn(bucket, 'get').mockImplementation(async (key, options) => {
+				if (key === METADATA_BACKEND_KEY && ++reads === 2)
+					await bucket.put(key, JSON.stringify({ ...marker, epoch: marker.epoch + 10 }));
+				return get(key, options);
+			});
+			try {
+				await expect(pending.activate()).rejects.toThrow('marker changed');
+				expect((await readMetadataBackendMarker(bucket))!.epoch).toBe(marker.epoch + 10);
+				expect((await pending.status())!.state).toBe('ready');
+			} finally {
+				fault.mockRestore();
+			}
+		},
+	);
+	it('does not freeze the marker for a reverse transfer while activation is incomplete', async () => {
+		const { bucket, namespace, transfer } = fixture();
+		await transfer.begin({ fresh: true });
+		let lease = await transfer.claim();
+		while (lease.state !== 'ready') lease = await transfer.step(lease);
+		const fault = vi
+			.spyOn(pool, 'query')
+			.mockImplementationOnce(() => Promise.reject(new Error('lost activation receipt')));
+		try {
+			await expect(transfer.activate()).rejects.toThrow('lost activation receipt');
+		} finally {
+			fault.mockRestore();
+		}
+		const marker = await readMetadataBackendMarker(bucket);
+		const reverse = new MetadataTransfer(pool, bucket, {
+			namespace,
+			id: randomUUID(),
+			direction: 'sql_to_bucket',
+			writersStopped: true,
+		});
+		await expect(reverse.begin()).rejects.toThrow('pending transfer');
+		expect(await readMetadataBackendMarker(bucket)).toEqual(marker);
+		await transfer.activate();
+		await reverse.begin();
+		expect(await readMetadataBackendMarker(bucket)).toMatchObject({
+			backend: 'postgres',
+			state: 'frozen',
+		});
+	});
 	it('rejects a replayed checkpoint and resumes from committed progress', async () => {
 		const { bucket, transfer } = fixture();
 		await bucket.put(key, '{}');

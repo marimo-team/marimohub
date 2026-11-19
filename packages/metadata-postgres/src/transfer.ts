@@ -28,6 +28,11 @@ export interface TransferOptions extends TransferIdentity {
 	direction?: TransferDirection;
 }
 
+interface ActivationTarget {
+	marker: MetadataBackendMarker;
+	sourceEtag: string;
+}
+
 export class MetadataTransfer {
 	private readonly pageSize: number;
 	constructor(
@@ -35,6 +40,7 @@ export class MetadataTransfer {
 		private readonly bucket: Bucket,
 		private readonly options: TransferOptions,
 	) {
+		this.options = { ...options };
 		this.pageSize = options.pageSize ?? 100;
 		if (!options.writersStopped)
 			throw new Error('Stop and externally fence every writer before transfer');
@@ -207,19 +213,9 @@ export class MetadataTransfer {
 		};
 		return createLogicalStorage(this.bucket, readOnly, { namespace, epoch }).logicalBucket;
 	}
-	async step(lease: TransferLease): Promise<TransferLease> {
+	async step(claim: TransferLease): Promise<TransferLease> {
+		const lease = { ...claim };
 		if (this.options.direction === 'sql_to_bucket') return this.stepReverse(lease);
-		await this.frozenMarker();
-		const page = await this.bucket.list({ startAfter: lease.cursor?.after, limit: this.pageSize });
-		const records: BucketObjectBody[] = [];
-		for (const item of page.objects) {
-			if (classifyMetadataKey(item.key) !== 'metadata') continue;
-			const object = await this.bucket.get(item.key);
-			if (!object || object.etag !== item.etag)
-				throw new Error('Source changed while reading transfer page');
-			await validateMetadataRecord(object);
-			records.push(object);
-		}
 		return this.transaction(async (client) => {
 			const row = await this.lock(client, lease);
 			const marker = await this.frozenMarker();
@@ -230,6 +226,16 @@ export class MetadataTransfer {
 				)
 			).rows[0];
 			if (!deployment) throw new Error('Importing deployment mismatch');
+			const page = await this.bucket.list({ startAfter: row.cursor?.after, limit: this.pageSize });
+			const records: BucketObjectBody[] = [];
+			for (const item of page.objects) {
+				if (classifyMetadataKey(item.key) !== 'metadata') continue;
+				const object = await this.bucket.get(item.key);
+				if (!object || object.etag !== item.etag)
+					throw new Error('Source changed while reading transfer page');
+				await validateMetadataRecord(object);
+				records.push(object);
+			}
 			for (const record of records) {
 				const bytes = Buffer.from(await record.bytes());
 				// Replacing within the isolated importing namespace preserves source upload time.
@@ -308,19 +314,23 @@ export class MetadataTransfer {
 			);
 			if (!updated.rowCount) throw new Error('Activation deployment mismatch');
 			return {
-				...marker,
-				backend: 'postgres' as const,
-				namespace: this.options.namespace,
-				state: 'active' as const,
-				epoch: Number(row.target_epoch),
+				marker: {
+					...marker,
+					backend: 'postgres' as const,
+					namespace: this.options.namespace,
+					state: 'active' as const,
+					epoch: Number(row.target_epoch),
+				},
+				sourceEtag: current.etag,
 			};
 		});
 		await this.completeActivation(target, 'Activation marker changed');
 	}
 	private async completeActivation(
-		target: MetadataBackendMarker,
+		activation: ActivationTarget,
 		markerChangedMessage: string,
 	): Promise<void> {
+		const target = activation.marker;
 		const current = await this.marker();
 		if (
 			!current ||
@@ -328,8 +338,10 @@ export class MetadataTransfer {
 			current.marker.artifact_store_id !== target.artifact_store_id
 		)
 			throw new Error(markerChangedMessage);
-		if (JSON.stringify(current.marker) !== JSON.stringify(target))
-			await this.writeMarker(target, current.etag);
+		if (JSON.stringify(current.marker) !== JSON.stringify(target)) {
+			if (current.etag !== activation.sourceEtag) throw new Error(markerChangedMessage);
+			await this.writeMarker(target, activation.sourceEtag);
+		}
 		await this.pool.query(
 			"UPDATE hub_metadata.transfers SET state='activated',lease_id=NULL,lease_until=NULL,revision=revision+1 WHERE namespace=$1 AND id=$2 AND state IN ('ready','activated')",
 			[this.options.namespace, this.options.id],
@@ -361,6 +373,13 @@ export class MetadataTransfer {
 				await this.frozenMarker();
 				return;
 			}
+			const pending = await client.query(
+				"SELECT 1 FROM hub_metadata.transfers WHERE namespace=$1 AND state IN ('copying','checking','ready')",
+				[this.options.namespace],
+			);
+			if (pending.rowCount)
+				throw new Error('Complete the pending transfer before starting another');
+
 			if (
 				!['active', 'frozen'].includes(deployment.state) ||
 				(current.marker.state === 'frozen' && current.marker.transfer_id !== this.options.id)
@@ -469,11 +488,14 @@ export class MetadataTransfer {
 			);
 			if (!result.rowCount) throw new Error('Reverse activation deployment mismatch');
 			return {
-				...marker,
-				backend: 'bucket' as const,
-				namespace: null,
-				state: 'active' as const,
-				epoch: Number(row.target_epoch),
+				marker: {
+					...marker,
+					backend: 'bucket' as const,
+					namespace: null,
+					state: 'active' as const,
+					epoch: Number(row.target_epoch),
+				},
+				sourceEtag: current.etag,
 			};
 		});
 		await this.completeActivation(target, 'Reverse activation marker changed');

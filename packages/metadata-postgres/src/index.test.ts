@@ -97,12 +97,13 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 	async function fixture(
 		options: {
 			ready?: boolean;
+			namespace?: string;
 			poolMax?: number;
 			lockTimeoutMs?: number;
 			connectTimeoutMs?: number;
 		} = {},
 	) {
-		const namespace = randomUUID();
+		const namespace = options.namespace ?? randomUUID();
 		const artifactStoreId = randomUUID();
 		namespaces.push(namespace);
 		await admin.query(
@@ -166,6 +167,27 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 		).rejects.toBeInstanceOf(RangeError);
 	});
 
+	it('treats SQL metacharacters in namespaces, keys, prefixes, and scopes as data', async () => {
+		const payload = "x'; DROP TABLE hub_metadata.records; --";
+		const { store } = await fixture({ namespace: `${payload}${randomUUID()}` });
+		const other = (await fixture()).store;
+		const key = `_system/identities/${payload}.json`;
+		await store.put(key, 'private');
+		await other.put(key, 'other namespace');
+		expect(await (await store.get(key))!.text()).toBe('private');
+		expect(
+			(await store.list({ prefix: `_system/identities/${payload}` })).objects.map(
+				(record) => record.key,
+			),
+		).toEqual([key]);
+		await store.transactions.run([payload], async (tx) => {
+			const current = (await tx.records.get(key))!;
+			await tx.records.put(key, 'updated', { onlyIfEtagMatches: current.etag });
+		});
+		await store.delete(key);
+		expect(await store.get(key)).toBeNull();
+		expect(await (await other.get(key))!.text()).toBe('other namespace');
+	});
 	it('refreshes identical-write and delete/recreate tokens', async () => {
 		const { store } = await fixture();
 		const first = await store.put('x', 'same');
