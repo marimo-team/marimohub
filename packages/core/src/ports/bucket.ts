@@ -134,3 +134,14 @@ export function compareBucketKeys(a: string, b: string): number {
 	}
 	return x.length - y.length;
 }
+
+export function bucketMetadataFingerprint(
+	object: Pick<BucketObject, 'httpMetadata' | 'customMetadata'>,
+): string {
+	return JSON.stringify([
+		object.httpMetadata?.contentType ?? null,
+		Object.entries(object.customMetadata ?? {}).sort(([left], [right]) =>
+			compareBucketKeys(left, right),
+		),
+	]);
+}

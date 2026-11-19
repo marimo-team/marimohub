@@ -283,6 +283,17 @@ describe.skipIf(!url)('offline metadata transfer', () => {
 			await store.put(key, '{"after":"new"}', { customMetadata: { source: 'sql' } });
 			await store.delete('_system/source-control-account-cleanup.json');
 			await store.put('_system/working-branches/cleanup.json', '{"cursor":"new"}');
+			const get = bucket.get.bind(bucket);
+			vi.spyOn(bucket, 'get').mockImplementation(async (key, options) => {
+				const result = await get(key, options);
+				return result && !('notModified' in result)
+					? {
+							...result,
+							httpMetadata: result.httpMetadata ?? { contentType: undefined },
+							customMetadata: result.customMetadata ?? {},
+						}
+					: result;
+			});
 			const reverse = new MetadataTransfer(pool, bucket, {
 				namespace,
 				id: randomUUID(),

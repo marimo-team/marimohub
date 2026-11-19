@@ -1,5 +1,8 @@
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
-import { assertValidBucketListLimit } from '@marimo-hub/core/ports/bucket';
+import {
+	assertValidBucketListLimit,
+	bucketMetadataFingerprint,
+} from '@marimo-hub/core/ports/bucket';
 import type {
 	BucketGetOptions,
 	BucketGetResult,
@@ -53,8 +56,7 @@ export async function matchesRecord(
 	return (
 		candidate !== null &&
 		Buffer.from(await candidate.bytes()).equals(row.body) &&
-		JSON.stringify([candidate.httpMetadata ?? null, candidate.customMetadata ?? null]) ===
-			JSON.stringify([row.http_metadata, row.custom_metadata])
+		bucketMetadataFingerprint(candidate) === bucketMetadataFingerprint(object(row))
 	);
 }
 

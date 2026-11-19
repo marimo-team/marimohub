@@ -29,6 +29,30 @@ describe('transfer record comparison', () => {
 	])('rejects %s', async (_, candidate) => {
 		expect(await matchesRecord(row, candidate)).toBe(false);
 	});
+	it.each([{}, { contentType: undefined }])(
+		'treats empty provider metadata as absent: %j',
+		async (httpMetadata) => {
+			const source = { ...row, http_metadata: null, custom_metadata: null };
+			expect(
+				await matchesRecord(source, { ...body(source), httpMetadata, customMetadata: {} }),
+			).toBe(true);
+		},
+	);
+	it('compares custom metadata independently of property order', async () => {
+		const source = { ...row, custom_metadata: { a: '1', b: '2' } };
+		expect(
+			await matchesRecord(source, { ...body(source), customMetadata: { b: '2', a: '1' } }),
+		).toBe(true);
+	});
+	it('preserves distinct Unicode metadata keys regardless of insertion order', async () => {
+		const source = { ...row, custom_metadata: { '\u00e9': '1', 'e\u0301': '2' } };
+		expect(
+			await matchesRecord(source, {
+				...body(source),
+				customMetadata: { 'e\u0301': '2', '\u00e9': '1' },
+			}),
+		).toBe(true);
+	});
 	it('matches empty bodies with no metadata', async () => {
 		const empty = {
 			...row,
