@@ -36,7 +36,7 @@ if (process.env.MARIMOHUB_REQUIRE_POSTGRES_TESTS === '1' && !url)
 
 it('embeds the authoritative SQL files without drift', async () => {
 	const files = await Promise.all(
-		['001-initial.sql', '002-deployment-guard.sql'].map((name) =>
+		['001-initial.sql', '002-deployment-guard.sql', '003-transfer-states.sql'].map((name) =>
 			readFile(new URL(`../sql/${name}`, import.meta.url), 'utf8'),
 		),
 	);

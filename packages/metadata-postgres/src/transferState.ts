@@ -5,7 +5,7 @@ import type { BucketObject } from '@marimo-hub/core/ports/bucket';
 import { METADATA_MANIFEST_VERSION } from '@marimo-hub/core/storage/metadata-keys';
 
 export type TransferDirection = 'bucket_to_sql' | 'sql_to_bucket';
-export type TransferState = 'copying' | 'checking' | 'ready' | 'activated' | 'failed';
+export type TransferState = 'copying' | 'checking' | 'ready' | 'activated';
 export interface TransferIdentity {
 	namespace: string;
 	id: string;

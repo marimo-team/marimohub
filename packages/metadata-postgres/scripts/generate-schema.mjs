@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 const root = new URL('../', import.meta.url);
 const sources = await Promise.all(
-	['001-initial.sql', '002-deployment-guard.sql'].map((name) =>
+	['001-initial.sql', '002-deployment-guard.sql', '003-transfer-states.sql'].map((name) =>
 		readFile(new URL(`sql/${name}`, root), 'utf8'),
 	),
 );

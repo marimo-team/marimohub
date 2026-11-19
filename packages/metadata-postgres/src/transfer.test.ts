@@ -42,6 +42,22 @@ describe.skipIf(!url)('offline metadata transfer', () => {
 	}
 	const key = '_system/host-retry-cleanup.json';
 
+	it('rejects the unused failed state without changing transfer progress', async () => {
+		const { transfer, namespace, id } = fixture();
+		await transfer.begin({ fresh: true });
+		await expect(
+			pool.query("UPDATE hub_metadata.transfers SET state='failed' WHERE namespace=$1 AND id=$2", [
+				namespace,
+				id,
+			]),
+		).rejects.toMatchObject({ code: '23514' });
+		const { rows } = await pool.query(
+			'SELECT state FROM hub_metadata.transfers WHERE namespace=$1 AND id=$2',
+			[namespace, id],
+		);
+		expect(rows[0].state).toBe('copying');
+	});
+
 	it('copies exact bytes and metadata, rescans updates/deletes, and activates idempotently', async () => {
 		const { bucket, namespace, transfer } = fixture();
 		await bucket.put(key, ' {"after":"old", "future":true} ', {
