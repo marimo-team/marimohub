@@ -128,29 +128,49 @@ describe.skipIf(!url)('offline metadata transfer', () => {
 			epoch: 2,
 		});
 	});
-	it('reconciles activation after SQL commits but marker publication fails', async () => {
-		const { bucket, namespace, transfer } = fixture();
-		await transfer.begin({ fresh: true });
-		let lease = await transfer.claim();
-		while (lease.state !== 'ready') lease = await transfer.step(lease);
-		const put = bucket.put.bind(bucket);
-		const fault = vi.spyOn(bucket, 'put').mockRejectedValueOnce(new Error('lost marker write'));
-		await expect(transfer.activate()).rejects.toThrow('lost marker');
-		expect(
-			(
-				await pool.query('SELECT state FROM hub_metadata.deployments WHERE namespace=$1', [
+	it.each(['bucket_to_sql', 'sql_to_bucket'] as const)(
+		'reconciles %s activation after SQL commits but marker publication fails',
+		async (direction) => {
+			const { bucket, namespace, transfer } = fixture();
+			await transfer.begin({ fresh: true });
+			let lease = await transfer.claim();
+			while (lease.state !== 'ready') lease = await transfer.step(lease);
+			let pending = transfer;
+			if (direction === 'sql_to_bucket') {
+				await transfer.activate();
+				pending = new MetadataTransfer(pool, bucket, {
 					namespace,
-				])
-			).rows[0].state,
-		).toBe('active');
-		expect(await readMetadataBackendMarker(bucket)).toMatchObject({
-			state: 'frozen',
-			backend: 'bucket',
-		});
-		fault.mockImplementation(put);
-		await transfer.activate();
-		expect((await transfer.status())!.state).toBe('activated');
-	});
+					id: randomUUID(),
+					direction,
+					writersStopped: true,
+				});
+				await pending.begin();
+				lease = await pending.claim();
+				while (lease.state !== 'ready') lease = await pending.step(lease);
+			}
+			const fault = vi.spyOn(bucket, 'put').mockRejectedValueOnce(new Error('lost marker write'));
+			await expect(pending.activate()).rejects.toThrow('lost marker');
+			expect(
+				(
+					await pool.query('SELECT state FROM hub_metadata.deployments WHERE namespace=$1', [
+						namespace,
+					])
+				).rows[0].state,
+			).toBe(direction === 'bucket_to_sql' ? 'active' : 'retired');
+			expect(await readMetadataBackendMarker(bucket)).toMatchObject({
+				state: 'frozen',
+				backend: direction === 'bucket_to_sql' ? 'bucket' : 'postgres',
+			});
+			fault.mockRestore();
+			await pending.activate();
+			expect((await pending.status())!.state).toBe('activated');
+			expect(await readMetadataBackendMarker(bucket)).toMatchObject({
+				state: 'active',
+				backend: direction === 'bucket_to_sql' ? 'postgres' : 'bucket',
+			});
+		},
+	);
+
 	it('rejects a replayed checkpoint and resumes from committed progress', async () => {
 		const { bucket, transfer } = fixture();
 		await bucket.put(key, '{}');

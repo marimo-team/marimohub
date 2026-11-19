@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { Bucket, BucketObjectBody } from '@marimo-hub/core/ports/bucket';
 import { MetadataBackendMarkerSchema } from '@marimo-hub/core/storage/backend-marker';
@@ -16,24 +16,15 @@ import { createLogicalStorage } from '@marimo-hub/core/storage/logical-bucket';
 import { body, COLUMNS, getRecord, headRecord, listRecords, UUID } from './records';
 import type { RecordRow } from './records';
 import { checkSchema } from './migrations';
+import { checkpointTransfer, insertTransfer, recordTransferItem } from './transferState';
+import type { TransferDirection, TransferIdentity, TransferLease } from './transferState';
 
-export interface TransferOptions {
-	namespace: string;
-	id: string;
+export type { TransferLease } from './transferState';
+
+export interface TransferOptions extends TransferIdentity {
 	writersStopped: boolean;
 	pageSize?: number;
-	direction?: 'bucket_to_sql' | 'sql_to_bucket';
-}
-export interface TransferLease {
-	state: 'copying' | 'checking' | 'ready' | 'activated' | 'failed';
-	lease_id: string;
-	revision: string;
-	cursor: { after: string; phase?: 'deleting' } | null;
-	scan_generation: string;
-	source_epoch: string;
-	target_epoch: string;
-	manifest_version: number;
-	direction: 'bucket_to_sql' | 'sql_to_bucket';
+	direction?: TransferDirection;
 }
 
 export class MetadataTransfer {
@@ -159,16 +150,7 @@ export class MetadataTransfer {
 				"INSERT INTO hub_metadata.deployments(namespace,backend_epoch,state,artifact_store_id) VALUES ($1,$2,'importing',$3)",
 				[this.options.namespace, marker.epoch + 1, marker.artifact_store_id],
 			);
-			await client.query(
-				"INSERT INTO hub_metadata.transfers(namespace,id,direction,state,source_epoch,target_epoch,manifest_version) VALUES ($1,$2,'bucket_to_sql','copying',$3,$4,$5)",
-				[
-					this.options.namespace,
-					this.options.id,
-					marker.epoch,
-					marker.epoch + 1,
-					METADATA_MANIFEST_VERSION,
-				],
-			);
+			await insertTransfer(client, this.options, 'bucket_to_sql', marker.epoch, marker.epoch + 1);
 		});
 	}
 	async status(): Promise<TransferLease | null> {
@@ -278,21 +260,12 @@ export class MetadataTransfer {
 					Number(written.size_bytes) !== bytes.length
 				)
 					throw new Error('Transfer byte verification failed');
-				await client.query(
-					`INSERT INTO hub_metadata.transfer_items(namespace,transfer_id,key,source_etag,source_uploaded_at,sha256,size_bytes,target_etag,seen_generation) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-				ON CONFLICT(namespace,transfer_id,key) DO UPDATE SET source_etag=EXCLUDED.source_etag,source_uploaded_at=EXCLUDED.source_uploaded_at,sha256=EXCLUDED.sha256,size_bytes=EXCLUDED.size_bytes,target_etag=EXCLUDED.target_etag,seen_generation=EXCLUDED.seen_generation,checked_at=clock_timestamp()`,
-					[
-						this.options.namespace,
-						this.options.id,
-						record.key,
-						record.etag,
-						record.uploaded,
-						createHash('sha256').update(bytes).digest('hex'),
-						bytes.length,
-						written.etag,
-						row.scan_generation,
-					],
-				);
+				await recordTransferItem(client, this.options, 'bucket_to_sql', {
+					source: record,
+					bytes,
+					targetEtag: written.etag,
+					generation: row.scan_generation,
+				});
 			}
 			let state = row.state;
 			let generation = Number(row.scan_generation);
@@ -308,21 +281,7 @@ export class MetadataTransfer {
 				await auditMetadataReferences(this.view(client, Number(row.target_epoch)));
 				state = 'ready';
 			}
-			const next = await client.query<TransferLease>(
-				`UPDATE hub_metadata.transfers SET state=$5,cursor=$6,scan_generation=$7,revision=revision+1,lease_until=clock_timestamp()+interval '60 seconds',updated_at=clock_timestamp()
-			WHERE namespace=$1 AND id=$2 AND lease_id=$3 AND revision=$4 AND lease_until>clock_timestamp() RETURNING *`,
-				[
-					this.options.namespace,
-					this.options.id,
-					lease.lease_id,
-					lease.revision,
-					state,
-					cursor,
-					generation,
-				],
-			);
-			if (!next.rows[0]) throw new Error('Transfer lease expired before checkpoint');
-			return next.rows[0];
+			return checkpointTransfer(client, this.options, lease, { state, cursor, generation });
 		});
 	}
 	async activate(): Promise<void> {
@@ -361,13 +320,19 @@ export class MetadataTransfer {
 				epoch: Number(row.target_epoch),
 			};
 		});
+		await this.completeActivation(target, 'Activation marker changed');
+	}
+	private async completeActivation(
+		target: MetadataBackendMarker,
+		markerChangedMessage: string,
+	): Promise<void> {
 		const current = await this.marker();
 		if (
 			!current ||
 			current.marker.transfer_id !== this.options.id ||
 			current.marker.artifact_store_id !== target.artifact_store_id
 		)
-			throw new Error('Activation marker changed');
+			throw new Error(markerChangedMessage);
 		if (JSON.stringify(current.marker) !== JSON.stringify(target))
 			await this.writeMarker(target, current.etag);
 		await this.pool.query(
@@ -416,16 +381,7 @@ export class MetadataTransfer {
 				{ ...current.marker, state: 'frozen', transfer_id: this.options.id },
 				current.etag,
 			);
-			await client.query(
-				"INSERT INTO hub_metadata.transfers(namespace,id,direction,state,source_epoch,target_epoch,manifest_version) VALUES ($1,$2,'sql_to_bucket','copying',$3,$4,$5)",
-				[
-					this.options.namespace,
-					this.options.id,
-					current.marker.epoch,
-					target,
-					METADATA_MANIFEST_VERSION,
-				],
-			);
+			await insertTransfer(client, this.options, 'sql_to_bucket', current.marker.epoch, target);
 		});
 	}
 	private async stepReverse(lease: TransferLease): Promise<TransferLease> {
@@ -482,21 +438,12 @@ export class MetadataTransfer {
 						metadata(target) !== metadata(source)
 					)
 						throw new Error('Reverse transfer verification failed');
-					await client.query(
-						`INSERT INTO hub_metadata.transfer_items(namespace,transfer_id,key,source_etag,source_uploaded_at,sha256,size_bytes,target_etag,seen_generation) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-					ON CONFLICT(namespace,transfer_id,key) DO UPDATE SET target_etag=EXCLUDED.target_etag,seen_generation=EXCLUDED.seen_generation,checked_at=clock_timestamp()`,
-						[
-							this.options.namespace,
-							this.options.id,
-							record.key,
-							record.etag,
-							record.uploaded_at,
-							createHash('sha256').update(record.body).digest('hex'),
-							record.body.length,
-							target.etag,
-							generation,
-						],
-					);
+					await recordTransferItem(client, this.options, 'sql_to_bucket', {
+						source,
+						bytes: record.body,
+						targetEtag: target.etag,
+						generation,
+					});
 				}
 				if (page.length === this.pageSize) cursor = { after: page.at(-1)!.key };
 				else if (state === 'copying') {
@@ -504,22 +451,7 @@ export class MetadataTransfer {
 					generation++;
 				} else cursor = { after: '', phase: 'deleting' };
 			}
-			const next = await client.query<TransferLease>(
-				`UPDATE hub_metadata.transfers SET state=$5,cursor=$6,scan_generation=$7,revision=revision+1,lease_until=clock_timestamp()+interval '60 seconds',updated_at=clock_timestamp()
-			WHERE namespace=$1 AND id=$2 AND lease_id=$3 AND revision=$4 AND lease_until>clock_timestamp() RETURNING *`,
-				[
-					this.options.namespace,
-					this.options.id,
-					lease.lease_id,
-					lease.revision,
-					state,
-					cursor,
-					generation,
-				],
-			);
-			if (!next.rows[0])
-				throw new Error('Reverse transfer lease expired; keep all writers stopped');
-			return next.rows[0];
+			return checkpointTransfer(client, this.options, lease, { state, cursor, generation });
 		});
 	}
 	private async activateReverse(): Promise<void> {
@@ -558,18 +490,6 @@ export class MetadataTransfer {
 				epoch: Number(row.target_epoch),
 			};
 		});
-		const current = await this.marker();
-		if (
-			!current ||
-			current.marker.transfer_id !== this.options.id ||
-			current.marker.artifact_store_id !== target.artifact_store_id
-		)
-			throw new Error('Reverse activation marker changed');
-		if (JSON.stringify(current.marker) !== JSON.stringify(target))
-			await this.writeMarker(target, current.etag);
-		await this.pool.query(
-			"UPDATE hub_metadata.transfers SET state='activated',lease_id=NULL,lease_until=NULL,revision=revision+1 WHERE namespace=$1 AND id=$2 AND state IN ('ready','activated')",
-			[this.options.namespace, this.options.id],
-		);
+		await this.completeActivation(target, 'Reverse activation marker changed');
 	}
 }
