@@ -133,7 +133,11 @@ it('starts the retry grace at preparation without extending the runtime lifetime
 		paths.session(s.project_id, s.session_id),
 		JSON.stringify({ ...s, started_at: started, last_heartbeat: started }),
 	);
-	const prepared = await writer.recordStartupCompletion(s.project_id, s.session_id, completion);
+	const { value: prepared } = await writer.recordStartupCompletion(
+		s.project_id,
+		s.session_id,
+		completion,
+	);
 	expect(prepared.last_heartbeat).toBe(completion.ready_at);
 	expect(isReusableSession(prepared, Date.parse(completion.ready_at) + 2 * 60_000)).toBe(true);
 	expect(isReusableSession(prepared, Date.parse(completion.ready_at) + 5 * 60_000)).toBe(false);
@@ -159,4 +163,68 @@ it('a completed runtime keeps a subsequent lifetime extension on repeated comple
 		),
 	).toBe(false);
 	expect((await writer.getSession(s.project_id, s.session_id)).status).toBe('running');
+});
+
+it('carries each write ETag into completion without reading the session again', async () => {
+	const { bucket, session: s, writer, completion } = await fixture();
+	const created = await writer.getSessionWithEtag(s.project_id, s.session_id);
+	const get = vi.spyOn(bucket, 'get');
+	const prepared = await writer.recordStartupCompletion(
+		s.project_id,
+		s.session_id,
+		completion,
+		created,
+	);
+	const running = await writer.completeStartup(s.project_id, s.session_id, completion.id, prepared);
+	expect(running.status).toBe('running');
+	expect(get).not.toHaveBeenCalled();
+	expect(prepared.etag).not.toBe(created.etag);
+});
+
+it.each(['receipt', 'completion'] as const)(
+	'rereads a concurrent stop before %s publication',
+	async (phase) => {
+		const { session: s, writer, reader, completion } = await fixture();
+		const created = await writer.getSessionWithEtag(s.project_id, s.session_id);
+		const known =
+			phase === 'receipt'
+				? created
+				: await writer.recordStartupCompletion(s.project_id, s.session_id, completion, created);
+		await reader.beginTerminating(s.project_id, s.session_id);
+		await expect(
+			phase === 'receipt'
+				? writer.recordStartupCompletion(s.project_id, s.session_id, completion, known)
+				: writer.completeStartup(s.project_id, s.session_id, completion.id, known),
+		).rejects.toThrow();
+		expect((await reader.getSession(s.project_id, s.session_id)).status).toBe('terminating');
+	},
+);
+
+it('preserves concurrent authorization changes when the prepared ETag conflicts', async () => {
+	const { session: s, writer, reader, completion } = await fixture();
+	const prepared = await writer.recordStartupCompletion(s.project_id, s.session_id, completion);
+	const deadline = new Date(Date.now() + 30_000).toISOString();
+	await reader.tightenAuthorizationDeadline(s.project_id, s.session_id, deadline);
+	const running = await writer.completeStartup(s.project_id, s.session_id, completion.id, prepared);
+	expect(running).toMatchObject({ status: 'running', authorization_expires_at: deadline });
+});
+
+it('does not use a cached running no-op to skip a subsequent stop', async () => {
+	const { session: s, writer, reader, completion } = await fixture();
+	await writer.recordStartupCompletion(s.project_id, s.session_id, completion);
+	await writer.completeStartup(s.project_id, s.session_id, completion.id);
+	const running = await writer.getSessionWithEtag(s.project_id, s.session_id);
+	await reader.beginTerminating(s.project_id, s.session_id);
+	await expect(
+		writer.completeStartup(s.project_id, s.session_id, completion.id, running),
+	).rejects.toThrow();
+});
+
+it('revalidates a cached receipt replay after a concurrent stop', async () => {
+	const { session: s, writer, reader, completion } = await fixture();
+	const prepared = await writer.recordStartupCompletion(s.project_id, s.session_id, completion);
+	await reader.beginTerminating(s.project_id, s.session_id);
+	await expect(
+		writer.recordStartupCompletion(s.project_id, s.session_id, completion, prepared),
+	).rejects.toThrow();
 });

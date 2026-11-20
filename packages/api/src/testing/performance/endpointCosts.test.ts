@@ -1,13 +1,13 @@
 import { createHash } from 'node:crypto';
 import { afterEach, expect, test, vi } from 'vitest';
-import { AuthorizationService, createServices } from '@marimo-hub/core';
+import { AuthorizationService, createServices, UnavailableError } from '@marimo-hub/core';
 import type { UserId } from '@marimo-hub/core';
 import { NotebookSource, SearchIndexer, SearchService } from '@marimo-hub/core/search';
 import { MemorySearchIndex } from '@marimo-hub/core/testing/search';
 import type { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { makeFakeCompute } from '@marimo-hub/core/testing';
 import { queuedBackgroundWork } from '@marimo-hub/core/testing/background-work';
-import { createTestApi, expectOk } from '../index';
+import { createTestApi, expectOk, expectError } from '../index';
 import type { PolicyConfig } from '../../context';
 import { RoundTripBucket } from './roundTripBucket';
 import type { StorageCost } from './roundTripBucket';
@@ -283,6 +283,30 @@ test.each([
 							const response = await a.request('POST', `${nbBase(s)}/sessions`);
 							const body = (await response.clone().json()) as { data: { session_id: string } };
 							expect(body.data.session_id).toBe(a.editSession);
+							return response;
+						},
+					},
+					{
+						name: 'POST …/sessions (edit; cold=recover, warm=reuse)',
+						setup: async (a, s) => {
+							const complete = vi.spyOn(a.deps.services.sessions, 'completeStartup');
+							complete.mockImplementationOnce(async (_pid, sid) => {
+								a.editSession = sid;
+								throw new UnavailableError('Interrupted startup');
+							});
+							try {
+								await expectError(await a.request('POST', `${nbBase(s)}/sessions`), 503);
+							} finally {
+								complete.mockRestore();
+							}
+							await a.background.runAll();
+						},
+						call: async (a, s) => {
+							const response = await a.request('POST', `${nbBase(s)}/sessions`);
+							const session = await expectOk<{ session_id: string; status: string }>(
+								response.clone(),
+							);
+							expect(session).toMatchObject({ session_id: a.editSession, status: 'running' });
 							return response;
 						},
 					},

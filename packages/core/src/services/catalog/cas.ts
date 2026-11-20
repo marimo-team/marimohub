@@ -254,8 +254,7 @@ export interface ObjectMutationOptions<T> extends CasRetryOptions {
 	known?: KnownObject<T>;
 }
 
-export interface ObjectMutationOutcome<T> {
-	value: T;
+export interface ObjectMutationOutcome<T> extends KnownObject<T> {
 	written: boolean;
 }
 
@@ -284,9 +283,9 @@ export async function mutateObjectWithOutcome<T>(
 			}
 			const current = record.value;
 			const next = apply(current);
-			if (next === null) return { value: current, written: false };
-			await cas.put(key, JSON.stringify(next), { onlyIfEtagMatches: record.etag });
-			return { value: next, written: true };
+			if (next === null) return { ...record, written: false };
+			const stored = await cas.put(key, JSON.stringify(next), { onlyIfEtagMatches: record.etag });
+			return { value: next, etag: stored.etag, written: true };
 		},
 		options,
 	);

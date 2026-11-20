@@ -1574,16 +1574,17 @@ export async function recoverNotebookSessionStart(input: {
 	pid: ProjectId;
 	sid: SessionId;
 }): Promise<Session> {
-	const session = await input.deps.services.sessions.getSession(input.pid, input.sid);
-	return completeNotebookSessionStart(input, session, true);
+	const session = await input.deps.services.sessions.getSessionWithEtag(input.pid, input.sid);
+	return completeNotebookSessionStart(input, session, { verifyRuntime: true });
 }
 
 async function completeNotebookSessionStart(
 	{ deps, user }: Pick<Parameters<typeof recoverNotebookSessionStart>[0], 'deps' | 'user'>,
-	session: Session,
-	probe: boolean,
+	prepared: KnownObject<Session>,
+	{ verifyRuntime }: { verifyRuntime: boolean },
 ): Promise<Session> {
 	const { sessions } = deps.services;
+	const session = prepared.value;
 	const { project_id: pid, session_id: sid } = session;
 	const receipt = session.startup_completion;
 	if (!receipt || !canRecoverStartup(session))
@@ -1594,7 +1595,7 @@ async function completeNotebookSessionStart(
 	if (session.user_id !== user.id)
 		throw new ForbiddenError('Only the session owner can complete startup');
 	try {
-		if (probe) {
+		if (verifyRuntime) {
 			await validateStartupCompletion(deps, user, session);
 			const existing = reconnectSessionSandbox(
 				deps.compute,
@@ -1609,7 +1610,7 @@ async function completeNotebookSessionStart(
 				throw new UnavailableError('The prepared runtime is not ready. Retry shortly.');
 			await validateStartupCompletion(deps, user, session);
 		}
-		const updated = await sessions.completeStartup(pid, sid, receipt.id);
+		const updated = await sessions.completeStartup(pid, sid, receipt.id, prepared);
 		await validateStartupCompletion(deps, user, updated);
 		return updated;
 	} catch (error) {
@@ -1938,6 +1939,34 @@ async function startNotebookSessionOnce(
 	const sandboxExposure = sandbox.exposure;
 	const hostname = sandbox.hostname || request.hostname;
 	const { appBaseUrl } = request;
+	const finalizeSurfaces = async (
+		current: Session,
+		{
+			includeEager,
+			contextPublication,
+		}: { includeEager: boolean; contextPublication?: Promise<void> },
+	): Promise<Session> => {
+		if (mode !== 'edit' || !surfaceGrant || current.status !== 'running') return current;
+		const ids = SECONDARY_SURFACE_IDS.filter((id) => {
+			const config = sandbox.surfaces?.[id];
+			return (
+				config && ((includeEager && config.start === 'eager') || requestedSurfaces.includes(id))
+			);
+		});
+		if (ids.length === 0) return current;
+		// Surfaces consume the context file when the launching replica is still publishing it.
+		await contextPublication;
+		return beginSessionSurfaces({
+			deps,
+			session: current,
+			user,
+			ids,
+			workspaceDir,
+			exposure: sandboxExposure,
+			hostname,
+			appBaseUrl,
+		});
+	};
 	const image = resolveBaseImage(notebook.meta.base_image, sandbox.images ?? [], () =>
 		logStoredConfigFallback('base_image'),
 	);
@@ -2057,6 +2086,7 @@ async function startNotebookSessionOnce(
 			grants(reusableCandidate),
 		]);
 		let reusable = reusableTightened;
+		let recoveredStartup = false;
 		if (
 			reusable.status === 'starting' &&
 			reusable.startup_completion &&
@@ -2064,6 +2094,7 @@ async function startNotebookSessionOnce(
 			reusable.user_id === user.id
 		) {
 			reusable = await recoverNotebookSessionStart({ deps, user, pid, sid: reusable.session_id });
+			recoveredStartup = true;
 		}
 		const authorizationExpired = isPastAuthorizationDeadline(reusable, Date.now());
 		// Role changes must not reuse a kernel with the previous credential policy.
@@ -2074,26 +2105,14 @@ async function startNotebookSessionOnce(
 		// Reuse does not grant control: a failed probe must not let a viewer
 		// tear down another caller's app.
 		const mayRetire = reusableGrants.stop;
-		// Only a `running` reconnect can hit a dead kernel; a `starting` reuse has no
-		// kernel yet. Probe what the browser would hit (origin in proxy mode, else url).
+		// Recovery already probed this runtime; ordinary reuse still needs a liveness check.
 		const kernelUrl =
-			mayRetire && reusable.status === 'running' && reusable.sandbox_id
+			!recoveredStartup && mayRetire && reusable.status === 'running' && reusable.sandbox_id
 				? (reusable.sandbox_origin_url ?? reusable.sandbox_url)
 				: undefined;
 		const dead = !!kernelUrl && (await deps.kernelProbe(kernelUrl)) === 'dead';
 		if (!authorizationExpired && (!mayRetire || (!dead && !classMismatch))) {
-			if (reusable.status === 'running' && requestedSurfaces.length > 0) {
-				reusable = await beginSessionSurfaces({
-					deps,
-					session: reusable,
-					user,
-					ids: requestedSurfaces,
-					workspaceDir,
-					exposure: sandboxExposure,
-					hostname,
-					appBaseUrl,
-				});
-			}
+			reusable = await finalizeSurfaces(reusable, { includeEager: recoveredStartup });
 			// Probing and surface startup can overlap a stop or an authorization update.
 			if (mode === 'edit') reusable = await revalidateEditorReuse(reusable);
 			const response = toSessionResponse(reusable, reusableGrants, deps.theme?.session_links);
@@ -2836,27 +2855,36 @@ async function startNotebookSessionOnce(
 					(compute.warmPool?.maxLifetimeMs
 						? (warmClaim?.member.checked_at ?? Date.now()) + compute.warmPool.maxLifetimeMs
 						: undefined);
+				const knownSession =
+					!progressStore.hasWrites && createdSession?.value === session
+						? createdSession
+						: undefined;
 				if (recoverableStartup) {
 					// An uncertain receipt write may already be visible to another replica.
 					// From here, retirement owns cleanup, never saga compensation.
 					completionAttempted = true;
 					const prepared = await sessions
-						.recordStartupCompletion(pid, session!.session_id, {
-							id: crypto.randomUUID(),
-							sandbox_id: sandboxId,
-							ready_at: new Date().toISOString(),
-							sandbox_url: clientUrl,
-							sandbox_origin_url: originUrl,
-							used_fallback: usedFallback,
-							expires_at: ttlMs ? new Date(Date.now() + ttlMs).toISOString() : undefined,
-							sandbox_deadline_at:
-								providerDeadline === undefined
-									? undefined
-									: new Date(providerDeadline).toISOString(),
-							reconnect_reference: provisionedSandbox.reconnectReference,
-							integrations: integrationAttachments,
-							startup: finalProgress,
-						})
+						.recordStartupCompletion(
+							pid,
+							session!.session_id,
+							{
+								id: crypto.randomUUID(),
+								sandbox_id: sandboxId,
+								ready_at: new Date().toISOString(),
+								sandbox_url: clientUrl,
+								sandbox_origin_url: originUrl,
+								used_fallback: usedFallback,
+								expires_at: ttlMs ? new Date(Date.now() + ttlMs).toISOString() : undefined,
+								sandbox_deadline_at:
+									providerDeadline === undefined
+										? undefined
+										: new Date(providerDeadline).toISOString(),
+								reconnect_reference: provisionedSandbox.reconnectReference,
+								integrations: integrationAttachments,
+								startup: finalProgress,
+							},
+							knownSession,
+						)
 						.catch(async (error) => {
 							// The conditional failure loses to any committed receipt, including one
 							// whose acknowledgement was lost. A storage outage leaves the record
@@ -2866,7 +2894,9 @@ async function startNotebookSessionOnce(
 							);
 							throw error;
 						});
-					updated = await completeNotebookSessionStart({ deps, user }, prepared, false);
+					updated = await completeNotebookSessionStart({ deps, user }, prepared, {
+						verifyRuntime: false,
+					});
 					return;
 				}
 				updated = await sessions.setRunning(
@@ -2878,9 +2908,7 @@ async function startNotebookSessionOnce(
 					ttlMs ? new Date(Date.now() + ttlMs).toISOString() : undefined,
 					integrationAttachments,
 					providerDeadline === undefined ? undefined : new Date(providerDeadline).toISOString(),
-					!progressStore.hasWrites && createdSession?.value === session
-						? createdSession
-						: undefined,
+					knownSession,
 					provisionedSandbox.reconnectReference,
 					finalProgress,
 				);
@@ -3062,23 +3090,8 @@ async function startNotebookSessionOnce(
 		);
 	}
 
-	const eagerSurfaces = SECONDARY_SURFACE_IDS.filter((id) => {
-		const config = sandbox.surfaces?.[id];
-		return config && (config.start === 'eager' || requestedSurfaces.includes(id));
-	});
-	if (mode === 'edit' && surfaceGrant && eagerSurfaces.length > 0 && updated) {
-		// Eagerly started surfaces should find the published context.
-		await contextPublication;
-		updated = await beginSessionSurfaces({
-			deps,
-			session: updated,
-			user,
-			ids: eagerSurfaces,
-			workspaceDir,
-			exposure: sandboxExposure,
-			hostname,
-			appBaseUrl,
-		});
+	if (updated) {
+		updated = await finalizeSurfaces(updated, { includeEager: true, contextPublication });
 	}
 
 	// App sessions can expose integration secrets and WIF credentials to their audience.

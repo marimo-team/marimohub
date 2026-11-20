@@ -70,10 +70,19 @@ background worker. Temporary editors, apps, previews, and takeover launches keep
 their existing lifecycle.
 
 The [storage-cost model](../packages/api/src/testing/performance/README.md) adds
-three GETs and one PUT per new editor at both 50 and 10,000 notebooks. The receipt,
-fenced status write, and current identity check add three sequential storage
-rounds (75 ms at the model's assumed 25 ms per round). Reuse, read, heartbeat, and
-app costs do not change. This model excludes compute and network execution time.
+one GET and one PUT per new editor at both 50 and 10,000 notebooks.
+The receipt adds one sequential storage round (25 ms at the model's assumed latency).
+The fresh identity read runs alongside the final authorization checks.
+
+Receipt creation uses the known session value and ETag when no progress write is pending or complete.
+Completion uses the value and ETag returned by the receipt write.
+Recovery carries the ETag from its initial session read into completion.
+Concurrent updates cause a conditional write conflict, followed by a fresh read and retry.
+Cached no-op transitions still require a fresh read.
+
+Reuse, read, heartbeat, and app costs do not change.
+The steady-state reports also measure recovery on a fresh replica.
+Recovery probes kernel readiness once. This network request is outside the storage-cost model.
 
 ## Admission boundary
 
@@ -82,6 +91,4 @@ admission. Recovery starts at the completion receipt. Earlier compute creation,
 workspace preparation, and crashes before the receipt remain outside this scope.
 Create-if-absent prevents session-ID reuse from overwriting an existing record.
 
-MO-8528 still needs earlier request replay, durable provisioning inputs, worker
-ownership and scheduling, provider reconciliation, and cross-process crash
-acceptance. An absent provider lookup cannot justify retrying an uncertain create.
+An absent provider lookup cannot justify retrying an uncertain create.

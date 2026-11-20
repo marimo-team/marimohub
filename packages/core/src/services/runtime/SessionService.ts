@@ -343,7 +343,16 @@ export class SessionService {
 		apply: (session: Session) => Session | null,
 		known?: KnownObject<Session>,
 	): Promise<Session> {
-		const { value, written } = await mutateObjectWithOutcome(
+		return (await this.mutateWithEtag(projectId, id, apply, known)).value;
+	}
+
+	private async mutateWithEtag(
+		projectId: ProjectId,
+		id: SessionId,
+		apply: (session: Session) => Session | null,
+		known?: KnownObject<Session>,
+	): Promise<KnownObject<Session>> {
+		const { value, etag, written } = await mutateObjectWithOutcome(
 			this.bucket,
 			paths.session(projectId, id),
 			(raw) => parseStored(SessionSchema, raw, paths.session(projectId, id)),
@@ -364,7 +373,7 @@ export class SessionService {
 			this.notifyStartup(value);
 			await this.removeFinishedIndexEntry(value);
 		}
-		return value;
+		return { value, etag };
 	}
 
 	private notifyStartup(session: Session): void {
@@ -718,57 +727,69 @@ export class SessionService {
 		projectId: ProjectId,
 		id: SessionId,
 		completion: StartupCompletion,
-	): Promise<Session> {
+		known?: KnownObject<Session>,
+	): Promise<KnownObject<Session>> {
 		const receipt = SessionStartupCompletionSchema.parse(completion);
-		return this.mutate(projectId, id, (session) => {
-			if (
-				session.status !== 'starting' ||
-				session.stop ||
-				session.sandbox_reclaimed_at ||
-				session.sandbox_id !== receipt.sandbox_id
-			)
-				throw new ConflictError('The starting runtime is no longer current');
-			if (session.startup_completion) {
-				if (session.startup_completion.id === receipt.id) return null;
-				throw new ConflictError('Runtime completion was already recorded');
-			}
-			return {
-				...session,
-				startup_completion: receipt,
-				last_heartbeat: receipt.ready_at,
-				...(receipt.reconnect_reference
-					? { reconnect_reference: receipt.reconnect_reference }
-					: {}),
-			};
-		});
+		return this.mutateWithEtag(
+			projectId,
+			id,
+			(session) => {
+				if (
+					session.status !== 'starting' ||
+					session.stop ||
+					session.sandbox_reclaimed_at ||
+					session.sandbox_id !== receipt.sandbox_id
+				)
+					throw new ConflictError('The starting runtime is no longer current');
+				if (session.startup_completion) {
+					if (session.startup_completion.id === receipt.id) return null;
+					throw new ConflictError('Runtime completion was already recorded');
+				}
+				return {
+					...session,
+					startup_completion: receipt,
+					last_heartbeat: receipt.ready_at,
+					...(receipt.reconnect_reference
+						? { reconnect_reference: receipt.reconnect_reference }
+						: {}),
+				};
+			},
+			known?.value.status === 'starting' && !known.value.startup_completion ? known : undefined,
+		);
 	}
 
 	async completeStartup(
 		projectId: ProjectId,
 		id: SessionId,
 		completionId: string,
+		known?: KnownObject<Session>,
 	): Promise<Session> {
-		return this.mutate(projectId, id, (session) => {
-			const receipt = session.startup_completion;
-			if (
-				!receipt ||
-				receipt.id !== completionId ||
-				receipt.sandbox_id !== session.sandbox_id ||
-				session.sandbox_reclaimed_at ||
-				session.stop
-			)
-				throw new ConflictError('The prepared runtime is no longer current');
-			if (session.status === 'running') return null;
-			if (session.status !== 'starting')
-				throw new ConflictError('The session is no longer starting');
-			if (
-				[session.authorization_expires_at, receipt.expires_at, receipt.sandbox_deadline_at].some(
-					(at) => at !== undefined && Date.parse(at) <= Date.now(),
+		return this.mutate(
+			projectId,
+			id,
+			(session) => {
+				const receipt = session.startup_completion;
+				if (
+					!receipt ||
+					receipt.id !== completionId ||
+					receipt.sandbox_id !== session.sandbox_id ||
+					session.sandbox_reclaimed_at ||
+					session.stop
 				)
-			)
-				throw new ConflictError('The prepared runtime has expired');
-			return runningSession(session, receipt);
-		});
+					throw new ConflictError('The prepared runtime is no longer current');
+				if (session.status === 'running') return null;
+				if (session.status !== 'starting')
+					throw new ConflictError('The session is no longer starting');
+				if (
+					[session.authorization_expires_at, receipt.expires_at, receipt.sandbox_deadline_at].some(
+						(at) => at !== undefined && Date.parse(at) <= Date.now(),
+					)
+				)
+					throw new ConflictError('The prepared runtime has expired');
+				return runningSession(session, receipt);
+			},
+			known?.value.status === 'starting' ? known : undefined,
+		);
 	}
 
 	async rejectStartupCompletion(

@@ -551,3 +551,94 @@ it('rechecks suspension persisted by another replica despite a cached active ide
 	).toBe('failed');
 	expect(env.calls.destroy).toBe(1);
 });
+
+it.each([false, true])(
+	'starts eager and requested surfaces after launch (recovery: %s)',
+	async (recover) => {
+		const env = await fixture({
+			deps: {
+				sandbox: {
+					bucket: { name: 'test', endpoint: '' },
+					hostname: 'localhost',
+					workdir: '/workspace',
+					persistWorkspace: 'source',
+					surfaces: {
+						opencode: { start: 'eager', port: 4096, embed: 'tab' },
+						vscode: {
+							flavor: 'code-server',
+							start: 'on-demand',
+							port: 8443,
+							settings: {},
+							extensionGallery: 'openvsx',
+							embed: 'tab',
+						},
+					},
+				},
+			},
+		});
+		Object.assign(env.compute, { capabilities: { multiPort: true } });
+		if (recover) await env.prepare();
+		const replica = env.replica();
+		const result = await expectOk<Session>(
+			await replica.request('POST', env.path, { surfaces: ['vscode'] }),
+		);
+		await vi.waitFor(async () => {
+			const stored = await replica.deps.services.sessions.getSession(
+				env.project.id,
+				result.session_id,
+			);
+			expect(stored.surfaces?.opencode?.status).toBe('ready');
+			expect(stored.surfaces?.vscode?.status).toBe('ready');
+		});
+		expect(
+			env.calls.startProcess.filter(({ cmd }) => cmd.includes("'opencode' 'web'")),
+		).toHaveLength(1);
+		expect(env.calls.startProcess.filter(({ cmd }) => cmd.includes('code-server'))).toHaveLength(1);
+		expect(new Set(env.create.mock.calls.map(([id]) => id)).size).toBe(1);
+	},
+);
+
+it('probes once during recovery and still probes ordinary reuse', async () => {
+	const env = await fixture();
+	const original = await env.prepare();
+	const kernelProbe = vi.fn(async () => 'alive' as const);
+	const replica = env.replica({ deps: { kernelProbe } });
+	const recovered = await expectOk<Session>(await replica.request('POST', env.path));
+	expect(recovered.session_id).toBe(original.session_id);
+	expect(kernelProbe).toHaveBeenCalledTimes(1);
+	await expectOk(await replica.request('POST', env.path));
+	expect(kernelProbe).toHaveBeenCalledTimes(2);
+});
+
+it('rechecks session state after recovery even when its readiness probe succeeded', async () => {
+	const env = await fixture();
+	const original = await env.prepare();
+	const replica = env.replica();
+	const sessions = replica.deps.services.sessions;
+	const complete = sessions.completeStartup.bind(sessions);
+	vi.spyOn(sessions, 'completeStartup').mockImplementationOnce(async (...args) => {
+		const running = await complete(...args);
+		await sessions.markFailed(env.project.id, original.session_id);
+		return running;
+	});
+	await expectError(await replica.request('POST', env.path), 409);
+	expect((await sessions.getSession(env.project.id, original.session_id)).status).toBe('failed');
+});
+
+it('does not start newly configured eager surfaces during ordinary reuse', async () => {
+	const env = await fixture();
+	Object.assign(env.compute, { capabilities: { multiPort: true } });
+	const original = await expectOk<Session>(await env.api.request('POST', env.path));
+	const replica = env.replica({
+		deps: {
+			sandbox: {
+				...env.api.deps.sandbox,
+				surfaces: { opencode: { start: 'eager', port: 4096, embed: 'tab' } },
+			},
+		},
+	});
+	const reused = await expectOk<Session>(await replica.request('POST', env.path));
+	expect(reused.session_id).toBe(original.session_id);
+	expect(reused.surfaces?.opencode).toBeUndefined();
+	expect(env.calls.startProcess.some(({ cmd }) => cmd.includes("'opencode' 'web'"))).toBe(false);
+});

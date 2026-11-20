@@ -304,7 +304,7 @@ describe('mutateObjectWithOutcome', () => {
 			n: current.n + 1,
 		}));
 
-		expect(result).toEqual({ value: { n: 2 }, written: true });
+		expect(result).toEqual({ value: { n: 2 }, written: true, etag: (await bucket.get('k'))!.etag });
 	});
 
 	it('reports an unchanged value', async () => {
@@ -313,7 +313,11 @@ describe('mutateObjectWithOutcome', () => {
 
 		const result = await mutateObjectWithOutcome(bucket, 'k', parse, () => null);
 
-		expect(result).toEqual({ value: { n: 1 }, written: false });
+		expect(result).toEqual({
+			value: { n: 1 },
+			written: false,
+			etag: (await bucket.get('k'))!.etag,
+		});
 	});
 });
 
@@ -530,7 +534,7 @@ describe('known mutation snapshots', () => {
 			known: { value: 1, etag: original.etag },
 			backoffMs: () => 0,
 		});
-		expect(result).toEqual({ value: stale ? 6 : 2, written: true });
+		expect(result).toEqual({ value: stale ? 6 : 2, written: true, etag: expect.any(String) });
 		expect(get).toHaveBeenCalledTimes(stale ? 1 : 0);
 		expect(put).toHaveBeenCalledTimes(stale ? 2 : 1);
 		expect(put.mock.calls[0][2]).toEqual({ onlyIfEtagMatches: original.etag });
@@ -561,7 +565,7 @@ describe('known mutation snapshots', () => {
 				known: { value: 1, etag: original.etag },
 				backoffMs: () => 0,
 			}),
-		).resolves.toEqual({ value: 5, written: false });
+		).resolves.toEqual({ value: 5, written: false, etag: expect.any(String) });
 		expect(put).toHaveBeenCalledTimes(1);
 	});
 
@@ -603,7 +607,7 @@ describe('known mutation snapshots', () => {
 			await mutateObjectWithOutcome(bucket, 'counter', Number, () => null, {
 				known: { value: 1, etag: 'known' },
 			}),
-		).toEqual({ value: 1, written: false });
+		).toEqual({ value: 1, written: false, etag: expect.any(String) });
 		expect(get).not.toHaveBeenCalled();
 		expect(put).not.toHaveBeenCalled();
 	});
