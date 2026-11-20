@@ -1,3 +1,7 @@
+import { apiClient, ApiRequestError } from '@/api/client';
+import { stopSessionSafely, SessionKeptRunningError } from '@/api/sessionStop';
+import { deferred } from '@/test/deferred';
+import type { Session } from '@/types';
 import { RetainedEditorContext } from '@/context/RetainedEditorContext';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -5,7 +9,10 @@ import { MemoryRouter, useNavigate, useParams } from 'react-router-dom';
 import { useContext, useEffect } from 'react';
 import { EDITOR_RETENTION_MS, RetainedEditorRoute } from './RetainedEditorRoute';
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+	vi.useRealTimers();
+	vi.restoreAllMocks();
+});
 
 function TestNavigation() {
 	const navigate = useNavigate();
@@ -27,7 +34,10 @@ function setup(ready: boolean | ((notebookId: string | undefined) => boolean) = 
 		const { nid } = useParams();
 		const reportReady = useContext(RetainedEditorContext);
 		const isReady = typeof ready === 'function' ? ready(nid) : ready;
-		useEffect(() => reportReady?.(isReady), [reportReady, isReady]);
+		useEffect(
+			() => reportReady?.(isReady ? `session-${nid}` : undefined),
+			[reportReady, isReady, nid],
+		);
 		useEffect(() => {
 			connected();
 			return disconnected;
@@ -130,4 +140,89 @@ it('keeps the editor mounted when only query parameters or the hash change', () 
 	expect(screen.getByTitle('editor-a')).toBe(frame);
 	expect(connected).toHaveBeenCalledOnce();
 	expect(disconnected).not.toHaveBeenCalled();
+});
+
+const stopResponse = (status = 200) =>
+	({ data: { success: true }, response: new Response(null, { status }) }) as never;
+
+const sessionResponse = (outcome: 'retained' | 'stopped') =>
+	({
+		data: {
+			success: true,
+			data: {
+				session_id: 'session-a',
+				status: outcome === 'stopped' ? 'terminated' : 'running',
+				stop: { id: 'attempt', outcome },
+			} as Session,
+		},
+		response: new Response(null, { status: 200 }),
+	}) as never;
+
+function hideEditor() {
+	setup();
+	const frame = screen.getByTitle('editor-a');
+	fireEvent.click(screen.getByText('Project'));
+	return frame;
+}
+
+it('evicts the hidden editor only after its session stops, then opens a fresh frame', async () => {
+	const frame = hideEditor();
+	const response = deferred<Awaited<ReturnType<typeof apiClient.DELETE>>>();
+	vi.spyOn(apiClient, 'DELETE').mockReturnValue(response.promise);
+	const stopping = stopSessionSafely('p', 'a', 'session-a');
+	expect(frame).toBeInTheDocument();
+	await act(async () => {
+		response.resolve(stopResponse());
+		await stopping;
+	});
+	expect(frame).not.toBeInTheDocument();
+	fireEvent.click(screen.getByText('Back'));
+	expect(screen.getByTitle('editor-a')).not.toBe(frame);
+});
+
+it.each([
+	['other-project', 'a', 'session-a'],
+	['p', 'b', 'session-b'],
+	['p', 'a', 'app-session'],
+])('preserves the editor when stopping %s/%s/%s', async (pid, nid, sid) => {
+	const frame = hideEditor();
+	vi.spyOn(apiClient, 'DELETE').mockResolvedValue(stopResponse());
+	await act(async () => {
+		await stopSessionSafely(pid, nid, sid);
+	});
+	expect(frame).toBeInTheDocument();
+});
+
+it('preserves the hidden editor when the session is kept running after a failed stop', async () => {
+	const frame = hideEditor();
+	vi.spyOn(apiClient, 'DELETE').mockRejectedValue(
+		new ApiRequestError('SESSION_PERSISTENCE_REQUIRED', 'Retained', { status: 409 }),
+	);
+	vi.spyOn(apiClient, 'GET').mockResolvedValue(sessionResponse('retained'));
+	await act(async () => {
+		await expect(
+			stopSessionSafely('p', 'a', 'session-a', async () => 'keep'),
+		).rejects.toBeInstanceOf(SessionKeptRunningError);
+	});
+	expect(frame).toBeInTheDocument();
+});
+
+it('leaves the visible editor mounted for its own shutdown handling', async () => {
+	setup();
+	const frame = screen.getByTitle('editor-a');
+	vi.spyOn(apiClient, 'DELETE').mockResolvedValue(stopResponse());
+	await act(async () => {
+		await stopSessionSafely('p', 'a', 'session-a');
+	});
+	expect(screen.getByTitle('editor-a')).toBe(frame);
+});
+
+it('evicts after reconciliation confirms an accepted stop', async () => {
+	const frame = hideEditor();
+	vi.spyOn(apiClient, 'DELETE').mockResolvedValue(stopResponse(202));
+	vi.spyOn(apiClient, 'GET').mockResolvedValue(sessionResponse('stopped'));
+	await act(async () => {
+		await stopSessionSafely('p', 'a', 'session-a');
+	});
+	expect(frame).not.toBeInTheDocument();
 });
