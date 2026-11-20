@@ -49,6 +49,7 @@ import {
 	readStored,
 	SessionSchema,
 	SessionStartupSchema,
+	SessionStartupCompletionSchema,
 	VersionPruneCutoffSchema,
 } from '../../schema';
 import type {
@@ -93,6 +94,39 @@ function advancesStartup(session: Session, next: Session['startup']): boolean {
 		Date.parse(next.started_at) >= Date.parse(current.started_at) &&
 		SANDBOX_STARTUP_PHASES.indexOf(next.phase) > SANDBOX_STARTUP_PHASES.indexOf(current.phase)
 	);
+}
+
+type StartupCompletion = NonNullable<Session['startup_completion']>;
+
+function runningSession(
+	session: Session,
+	runtime: Omit<StartupCompletion, 'id' | 'sandbox_id'>,
+): Session {
+	return {
+		...session,
+		status: 'running',
+		...(advancesStartup(session, runtime.startup) ? { startup: runtime.startup } : {}),
+		...(runtime.reconnect_reference === undefined
+			? {}
+			: { reconnect_reference: runtime.reconnect_reference }),
+		sandbox_url: runtime.sandbox_url,
+		surfaces: {
+			...session.surfaces,
+			marimo: {
+				status: 'ready',
+				port: MARIMO_PORT,
+				url: runtime.sandbox_url,
+				started_at: runtime.ready_at,
+			},
+		},
+		sandbox_origin_url: runtime.sandbox_origin_url,
+		used_fallback: runtime.used_fallback,
+		...(runtime.expires_at ? { expires_at: runtime.expires_at } : {}),
+		...(runtime.sandbox_deadline_at ? { sandbox_deadline_at: runtime.sandbox_deadline_at } : {}),
+		...(session.integrations === undefined && runtime.integrations?.length
+			? { integrations: runtime.integrations }
+			: {}),
+	};
 }
 
 export interface CreateSessionInput {
@@ -144,12 +178,14 @@ export function isPastAuthorizationDeadline(
  * has not flipped yet, so handing it out would strand the caller.
  */
 export function isReusableSession(
-	session: Pick<Session, 'status' | 'sandbox_url' | 'started_at'>,
+	session: Pick<Session, 'status' | 'sandbox_url' | 'started_at' | 'startup_completion'>,
 	now: number,
 ): boolean {
 	return (
 		(session.status === 'running' && !!session.sandbox_url) ||
-		(session.status === 'starting' && now - Date.parse(session.started_at) < HEARTBEAT_TTL_MS)
+		(session.status === 'starting' &&
+			now - Date.parse(session.startup_completion?.ready_at ?? session.started_at) <
+				HEARTBEAT_TTL_MS)
 	);
 }
 
@@ -662,34 +698,99 @@ export class SessionService {
 			(session) => {
 				if (isTerminal(session.status) || session.status === 'terminating') return null;
 
-				return {
-					...session,
-					status: 'running',
-					...(advancesStartup(session, progress) ? { startup: progress } : {}),
-					...(reference === undefined ? {} : { reconnect_reference: reference }),
+				return runningSession(session, {
+					ready_at: new Date().toISOString(),
 					sandbox_url: sandboxUrl,
-					surfaces: {
-						...session.surfaces,
-						marimo: {
-							status: 'ready',
-							port: MARIMO_PORT,
-							url: sandboxUrl,
-							started_at: new Date().toISOString(),
-						},
-					},
-					// Persisted only in `proxy` exposure mode (the forwarder's target); absent
-					// in `subdomain` mode where the client reaches the kernel directly.
-					sandbox_origin_url: originUrl,
 					used_fallback: usedFallback,
-					...(expiresAt ? { expires_at: expiresAt } : {}),
-					...(sandboxDeadlineAt ? { sandbox_deadline_at: sandboxDeadlineAt } : {}),
-					...(session.integrations === undefined && integrations && integrations.length > 0
-						? { integrations }
-						: {}),
-				};
+					sandbox_origin_url: originUrl,
+					expires_at: expiresAt,
+					integrations,
+					sandbox_deadline_at: sandboxDeadlineAt,
+					reconnect_reference: reference,
+					startup: progress,
+				});
 			},
 			known,
 		);
+	}
+
+	async recordStartupCompletion(
+		projectId: ProjectId,
+		id: SessionId,
+		completion: StartupCompletion,
+	): Promise<Session> {
+		const receipt = SessionStartupCompletionSchema.parse(completion);
+		return this.mutate(projectId, id, (session) => {
+			if (
+				session.status !== 'starting' ||
+				session.stop ||
+				session.sandbox_reclaimed_at ||
+				session.sandbox_id !== receipt.sandbox_id
+			)
+				throw new ConflictError('The starting runtime is no longer current');
+			if (session.startup_completion) {
+				if (session.startup_completion.id === receipt.id) return null;
+				throw new ConflictError('Runtime completion was already recorded');
+			}
+			return {
+				...session,
+				startup_completion: receipt,
+				last_heartbeat: receipt.ready_at,
+				...(receipt.reconnect_reference
+					? { reconnect_reference: receipt.reconnect_reference }
+					: {}),
+			};
+		});
+	}
+
+	async completeStartup(
+		projectId: ProjectId,
+		id: SessionId,
+		completionId: string,
+	): Promise<Session> {
+		return this.mutate(projectId, id, (session) => {
+			const receipt = session.startup_completion;
+			if (
+				!receipt ||
+				receipt.id !== completionId ||
+				receipt.sandbox_id !== session.sandbox_id ||
+				session.sandbox_reclaimed_at ||
+				session.stop
+			)
+				throw new ConflictError('The prepared runtime is no longer current');
+			if (session.status === 'running') return null;
+			if (session.status !== 'starting')
+				throw new ConflictError('The session is no longer starting');
+			if (
+				[session.authorization_expires_at, receipt.expires_at, receipt.sandbox_deadline_at].some(
+					(at) => at !== undefined && Date.parse(at) <= Date.now(),
+				)
+			)
+				throw new ConflictError('The prepared runtime has expired');
+			return runningSession(session, receipt);
+		});
+	}
+
+	async rejectStartupCompletion(
+		projectId: ProjectId,
+		id: SessionId,
+		expected: { sandbox_id: SandboxId; id?: string; status?: 'starting' | 'running' },
+		error: { code: string; message: string },
+	): Promise<boolean> {
+		let rejected = false;
+		await this.mutate(projectId, id, (session) => {
+			rejected =
+				!session.stop &&
+				!session.sandbox_reclaimed_at &&
+				session.sandbox_id === expected.sandbox_id &&
+				(expected.status === undefined || session.status === expected.status) &&
+				session.startup_completion?.id === expected.id &&
+				(session.status === 'starting' ||
+					(expected.id !== undefined && session.status === 'running'));
+			if (!rejected) return null;
+			return { ...session, status: 'failed', error };
+		});
+		return rejected;
 	}
 
 	/** Slide a live session's graceful-teardown deadline forward (the lifecycle
@@ -1190,6 +1291,7 @@ export class SessionService {
 				sandbox_id: sandboxId,
 				sandbox_reclaimed_at: undefined,
 				startup: undefined,
+				startup_completion: undefined,
 			};
 		});
 	}

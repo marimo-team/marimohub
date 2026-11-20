@@ -984,7 +984,33 @@ export const SessionStartupSchema = z.object({
 	observed: z.array(z.enum(SANDBOX_STARTUP_PHASES)).max(SANDBOX_STARTUP_PHASES.length),
 });
 
+const SessionIntegrationsSchema = z
+	.array(
+		z.object({
+			id: IntegrationIdSchema,
+			name: z.string(),
+			kind: z.string(),
+			version: z.number().int().positive(),
+		}),
+	)
+	.optional();
+
+export const SessionStartupCompletionSchema = z.object({
+	id: z.uuid(),
+	sandbox_id: SandboxIdSchema,
+	ready_at: utcTimestamp(),
+	sandbox_url: z.url(),
+	sandbox_origin_url: z.url().optional(),
+	used_fallback: z.boolean().optional(),
+	expires_at: utcTimestamp().optional(),
+	sandbox_deadline_at: utcTimestamp().optional(),
+	reconnect_reference: SandboxReconnectReferenceSchema.optional(),
+	integrations: SessionIntegrationsSchema,
+	startup: SessionStartupSchema.optional(),
+});
+
 export const SessionSchema = z.looseObject({
+	startup_completion: SessionStartupCompletionSchema.optional(),
 	startup: SessionStartupSchema.optional(),
 	status_changed_at: utcTimestamp().optional(),
 	stop: SessionStopAttemptSchema.optional(),
@@ -1098,16 +1124,7 @@ export const SessionSchema = z.looseObject({
 	 * sandbox at provision. Written once at `setRunning`, never mutated. Absent =
 	 * none rendered (or the record predates integrations).
 	 */
-	integrations: z
-		.array(
-			z.object({
-				id: IntegrationIdSchema,
-				name: z.string(),
-				kind: z.string(),
-				version: z.number().int().positive(),
-			}),
-		)
-		.optional(),
+	integrations: SessionIntegrationsSchema,
 });
 
 export type Session = z.infer<typeof SessionSchema>;

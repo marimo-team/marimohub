@@ -1059,7 +1059,7 @@ describe('ReconciliationService', () => {
 		const session = await createSession(terminalId);
 		await sessions.terminate(projectId, session.session_id);
 		compute.active = [{ id: terminalId }];
-		vi.spyOn(compute, 'create').mockReturnValue({
+		vi.mocked(compute.connectExisting).mockReturnValue({
 			async destroy() {
 				throw new Error('destroy boom');
 			},

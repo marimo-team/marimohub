@@ -41,12 +41,47 @@ Subscribers read storage across replicas without notification dependencies.
 Reconnects and slow consumers receive current state, with no intermediate-event
 replay guarantee. `observed` lists phases seen by the reporter, not an event journal.
 
-## Recovery boundary
+## Runtime finalization recovery
 
-The launch route still waits for provisioning. A starting record does not prove
-accepted admission, and persisted status does not resume interrupted provisioning.
+Persistent editors record an internal `startup_completion` receipt after workspace
+preparation, kernel readiness, and exposure. Optional context publication remains
+asynchronous and does not gate recovery. The receipt stores the sandbox identity,
+connection details, progress, and original runtime deadlines. It carries no caller
+credentials or authority. API responses and startup snapshots exclude it.
+
+If final status publication fails, the owner can retry the start request on any
+replica within five minutes of preparation. Recovery checks current access,
+account suspension, editor ownership, authorization deadlines, and runtime
+readiness. A conditional write publishes the stored runtime details. Recovery
+preserves the original runtime deadlines and does not create compute or repeat
+workspace preparation. Concurrent retries reuse one session. Stop and sandbox
+replacement fence completion, and delayed requests cannot destroy a recovered
+runtime through compensation.
+
+Transient storage and readiness failures retain the receipt for retry. Definitive
+authorization, deletion, expiry, or claim failures reject only the matching runtime
+and invoke retirement. A failed receipt write can reject a session only while no
+receipt exists. If storage remains unavailable, stale-session maintenance can
+reclaim the runtime after storage recovers and heartbeats stop.
+
+Recovery requires strict `connectExisting` support and a fresh authenticated owner
+passed to `recoverNotebookSessionStart`. It runs on request retry, without a
+background worker. Temporary editors, apps, previews, and takeover launches keep
+their existing lifecycle.
+
+The [storage-cost model](../packages/api/src/testing/performance/README.md) adds
+three GETs and one PUT per new editor at both 50 and 10,000 notebooks. The receipt,
+fenced status write, and current identity check add three sequential storage
+rounds (75 ms at the model's assumed 25 ms per round). Reuse, read, heartbeat, and
+app costs do not change. This model excludes compute and network execution time.
+
+## Admission boundary
+
+The launch route waits for provisioning. A starting record does not prove accepted
+admission. Recovery starts at the completion receipt. Earlier compute creation,
+workspace preparation, and crashes before the receipt remain outside this scope.
 Create-if-absent prevents session-ID reuse from overwriting an existing record.
 
-MO-8528 still needs request replay, durable provisioning inputs, worker ownership
-and scheduling, provider reconciliation, and cross-process crash tests.
-An absent provider lookup alone cannot justify retrying an uncertain create.
+MO-8528 still needs earlier request replay, durable provisioning inputs, worker
+ownership and scheduling, provider reconciliation, and cross-process crash
+acceptance. An absent provider lookup cannot justify retrying an uncertain create.

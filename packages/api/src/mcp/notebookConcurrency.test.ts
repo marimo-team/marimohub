@@ -226,8 +226,8 @@ describe('MCP source replacement and editor admission', () => {
 			if (phase === 'during provision')
 				vi.spyOn(instance, 'exec').mockRejectedValue(new Error('provision failed'));
 			if (phase === 'after provision')
-				vi.spyOn(starter.services.sessions, 'setRunning').mockRejectedValueOnce(
-					new Error('mark running failed'),
+				vi.spyOn(starter.services.sessions, 'recordStartupCompletion').mockRejectedValueOnce(
+					new Error('receipt write failed'),
 				);
 			await expect(fixture.start()).rejects.toThrow();
 			const [session] = await starter.services.sessions.listSessions(notebook.id);
@@ -245,6 +245,30 @@ describe('MCP source replacement and editor admission', () => {
 			else expect(update.isError).toBeFalsy();
 		},
 	);
+
+	it('blocks source replacement while prepared finalization is retryable', async () => {
+		const fixture = await setup();
+		const { starter, notebook, instance } = fixture;
+		const destroy = vi.spyOn(instance, 'destroy');
+		const create = vi.spyOn(starter.compute, 'create');
+		vi.spyOn(starter.services.sessions, 'completeStartup').mockRejectedValueOnce(
+			new Error('status publication failed'),
+		);
+
+		await expect(fixture.start()).rejects.toThrow('status publication failed');
+		const [prepared] = await starter.services.sessions.listSessions(notebook.id);
+		expect(prepared.status).toBe('starting');
+		expect(prepared.startup_completion).toBeDefined();
+		expect(await fixture.update()).toMatchObject({
+			isError: true,
+			structuredContent: { code: 'CONFLICT' },
+		});
+
+		const recovered = await fixture.start();
+		expect(recovered).toMatchObject({ session_id: prepared.session_id, status: 'running' });
+		expect(create).toHaveBeenCalledOnce();
+		expect(destroy).not.toHaveBeenCalled();
+	});
 
 	it('keeps source blocked when cleanup succeeds but its marker cannot be stored', async () => {
 		const fixture = await setup();
