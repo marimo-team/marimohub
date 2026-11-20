@@ -11,7 +11,7 @@ export interface RuntimeCheckpoint {
 	directory: string;
 }
 
-// Only a provider response to sandbox execution confirms runtime absence.
+// Only the provider can confirm runtime absence.
 export class RuntimeMissingError extends NotFoundError {
 	override readonly name = 'RuntimeMissingError';
 }
@@ -37,31 +37,57 @@ const replySchema = z.object({
 });
 
 export class RuntimeCaptureClient {
+	private readonly bridgeDirectory: string;
+
 	constructor(
 		private readonly sandbox: SandboxInstance,
-		private readonly sandboxId: SandboxId,
+		sandboxId: SandboxId,
 		private readonly telemetry = new CaptureTelemetry(),
-	) {}
+	) {
+		this.bridgeDirectory = notebookBridgePaths(sandboxId, 'marimo-bridge.py').directory;
+	}
+
+	private async transport<T>(
+		transport: 'native' | 'exec',
+		operation: () => Promise<T>,
+	): Promise<T> {
+		this.telemetry.histogram('transport_operations', 1, { transport });
+		return this.telemetry.time(`transport_${transport}`, async () => {
+			try {
+				return await operation();
+			} catch (cause) {
+				if (cause instanceof NotFoundError) throw new RuntimeMissingError(cause.message);
+				throw cause;
+			}
+		});
+	}
 
 	private request(request: Record<string, unknown> & { action: string }) {
 		return this.telemetry.time(`runtime_${request.action}`, () => this.send(request));
 	}
 
 	private async send(request: Record<string, unknown>) {
-		const path = `${notebookBridgePaths(this.sandboxId, 'marimo-bridge.py').directory}/lifecycle_client.py`;
-		const client = this.sandbox.resolveProcessPath?.(path) ?? path;
-		const result = await this.sandbox
-			.exec(`python3 ${shellQuote(client)} ${shellQuote(JSON.stringify(request))}`, {
-				timeout: 60_000,
-			})
-			.catch((cause: unknown) => {
-				if (cause instanceof NotFoundError) throw new RuntimeMissingError(cause.message);
-				throw cause;
-			});
-		if (!result.success) throw new RuntimeCaptureError('CAPTURE_UNAVAILABLE');
+		let stdout: string | undefined;
+		if (this.sandbox.requestLifecycle) {
+			stdout = await this.transport('native', () =>
+				this.sandbox.requestLifecycle!(`${this.bridgeDirectory}/lifecycle`, request),
+			);
+		}
+		if (stdout === undefined) {
+			const path = `${this.bridgeDirectory}/lifecycle_client.py`;
+			const client = this.sandbox.resolveProcessPath?.(path) ?? path;
+			const result = await this.transport('exec', () =>
+				this.sandbox.exec(`python3 ${shellQuote(client)} ${shellQuote(JSON.stringify(request))}`, {
+					timeout: 60_000,
+					maxOutputBytes: 1024 * 1024,
+				}),
+			);
+			if (!result.success) throw new RuntimeCaptureError('CAPTURE_UNAVAILABLE');
+			stdout = result.stdout;
+		}
 		let reply;
 		try {
-			reply = replySchema.parse(JSON.parse(result.stdout));
+			reply = replySchema.parse(JSON.parse(stdout));
 		} catch {
 			throw new RuntimeCaptureError('CAPTURE_UNAVAILABLE');
 		}
@@ -82,7 +108,7 @@ export class RuntimeCaptureClient {
 			);
 		const token = crypto.randomUUID();
 		// Sandbox file APIs use sandbox paths, whereas the local adapter remaps process paths.
-		const directory = `${notebookBridgePaths(this.sandboxId, 'marimo-bridge.py').directory}/lifecycle/captures/${token}`;
+		const directory = `${this.bridgeDirectory}/lifecycle/captures/${token}`;
 		try {
 			const reply = await this.request({
 				action: 'prepare',

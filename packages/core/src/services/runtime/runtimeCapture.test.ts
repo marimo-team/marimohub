@@ -2,6 +2,7 @@ import { CaptureTelemetry } from '../../internal/captureTelemetry';
 import { describe, expect, it, vi } from 'vitest';
 import { createSandboxId } from '../../ids';
 import { execResult } from '../../ports/sandbox';
+import type { SandboxInstance } from '../../ports/sandbox';
 import { makeFakeSandbox } from '../../testing';
 import { RuntimeCaptureClient, RuntimeCaptureError } from './runtimeCapture';
 
@@ -57,7 +58,11 @@ describe('runtime checkpoint client', () => {
 		const token = commands[1].match(/"token":"([^"]+)"/)![1];
 		expect(commands[2]).toContain(`"token":"${token}"`);
 		expect(commands[2]).toContain('"action":"abort"');
-		expect(metrics.histogram.mock.calls.map(([, , tags]) => tags)).toEqual([
+		expect(
+			metrics.histogram.mock.calls
+				.map(([, , tags]) => tags)
+				.filter((tags) => tags?.phase?.startsWith('runtime_')),
+		).toEqual([
 			{ phase: 'runtime_status', outcome: 'success' },
 			{ phase: 'runtime_prepare', outcome: 'failed' },
 			{ phase: 'runtime_abort', outcome: 'success' },
@@ -102,4 +107,145 @@ it('rejects a stop acknowledgement for a different checkpoint token', async () =
 			directory: '/checkpoint',
 		}),
 	).rejects.toMatchObject({ code: 'CAPTURE_UNAVAILABLE' });
+});
+
+function nativeFixture(requestLifecycle: NonNullable<SandboxInstance['requestLifecycle']>) {
+	const { instance } = makeFakeSandbox();
+	const exec = vi.spyOn(instance, 'exec');
+	return {
+		runtime: new RuntimeCaptureClient({ ...instance, requestLifecycle }, createSandboxId()),
+		exec,
+	};
+}
+
+it('uses native transport for the entire capture control sequence', async () => {
+	const requestLifecycle = vi.fn(async (_directory: string, request: Record<string, unknown>) =>
+		JSON.stringify(
+			request.action === 'prepare'
+				? { ok: true, state: 'paused', token: request.token, checkpoint: '/checkpoint' }
+				: { ok: true, state: 'running', generation: 0 },
+		),
+	);
+	const { runtime, exec } = nativeFixture(requestLifecycle);
+	await runtime.resume(await runtime.prepare('/workspace', 'notebook.py'));
+	expect(requestLifecycle.mock.calls.map(([, request]) => request.action)).toEqual([
+		'status',
+		'prepare',
+		'abort',
+	]);
+	expect(exec).not.toHaveBeenCalled();
+});
+
+it('never falls back to exec after a native request rejects', async () => {
+	const { runtime, exec } = nativeFixture(vi.fn().mockRejectedValue(new Error('disconnected')));
+	await expect(runtime.status()).rejects.toThrow('disconnected');
+	expect(exec).not.toHaveBeenCalled();
+});
+
+it('recovers a lost native prepare response with the same checkpoint token', async () => {
+	const requestLifecycle = vi
+		.fn()
+		.mockResolvedValueOnce(JSON.stringify({ ok: true, state: 'running', generation: 7 }))
+		.mockRejectedValueOnce(new Error('disconnected'))
+		.mockResolvedValueOnce(JSON.stringify({ ok: true, state: 'running' }));
+	const { runtime, exec } = nativeFixture(requestLifecycle);
+	await expect(runtime.prepare('/workspace', 'notebook.py')).rejects.toMatchObject({
+		code: 'CAPTURE_UNAVAILABLE',
+		runtimeState: 'running',
+	});
+	expect(requestLifecycle.mock.calls[1][1]).toMatchObject({ action: 'prepare', generation: 7 });
+	expect(requestLifecycle.mock.calls[2][1]).toEqual({
+		action: 'abort',
+		token: requestLifecycle.mock.calls[1][1].token,
+	});
+	expect(exec).not.toHaveBeenCalled();
+});
+
+it.each(['{', 'null', '{}', '{"ok":"true"}', '{"ok":true,"generation":-1}'])(
+	'rejects malformed native replies without replay: %s',
+	async (reply) => {
+		const { runtime, exec } = nativeFixture(vi.fn().mockResolvedValue(reply));
+		await expect(runtime.status()).rejects.toMatchObject({ code: 'CAPTURE_UNAVAILABLE' });
+		expect(exec).not.toHaveBeenCalled();
+	},
+);
+
+it('uses bounded exec fallback only when native dispatch was declined', async () => {
+	const { runtime, exec } = nativeFixture(vi.fn().mockResolvedValue(undefined));
+	exec.mockResolvedValue(execResult(true, '{"ok":true,"state":"running"}', ''));
+	await expect(runtime.status()).resolves.toMatchObject({ state: 'running' });
+	expect(exec).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
+		timeout: 60_000,
+		maxOutputBytes: 1024 * 1024,
+	});
+});
+
+it.each([
+	{ state: 'paused', token: crypto.randomUUID(), checkpoint: '/checkpoint' },
+	{ state: 'running', checkpoint: '/checkpoint' },
+	{ state: 'paused' },
+])('aborts invalid native prepare acknowledgements: %j', async (reply) => {
+	const requestLifecycle = vi.fn(async (_directory: string, request: Record<string, unknown>) =>
+		JSON.stringify(
+			request.action === 'prepare'
+				? { ok: true, token: request.token, ...reply }
+				: { ok: true, state: 'running', generation: 0 },
+		),
+	);
+	const { runtime } = nativeFixture(requestLifecycle);
+	await expect(runtime.prepare('/workspace', 'notebook.py')).rejects.toMatchObject({
+		code: 'CAPTURE_UNAVAILABLE',
+		runtimeState: 'running',
+	});
+	expect(requestLifecycle.mock.calls.map(([, request]) => request.action)).toEqual([
+		'status',
+		'prepare',
+		'abort',
+	]);
+	expect(requestLifecycle.mock.calls[2][1].token).toBe(requestLifecycle.mock.calls[1][1].token);
+});
+
+it('keeps runtime state unknown when native prepare and recovery both fail', async () => {
+	const requestLifecycle = vi
+		.fn()
+		.mockResolvedValueOnce('{"ok":true,"state":"running","generation":0}')
+		.mockRejectedValueOnce(new Error('disconnected'))
+		.mockRejectedValueOnce(new Error('abort unavailable'))
+		.mockResolvedValueOnce('{"ok":true,"state":"paused"}');
+	const { runtime, exec } = nativeFixture(requestLifecycle);
+	await expect(runtime.prepare('/workspace', 'notebook.py')).rejects.toMatchObject({
+		code: 'CAPTURE_UNAVAILABLE',
+		runtimeState: 'unknown',
+	});
+	expect(requestLifecycle.mock.calls.map(([, request]) => request.action)).toEqual([
+		'status',
+		'prepare',
+		'abort',
+		'status',
+	]);
+	expect(exec).not.toHaveBeenCalled();
+});
+
+it('does not retry a native commit-stop with a mismatched token', async () => {
+	const requestLifecycle = vi.fn().mockResolvedValue(
+		JSON.stringify({
+			ok: true,
+			state: 'stopped',
+			token: crypto.randomUUID(),
+		}),
+	);
+	const { runtime, exec } = nativeFixture(requestLifecycle);
+	await expect(
+		runtime.commitStop({ token: crypto.randomUUID(), directory: '/checkpoint' }),
+	).rejects.toMatchObject({ code: 'CAPTURE_UNAVAILABLE' });
+	expect(requestLifecycle).toHaveBeenCalledTimes(1);
+	expect(exec).not.toHaveBeenCalled();
+});
+
+it('retains native runtime error codes without fallback', async () => {
+	const { runtime, exec } = nativeFixture(
+		vi.fn().mockResolvedValue('{"ok":false,"code":"CAPTURE_BUSY"}'),
+	);
+	await expect(runtime.status()).rejects.toMatchObject({ code: 'CAPTURE_BUSY' });
+	expect(exec).not.toHaveBeenCalled();
 });
