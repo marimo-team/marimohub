@@ -57,6 +57,7 @@ const configOf = (provider: unknown) =>
 				surfacePorts?: readonly number[];
 				extraLabels?: Record<string, string>;
 				runAsUser?: number;
+				maxLifetimeSeconds?: number;
 			};
 		}
 	).config;
@@ -851,6 +852,12 @@ describe('makeCompute fail-fast', () => {
 		);
 	});
 
+	it('requires the boxd api key before constructing the adapter', () => {
+		expect(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'boxd' })).toThrow(
+			/MARIMOHUB_COMPUTE_BOXD_API_KEY/,
+		);
+	});
+
 	it('requires the coreweave api key before constructing the adapter', () => {
 		expect(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'coreweave' })).toThrow(
 			/MARIMOHUB_COMPUTE_COREWEAVE_API_KEY/,
@@ -978,7 +985,7 @@ describe('sandbox image list', () => {
 		]);
 	});
 
-	it.each(['docker', 'podman', 'kubernetes', 'coreweave', 'wandb', 'e2b', 'cloudflare'])(
+	it.each(['docker', 'podman', 'kubernetes', 'coreweave', 'wandb', 'e2b', 'boxd', 'cloudflare'])(
 		'rejects modal:// image references for %s at startup',
 		(backend) => {
 			const error = getConfigError(() =>
@@ -1053,6 +1060,74 @@ describe('sandbox image list', () => {
 			MARIMOHUB_COMPUTE_E2B_TEMPLATE: 'tpl-a,tpl-b',
 		});
 		expect(configOf(compute).template).toBe('tpl-a');
+	});
+
+	it('resolveSandboxImages prefers the boxd snapshot list over the image list', () => {
+		expect(
+			resolveSandboxImages({
+				MARIMOHUB_COMPUTE_BACKEND: 'boxd',
+				MARIMOHUB_COMPUTE_BOXD_SNAPSHOT: 'snap-a, snap-b',
+				MARIMOHUB_COMPUTE_IMAGE: 'img-a',
+			}),
+		).toEqual(['snap-a', 'snap-b']);
+		const error = getConfigError(() =>
+			resolveSandboxImages({
+				MARIMOHUB_COMPUTE_BACKEND: 'boxd',
+				MARIMOHUB_COMPUTE_BOXD_SNAPSHOT: 'modal://snap',
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_COMPUTE_BOXD_SNAPSHOT');
+		expect(error.opts.remediation).toContain('boxd snapshot names');
+	});
+
+	it('wires the boxd backend from its variables', () => {
+		const compute = makeCompute({
+			MARIMOHUB_COMPUTE_BACKEND: 'boxd',
+			MARIMOHUB_COMPUTE_BOXD_API_KEY: 'key',
+			MARIMOHUB_COMPUTE_BOXD_SNAPSHOT: 'snap-a,snap-b',
+			MARIMOHUB_COMPUTE_BOXD_ORG: 'acme',
+			MARIMOHUB_COMPUTE_BOXD_REGION: 'nyc',
+			MARIMOHUB_COMPUTE_BOXD_OWNER_TAG: 'hub-a',
+			MARIMOHUB_COMPUTE_BOXD_NAME_PREFIX: 'hub-a-',
+			MARIMOHUB_COMPUTE_BOXD_LABELS: 'team=data, env=prod',
+			MARIMOHUB_COMPUTE_WORKDIR: '/srv/nb',
+		});
+		expect(compute.capabilities?.multiPort).toBe(true);
+		expect(configOf(compute)).toEqual({
+			apiKey: 'key',
+			snapshot: 'snap-a',
+			org: 'acme',
+			region: 'nyc',
+			ownerTag: 'hub-a',
+			namePrefix: 'hub-a-',
+			labels: { team: 'data', env: 'prod' },
+			workdir: '/srv/nb',
+		});
+	});
+
+	it('defaults the boxd lifetime cap to twice the session lifetime', () => {
+		const env = { MARIMOHUB_COMPUTE_BACKEND: 'boxd', MARIMOHUB_COMPUTE_BOXD_API_KEY: 'key' };
+		expect(
+			configOf(makeCompute(env, { sessionMaxLifetimeSeconds: Seconds.of(3600) }))
+				.maxLifetimeSeconds,
+		).toBe(7200);
+		expect(() =>
+			makeCompute(
+				{ ...env, MARIMOHUB_COMPUTE_BOXD_MAX_LIFETIME_SECONDS: '60' },
+				{ sessionMaxLifetimeSeconds: Seconds.of(3600) },
+			),
+		).toThrow(/MARIMOHUB_COMPUTE_BOXD_MAX_LIFETIME_SECONDS/);
+	});
+
+	it('rejects a boxd label without a key', () => {
+		const error = getConfigError(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'boxd',
+				MARIMOHUB_COMPUTE_BOXD_API_KEY: 'key',
+				MARIMOHUB_COMPUTE_BOXD_LABELS: 'team=data,=x',
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_COMPUTE_BOXD_LABELS');
 	});
 
 	it('modal rejects an image value that parses to an empty list', () => {

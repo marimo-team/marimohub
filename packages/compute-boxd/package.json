@@ -1,0 +1,32 @@
+{
+	"name": "@marimo-hub/compute-boxd",
+	"version": "0.0.0",
+	"private": true,
+	"license": "Apache-2.0",
+	"files": [
+		"dist"
+	],
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"build": "vp pack",
+		"check": "vp check",
+		"test": "vp run test:vitest",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@marimo-hub/compute-commons": "workspace:*",
+		"@marimo-hub/core": "workspace:*"
+	},
+	"devDependencies": {
+		"@marimo-hub/tsconfig": "workspace:*",
+		"@marimo-hub/vite-config": "workspace:*",
+		"@types/node": "catalog:",
+		"typescript": "catalog:",
+		"vite-plus": "catalog:",
+		"vitest": "catalog:"
+	}
+}

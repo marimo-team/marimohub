@@ -64,6 +64,7 @@ const ICONS: Record<string, string> = {
 	docker: '🐳',
 	podman: '🦭',
 	e2b: '📦',
+	boxd: '🧊',
 	kubernetes: '☸️',
 	local: '💻',
 	none: '🚫',
@@ -317,6 +318,16 @@ export const COMPUTE_WIRING: Record<string, BackendWiring> = {
 				`new E2bCompute({`,
 				`\tapiKey: ${env('MARIMOHUB_COMPUTE_E2B_API_KEY', true)},`,
 				`\ttemplate: process.env.MARIMOHUB_COMPUTE_E2B_TEMPLATE ?? process.env.MARIMOHUB_COMPUTE_IMAGE,`,
+				`})`,
+			].join('\n'),
+	},
+	boxd: {
+		imports: [`import { BoxdCompute } from '@marimo-hub/compute-boxd';`],
+		rhs: () =>
+			[
+				`new BoxdCompute({`,
+				`\tapiKey: ${env('MARIMOHUB_COMPUTE_BOXD_API_KEY', true)},`,
+				`\tsnapshot: process.env.MARIMOHUB_COMPUTE_BOXD_SNAPSHOT ?? process.env.MARIMOHUB_COMPUTE_IMAGE,`,
 				`})`,
 			].join('\n'),
 	},
