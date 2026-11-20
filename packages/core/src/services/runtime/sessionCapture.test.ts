@@ -97,6 +97,113 @@ async function coordinatorFixture() {
 	};
 }
 
+describe('capture preparation', () => {
+	it('reads the source once and skips the README before checking ownership', async () => {
+		const f = await coordinatorFixture();
+		const get = vi.spyOn(f.bucket, 'get');
+		const detail = vi.spyOn(f.notebooks, 'getNotebook');
+		const ownership = vi.fn(async () => {
+			expect(get.mock.calls.filter(([key]) => key === f.nb.source)).toHaveLength(1);
+			expect(get.mock.calls.some(([key]) => key === f.nb.readme)).toBe(false);
+			expect(detail).not.toHaveBeenCalled();
+			expect(f.prepare).not.toHaveBeenCalled();
+			await f.sessions.assertCaptureOwnership(f.session);
+		});
+		const result = await f.coordinator.capture(f.session, f.instance, {
+			assertOwnership: ownership,
+		});
+		expect(ownership).toHaveBeenCalledOnce();
+		expect(result.critical.status).toBe('durable');
+		expect(await f.notebooks.getNotebookContent(f.project.id, f.notebook.id)).toBe('# edited');
+	});
+
+	it('rejects a publication fenced after preparation', async () => {
+		const f = await coordinatorFixture();
+		const result = await f.coordinator.capture(f.session, f.instance, {
+			assertOwnership: async () => {
+				await f.notebooks.fenceSessionPublications(f.project.id, f.notebook.id);
+				await f.sessions.assertCaptureOwnership(f.session);
+			},
+		});
+		expect(result.critical.status).toBe('uncertain');
+		expect(await f.notebooks.getNotebookContent(f.project.id, f.notebook.id)).toBe('# original');
+	});
+
+	it('skips remote sources without reading runtime artifacts', async () => {
+		const f = await coordinatorFixture();
+		await f.bucket.put(
+			f.nb.source,
+			JSON.stringify({
+				schema_version: 1,
+				type: 'git',
+				provider: 'github',
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: '',
+				entry_notebook: 'notebook.py',
+				sync_mode: 'push',
+				current_version_id: null,
+				commit: null,
+				last_synced_at: null,
+			}),
+		);
+		const result = await f.coordinator.capture(f.session, f.instance);
+		expect(result.critical).toEqual({ status: 'not_required', reason: 'remote_source' });
+		expect(f.prepare).not.toHaveBeenCalled();
+	});
+
+	it.each(['missing_meta', 'missing', 'invalid_json', 'invalid_schema', 'read_error'] as const)(
+		'fails without runtime or publication work for a %s source',
+		async (failure) => {
+			const f = await coordinatorFixture();
+			if (failure === 'missing_meta') await f.bucket.delete(f.nb.meta);
+			if (failure === 'missing') await f.bucket.delete(f.nb.source);
+			if (failure === 'invalid_json') await f.bucket.put(f.nb.source, '{');
+			if (failure === 'invalid_schema') await f.bucket.put(f.nb.source, '{}');
+			if (failure === 'read_error') {
+				const get = f.bucket.get.bind(f.bucket);
+				vi.spyOn(f.bucket, 'get').mockImplementation((key) => {
+					if (key === f.nb.source) return Promise.reject(new Error('Storage unavailable'));
+					return get(key);
+				});
+			}
+			const commit = vi.spyOn(f.notebooks, 'commitSession');
+			const attempt = vi.spyOn(f.sessions, 'recordCaptureAttempt');
+			const result = await f.coordinator.capture(f.session, f.instance);
+			expect(result.critical).toMatchObject({
+				status: 'failed',
+				code: 'RUNTIME_CAPTURE_UNAVAILABLE',
+				retryable: true,
+			});
+			expect(f.prepare).not.toHaveBeenCalled();
+			expect(commit).not.toHaveBeenCalled();
+			expect(attempt).not.toHaveBeenCalled();
+		},
+	);
+
+	it('checks ownership after preparation and rejects a lost editor claim', async () => {
+		const f = await coordinatorFixture();
+		const prepare = f.notebooks.prepareSessionCapture.bind(f.notebooks);
+		vi.spyOn(f.notebooks, 'prepareSessionCapture').mockImplementation(async (...args) => {
+			const token = await prepare(...args);
+			await f.sessions.releaseEditorFor(f.session);
+			const replacement = await f.sessions.createSession({
+				project_id: f.project.id,
+				notebook_id: f.notebook.id,
+				user_id: ACTOR,
+			});
+			await f.sessions.claimEditor(f.project.id, f.notebook.id, replacement.session_id, 'shared');
+			return token;
+		});
+		const commit = vi.spyOn(f.notebooks, 'commitSession');
+		const result = await f.coordinator.capture(f.session, f.instance);
+		expect(result.critical.status).toBe('failed');
+		expect(f.prepare).not.toHaveBeenCalled();
+		expect(commit).not.toHaveBeenCalled();
+		expect(await f.notebooks.getNotebookContent(f.project.id, f.notebook.id)).toBe('# original');
+	});
+});
+
 describe('capture failure diagnostics and recovery', () => {
 	it.each([null, 300_000, -60_000])(
 		'reports prior capture age %s without leaking runtime errors',
@@ -653,8 +760,7 @@ describe('capture instrumentation and publication fences', () => {
 		expect(f.metrics.histogram).toHaveBeenCalledWith('sessions.capture.artifact_bytes', 8, {
 			artifact: 'code',
 		});
-		// Initial policy read and commit validation remain; the paused read is redundant.
-		expect(get).toHaveBeenCalledTimes(2);
+		expect(get).toHaveBeenCalledTimes(1);
 	});
 
 	it('does not let a throwing metrics exporter change publication or resume', async () => {

@@ -109,7 +109,9 @@ describe('SessionRetirer', () => {
 			source: makeLocalSource(),
 			readme: null,
 		});
-		vi.spyOn(notebooks, 'beginSessionCapture').mockResolvedValue({} as never);
+		vi.spyOn(notebooks, 'prepareSessionCapture').mockResolvedValue({
+			source: makeLocalSource(),
+		} as never);
 		vi.spyOn(notebooks, 'commitSession').mockResolvedValue({
 			versionId: createVersionId(),
 			newVersion: true,

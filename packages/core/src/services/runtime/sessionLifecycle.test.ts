@@ -69,7 +69,9 @@ describe('SessionLifecycleService', () => {
 		// tests don't need a populated catalog (the save wiring itself is covered
 		// by the SandboxProvisioner tests).
 		vi.spyOn(notebooks, 'getNotebook').mockResolvedValue({ source: makeLocalSource() } as never);
-		vi.spyOn(notebooks, 'beginSessionCapture').mockResolvedValue({} as never);
+		vi.spyOn(notebooks, 'prepareSessionCapture').mockResolvedValue({
+			source: makeLocalSource(),
+		} as never);
 		vi.spyOn(notebooks, 'commitSession').mockResolvedValue({
 			versionId: createVersionId(),
 			newVersion: true,
@@ -970,6 +972,7 @@ describe('SessionLifecycleService', () => {
 		});
 
 		it('advances last_snapshot_at for a synced source (nothing to persist, checked per interval)', async () => {
+			vi.mocked(notebooks.prepareSessionCapture).mockResolvedValue(null);
 			vi.mocked(notebooks.getNotebook).mockResolvedValue({
 				source: { schema_version: 1, type: 'git' },
 			} as never);

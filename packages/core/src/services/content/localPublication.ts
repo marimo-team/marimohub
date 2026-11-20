@@ -27,18 +27,44 @@ export interface LocalPublicationToken {
 	versions: LocalPublicationVersion[];
 }
 
+export async function readPublicationSource(
+	bucket: Bucket,
+	projectId: ProjectId,
+	notebookId: NotebookId,
+) {
+	const key = paths.project(projectId).notebook(notebookId).source;
+	const object = await bucket.get(key);
+	if (!object) throw new NotFoundError(`Notebook ${notebookId} source not found`);
+	return { source: await readStored(SourceSchema, object, key), etag: object.etag };
+}
+
 export async function readLocalPublication(
 	bucket: Bucket,
 	projectId: ProjectId,
 	notebookId: NotebookId,
 	retainLegacyVersions?: ReadonlySet<string>,
 ): Promise<LocalPublicationToken> {
-	const nb = paths.project(projectId).notebook(notebookId);
-	const object = await bucket.get(nb.source);
-	if (!object) throw new NotFoundError(`Notebook ${notebookId} source not found`);
-	const source = await readStored(SourceSchema, object, nb.source);
+	const { source, etag } = await readPublicationSource(bucket, projectId, notebookId);
 	if (source.type !== 'local')
 		throw new ConflictError('Only local notebooks accept session captures');
+	return prepareLocalPublication(
+		bucket,
+		projectId,
+		notebookId,
+		{ source, etag },
+		retainLegacyVersions,
+	);
+}
+
+export async function prepareLocalPublication(
+	bucket: Bucket,
+	projectId: ProjectId,
+	notebookId: NotebookId,
+	observation: { source: LocalSource; etag: string },
+	retainLegacyVersions?: ReadonlySet<string>,
+): Promise<LocalPublicationToken> {
+	const nb = paths.project(projectId).notebook(notebookId);
+	const { source, etag } = observation;
 	let versions = source.publication?.versions;
 	if (!versions) {
 		const prefixes = await listAllPrefixes(bucket, `${nb.base}/versions/`);
@@ -73,26 +99,24 @@ export async function readLocalPublication(
 		};
 		try {
 			const written = await bucket.put(nb.source, JSON.stringify(initialized), {
-				onlyIfEtagMatches: object.etag,
+				onlyIfEtagMatches: etag,
 			});
 			return { projectId, notebookId, etag: written.etag, source: initialized, versions };
 		} catch (error) {
 			if (!(error instanceof PreconditionFailedError)) throw error;
-			const current = await bucket.get(nb.source);
-			if (!current) throw new NotFoundError(`Notebook ${notebookId} source not found`);
-			const adopted = await readStored(SourceSchema, current, nb.source);
+			const { source: adopted, etag } = await readPublicationSource(bucket, projectId, notebookId);
 			if (adopted.type !== 'local' || !adopted.publication)
 				throw new ConflictError('Notebook publication initialization changed; retry');
 			return {
 				projectId,
 				notebookId,
-				etag: current.etag,
+				etag,
 				source: adopted,
 				versions: adopted.publication.versions,
 			};
 		}
 	}
-	return { projectId, notebookId, etag: object.etag, source, versions };
+	return { projectId, notebookId, etag, source, versions };
 }
 
 export async function publishLocalSource(

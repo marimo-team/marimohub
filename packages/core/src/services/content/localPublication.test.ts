@@ -284,3 +284,69 @@ it('does not publish an unreadable legacy head and can migrate after bounded ret
 	expect((await env.token()).versions.length).toBeLessThanOrEqual(1000);
 	expect(await env.notebooks.getNotebookContent(env.project.id, env.notebook.id)).toBe('# initial');
 });
+
+describe('capture preparation with a legacy head', () => {
+	async function legacyFixture() {
+		const f = await fixture();
+		const original = await f.token();
+		const legacy = JSON.stringify({ ...original.source, publication: undefined });
+		await f.bucket.put(f.nb.source, legacy);
+		return {
+			...f,
+			original,
+			legacy,
+			prepare: () => f.notebooks.prepareSessionCapture(f.project.id, f.notebook.id),
+		};
+	}
+
+	it('initializes the observed head without reading it again', async () => {
+		const f = await legacyFixture();
+		const get = vi.spyOn(f.bucket, 'get');
+		const token = await f.prepare();
+		expect(get.mock.calls.filter(([key]) => key === f.nb.source)).toHaveLength(1);
+		expect(token?.versions).toEqual(f.original.versions);
+		expect(token?.etag).toBe((await f.bucket.get(f.nb.source))?.etag);
+	});
+
+	it.each(['initialized', 'uninitialized', 'deleted', 'write_error'] as const)(
+		'handles an %s head at initialization',
+		async (change) => {
+			const f = await legacyFixture();
+			const put = f.bucket.put.bind(f.bucket);
+			const replacement = {
+				...f.original.source,
+				publication:
+					change === 'initialized'
+						? { generation: crypto.randomUUID(), versions: f.original.versions }
+						: undefined,
+				entry_notebook: 'changed.py',
+			};
+			let intercepted = false;
+			vi.spyOn(f.bucket, 'put').mockImplementation(async (key, body, options) => {
+				if (key === f.nb.source && !intercepted) {
+					intercepted = true;
+					if (change === 'write_error') throw new Error('Storage unavailable');
+					if (change === 'deleted') await f.bucket.delete(key);
+					else await put(key, JSON.stringify(replacement));
+				}
+				return put(key, body, options);
+			});
+			const preparation = f.prepare();
+			if (change === 'initialized') {
+				const token = await preparation;
+				expect(token?.source).toEqual(replacement);
+				expect(token?.etag).toBe((await f.bucket.get(f.nb.source))?.etag);
+				await expect(f.commit({ code: '# captured' }, token!)).resolves.toMatchObject({
+					newVersion: true,
+				});
+			} else if (change === 'write_error') {
+				await expect(preparation).rejects.toThrow('Storage unavailable');
+				expect(await (await f.bucket.get(f.nb.source))!.text()).toBe(f.legacy);
+			} else {
+				await expect(preparation).rejects.toMatchObject({
+					code: change === 'deleted' ? 'NOT_FOUND' : 'CONFLICT',
+				});
+			}
+		},
+	);
+});

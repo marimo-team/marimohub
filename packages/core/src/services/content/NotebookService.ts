@@ -1,6 +1,8 @@
 import { CaptureTelemetry } from '../../internal/captureTelemetry';
 import {
 	readLocalPublication,
+	readPublicationSource,
+	prepareLocalPublication,
 	publishLocalSource,
 	publishedVersion,
 	publicationArtifactKey,
@@ -1184,6 +1186,19 @@ export class NotebookService {
 				true,
 			),
 		);
+	}
+
+	/** Returns null for remote sources. Acquire before ownership checks and runtime reads. */
+	async prepareSessionCapture(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+	): Promise<LocalPublicationToken | null> {
+		const [, { source, etag }] = await Promise.all([
+			this.getNotebookMeta(projectId, notebookId),
+			readPublicationSource(this.bucket, projectId, notebookId),
+		]);
+		if (source.type !== 'local') return null;
+		return prepareLocalPublication(this.bucket, projectId, notebookId, { source, etag });
 	}
 
 	// Acquire before reading runtime bytes or validating editor ownership.
