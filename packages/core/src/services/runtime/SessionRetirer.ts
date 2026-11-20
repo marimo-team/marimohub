@@ -902,10 +902,13 @@ export class SessionRetirer {
 		if (!session.sandbox_id) return true;
 		try {
 			const sandbox =
-				existing ?? sessionSandbox(this.deps.compute, session, this.deps.metrics, 'teardown');
+				existing ??
+				reconnectSessionSandbox(this.deps.compute, session, this.deps.metrics, 'teardown') ??
+				sessionSandbox(this.deps.compute, session, this.deps.metrics, 'teardown');
 			await this.telemetry.time('destroy', () => sandbox.destroy());
 			return true;
 		} catch (err) {
+			if (err instanceof NotFoundError) return true;
 			logOperationalError(
 				'sandbox_destroy_failed',
 				{

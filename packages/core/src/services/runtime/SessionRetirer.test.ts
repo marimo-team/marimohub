@@ -164,6 +164,40 @@ describe('SessionRetirer', () => {
 		});
 	}
 
+	it.each(['missing', 'transport'] as const)(
+		'never creates compute when strict retirement reconnect reports %s',
+		async (failure) => {
+			const session = await persistentSession({ status: 'failed' });
+			const { instance, calls } = makeFakeSandbox();
+			const compute = fakeComputeFrom(instance);
+			const create = vi.spyOn(compute, 'create');
+			vi.spyOn(compute, 'connectExisting').mockImplementation(() => {
+				throw failure === 'missing'
+					? new NotFoundError('Runtime gone')
+					: new Error('Provider unavailable');
+			});
+			const result = await retirer(compute).reclaim(session);
+			expect(result.reclaimed).toBe(failure === 'missing');
+			expect(create).not.toHaveBeenCalled();
+			expect(calls.destroy).toBe(0);
+			expect(
+				(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at !==
+					undefined,
+			).toBe(failure === 'missing');
+		},
+	);
+
+	it('retains legacy retirement for a provider without strict reconnect', async () => {
+		const session = await persistentSession({ status: 'failed' });
+		const { instance, calls } = makeFakeSandbox();
+		const create = vi.fn(() => instance);
+		expect((await retirer({ create, proxy: async () => null }).reclaim(session)).reclaimed).toBe(
+			true,
+		);
+		expect(create).toHaveBeenCalledOnce();
+		expect(calls.destroy).toBe(1);
+	});
+
 	it('uses the persisted reference for capture and destruction', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const session = await persistentSession({ reconnect_reference: 'teardown-reference' });
@@ -485,7 +519,7 @@ describe('SessionRetirer', () => {
 					save: true,
 				}),
 			).toEqual({ reclaimed: true, saved: false });
-			expect(connectExisting).not.toHaveBeenCalled();
+			expect(connectExisting).toHaveBeenCalledOnce();
 			expect(notebooks.commitSession).not.toHaveBeenCalled();
 			expect(calls.destroy).toBe(1);
 		},
@@ -742,7 +776,7 @@ describe('SessionRetirer', () => {
 		expect(await retirer(provider).reclaim(session, { save: true })).toMatchObject({
 			reclaimed: true,
 		});
-		expect(connect).not.toHaveBeenCalled();
+		expect(connect).toHaveBeenCalledOnce();
 		expect(notebooks.commitSession).not.toHaveBeenCalled();
 		expect(calls.destroy).toBe(1);
 	});

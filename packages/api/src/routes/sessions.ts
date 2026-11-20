@@ -87,6 +87,7 @@ import {
 	sandboxContextFile,
 	writeSandboxContext,
 	sessionSandbox,
+	reconnectSessionSandbox,
 	sessionWorkspaceDir,
 	UnavailableError,
 	EditSessionOwnedError,
@@ -754,6 +755,23 @@ export async function authorizeSessionStart(
 			? { subjectContextExpiresAt: decision.subjectContextExpiresAt }
 			: {}),
 	};
+}
+
+async function recheckSessionAuthorization(
+	project: Project,
+	user: AuthenticatedPrincipal,
+	mode: SessionMode,
+	deps: AuthzDeps,
+	labels: ResourceSecurityLabels | null,
+	expected: { ephemeral: boolean; restrictedViewerCredentials: boolean },
+) {
+	const current = await authorizeSessionStart(project, user, mode, deps, labels);
+	if (
+		current.ephemeral !== expected.ephemeral ||
+		current.restrictedViewerCredentials !== expected.restrictedViewerCredentials
+	)
+		throw new ForbiddenError('Session authorization changed during startup');
+	return current;
 }
 
 /** The earlier of two ISO deadlines; undefined entries do not bound. */
@@ -1453,6 +1471,160 @@ export type SessionCreateResult = z.infer<typeof SessionCreateResponseSchema>;
 
 const EDITOR_STOP_WAIT_MS = 10_000;
 
+class StartupCompletionRejectedError extends ConflictError {
+	override readonly name = 'StartupCompletionRejectedError';
+	constructor(readonly reason: 'claim' | 'expiry') {
+		super(
+			reason === 'claim'
+				? 'The editor claim changed during startup'
+				: 'The prepared runtime has expired',
+		);
+	}
+}
+
+async function rejectStartupCompletion(
+	deps: ApiDeps,
+	session: Session,
+	expected: { sandbox_id: NonNullable<Session['sandbox_id']>; id?: string },
+	error: unknown,
+): Promise<void> {
+	const { sessions } = deps.services;
+	if (
+		await sessions.rejectStartupCompletion(
+			session.project_id,
+			session.session_id,
+			error instanceof StartupCompletionRejectedError && error.reason === 'expiry'
+				? { ...expected, status: 'starting' }
+				: expected,
+			toSessionError(error),
+		)
+	) {
+		await sessionRetirer(deps).reclaim(
+			await sessions.getSession(session.project_id, session.session_id),
+			{ thumbnail: 'skip' },
+		);
+	}
+}
+
+function canRecoverStartup(session: Session): boolean {
+	return (
+		sessionMode(session) === 'edit' && !session.ephemeral && !session.origin && !session.app_pool
+	);
+}
+
+async function validateStartupCompletion(
+	deps: ResolvedApiDeps,
+	user: AuthenticatedPrincipal,
+	session: Session,
+): Promise<void> {
+	if (
+		isPastAuthorizationDeadline(session, Date.now()) ||
+		(user.credential.expiresAt && Date.parse(user.credential.expiresAt) <= Date.now())
+	)
+		throw new ForbiddenError('Session authorization expired during startup');
+	entitlementAuthorizationDeadline(user);
+	if (
+		session.status === 'starting' &&
+		[session.startup_completion?.expires_at, session.startup_completion?.sandbox_deadline_at].some(
+			(at) => at !== undefined && Date.parse(at) <= Date.now(),
+		)
+	)
+		throw new StartupCompletionRejectedError('expiry');
+	const { projects, notebooks, sessions, identities } = deps.services;
+	const [project, notebook, claim, suspended] = await Promise.all([
+		projects.getProject(session.project_id, { consistency: 'validated' }),
+		notebooks.getNotebookMeta(session.project_id, session.notebook_id, {
+			consistency: 'validated',
+		}),
+		sessions.getEditorClaim(session.project_id, session.notebook_id),
+		identities.get(user.id).then((identity) => identity?.suspended_at !== undefined),
+	]);
+	if (claim?.session_id !== session.session_id || claim.transfer)
+		throw new StartupCompletionRejectedError('claim');
+	if (project.status === 'deleted')
+		throw new NotFoundError(`Project ${session.project_id} not found`);
+	if (notebook.status === 'deleted')
+		throw new NotFoundError(`Notebook ${session.notebook_id} not found`);
+	if (suspended) throw new ForbiddenError('The session owner is suspended');
+
+	const authorization = await recheckSessionAuthorization(
+		project,
+		user,
+		'edit',
+		deps,
+		notebook.security_labels ?? null,
+		{
+			ephemeral: false,
+			restrictedViewerCredentials: !!session.restricted_viewer_credentials,
+		},
+	);
+	const deadline = earliestDeadline(
+		user.credential.expiresAt,
+		user.entitlementsExpiresAt,
+		authorization.subjectContextExpiresAt,
+	);
+	if (deadline)
+		await sessions.tightenAuthorizationDeadline(session.project_id, session.session_id, deadline);
+}
+
+/** The caller supplies a freshly authenticated principal; stored receipts carry no authorization. */
+export async function recoverNotebookSessionStart(input: {
+	deps: ResolvedApiDeps;
+	user: AuthenticatedPrincipal;
+	pid: ProjectId;
+	sid: SessionId;
+}): Promise<Session> {
+	const session = await input.deps.services.sessions.getSessionWithEtag(input.pid, input.sid);
+	return completeNotebookSessionStart(input, session, { verifyRuntime: true });
+}
+
+async function completeNotebookSessionStart(
+	{ deps, user }: Pick<Parameters<typeof recoverNotebookSessionStart>[0], 'deps' | 'user'>,
+	prepared: KnownObject<Session>,
+	{ verifyRuntime }: { verifyRuntime: boolean },
+): Promise<Session> {
+	const { sessions } = deps.services;
+	const session = prepared.value;
+	const { project_id: pid, session_id: sid } = session;
+	const receipt = session.startup_completion;
+	if (!receipt || !canRecoverStartup(session))
+		throw new ConflictError('Session startup has no recoverable completion');
+	if (!deps.compute.connectExisting)
+		throw new UnavailableError('The compute provider cannot reconnect to this runtime');
+	// A different caller cannot invalidate the owner's pending launch.
+	if (session.user_id !== user.id)
+		throw new ForbiddenError('Only the session owner can complete startup');
+	try {
+		if (verifyRuntime) {
+			await validateStartupCompletion(deps, user, session);
+			const existing = reconnectSessionSandbox(
+				deps.compute,
+				session,
+				deps.metrics,
+				'startup_recovery',
+			)!;
+			if (existing.ready) await existing.ready();
+			else if (!(await existing.exec('true')).success)
+				throw new UnavailableError('The prepared runtime is unavailable');
+			if ((await deps.kernelProbe(receipt.sandbox_origin_url ?? receipt.sandbox_url)) !== 'alive')
+				throw new UnavailableError('The prepared runtime is not ready. Retry shortly.');
+			await validateStartupCompletion(deps, user, session);
+		}
+		const updated = await sessions.completeStartup(pid, sid, receipt.id, prepared);
+		await validateStartupCompletion(deps, user, updated);
+		return updated;
+	} catch (error) {
+		if (
+			error instanceof ForbiddenError ||
+			error instanceof NotFoundError ||
+			error instanceof StartupCompletionRejectedError
+		) {
+			await rejectStartupCompletion(deps, session, receipt, error);
+		}
+		throw error;
+	}
+}
+
 export async function startNotebookSession(input: {
 	onProgress?: (progress: SandboxStartupSnapshot) => void;
 	onAuthorized?: () => void;
@@ -1767,6 +1939,34 @@ async function startNotebookSessionOnce(
 	const sandboxExposure = sandbox.exposure;
 	const hostname = sandbox.hostname || request.hostname;
 	const { appBaseUrl } = request;
+	const finalizeSurfaces = async (
+		current: Session,
+		{
+			includeEager,
+			contextPublication,
+		}: { includeEager: boolean; contextPublication?: Promise<void> },
+	): Promise<Session> => {
+		if (mode !== 'edit' || !surfaceGrant || current.status !== 'running') return current;
+		const ids = SECONDARY_SURFACE_IDS.filter((id) => {
+			const config = sandbox.surfaces?.[id];
+			return (
+				config && ((includeEager && config.start === 'eager') || requestedSurfaces.includes(id))
+			);
+		});
+		if (ids.length === 0) return current;
+		// Surfaces consume the context file when the launching replica is still publishing it.
+		await contextPublication;
+		return beginSessionSurfaces({
+			deps,
+			session: current,
+			user,
+			ids,
+			workspaceDir,
+			exposure: sandboxExposure,
+			hostname,
+			appBaseUrl,
+		});
+	};
 	const image = resolveBaseImage(notebook.meta.base_image, sandbox.images ?? [], () =>
 		logStoredConfigFallback('base_image'),
 	);
@@ -1886,6 +2086,16 @@ async function startNotebookSessionOnce(
 			grants(reusableCandidate),
 		]);
 		let reusable = reusableTightened;
+		let recoveredStartup = false;
+		if (
+			reusable.status === 'starting' &&
+			reusable.startup_completion &&
+			canRecoverStartup(reusable) &&
+			reusable.user_id === user.id
+		) {
+			reusable = await recoverNotebookSessionStart({ deps, user, pid, sid: reusable.session_id });
+			recoveredStartup = true;
+		}
 		const authorizationExpired = isPastAuthorizationDeadline(reusable, Date.now());
 		// Role changes must not reuse a kernel with the previous credential policy.
 		const classMismatch =
@@ -1895,26 +2105,14 @@ async function startNotebookSessionOnce(
 		// Reuse does not grant control: a failed probe must not let a viewer
 		// tear down another caller's app.
 		const mayRetire = reusableGrants.stop;
-		// Only a `running` reconnect can hit a dead kernel; a `starting` reuse has no
-		// kernel yet. Probe what the browser would hit (origin in proxy mode, else url).
+		// Recovery already probed this runtime; ordinary reuse still needs a liveness check.
 		const kernelUrl =
-			mayRetire && reusable.status === 'running' && reusable.sandbox_id
+			!recoveredStartup && mayRetire && reusable.status === 'running' && reusable.sandbox_id
 				? (reusable.sandbox_origin_url ?? reusable.sandbox_url)
 				: undefined;
 		const dead = !!kernelUrl && (await deps.kernelProbe(kernelUrl)) === 'dead';
 		if (!authorizationExpired && (!mayRetire || (!dead && !classMismatch))) {
-			if (reusable.status === 'running' && requestedSurfaces.length > 0) {
-				reusable = await beginSessionSurfaces({
-					deps,
-					session: reusable,
-					user,
-					ids: requestedSurfaces,
-					workspaceDir,
-					exposure: sandboxExposure,
-					hostname,
-					appBaseUrl,
-				});
-			}
+			reusable = await finalizeSurfaces(reusable, { includeEager: recoveredStartup });
 			// Probing and surface startup can overlap a stop or an authorization update.
 			if (mode === 'edit') reusable = await revalidateEditorReuse(reusable);
 			const response = toSessionResponse(reusable, reusableGrants, deps.theme?.session_links);
@@ -2001,6 +2199,13 @@ async function startNotebookSessionOnce(
 	let createdSession: KnownObject<Session> | undefined;
 	let session: Session | undefined;
 	let sessionRecordAttempted = false;
+	const recoverableStartup =
+		mode === 'edit' &&
+		!ephemeral &&
+		!origin &&
+		!replacingAfterTakeover &&
+		compute.connectExisting !== undefined;
+	let completionAttempted = false;
 	let sandboxMayExist = false;
 	let workspaceStarted = false;
 	const atomicEditorAdmission =
@@ -2277,7 +2482,7 @@ async function startNotebookSessionOnce(
 		let coldCleanup: Promise<void> | undefined;
 		const cleanupColdSandbox = async () => {
 			const boot = bootedSandbox;
-			if (warmClaim || !boot || !sandboxMayExist) return;
+			if (completionAttempted || warmClaim || !boot || !sandboxMayExist) return;
 			return (coldCleanup ??= (async () => {
 				await workspacePrefetch?.cancel();
 				const reclaim = async () => {
@@ -2493,7 +2698,7 @@ async function startNotebookSessionOnce(
 					}
 				},
 				compensate: async () => {
-					if (session) await sessions.releaseEditorFor(session);
+					if (session && !completionAttempted) await sessions.releaseEditorFor(session);
 				},
 			})
 			.step('admitted_sandbox_boot', {
@@ -2607,6 +2812,7 @@ async function startNotebookSessionOnce(
 					}
 				},
 				compensate: async () => {
+					if (completionAttempted) return;
 					// Never destroy the sandbox under an in-flight context write.
 					await contextPublication;
 					await cleanupColdSandbox();
@@ -2649,6 +2855,50 @@ async function startNotebookSessionOnce(
 					(compute.warmPool?.maxLifetimeMs
 						? (warmClaim?.member.checked_at ?? Date.now()) + compute.warmPool.maxLifetimeMs
 						: undefined);
+				const knownSession =
+					!progressStore.hasWrites && createdSession?.value === session
+						? createdSession
+						: undefined;
+				if (recoverableStartup) {
+					// An uncertain receipt write may already be visible to another replica.
+					// From here, retirement owns cleanup, never saga compensation.
+					completionAttempted = true;
+					const prepared = await sessions
+						.recordStartupCompletion(
+							pid,
+							session!.session_id,
+							{
+								id: crypto.randomUUID(),
+								sandbox_id: sandboxId,
+								ready_at: new Date().toISOString(),
+								sandbox_url: clientUrl,
+								sandbox_origin_url: originUrl,
+								used_fallback: usedFallback,
+								expires_at: ttlMs ? new Date(Date.now() + ttlMs).toISOString() : undefined,
+								sandbox_deadline_at:
+									providerDeadline === undefined
+										? undefined
+										: new Date(providerDeadline).toISOString(),
+								reconnect_reference: provisionedSandbox.reconnectReference,
+								integrations: integrationAttachments,
+								startup: finalProgress,
+							},
+							knownSession,
+						)
+						.catch(async (error) => {
+							// The conditional failure loses to any committed receipt, including one
+							// whose acknowledgement was lost. A storage outage leaves the record
+							// for stale-session retirement once metadata is available again.
+							await rejectStartupCompletion(deps, session!, { sandbox_id: sandboxId }, error).catch(
+								() => {},
+							);
+							throw error;
+						});
+					updated = await completeNotebookSessionStart({ deps, user }, prepared, {
+						verifyRuntime: false,
+					});
+					return;
+				}
 				updated = await sessions.setRunning(
 					pid,
 					session!.session_id,
@@ -2658,9 +2908,7 @@ async function startNotebookSessionOnce(
 					ttlMs ? new Date(Date.now() + ttlMs).toISOString() : undefined,
 					integrationAttachments,
 					providerDeadline === undefined ? undefined : new Date(providerDeadline).toISOString(),
-					!progressStore.hasWrites && createdSession?.value === session
-						? createdSession
-						: undefined,
+					knownSession,
 					provisionedSandbox.reconnectReference,
 					finalProgress,
 				);
@@ -2668,6 +2916,7 @@ async function startNotebookSessionOnce(
 			// Deletion can miss a starting sandbox. Rechecks after mark_running close that race.
 			// The project needs a separate check because its notebooks remain readable until GC.
 			.step('running_rechecks', async () => {
+				if (recoverableStartup) return;
 				const rechecks = await all({
 					claim: async () => {
 						if (mode !== 'edit' || ephemeral) return;
@@ -2698,18 +2947,17 @@ async function startNotebookSessionOnce(
 				if (!rechecks.project || rechecks.project.status === 'deleted') {
 					throw new NotFoundError(`Project ${pid} not found`);
 				}
-				const currentAuthorization = await authorizeSessionStart(
+				await recheckSessionAuthorization(
 					rechecks.project,
 					user,
 					mode,
 					deps,
 					rechecks.notebook.security_labels ?? null,
+					{
+						ephemeral: authorization.ephemeral,
+						restrictedViewerCredentials,
+					},
 				);
-				if (
-					currentAuthorization.ephemeral !== authorization.ephemeral ||
-					currentAuthorization.restrictedViewerCredentials !== restrictedViewerCredentials
-				)
-					throw new ForbiddenError('Session authorization changed during startup');
 			})
 			.step('app_pool_complete', async () => {
 				if (admission) {
@@ -2720,6 +2968,7 @@ async function startNotebookSessionOnce(
 			})
 			.run();
 	} catch (err) {
+		if (completionAttempted) throw err;
 		startup.close();
 		const finalProgress = progressStore.finish();
 		await contextPublication;
@@ -2841,23 +3090,8 @@ async function startNotebookSessionOnce(
 		);
 	}
 
-	const eagerSurfaces = SECONDARY_SURFACE_IDS.filter((id) => {
-		const config = sandbox.surfaces?.[id];
-		return config && (config.start === 'eager' || requestedSurfaces.includes(id));
-	});
-	if (mode === 'edit' && surfaceGrant && eagerSurfaces.length > 0 && updated) {
-		// Eagerly started surfaces should find the published context.
-		await contextPublication;
-		updated = await beginSessionSurfaces({
-			deps,
-			session: updated,
-			user,
-			ids: eagerSurfaces,
-			workspaceDir,
-			exposure: sandboxExposure,
-			hostname,
-			appBaseUrl,
-		});
+	if (updated) {
+		updated = await finalizeSurfaces(updated, { includeEager: true, contextPublication });
 	}
 
 	// App sessions can expose integration secrets and WIF credentials to their audience.

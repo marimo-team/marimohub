@@ -6,6 +6,7 @@ export {
 	SessionCreateBodySchema,
 	SessionCreateResponseSchema,
 	startNotebookSession,
+	recoverNotebookSessionStart,
 	toSessionResponse,
 } from './sessions';
 export type { SessionCreateBody, SessionCreateResult } from './sessions';

@@ -68,13 +68,13 @@ Cold uses fresh services; warm repeats on the same services. Each scenario start
 | GET /search?q=revenue&project_id= | cold | deferred | 0 | 0 | 0 | — | — |
 | GET /search?q=revenue&project_id= | warm | response | 63 | 9 | 225 | get: 40, get304: 3, head: 20 | 1×3, 16, 8, 16, 8×2, 4 |
 | GET /search?q=revenue&project_id= | warm | deferred | 0 | 0 | 0 | — | — |
-| POST …/sessions (edit; cold=create, warm=reuse) | cold | response | 2444 | 176 | 4400 | get: 2024, get304: 404, head: 1, list: 7, put: 8 | 1×5, 4, 1×2, 16×12, 11, 2, 1×6, 16×112, 11, 16×25, 3, 1×2, 3, 2×2, 1, 2, 1, 3 |
+| POST …/sessions (edit; cold=create, warm=reuse) | cold | response | 2446 | 177 | 4425 | get: 2025, get304: 404, head: 1, list: 7, put: 9 | 1×5, 4, 1×2, 16×12, 11, 2, 1×6, 16×112, 11, 16×25, 3, 1×2, 3, 2×2, 1, 2, 1×2, 4 |
 | POST …/sessions (edit; cold=create, warm=reuse) | cold | deferred | 0 | 0 | 0 | — | — |
 | POST …/sessions (edit; cold=create, warm=reuse) | warm | response | 7 | 4 | 100 | get: 6, get304: 1 | 4, 1×3 |
 | POST …/sessions (edit; cold=create, warm=reuse) | warm | deferred | 0 | 0 | 0 | — | — |
-| POST …/sessions (edit; new notebook each call) | cold | response | 2444 | 176 | 4400 | get: 2024, get304: 404, head: 1, list: 7, put: 8 | 1×5, 4, 1×2, 16×12, 11, 2, 1×6, 16×112, 11, 16×25, 3, 1×2, 3, 2×2, 1, 2, 1, 3 |
+| POST …/sessions (edit; new notebook each call) | cold | response | 2446 | 177 | 4425 | get: 2025, get304: 404, head: 1, list: 7, put: 9 | 1×5, 4, 1×2, 16×12, 11, 2, 1×6, 16×112, 11, 16×25, 3, 1×2, 3, 2×2, 1, 2, 1×2, 4 |
 | POST …/sessions (edit; new notebook each call) | cold | deferred | 0 | 0 | 0 | — | — |
-| POST …/sessions (edit; new notebook each call) | warm | response | 29 | 17 | 425 | get: 15, get304: 2, list: 4, put: 8 | 4, 1×3, 2, 1×5, 3, 2×4, 1, 3 |
+| POST …/sessions (edit; new notebook each call) | warm | response | 31 | 18 | 450 | get: 16, get304: 2, list: 4, put: 9 | 4, 1×3, 2, 1×5, 3, 2×4, 1×2, 4 |
 | POST …/sessions (edit; new notebook each call) | warm | deferred | 0 | 0 | 0 | — | — |
 | GET …/sessions/{sid} | cold | response | 8 | 8 | 200 | get: 7, head: 1 | 1×8 |
 | GET …/sessions/{sid} | cold | deferred | 0 | 0 | 0 | — | — |

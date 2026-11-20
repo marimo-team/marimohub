@@ -191,6 +191,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		// deadline.
 		const internalSessionFields = [
 			'startup',
+			'startup_completion',
 			'status_changed_at',
 			'stop_receipts',
 			'save_dirty',

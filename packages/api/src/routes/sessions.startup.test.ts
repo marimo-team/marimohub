@@ -92,6 +92,7 @@ it.each(['edit', 'app'] as const)(
 		expect(result.status).toBe('running');
 		if (mode === 'app') expect(result.app_assignment).toBeDefined();
 		expect(result).not.toHaveProperty('startup');
+		expect(body).not.toContain('startup_completion');
 		const stored = await env.deps.services.sessions.getSession(
 			env.project.id,
 			result.session_id as SessionId,
@@ -169,7 +170,7 @@ it('continues provisioning after the response reader disconnects', async () => {
 	const env = await fixture();
 	const ready = Promise.withResolvers<void>();
 	env.instance.ready = () => ready.promise;
-	const running = vi.spyOn(env.deps.services.sessions, 'setRunning');
+	const running = vi.spyOn(env.deps.services.sessions, 'completeStartup');
 	const response = await env.request('POST', env.path, undefined, headers);
 	await response.body!.cancel();
 	ready.resolve();
@@ -274,14 +275,14 @@ it('preserves the final deletion check after the stream opens', async () => {
 });
 
 it.each(['before', 'after'] as const)(
-	'compensates for failure %s the running write',
+	'retains recoverable runtime after failure %s the running write',
 	async (timing) => {
 		const env = await fixture();
 		const sessions = env.deps.services.sessions;
-		const write = sessions.setRunning.bind(sessions);
+		const write = sessions.completeStartup.bind(sessions);
 		const error = new Error('Private storage failure');
 		let committedStatus: string | undefined;
-		vi.spyOn(sessions, 'setRunning').mockImplementation(async (...args) => {
+		vi.spyOn(sessions, 'completeStartup').mockImplementation(async (...args) => {
 			if (timing === 'after') committedStatus = (await write(...args)).status;
 			throw error;
 		});
@@ -291,13 +292,13 @@ it.each(['before', 'after'] as const)(
 		expect(body).not.toContain('event: result');
 		expect(body).not.toContain(error.message);
 		expect(committedStatus).toBe(timing === 'after' ? 'running' : undefined);
-		expect(env.calls.destroy).toBeGreaterThan(0);
+		expect(env.calls.destroy).toBe(0);
 		expect(await sessions.listByProject(env.project.id)).toEqual([
 			expect.objectContaining({
-				status: 'failed',
-				error: { code: 'PROVISION_FAILED', message: expect.any(String) },
-				sandbox_reclaimed_at: expect.any(String),
-				startup: expect.objectContaining({ phase: 'starting' }),
+				status: timing === 'after' ? 'running' : 'starting',
+				startup_completion: expect.objectContaining({
+					startup: expect.objectContaining({ phase: 'starting' }),
+				}),
 			}),
 		]);
 	},

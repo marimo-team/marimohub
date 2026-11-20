@@ -368,13 +368,13 @@ describe('preview maintenance', () => {
 		await sessions.replaceStartingSandbox(pid, stale.session_id, oldId, currentId);
 		await sessions.setRunning(pid, stale.session_id, 'https://sandbox.example');
 		vi.spyOn(sessions, 'listByProject').mockResolvedValue([{ ...stale, status: 'running' }]);
-		const create = vi.spyOn(api.deps.compute, 'create');
+		const connect = vi.spyOn(api.deps.compute, 'connectExisting');
 		const retiring = await api.deps.services.previews.retire(preview);
 
 		await cleanupPreview(api.deps, retiring);
 
-		expect(create.mock.calls.map(([id]) => id)).toContain(currentId);
-		expect(create.mock.calls.map(([id]) => id)).not.toContain(oldId);
+		expect(connect.mock.calls.map(([id]) => id)).toContain(currentId);
+		expect(connect.mock.calls.map(([id]) => id)).not.toContain(oldId);
 		expect(fake.calls.destroy).toBe(1);
 		expect((await sessions.getSession(pid, stale.session_id)).sandbox_reclaimed_at).toBeTruthy();
 	});

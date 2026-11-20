@@ -122,8 +122,8 @@ describe('Session routes', () => {
 			deps: { services },
 		});
 		await expectOk(await api.request('POST', `/projects/${pid}/notebooks/${nid}/sessions`));
-		// Provisioning still rechecks ownership after the sandbox starts.
-		expect(claim).toHaveBeenCalledOnce();
+		// Finalization checks the existing owner without writing another claim.
+		expect(claim).not.toHaveBeenCalled();
 		expect(fence).not.toHaveBeenCalled();
 		expect(
 			put.mock.calls.filter(([key]) => key === paths.project(pid).notebook(nid).source),
@@ -1144,14 +1144,15 @@ describe('Session routes', () => {
 		},
 	);
 
-	it('reads an absent editor claim once before creating a session', async () => {
+	it('reads the editor claim before admission and rechecks it after finalization', async () => {
 		const api = createTestApi({ bucket, compute: makeFakeCompute() });
 		const readClaim = vi.spyOn(api.deps.services.sessions, 'getEditorClaim');
 
 		const session = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
 
 		expect(session.status).toBe('running');
-		expect(readClaim).toHaveBeenCalledExactlyOnceWith(pid, nid);
+		expect(readClaim).toHaveBeenCalledTimes(2);
+		expect(readClaim).toHaveBeenCalledWith(pid, nid);
 	});
 
 	it('rejects a session record whose workspace lease was lost before publication completed', async () => {
@@ -1196,30 +1197,27 @@ describe('Session routes', () => {
 		const api = createTestApi({ bucket, compute: fakeComputeFrom(instance) });
 		const { sessions, notebooks, projects } = api.deps.services;
 		let running = false;
-		const setRunning = sessions.setRunning.bind(sessions);
-		vi.spyOn(sessions, 'setRunning').mockImplementation(async (...args) => {
-			const session = await setRunning(...args);
+		const completeStartup = sessions.completeStartup.bind(sessions);
+		vi.spyOn(sessions, 'completeStartup').mockImplementation(async (...args) => {
+			const session = await completeStartup(...args);
 			running = true;
 			return session;
 		});
 		const started = new Set<string>();
 		const releaseClaim = Promise.withResolvers<void>();
-		const claimEditor = sessions.claimEditor.bind(sessions);
-		vi.spyOn(sessions, 'claimEditor').mockImplementation(async (...args) => {
-			if (!running) return claimEditor(...args);
+		const getClaim = sessions.getEditorClaim.bind(sessions);
+		vi.spyOn(sessions, 'getEditorClaim').mockImplementation(async (...args) => {
+			if (!running) return getClaim(...args);
 			started.add('claim');
 			await releaseClaim.promise;
 			if (failure === 'claim') {
 				return {
-					claimed: false,
-					claim: {
-						session_id: makeSession().session_id,
-						sharing: 'shared',
-						claimed_at: new Date().toISOString(),
-					},
+					session_id: makeSession().session_id,
+					sharing: 'shared',
+					claimed_at: new Date().toISOString(),
 				};
 			}
-			return claimEditor(...args);
+			return getClaim(...args);
 		});
 		const getMeta = notebooks.getNotebookMeta.bind(notebooks);
 		vi.spyOn(notebooks, 'getNotebookMeta').mockImplementation(async (...args) => {
@@ -1257,6 +1255,12 @@ describe('Session routes', () => {
 		if (failure === 'none') {
 			expect(await expectOk<ApiSession>(response)).toMatchObject({ status: 'running' });
 			expect(calls.destroy).toBe(0);
+		} else if (failure.endsWith('read')) {
+			await expectError(response, 500);
+			expect(calls.destroy).toBe(0);
+			expect(await sessions.listSessions(nid)).toMatchObject([
+				{ status: 'running', startup_completion: expect.any(Object) },
+			]);
 		} else {
 			const claimLost = failure === 'claim';
 			const error = await expectError(
@@ -1266,19 +1270,19 @@ describe('Session routes', () => {
 			);
 			expect(error.message).toBe(
 				claimLost
-					? 'The editor session changed. Retry shortly.'
-					: failure.startsWith('project')
+					? 'The editor claim changed during startup'
+					: failure.startsWith('project') || failure === 'both'
 						? `Project ${pid} not found`
 						: `Notebook ${nid} not found`,
 			);
 			expect(calls.destroy).toBe(1);
 			expect(await sessions.listSessions(nid)).toMatchObject([
 				{
-					status: claimLost ? 'terminated' : 'failed',
+					status: 'failed',
 					sandbox_reclaimed_at: expect.any(String),
 				},
 			]);
-			expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
+			expect((await getClaim(pid, nid))?.session_id).toBeNull();
 		}
 	});
 
