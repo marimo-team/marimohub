@@ -6,6 +6,8 @@ import {
 	createSandboxId,
 	createNotebookId,
 	SessionCaptureCoordinator,
+	SessionService,
+	paths,
 } from '@marimo-hub/core';
 import { ACTOR, makeSession, makeFakeCompute, MemoryBucket } from '@marimo-hub/core/testing';
 import { queuedBackgroundWork } from '@marimo-hub/core/testing/background-work';
@@ -20,8 +22,10 @@ function fixture() {
 	const projectId = createProjectId();
 	const sessionId = createSessionId();
 	const background = queuedBackgroundWork();
+	const metrics = { increment: vi.fn(), gauge: vi.fn() };
 	const deps = makeTestDeps(new MemoryBucket(), {
 		backgroundWork: background.work,
+		metrics,
 		compute: makeFakeCompute(),
 	});
 	const session = makeSession({
@@ -50,6 +54,7 @@ function fixture() {
 	const getSession = vi.spyOn(deps.services.sessions, 'getSession').mockResolvedValue(session);
 	return {
 		deps,
+		metrics,
 		background,
 		acknowledge,
 		capture,
@@ -62,99 +67,6 @@ function fixture() {
 			observeRuntimeSave(deps, request, response, { ...decision, ...overrides }),
 	};
 }
-
-it('returns without waiting for storage or buffering the native acknowledgement, even with inline background work', async () => {
-	vi.useFakeTimers();
-	const env = fixture();
-	const release = Promise.withResolvers<void>();
-	const work: Promise<unknown>[] = [];
-	env.deps.backgroundWork = {
-		defer: (_label, task) => {
-			const execution = task();
-			work.push(execution);
-			return execution.then(() => {});
-		},
-	};
-	env.acknowledge.mockImplementation(async () => {
-		await release.promise;
-		throw new Error('bucket outage');
-	});
-	env.deps.metrics = {
-		increment: () => {
-			throw new Error('exporter failure');
-		},
-		gauge: () => {},
-	};
-	try {
-		await env.save();
-		expect(env.response.bodyUsed).toBe(false);
-		expect(await env.response.text()).toBe('native acknowledgement');
-		expect(env.capture).not.toHaveBeenCalled();
-	} finally {
-		release.resolve();
-		await vi.runAllTimersAsync();
-		const results = await Promise.allSettled(work);
-		expect(results.map((result) => result.status)).toEqual([
-			'fulfilled',
-			'fulfilled',
-			'fulfilled',
-			'rejected',
-		]);
-		expect(work).toHaveLength(4);
-	}
-});
-
-it('coalesces superseded hints before capture', async () => {
-	const env = fixture();
-	await Promise.all(Array.from({ length: 30 }, () => env.save()));
-	expect(env.acknowledge).not.toHaveBeenCalled();
-	await env.background.runAll();
-	expect(env.capture).toHaveBeenCalledOnce();
-	expect(env.acknowledge).toHaveBeenCalledOnce();
-});
-
-it.each([
-	{ method: 'GET', status: 200 },
-	{ method: 'POST', status: 500 },
-])('ignores non-save acknowledgements %j', async ({ method, status }) => {
-	const env = fixture();
-	await observeRuntimeSave(
-		env.deps,
-		new Request(env.request.url, { method }),
-		new Response('', { status }),
-		env.decision,
-	);
-	await env.background.runAll();
-	expect(env.acknowledge).not.toHaveBeenCalled();
-});
-
-it('bounds the process-local coalescer independently of notebook cardinality', async () => {
-	const env = fixture();
-	for (let index = 0; index < 100; index++)
-		await env.save({
-			sessionId: createSessionId(),
-		});
-	await env.background.runAll();
-	expect(env.capture).toHaveBeenCalledTimes(64);
-});
-
-it('preserves observation time across queue delay and a coalesced later save', async () => {
-	vi.useFakeTimers({ toFake: ['Date'] });
-	const env = fixture();
-	const first = '2026-01-01T00:00:00.000Z';
-	const next = '2026-01-01T00:00:01.000Z';
-	vi.setSystemTime(new Date(first));
-	await env.save();
-	vi.setSystemTime(new Date(next));
-	await env.save();
-	vi.setSystemTime(new Date('2026-01-01T00:01:00Z'));
-	await env.background.runAll();
-	expect(env.acknowledge).toHaveBeenCalledExactlyOnceWith(
-		env.decision.projectId,
-		env.decision.sessionId,
-		next,
-	);
-});
 
 const failedCapture = (retryable: boolean, status: 'failed' | 'uncertain' = 'failed') => ({
 	critical: {
@@ -183,39 +95,86 @@ const durable = () => ({
 	workspace: { status: 'skipped' as const },
 });
 
-it('captures saves arriving during capture and during its completion read', async () => {
+it('persists intent before admission without waiting for artifact capture', async () => {
 	const env = fixture();
-	env.capture
-		.mockImplementationOnce(async () => {
-			await env.save();
-			return durable();
-		})
-		.mockResolvedValue(durable());
-	env.getSession
-		.mockImplementationOnce(async () => {
-			await env.save();
-			return { ...env.session, save_dirty: undefined };
-		})
-		.mockResolvedValue({ ...env.session, save_dirty: undefined });
 	await env.save();
+	expect(env.acknowledge).toHaveBeenCalledOnce();
+	expect(env.capture).not.toHaveBeenCalled();
+	expect(env.response.bodyUsed).toBe(false);
+	expect(await env.response.text()).toBe('native acknowledgement');
 	await env.background.runAll();
-	expect(env.capture).toHaveBeenCalledTimes(2);
-	expect(env.acknowledge).toHaveBeenCalledTimes(2);
+	expect(env.capture).toHaveBeenCalledOnce();
 });
 
-it('bounds continuous saves and leaves the final hint dirty', async () => {
+it('records every generation while coalescing capture work', async () => {
 	const env = fixture();
-	env.capture.mockImplementation(async () => {
+	await Promise.all(Array.from({ length: 30 }, () => env.save()));
+	expect(env.acknowledge).toHaveBeenCalledTimes(30);
+	await env.background.runAll();
+	expect(env.capture).toHaveBeenCalledOnce();
+});
+
+it('persists overflow intent independently of the bounded worker pool', async () => {
+	const env = fixture();
+	for (let index = 0; index < 100; index++) await env.save({ sessionId: createSessionId() });
+	expect(env.acknowledge).toHaveBeenCalledTimes(100);
+	expect(env.background.pending()).toBe(64);
+	await env.background.runAll();
+	expect(env.capture).toHaveBeenCalledTimes(64);
+});
+
+it('persists intent without a background host', async () => {
+	const env = fixture();
+	env.deps.backgroundWork = undefined;
+	await env.save();
+	expect(env.acknowledge).toHaveBeenCalledOnce();
+	expect(env.capture).not.toHaveBeenCalled();
+});
+
+it.each(['throw', 'reject'] as const)(
+	'retains intent when scheduling fails to %s',
+	async (failure) => {
+		const env = fixture();
+		env.deps.backgroundWork = {
+			defer: () => {
+				if (failure === 'throw') throw new Error('queue unavailable');
+				return Promise.reject(new Error('queue unavailable'));
+			},
+		};
 		await env.save();
-		return durable();
-	});
+		expect(env.acknowledge).toHaveBeenCalledOnce();
+		expect(env.metrics.increment).toHaveBeenCalledWith('sessions.save.hint_failed');
+		env.deps.backgroundWork = env.background.work;
+		await env.save();
+		await env.background.runAll();
+		expect(env.capture).toHaveBeenCalledOnce();
+	},
+);
+
+it('reports persistence failures without changing the native response', async () => {
+	const env = fixture();
+	env.acknowledge.mockRejectedValue(new Error('bucket unavailable'));
 	await env.save();
-	await env.background.runAll();
-	expect(env.capture).toHaveBeenCalledTimes(4);
-	expect(env.acknowledge).toHaveBeenCalledTimes(5);
+	expect(env.metrics.increment).toHaveBeenCalledWith('sessions.save.hint_failed');
+	expect(env.background.pending()).toBe(0);
+	expect(await env.response.text()).toBe('native acknowledgement');
 });
 
-it('retries failures with bounded exponential backoff without clearing dirty state', async () => {
+it.each([
+	{ method: 'GET', status: 200 },
+	{ method: 'POST', status: 500 },
+])('ignores non-save acknowledgements %j', async ({ method, status }) => {
+	const env = fixture();
+	await observeRuntimeSave(
+		env.deps,
+		new Request(env.request.url, { method }),
+		new Response('', { status }),
+		env.decision,
+	);
+	expect(env.acknowledge).not.toHaveBeenCalled();
+});
+
+it('retries failures with bounded exponential backoff', async () => {
 	vi.useFakeTimers();
 	const env = fixture();
 	env.capture.mockResolvedValue(failedCapture(true));
@@ -234,120 +193,140 @@ it('retries failures with bounded exponential backoff without clearing dirty sta
 	expect(env.session.save_dirty).toBeDefined();
 });
 
-it.each(['terminating', 'running'] as const)(
-	'rechecks %s sessions before retrying',
-	async (status) => {
-		vi.useFakeTimers();
-		const env = fixture();
-		env.capture.mockResolvedValue(failedCapture(true, 'uncertain'));
-		env.getSession.mockResolvedValue({
-			...env.session,
-			status,
-			save_dirty: status === 'running' ? undefined : env.session.save_dirty,
-		});
-		await env.save();
-		const work = env.background.runAll();
-		await vi.runAllTimersAsync();
-		await work;
-		expect(env.capture).toHaveBeenCalledOnce();
-	},
-);
-
-it('queues follow-ups behind other sessions', async () => {
+it('bounds continuous saves while persisting the final generation', async () => {
 	const env = fixture();
-	const otherId = createSessionId();
-	const order: string[] = [];
-	env.acknowledge.mockImplementation(async (_project, id) => ({ ...env.session, session_id: id }));
-	env.getSession.mockResolvedValue({ ...env.session, save_dirty: undefined });
-	env.capture.mockImplementation(async (session) => {
-		order.push(session.session_id);
-		if (order.length === 1) await env.save();
+	env.capture.mockImplementation(async () => {
+		await env.save();
 		return durable();
 	});
 	await env.save();
-	await env.save({
-		sessionId: otherId,
-	});
 	await env.background.runAll();
-	expect(order).toEqual([env.decision.sessionId, otherId, env.decision.sessionId]);
+	expect(env.capture).toHaveBeenCalledTimes(4);
+	expect(env.acknowledge).toHaveBeenCalledTimes(5);
 });
 
-it('follows newer durable dirty state even without a local hint', async () => {
+it('rechecks durable dirty state before queued work runs', async () => {
+	const env = fixture();
+	await env.save();
+	env.getSession.mockResolvedValue({ ...env.session, save_dirty: undefined });
+	await env.background.runAll();
+	expect(env.capture).not.toHaveBeenCalled();
+});
+
+it('follows newer dirty state without a local hint', async () => {
 	const env = fixture();
 	env.capture.mockResolvedValue(durable());
 	env.getSession
+		.mockResolvedValueOnce(env.session)
 		.mockResolvedValueOnce(env.session)
 		.mockResolvedValueOnce(env.session)
 		.mockResolvedValue({ ...env.session, save_dirty: undefined });
 	await env.save();
 	await env.background.runAll();
 	expect(env.capture).toHaveBeenCalledTimes(2);
-	expect(env.acknowledge).toHaveBeenCalledOnce();
 });
 
-it('keeps the newest hint when acknowledging an older hint fails', async () => {
-	vi.useFakeTimers();
+it('queues follow-ups behind other sessions', async () => {
 	const env = fixture();
-	const first = '2026-01-01T00:00:00.000Z';
-	const next = '2026-01-01T00:00:01.000Z';
-	vi.setSystemTime(new Date(first));
-	env.acknowledge.mockImplementationOnce(async () => {
-		vi.setSystemTime(new Date(next));
-		await env.save();
-		throw new Error('dirty record unavailable');
+	const otherId = createSessionId();
+	const order: string[] = [];
+	env.getSession.mockImplementation(async (_project, id) => ({ ...env.session, session_id: id }));
+	env.capture.mockImplementation(async (session) => {
+		order.push(session.session_id);
+		return durable();
 	});
 	await env.save();
-	const work = env.background.runAll();
-	await vi.runAllTimersAsync();
-	await work;
-	expect(env.acknowledge.mock.calls.map((call) => call[2])).toEqual([first, next]);
-	expect(env.capture).toHaveBeenCalledOnce();
+	await env.save({ sessionId: otherId });
+	await env.background.runAll();
+	expect(order.slice(0, 4)).toEqual([
+		env.decision.sessionId,
+		otherId,
+		env.decision.sessionId,
+		otherId,
+	]);
 });
 
-it.each(['acknowledge', 'capture', 'completion read'] as const)(
-	'bounds thrown %s failures and admits a later save',
+it.each(['ephemeral', 'no reconnect'] as const)('skips capture for %s sessions', async (kind) => {
+	const env = fixture();
+	if (kind === 'ephemeral') env.getSession.mockResolvedValue({ ...env.session, ephemeral: true });
+	else env.deps.compute.connectExisting = undefined;
+	await env.save();
+	await env.background.runAll();
+	expect(env.capture).not.toHaveBeenCalled();
+});
+
+it('does not admit capture while dirty intent is still being persisted', async () => {
+	const env = fixture();
+	const persisted = Promise.withResolvers<typeof env.session>();
+	env.acknowledge.mockReturnValue(persisted.promise);
+	const save = env.save();
+	expect(env.background.pending()).toBe(0);
+	expect(env.capture).not.toHaveBeenCalled();
+	persisted.resolve(env.session);
+	await save;
+	expect(env.background.pending()).toBe(1);
+	await env.background.runAll();
+});
+
+it('returns while inline background capture is still blocked', async () => {
+	const env = fixture();
+	const captured = Promise.withResolvers<ReturnType<typeof durable>>();
+	const work: Promise<void>[] = [];
+	env.capture.mockReturnValue(captured.promise);
+	env.deps.backgroundWork = {
+		defer: (_label, task) => {
+			const execution = task().then(() => {});
+			work.push(execution);
+			return execution;
+		},
+	};
+	env.getSession
+		.mockResolvedValueOnce(env.session)
+		.mockResolvedValue({ ...env.session, save_dirty: undefined });
+	await env.save();
+	expect(env.capture).toHaveBeenCalledOnce();
+	expect(await env.response.text()).toBe('native acknowledgement');
+	captured.resolve(durable());
+	await Promise.all(work);
+});
+
+it.each(['capture', 'read', 'completion read'] as const)(
+	'bounds thrown %s failures and releases admission for a later save',
 	async (failure) => {
 		vi.useFakeTimers();
 		const env = fixture();
-		const error = new Error('storage unavailable');
-		if (failure === 'acknowledge') env.acknowledge.mockRejectedValue(error);
+		const error = new Error('unavailable');
 		if (failure === 'capture') env.capture.mockRejectedValue(error);
+		if (failure === 'read') env.getSession.mockRejectedValue(error);
 		if (failure === 'completion read') {
 			env.capture.mockResolvedValue(durable());
-			env.getSession.mockRejectedValue(error);
+			env.getSession.mockImplementation(async () => {
+				if (env.getSession.mock.calls.length % 2 === 0) throw error;
+				return env.session;
+			});
 		}
 		await env.save();
-		const work = env.background.runAll().then(
-			() => null,
-			(error: unknown) => error,
-		);
+		const work = env.background.runAll();
 		await vi.runAllTimersAsync();
-		expect(await work).toBe(failure === 'acknowledge' ? error : null);
+		await work;
 		expect(env.background.labels).toHaveLength(4);
+		expect(
+			env.metrics.increment.mock.calls.filter(([name]) => name === 'sessions.save.hint_failed'),
+		).toHaveLength(4);
 		expect(vi.getTimerCount()).toBe(0);
-		env.acknowledge.mockResolvedValue(env.session);
-		env.getSession.mockResolvedValue({ ...env.session, save_dirty: undefined });
-		env.capture.mockResolvedValue(durable());
-		const before = env.capture.mock.calls.length;
+		env.getSession.mockResolvedValue(env.session);
+		env.capture.mockResolvedValue(failedCapture(false));
 		await env.save();
+		expect(env.background.pending()).toBe(1);
 		await env.background.runAll();
-		expect(env.capture).toHaveBeenCalledTimes(before + 1);
 	},
 );
 
 it.each(['failed', 'uncertain'] as const)(
-	'does not retry a nonretryable %s result',
+	'does not spin on nonretryable %s captures',
 	async (status) => {
 		const env = fixture();
-		env.capture.mockResolvedValue({
-			critical: {
-				status,
-				code: 'CAPTURE_UNSUPPORTED',
-				retryable: false,
-				cause: new Error('unsupported runtime'),
-			},
-			workspace: { status: 'skipped' },
-		});
+		env.capture.mockResolvedValue(failedCapture(false, status));
 		await env.save();
 		await env.background.runAll();
 		expect(env.capture).toHaveBeenCalledOnce();
@@ -355,82 +334,65 @@ it.each(['failed', 'uncertain'] as const)(
 	},
 );
 
-it.each(['throw', 'reject'] as const)(
-	'releases admission when the background host fails to %s',
-	async (failure) => {
-		const env = fixture();
-		env.deps.backgroundWork = {
-			defer: () => {
-				if (failure === 'throw') throw new Error('queue unavailable');
-				return Promise.reject(new Error('queue unavailable'));
-			},
-		};
-		await env.save();
-		env.deps.backgroundWork = env.background.work;
-		await env.save();
-		await env.background.runAll();
-		expect(env.capture).toHaveBeenCalledOnce();
-	},
-);
-
-it('captures the latest hint after a save arrives during retry backoff', async () => {
+it('persists saves during backoff and captures their latest generation', async () => {
 	vi.useFakeTimers();
 	const env = fixture();
-	env.capture.mockRejectedValueOnce(new Error('runtime unavailable')).mockResolvedValue(durable());
-	env.getSession.mockResolvedValue({ ...env.session, save_dirty: undefined });
+	const newer = {
+		...env.session,
+		save_dirty: { id: crypto.randomUUID(), acknowledged_at: new Date().toISOString() },
+	};
+	env.capture.mockResolvedValueOnce(failedCapture(true)).mockResolvedValue(failedCapture(false));
 	await env.save();
 	const work = env.background.runAll();
 	await vi.advanceTimersByTimeAsync(50);
-	const at = new Date().toISOString();
+	env.acknowledge.mockResolvedValue(newer);
+	env.getSession.mockResolvedValue(newer);
 	await env.save();
+	expect(env.acknowledge).toHaveBeenCalledTimes(2);
 	await vi.runAllTimersAsync();
 	await work;
 	expect(env.capture).toHaveBeenCalledTimes(2);
-	expect(env.acknowledge).toHaveBeenLastCalledWith(
-		env.decision.projectId,
-		env.decision.sessionId,
-		at,
-	);
+	expect(env.capture.mock.calls[1][0].save_dirty).toEqual(newer.save_dirty);
 });
 
-it.each(['succeeds', 'fails'] as const)(
-	'preserves a newer burst when the previous final flush %s',
-	async (outcome) => {
-		const env = fixture();
-		env.capture.mockImplementation(async () => {
-			if (env.capture.mock.calls.length <= 4) await env.save();
-			return durable();
-		});
-		env.getSession.mockResolvedValue({ ...env.session, save_dirty: undefined });
-		env.acknowledge.mockImplementation(async () => {
-			if (env.acknowledge.mock.calls.length === 5) {
-				await env.save();
-				if (outcome === 'fails') throw new Error('final hint write failed');
-			}
-			return env.session;
-		});
-		await env.save();
-		if (outcome === 'fails') {
-			await expect(env.background.runAll()).rejects.toThrow('final hint write failed');
-			await env.save();
-			expect(env.background.pending()).toBe(1);
-		}
-		await env.background.runAll();
-		expect(env.capture).toHaveBeenCalledTimes(5);
-		expect(env.acknowledge).toHaveBeenCalledTimes(6);
-	},
-);
+it('does not capture a session that stops during backoff', async () => {
+	vi.useFakeTimers();
+	const env = fixture();
+	env.capture.mockResolvedValue(failedCapture(true, 'uncertain'));
+	await env.save();
+	const work = env.background.runAll();
+	await vi.advanceTimersByTimeAsync(50);
+	env.getSession.mockResolvedValue({ ...env.session, status: 'terminating' });
+	await vi.runAllTimersAsync();
+	await work;
+	expect(env.capture).toHaveBeenCalledOnce();
+});
 
-it.each(['ephemeral', 'no reconnect'] as const)(
-	'skips capture for %s sessions without looping',
-	async (kind) => {
-		const env = fixture();
-		if (kind === 'ephemeral')
-			env.acknowledge.mockResolvedValue({ ...env.session, ephemeral: true });
-		else env.deps.compute.connectExisting = undefined;
-		await env.save();
-		await env.background.runAll();
-		expect(env.capture).not.toHaveBeenCalled();
-		expect(env.background.labels).toHaveLength(1);
-	},
-);
+it('keeps persistence and scheduling functional when telemetry throws', async () => {
+	const env = fixture();
+	env.metrics.increment.mockImplementation(() => {
+		throw new Error('exporter unavailable');
+	});
+	await env.save();
+	await env.background.runAll();
+	expect(env.acknowledge).toHaveBeenCalledOnce();
+	expect(env.capture).toHaveBeenCalledOnce();
+});
+
+it('leaves overflow and abandoned queued intent discoverable by another service instance', async () => {
+	const env = fixture();
+	env.acknowledge.mockRestore();
+	env.getSession.mockRestore();
+	const ids = Array.from({ length: 65 }, () => createSessionId());
+	for (const id of ids) {
+		const session = { ...env.session, session_id: id, save_dirty: undefined };
+		await env.deps.bucket.put(paths.session(session.project_id, id), JSON.stringify(session));
+		await env.save({ sessionId: id });
+	}
+	expect(env.background.pending()).toBe(64);
+	expect(env.capture).not.toHaveBeenCalled();
+	const replica = new SessionService(env.deps.bucket);
+	for (const id of ids) {
+		expect((await replica.getSession(env.session.project_id, id)).save_dirty).toBeDefined();
+	}
+});

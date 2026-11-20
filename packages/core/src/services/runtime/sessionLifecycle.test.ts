@@ -917,6 +917,54 @@ describe('SessionLifecycleService', () => {
 			expect(ownsClaim).not.toHaveBeenCalled();
 		});
 
+		it('drains persisted dirty intent from a fresh sweeper with periodic snapshots disabled', async () => {
+			const s = await putSession({ last_snapshot_at: iso(-1000) });
+			await sessions.acknowledgeRuntimeSave(s.project_id, s.session_id);
+			sessions = new SessionService(bucket);
+			const result = await makeService({ snapshotIntervalMs: 0 }).sweep(now);
+			expect(result.snapshotted).toBe(1);
+			expect((await getStored(s)).save_dirty).toBeUndefined();
+		});
+
+		it('retains a failed capture through restart and retries after the persisted delay', async () => {
+			const s = await putSession({ last_snapshot_at: iso(-1000) });
+			const dirty = await sessions.acknowledgeRuntimeSave(s.project_id, s.session_id);
+			vi.mocked(RuntimeCaptureClient.prototype.prepare).mockRejectedValueOnce(
+				new Error('runtime unavailable'),
+			);
+			expect((await makeService({ snapshotIntervalMs: 0 }).sweep(now)).snapshotted).toBe(0);
+			expect((await getStored(s)).save_dirty).toEqual(dirty.save_dirty);
+			expect((await getStored(s)).last_capture_attempt_at).toBe(iso(0));
+			sessions = new SessionService(bucket);
+			expect((await makeService({ snapshotIntervalMs: 0 }).sweep(now + 59_999)).snapshotted).toBe(
+				0,
+			);
+			vi.setSystemTime(now + 60_000);
+			expect((await makeService({ snapshotIntervalMs: 0 }).sweep(now + 60_000)).snapshotted).toBe(
+				1,
+			);
+			expect((await getStored(s)).save_dirty).toBeUndefined();
+		});
+
+		it('drains older attempts before recently attempted sessions', async () => {
+			const recent = await putSession({
+				notebook_id: createNotebookId(),
+				last_capture_attempt_at: iso(-70_000),
+				save_dirty: { id: crypto.randomUUID(), acknowledged_at: iso(-120_000) },
+			});
+			const older = await putSession({
+				notebook_id: createNotebookId(),
+				last_capture_attempt_at: iso(-90_000),
+				save_dirty: { id: crypto.randomUUID(), acknowledged_at: iso(-120_000) },
+			});
+			const capture = vi.spyOn(SessionCaptureCoordinator.prototype, 'capture');
+			await makeService({ snapshotIntervalMs: 0 }).sweep(now);
+			expect(capture.mock.calls.map(([session]) => session.session_id)).toEqual([
+				older.session_id,
+				recent.session_id,
+			]);
+		});
+
 		it('is disabled by snapshotIntervalMs = 0', async () => {
 			const ownsClaim = vi.spyOn(sessions, 'ownsEditorClaim');
 			await putSession({ started_at: iso(-60 * 60 * 1000) });

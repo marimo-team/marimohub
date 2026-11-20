@@ -39,6 +39,27 @@ old predecessor. Internal causes, runtime paths, tokens, and lease IDs are omitt
 from public responses. MCP `stop_session` exposes the same deliberate retry fields
 and reports retained or pending outcomes explicitly.
 
+## Proxy save intent
+
+After a successful runtime save, the proxy persists a new `Session.save_dirty` generation
+before it admits capture work. The response waits for this persistence attempt, but
+does not wait for artifact capture. Persistence failures leave the runtime response
+unchanged and emit `session_save_intent_failed`.
+
+The local queue admits at most 64 sessions. Each burst makes at most four capture
+attempts, with 100, 200, and 400 ms delays after consecutive failures.
+Overflow, scheduling failure, and process exit leave recorded intent in the session.
+
+Any replica's lifecycle sweep can discover that intent, even with periodic snapshots
+disabled. The sweep processes at most eight sessions concurrently, oldest attempt first.
+Without an attempt, it uses the save time or session start time.
+It retries captures after one minute, or the configured snapshot interval if shorter.
+The retry delay uses the persisted `last_capture_attempt_at`.
+
+Capture still requires editor ownership and the notebook publication fence.
+A successful capture clears only the dirty generation it observed.
+A newer save remains pending. Periodic capture also reconciles edits without save hints.
+
 ## Publication and runtime recovery
 
 `NotebookService.prepareSessionCapture` validates notebook metadata and reads the source head once, without loading the README.
@@ -73,7 +94,11 @@ For the deployment and backup rules, see
 ## Operations
 
 Monitor `sessions.save.acknowledged`, `sessions.save.hint_failed`,
-`sessions.capture.durable`, and `sessions.capture.durable_lag_ms`. The durable-capture
+`sessions.save.capture_deferred`, `sessions.capture.durable`, and
+`sessions.capture.durable_lag_ms`.
+`capture_deferred` counts saves that exceed local queue capacity.
+`hint_failed` counts persistence, scheduling, and thrown capture failures.
+The corresponding `session_save_{intent,schedule,capture}_failed` logs identify the session and cause. The durable-capture
 metrics count stop captures, periodic snapshots, and host saves.
 `sessions.stop.retained` and `sessions.stop.forced` count outcomes; the
 `sessions.stop.pending_age_ms`, `sessions.stop.retained_age_ms`, and matching `_count`
