@@ -202,6 +202,14 @@ Writes containing overlays stay sequential. If the budget is full, reads run seq
 Packed archives and mounts do not use batch prefetch.
 Failed restores drain pending reads and writes. Cold cleanup cancels prefetch before sandbox destruction.
 
+Successful proxied kernel saves queue captures without delaying the response.
+Each process coalesces hints for up to 64 sessions and permits four capture attempts per burst.
+Each follow-up uses a separate queue task. Retryable failures use exponential backoff from 100 ms.
+
+After a durable capture, newer dirty state triggers another attempt within the burst limit.
+Only a durable receipt clears the dirty generation it covers. Publication fences also apply to periodic capture and stop.
+The periodic scheduler covers remaining dirty state after the burst limit.
+
 Periodic saves use bounded sandbox commands to collect artifact sizes and SHA-256 hashes.
 Only changed artifacts require a file read. A successful save caches up to 128 sandbox captures within a 64 MiB budget.
 Reused artifacts are probed again before commit. A changed or failed probe falls back to bounded reads.
