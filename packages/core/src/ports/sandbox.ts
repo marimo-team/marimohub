@@ -200,6 +200,15 @@ export interface SetEnvVarsOptions {
 }
 
 export interface SandboxInstance {
+	/**
+	 * Return undefined only before dispatch to permit exec fallback.
+	 * Reject after dispatch to prevent mutation replay. Bound response size and duration.
+	 */
+	requestLifecycle?(
+		directory: string,
+		request: Record<string, unknown>,
+	): Promise<string | undefined>;
+
 	/** Credential-free, serializable provider locator, available after readiness. */
 	readonly reconnectReference?: string;
 	/** HOME in sandbox file coordinates; adapters with mapped process paths must provide this. */

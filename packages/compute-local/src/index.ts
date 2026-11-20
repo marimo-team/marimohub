@@ -21,6 +21,7 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { mkdir, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import net from 'node:net';
+import { requestLifecycle } from './lifecycleTransport';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -413,6 +414,11 @@ class LocalSandboxInstance implements SandboxInstance {
 		});
 		child.once('error', forget);
 		return child;
+	}
+
+	async requestLifecycle(directory: string, request: Record<string, unknown>) {
+		await this.ensureRoot();
+		return requestLifecycle(this.resolveProcessPath(directory), request);
 	}
 
 	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
