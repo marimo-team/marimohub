@@ -116,6 +116,26 @@ cd packages/notebook-bridge/python
 python -m unittest test_lifecycle test_lifecycle_linux
 ```
 
-The native tests cover a save overlapping prepare, checkpoint output restoration,
-resume, committed stop, and supervisor crash recovery. On other platforms, the
-Linux integration tests skip; the hermetic lifecycle tests still run.
+The native tests cover saves overlapping prepare, checkpoint restoration, resume,
+and committed stop. They kill the runtime process group, then restore source and
+native outputs in a fresh runtime. They also kill the supervisor after its stop
+receipt is durable but before it destroys writers. Recovery must finish the stop
+without resuming those writers. The Linux tests skip on other platforms.
+
+`apps/server/src/captureDurability.test.ts` kills publisher processes at artifact
+upload, source-head publication, and durable-receipt boundaries. Fresh processes
+read the persisted source and output pair, check that incomplete captures leave
+the save dirty, and retry. Cases include unchanged source with new outputs, stale
+publication tokens, replacement editors, and lost publication acknowledgements.
+Run this suite with:
+
+```sh
+pnpm exec vp test apps/server/src/captureDurability.test.ts
+```
+
+Publisher tests use core services and filesystem storage, with one writer at a
+time. They do not exercise the capture coordinator, PostgreSQL transactions,
+provider destruction, or concurrent replicas. Native tests retain checkpoint
+bytes outside the killed runtime to represent a published capture. They do not
+send those bytes through hub storage. End-to-end provider recovery needs a
+separate acceptance run.

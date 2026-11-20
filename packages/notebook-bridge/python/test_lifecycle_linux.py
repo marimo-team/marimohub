@@ -26,6 +26,14 @@ def run_worker():
                 os.kill(os.getpid(), signal.SIGKILL)
 
             Supervisor.checkpoint = crash
+        if os.environ.get('TEST_CRASH_AFTER_STOP_RECEIPT'):
+            write_receipt = Supervisor.write_receipt
+
+            def crash_after_receipt(self, *args):
+                write_receipt(self, *args)
+                os.kill(os.getpid(), signal.SIGKILL)
+
+            Supervisor.write_receipt = crash_after_receipt
         raise SystemExit(supervise([__file__, '--worker', *sys.argv[2:]]))
     from lifecycle import install
     install()
@@ -63,7 +71,7 @@ def wait_until(check, timeout=20):
 
 @unittest.skipUnless(sys.platform == 'linux' and importlib.util.find_spec('marimo'), 'requires Linux and installed marimo')
 class LinuxRuntimeTests(unittest.TestCase):
-    def start(self, crash=False, pause_save=False, restore=None):
+    def start(self, crash=False, pause_save=False, restore=None, crash_stop=False):
         from websockets.sync.client import connect
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -78,7 +86,7 @@ class LinuxRuntimeTests(unittest.TestCase):
         directory = root / 'lifecycle'
         log = (root / 'server.log').open('w+')
         self.addCleanup(log.close)
-        process = subprocess.Popen([sys.executable, __file__, '--worker', str(source)], cwd=root, env={**os.environ, 'MARIMOHUB_LIFECYCLE_DIR': str(directory), **({'TEST_CRASH_AFTER_READY': '1'} if crash else {}), **({'TEST_PAUSE_SAVE': '1'} if pause_save else {})}, start_new_session=True, stdout=log, stderr=log)
+        process = subprocess.Popen([sys.executable, __file__, '--worker', str(source)], cwd=root, env={**os.environ, 'MARIMOHUB_LIFECYCLE_DIR': str(directory), **({'TEST_CRASH_AFTER_READY': '1'} if crash else {}), **({'TEST_PAUSE_SAVE': '1'} if pause_save else {}), **({'TEST_CRASH_AFTER_STOP_RECEIPT': '1'} if crash_stop else {})}, start_new_session=True, stdout=log, stderr=log)
 
         def cleanup():
             try:
@@ -115,6 +123,84 @@ class LinuxRuntimeTests(unittest.TestCase):
         status = exchange(directory / 'control.sock', {'action': 'status'})
         return exchange(directory / 'control.sock', {'action': 'prepare', 'generation': status['generation'], 'token': str(uuid.uuid4()), 'entry': source.name, 'workdir': str(source.parent)}, timeout=40)
 
+    def execute(self, ws, codes=None, value=42):
+        if codes is None:
+            self.post('instantiate', {'objectIds': [], 'values': [], 'autoRun': True})
+        else:
+            self.post('run', {'cellIds': self.ready['data']['cell_ids'], 'codes': codes})
+        output_seen = False
+        while True:
+            message = json.loads(ws.recv(timeout=10))
+            if message.get('op') != 'cell-op':
+                continue
+            output = message['data'].get('output') or {}
+            if output.get('mimetype') == 'text/html' and output.get('data') == f"<pre class='text-xs'>{value}</pre>":
+                output_seen = True
+            if output_seen and message['data'].get('status') == 'idle':
+                return
+
+    def snapshot(self, checkpoint, source):
+        root = Path(checkpoint['checkpoint'])
+        return {name: (root / name).read_bytes() for name in (source.name, '__marimo__/session/notebook.py.json')}
+
+    def assert_output(self, snapshot, value):
+        native = json.loads(snapshot['__marimo__/session/notebook.py.json'])
+        self.assertEqual(native['cells'][0]['outputs'][0]['data']['text/html'], f"<pre class='text-xs'>{value}</pre>")
+
+    def kill_runtime(self, process, ws):
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=10)
+        ws.close()
+
+    def test_runtime_death_restores_only_published_source_and_outputs(self):
+        for publish_latest in (False, True):
+            with self.subTest(publish_latest=publish_latest):
+                root, source, directory, process, ws = self.start()
+                self.execute(ws)
+                checkpoint = self.prepare(directory, source)
+                durable = self.snapshot(checkpoint, source)
+                self.assert_output(durable, 42)
+                exchange(directory / 'control.sock', {'action': 'abort', 'token': checkpoint['token']})
+                ready = self.ready['data']
+                codes = [code.replace('42', '84') for code in ready['codes']]
+                self.post('save', {'cellIds': ready['cell_ids'], 'codes': codes, 'names': ready['names'], 'configs': ready['configs'], 'filename': str(source)})
+                self.execute(ws, codes, 84)
+                latest = self.prepare(directory, source)
+                latest_snapshot = self.snapshot(latest, source)
+                self.assert_output(latest_snapshot, 84)
+                self.assertNotEqual(durable[source.name], latest_snapshot[source.name])
+                if publish_latest:
+                    durable = latest_snapshot
+                # The retained copy represents already published bytes; runtime-local
+                # captures and acknowledged but unpublished saves die with this process.
+                self.kill_runtime(process, ws)
+                root2, source2, directory2, process2, ws2 = self.start(restore=durable)
+                restored = self.prepare(directory2, source2)
+                snapshot = self.snapshot(restored, source2)
+                self.assertEqual(snapshot[source2.name], durable[source.name])
+                self.assert_output(snapshot, 84 if publish_latest else 42)
+                self.kill_runtime(process2, ws2)
+
+    def test_stop_receipt_survives_supervisor_death_before_writer_destruction(self):
+        root, source, directory, process, ws = self.start(crash_stop=True)
+        self.execute(ws)
+        checkpoint = self.prepare(directory, source)
+        durable = self.snapshot(checkpoint, source)
+        with self.assertRaises((ValueError, OSError)):
+            exchange(directory / 'control.sock', {'action': 'commit-stop', 'token': checkpoint['token']})
+        process.wait(timeout=10)
+        receipt = json.loads((directory / 'stop.json').read_text())
+        table = ProcessTree(process.pid).table()
+        self.assertTrue(any(table.get(int(pid), (None, None, None))[2] in ('T', 't') for pid in receipt['processes']))
+        for _ in range(2):
+            self.assertEqual(recover_dead_supervisor(directory), {'ok': True, 'state': 'stopped', 'token': checkpoint['token']})
+        wait_until(lambda: all(ProcessTree(process.pid).table().get(int(pid), (None, None, 'Z'))[2] == 'Z' for pid in receipt['processes']))
+        ws.close()
+        root2, source2, directory2, process2, ws2 = self.start(restore=durable)
+        restored = self.prepare(directory2, source2)
+        self.assert_output(self.snapshot(restored, source2), 42)
+        self.kill_runtime(process2, ws2)
+
     def test_live_native_snapshot_resume_and_committed_stop(self):
         root, source, directory, process, ws = self.start()
         checkpoint = self.prepare(directory, source)
@@ -139,11 +225,7 @@ class LinuxRuntimeTests(unittest.TestCase):
 
     def test_native_save_drains_before_capture_and_outputs_restore(self):
         root, source, directory, process, ws = self.start(pause_save=True)
-        self.post('instantiate', {'objectIds': [], 'values': [], 'autoRun': True})
-        while True:
-            message = json.loads(ws.recv(timeout=10))
-            if message.get('op') == 'cell-op' and message['data'].get('status') == 'idle':
-                break
+        self.execute(ws)
         initial = source.read_bytes()
         ready = self.ready['data']
         body = {'cellIds': ready['cell_ids'], 'codes': ready['codes'], 'names': ready['names'], 'configs': ready['configs'], 'filename': str(source)}
