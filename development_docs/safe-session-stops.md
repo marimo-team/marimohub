@@ -41,6 +41,10 @@ and reports retained or pending outcomes explicitly.
 
 ## Publication and runtime recovery
 
+`NotebookService.prepareSessionCapture` validates notebook metadata and reads the source head once, without loading the README.
+Remote sources need no capture. Local sources return a publication token from that source observation.
+The coordinator acquires the token before ownership checks and runtime reads. Publication uses the token's ETag to reject stale captures.
+
 NotebookService is the sole writer of local `source.json` publication heads.
 It stages immutable code, dependencies, and capture sidecars, then publishes their
 references with one ETag CAS. Every successful capture advances the generation,

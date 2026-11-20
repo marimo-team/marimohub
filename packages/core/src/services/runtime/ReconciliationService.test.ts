@@ -80,7 +80,9 @@ describe('ReconciliationService', () => {
 		// cases that don't assert it don't need a populated catalog. The teardown
 		// wiring itself is asserted in its own test below.
 		vi.spyOn(notebooks, 'getNotebook').mockResolvedValue({ source: makeLocalSource() } as never);
-		vi.spyOn(notebooks, 'beginSessionCapture').mockResolvedValue({} as never);
+		vi.spyOn(notebooks, 'prepareSessionCapture').mockResolvedValue({
+			source: makeLocalSource(),
+		} as never);
 		vi.spyOn(notebooks, 'commitSession').mockResolvedValue({
 			versionId: createVersionId(),
 			newVersion: false,

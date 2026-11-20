@@ -64,17 +64,15 @@ export class SessionCaptureCoordinator {
 					},
 				));
 		try {
-			const { source } = await telemetry.time('notebook_read', () =>
-				notebooks.getNotebook(session.project_id, session.notebook_id),
+			const publicationToken = await telemetry.time('publication_token', () =>
+				notebooks.prepareSessionCapture(session.project_id, session.notebook_id),
 			);
-			if (source.type !== 'local')
+			if (!publicationToken)
 				return {
 					critical: { status: 'not_required', reason: 'remote_source' },
 					workspace: skipped,
 				};
-			const publicationToken = await telemetry.time('publication_token', () =>
-				notebooks.beginSessionCapture(session.project_id, session.notebook_id),
-			);
+			const { source } = publicationToken;
 			await telemetry.time(
 				'ownership',
 				() => options.assertOwnership?.() ?? sessions.assertCaptureOwnership(session),

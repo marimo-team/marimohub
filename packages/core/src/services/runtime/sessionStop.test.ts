@@ -579,11 +579,10 @@ it.each(['timeout', 'source', 'storage'] as const)(
 	'keeps ownership when capture fails because of %s without confirmed runtime absence',
 	async (failure) => {
 		const env = await stopFixture();
-		const beginCapture = env.notebooks.beginSessionCapture.bind(env.notebooks);
 		if (failure === 'storage')
-			vi.spyOn(env.notebooks, 'beginSessionCapture')
-				.mockImplementationOnce(beginCapture)
-				.mockRejectedValue(new NotFoundError('Missing object'));
+			vi.spyOn(env.notebooks, 'prepareSessionCapture').mockRejectedValue(
+				new NotFoundError('Missing object'),
+			);
 		vi.spyOn(env.instance, 'exec').mockImplementation(async (command) => {
 			if (failure === 'timeout') throw new Error('Provider timeout');
 			if (command.includes('"action":"prepare"'))

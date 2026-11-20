@@ -54,7 +54,9 @@ describe('SessionLifecycleService (app sessions)', () => {
 		sessions = new SessionService(bucket);
 		notebooks = new NotebookService(bucket, new CatalogService(bucket));
 		vi.spyOn(notebooks, 'getNotebook').mockResolvedValue({ source: makeLocalSource() } as never);
-		vi.spyOn(notebooks, 'beginSessionCapture').mockResolvedValue({} as never);
+		vi.spyOn(notebooks, 'prepareSessionCapture').mockResolvedValue({
+			source: makeLocalSource(),
+		} as never);
 		vi.spyOn(notebooks, 'commitSession').mockResolvedValue({
 			versionId: createVersionId(),
 			newVersion: true,
