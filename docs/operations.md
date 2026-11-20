@@ -150,6 +150,10 @@ Authorization expiry enforces security teardown even when the save fails.
 Safe capture requires the Linux lifecycle supervisor and marimo 0.24.x or 0.25.x.
 The default sandbox image includes a supported version. Native macOS runtimes and
 unsupported launch strategies retain the editor on a normal stop. Users can force stop it.
+Proxy saves record pending intent before capture admission. A successful save response
+does not confirm artifact durability. Lifecycle sweeps recover recorded intent after
+worker saturation or process exit, even with periodic snapshots disabled.
+
 Direct runtime exposure has no proxy save hints, so it relies on periodic capture.
 Neither exposure mode protects unsaved browser buffers or prevents provider kills.
 

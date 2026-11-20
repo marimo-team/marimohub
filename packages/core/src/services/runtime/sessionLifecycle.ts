@@ -112,6 +112,9 @@ export class SessionLifecycleService {
 	async sweep(now = Date.now()): Promise<SweepResult> {
 		const thumbnailDeadlineAt = Date.now() + THUMBNAIL_MAINTENANCE_BUDGET_MS;
 		const sessions = await this.sessions.listSessions();
+		const { snapshotIntervalMs } = this.cfg;
+		const captureRetryMs =
+			snapshotIntervalMs > 0 ? Math.min(snapshotIntervalMs, Millis.minutes(1)) : Millis.minutes(1);
 		try {
 			for (const outcome of ['pending', 'retained'] as const) {
 				const matching = sessions.filter(
@@ -150,6 +153,12 @@ export class SessionLifecycleService {
 					s.status === 'running' ||
 					(!!s.stop && !s.sandbox_reclaimed_at) ||
 					(isTerminal(s.status) && !s.sandbox_reclaimed_at)),
+		);
+		// Oldest attempts go first so repeated failures cannot monopolize the drain.
+		candidates.sort(
+			(a, b) =>
+				Date.parse(a.last_capture_attempt_at ?? a.save_dirty?.acknowledged_at ?? a.started_at) -
+				Date.parse(b.last_capture_attempt_at ?? b.save_dirty?.acknowledged_at ?? b.started_at),
 		);
 		const liveEditorNotebooks = new Set<NotebookId>(
 			sessions.filter(isLivePersistingEditor).map((s) => s.notebook_id),
@@ -305,12 +314,11 @@ export class SessionLifecycleService {
 				// interval is too expensive; the mirror still refreshes at teardown.
 				const snapshotDueByCadence =
 					sessionPersistsEdits(s) &&
-					this.cfg.snapshotIntervalMs > 0 &&
 					(!s.last_capture_attempt_at ||
-						now - Date.parse(s.last_capture_attempt_at) >=
-							Math.min(this.cfg.snapshotIntervalMs, Millis.minutes(1))) &&
+						now - Date.parse(s.last_capture_attempt_at) >= captureRetryMs) &&
 					(!!s.save_dirty ||
-						now - Date.parse(s.last_snapshot_at ?? s.started_at) >= this.cfg.snapshotIntervalMs);
+						(snapshotIntervalMs > 0 &&
+							now - Date.parse(s.last_snapshot_at ?? s.started_at) >= snapshotIntervalMs));
 				const snapshotDue =
 					snapshotDueByCadence && (await this.sessions.ownsEditorClaim(s).catch(() => false));
 				if (snapshotDue && sandbox && !sandboxGone) {

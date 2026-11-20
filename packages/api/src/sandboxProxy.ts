@@ -534,7 +534,7 @@ const MAX_PENDING_SAVE_CAPTURES = 64;
 const MAX_SAVE_CAPTURE_ATTEMPTS = 4;
 const SAVE_CAPTURE_RETRY_MS = 100;
 
-const pendingSaveCaptures = deploymentState(() => new Map<string, { again?: string }>());
+const pendingSaveCaptures = deploymentState(() => new Map<string, { again: boolean }>());
 
 export async function observeRuntimeSave(
 	deps: ApiDeps,
@@ -556,31 +556,49 @@ export async function observeRuntimeSave(
 	};
 	const acknowledgedAt = new Date().toISOString();
 	metric('sessions.save.acknowledged');
+	const sessionId = SessionId.parse(decision.sessionId);
+	const projectId = decision.projectId;
+	const { sessions, notebooks } = deps.services;
+	const reportFailure = (phase: 'intent' | 'schedule' | 'capture', error: unknown) => {
+		metric('sessions.save.hint_failed');
+		logEvent({
+			level: phase === 'intent' ? 'error' : 'warn',
+			event: `session_save_${phase}_failed`,
+			session_id: sessionId,
+			error: String(error),
+		});
+	};
+	try {
+		// Persist before admission so a full worker pool or process exit cannot lose intent.
+		await sessions.acknowledgeRuntimeSave(projectId, sessionId, acknowledgedAt);
+	} catch (error) {
+		reportFailure('intent', error);
+		return;
+	}
 	const backgroundWork = deps.backgroundWork;
 	if (!backgroundWork) return;
 	const pending = pendingSaveCaptures(deps);
 	const existing = pending.get(decision.sessionId);
 	if (existing) {
-		existing.again = acknowledgedAt;
+		existing.again = true;
 		return;
 	}
-	if (pending.size >= MAX_PENDING_SAVE_CAPTURES) return;
-	const queued: { again?: string } = { again: acknowledgedAt };
+	if (pending.size >= MAX_PENDING_SAVE_CAPTURES) {
+		metric('sessions.save.capture_deferred');
+		return;
+	}
+	const queued = { again: false };
 	pending.set(decision.sessionId, queued);
-	const sessionId = SessionId.parse(decision.sessionId);
-	const projectId = decision.projectId;
 	let attempts = 0;
 	let failures = 0;
 	const release = () => {
 		if (pending.get(decision.sessionId) === queued) pending.delete(decision.sessionId);
 	};
-	const schedulingFailed = () => {
+	const schedulingFailed = (error: unknown) => {
 		release();
-		metric('sessions.save.hint_failed');
+		reportFailure('schedule', error);
 	};
-	const { sessions, notebooks } = deps.services;
 	const getSession = () => sessions.getSession(projectId, sessionId);
-	const acknowledge = (at: string) => sessions.acknowledgeRuntimeSave(projectId, sessionId, at);
 	const coordinator = new SessionCaptureCoordinator({
 		compute: deps.compute,
 		bucket: deps.bucket,
@@ -591,15 +609,8 @@ export async function observeRuntimeSave(
 		metrics: deps.metrics,
 	});
 	const captureNext = async (): Promise<boolean> => {
-		const hint = queued.again;
-		queued.again = undefined;
-		let current;
-		try {
-			current = hint ? await acknowledge(hint) : await getSession();
-		} catch (error) {
-			queued.again ??= hint;
-			throw error;
-		}
+		queued.again = false;
+		const current = await getSession();
 		if (!current.save_dirty || current.status !== 'running' || !sessionPersistsEdits(current))
 			return false;
 		const sandbox = reconnectSessionSandbox(deps.compute, current, deps.metrics, 'poll');
@@ -614,12 +625,6 @@ export async function observeRuntimeSave(
 		const latest = await getSession();
 		return latest.status === 'running' && !!latest.save_dirty;
 	};
-	const finish = async () => {
-		const hint = queued.again;
-		// Saves during the final flush must start a new burst.
-		release();
-		if (hint) await acknowledge(hint);
-	};
 	const schedule = (delay = 0) => {
 		try {
 			void Promise.resolve(
@@ -632,21 +637,21 @@ export async function observeRuntimeSave(
 							});
 						attempts++;
 						followUp = await captureNext();
-					} catch {
+					} catch (error) {
+						reportFailure('capture', error);
 						failures++;
 						followUp = true;
-						metric('sessions.save.hint_failed');
 					}
-					// Requeue to share worker capacity. Periodic capture covers exhausted bursts.
+					// Requeue to share worker capacity. The lifecycle sweep retries exhausted bursts.
 					if (attempts < MAX_SAVE_CAPTURE_ATTEMPTS && (followUp || queued.again)) {
 						schedule(failures ? SAVE_CAPTURE_RETRY_MS * 2 ** (failures - 1) : 0);
 					} else {
-						await finish();
+						release();
 					}
 				}),
 			).catch(schedulingFailed);
-		} catch {
-			schedulingFailed();
+		} catch (error) {
+			schedulingFailed(error);
 		}
 	};
 	schedule();
