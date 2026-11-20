@@ -530,7 +530,10 @@ export async function forwardHttp(
 	});
 }
 
-/** Mount before API and SPA routes so proxy requests cannot fall through to them. */
+const MAX_PENDING_SAVE_CAPTURES = 64;
+const MAX_SAVE_CAPTURE_ATTEMPTS = 4;
+const SAVE_CAPTURE_RETRY_MS = 100;
+
 const pendingSaveCaptures = deploymentState(() => new Map<string, { again?: string }>());
 
 export async function observeRuntimeSave(
@@ -553,58 +556,100 @@ export async function observeRuntimeSave(
 	};
 	const acknowledgedAt = new Date().toISOString();
 	metric('sessions.save.acknowledged');
-	if (!deps.backgroundWork) return;
+	const backgroundWork = deps.backgroundWork;
+	if (!backgroundWork) return;
 	const pending = pendingSaveCaptures(deps);
 	const existing = pending.get(decision.sessionId);
 	if (existing) {
 		existing.again = acknowledgedAt;
 		return;
 	}
-	if (pending.size >= 64) return;
-	const queued: { again?: string } = {};
+	if (pending.size >= MAX_PENDING_SAVE_CAPTURES) return;
+	const queued: { again?: string } = { again: acknowledgedAt };
 	pending.set(decision.sessionId, queued);
-	try {
-		void Promise.resolve(
-			deps.backgroundWork.defer('session.save_capture', async () => {
-				try {
-					const current = await deps.services.sessions.acknowledgeRuntimeSave(
-						decision.projectId!,
-						SessionId.parse(decision.sessionId),
-						acknowledgedAt,
-					);
-					if (!current.save_dirty || current.status !== 'running' || !sessionPersistsEdits(current))
-						return;
-					const sandbox = reconnectSessionSandbox(deps.compute, current, deps.metrics, 'poll');
-					if (sandbox)
-						await new SessionCaptureCoordinator({
-							compute: deps.compute,
-							bucket: deps.bucket,
-							notebooks: deps.services.notebooks,
-							sessions: deps.services.sessions,
-							persistWorkspace: deps.sandbox.persistWorkspace,
-							workdir: deps.sandbox.workdir,
-							metrics: deps.metrics,
-						}).capture(current, sandbox, { includeWorkspace: false });
-					if (queued.again)
-						await deps.services.sessions.acknowledgeRuntimeSave(
-							current.project_id,
-							current.session_id,
-							queued.again,
-						);
-				} catch {
-					metric('sessions.save.hint_failed');
-				} finally {
-					pending.delete(decision.sessionId);
-				}
-			}),
-		).catch(() => {
-			pending.delete(decision.sessionId);
-			metric('sessions.save.hint_failed');
-		});
-	} catch {
-		pending.delete(decision.sessionId);
+	const sessionId = SessionId.parse(decision.sessionId);
+	const projectId = decision.projectId;
+	let attempts = 0;
+	let failures = 0;
+	const release = () => {
+		if (pending.get(decision.sessionId) === queued) pending.delete(decision.sessionId);
+	};
+	const schedulingFailed = () => {
+		release();
 		metric('sessions.save.hint_failed');
-	}
+	};
+	const { sessions, notebooks } = deps.services;
+	const getSession = () => sessions.getSession(projectId, sessionId);
+	const acknowledge = (at: string) => sessions.acknowledgeRuntimeSave(projectId, sessionId, at);
+	const coordinator = new SessionCaptureCoordinator({
+		compute: deps.compute,
+		bucket: deps.bucket,
+		notebooks,
+		sessions,
+		persistWorkspace: deps.sandbox.persistWorkspace,
+		workdir: deps.sandbox.workdir,
+		metrics: deps.metrics,
+	});
+	const captureNext = async (): Promise<boolean> => {
+		const hint = queued.again;
+		queued.again = undefined;
+		let current;
+		try {
+			current = hint ? await acknowledge(hint) : await getSession();
+		} catch (error) {
+			queued.again ??= hint;
+			throw error;
+		}
+		if (!current.save_dirty || current.status !== 'running' || !sessionPersistsEdits(current))
+			return false;
+		const sandbox = reconnectSessionSandbox(deps.compute, current, deps.metrics, 'poll');
+		if (!sandbox) return false;
+		const { critical } = await coordinator.capture(current, sandbox, { includeWorkspace: false });
+		if (critical.status === 'failed' || critical.status === 'uncertain') {
+			failures++;
+			return critical.retryable;
+		}
+		if (critical.status !== 'durable') return false;
+		failures = 0;
+		const latest = await getSession();
+		return latest.status === 'running' && !!latest.save_dirty;
+	};
+	const finish = async () => {
+		const hint = queued.again;
+		// Saves during the final flush must start a new burst.
+		release();
+		if (hint) await acknowledge(hint);
+	};
+	const schedule = (delay = 0) => {
+		try {
+			void Promise.resolve(
+				backgroundWork.defer('session.save_capture', async () => {
+					let followUp = false;
+					try {
+						if (delay)
+							await new Promise((resolve) => {
+								setTimeout(resolve, delay);
+							});
+						attempts++;
+						followUp = await captureNext();
+					} catch {
+						failures++;
+						followUp = true;
+						metric('sessions.save.hint_failed');
+					}
+					// Requeue to share worker capacity. Periodic capture covers exhausted bursts.
+					if (attempts < MAX_SAVE_CAPTURE_ATTEMPTS && (followUp || queued.again)) {
+						schedule(failures ? SAVE_CAPTURE_RETRY_MS * 2 ** (failures - 1) : 0);
+					} else {
+						await finish();
+					}
+				}),
+			).catch(schedulingFailed);
+		} catch {
+			schedulingFailed();
+		}
+	};
+	schedule();
 }
 
 export function sandboxProxyMiddleware(deps: ApiDeps): MiddlewareHandler<HonoEnv> {
