@@ -17,6 +17,7 @@ permissions: {}
 
 jobs:
   CLAAssistant:
+    if: github.repository == 'marimo-team/marimohub'
     runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
