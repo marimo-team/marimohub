@@ -97,5 +97,3 @@ For readiness failures, `warm_pool_claim_failed` logs include `sandbox_id`, `ela
 The reasons are `reconnect_timeout`, `reconnect_failed`, `command_timeout`, `command_transport_failed`, and `command_failed`.
 For provider failures, the log keeps allowlisted error fields from the original cause, such as `name`, `code`, and `status`.
 It excludes provider messages, request bodies, and command output.
-
-<!-- Temporary fork-CI trigger; removed after validation. -->
