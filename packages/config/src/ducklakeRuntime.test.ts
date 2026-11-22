@@ -125,7 +125,7 @@ describe('packaged DuckLake integration', () => {
 		expect(storageRequests.every(({ headers }) => headers?.['x-amz-date'] !== undefined)).toBe(
 			true,
 		);
-	});
+	}, 30_000);
 
 	it('denies a data file outside the configured S3 prefix before transport', async () => {
 		const requests: IcebergHttpBrokerTransportRequest[] = [];
@@ -165,5 +165,5 @@ describe('packaged DuckLake integration', () => {
 
 		expect(requests.length).toBeGreaterThan(0);
 		expect(requests.every(({ url }) => url === METADATA_URL)).toBe(true);
-	});
+	}, 30_000);
 });

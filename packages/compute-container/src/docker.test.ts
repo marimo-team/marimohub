@@ -357,12 +357,14 @@ describe('DockerCompute', () => {
 		expect(active.map((a) => a.id)).toEqual(['sb-aaaaaaaaaaaaaaaa', 'sb-bbbbbbbbbbbbbbbb']);
 	});
 
-	it('listActive returns an empty list when docker ps fails', async () => {
+	it('listActive rejects when docker ps fails instead of reporting no active sandboxes', async () => {
 		const { runner } = fakeRunner((args) =>
 			args[0] === 'ps' ? { stdout: '', stderr: 'daemon unavailable', exitCode: 1 } : undefined,
 		);
 
-		await expect(new DockerCompute({}, runner).listActive()).resolves.toEqual([]);
+		await expect(new DockerCompute({}, runner).listActive()).rejects.toThrow(
+			'failed to list active sandboxes (exit 1)',
+		);
 	});
 
 	it('reuses a running container instead of creating a new one', async () => {

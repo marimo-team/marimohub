@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it, expect, vi } from 'vitest';
@@ -75,6 +75,27 @@ const modalEnv = {
 	MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: 'tsecret',
 	MARIMOHUB_COMPUTE_IMAGE: 'img',
 };
+
+const dockerConfigDirs: string[] = [];
+function dockerConfig(endpoint: string): string {
+	const dir = mkdtempSync(join(tmpdir(), 'config-docker-context-'));
+	dockerConfigDirs.push(dir);
+	writeFileSync(join(dir, 'config.json'), JSON.stringify({ currentContext: 'remote' }));
+	const contextDir = join(dir, 'contexts', 'meta', 'context-id');
+	mkdirSync(contextDir, { recursive: true });
+	writeFileSync(
+		join(contextDir, 'meta.json'),
+		JSON.stringify({
+			Name: 'remote',
+			Endpoints: { docker: { Host: endpoint, SkipTLSVerify: false } },
+		}),
+	);
+	return dir;
+}
+
+afterEach(() => {
+	for (const dir of dockerConfigDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 describe('Kubernetes pod template configuration', () => {
 	const key = 'MARIMOHUB_COMPUTE_KUBERNETES_POD_TEMPLATE_FILE';
@@ -217,6 +238,68 @@ describe('makeCompute backend selection', () => {
 
 	it('selects docker', () => {
 		expect(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'docker' })).toBeInstanceOf(DockerCompute);
+	});
+
+	it('does not require local Docker context files when pooling is disabled', () => {
+		expect(
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'docker',
+				DOCKER_CONFIG: '/missing/docker-config',
+			}).warmPool,
+		).toBeDefined();
+	});
+
+	it('supports Docker warm-pool reconnect without storing daemon credentials', () => {
+		const provider = makeCompute({
+			MARIMOHUB_COMPUTE_BACKEND: 'docker',
+			MARIMOHUB_COMPUTE_WARM_POOL_ENABLED: 'true',
+			MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG: 'hub-test',
+			DOCKER_HOST: 'ssh://user:secret@docker.example.test:2222',
+		});
+		const daemon = provider.warmPool?.configuration as { daemon?: string };
+
+		expect(provider).toBeInstanceOf(DockerCompute);
+		expect(provider.connectExisting).toEqual(expect.any(Function));
+		expect(provider.warmPool).toMatchObject({ maxLifetimeMs: null });
+		expect(daemon.daemon).toMatch(/^[a-f0-9]{64}$/);
+		expect(JSON.stringify(provider.warmPool)).not.toContain('secret');
+		expect(JSON.stringify(provider.warmPool)).not.toContain('user');
+		expect(
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'docker',
+				MARIMOHUB_COMPUTE_WARM_POOL_ENABLED: 'true',
+				DOCKER_HOST: 'ssh://other:secret@docker.example.test:2222',
+			}).warmPool?.configuration,
+		).not.toEqual(provider.warmPool?.configuration);
+	});
+
+	it('fingerprints the effective Docker context endpoint, not just its stable name', () => {
+		const configDir = dockerConfig('tcp://docker-one.example.test:2376');
+		const env = {
+			MARIMOHUB_COMPUTE_BACKEND: 'docker',
+			MARIMOHUB_COMPUTE_WARM_POOL_ENABLED: 'true',
+			DOCKER_CONFIG: configDir,
+		};
+		const before = makeCompute(env).warmPool?.configuration;
+		expect(
+			makeCompute({ ...env, DOCKER_CONTEXT: 'remote', DOCKER_HOST: 'tcp://ignored:2375' }).warmPool
+				?.configuration,
+		).toEqual(before);
+		writeFileSync(
+			join(configDir, 'contexts', 'meta', 'context-id', 'meta.json'),
+			JSON.stringify({
+				Name: 'remote',
+				Endpoints: { docker: { Host: 'tcp://docker-two.example.test:2376' } },
+			}),
+		);
+		const after = makeCompute(env).warmPool?.configuration;
+
+		expect(after).not.toEqual(before);
+		expect(JSON.stringify(after)).not.toContain('docker-two.example.test');
+	});
+
+	it('does not enable warm pools for Podman implicitly', () => {
+		expect(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'podman' }).warmPool).toBeUndefined();
 	});
 
 	it('selects podman', () => {

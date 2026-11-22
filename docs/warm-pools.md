@@ -1,6 +1,6 @@
 # Warm sandbox pools
 
-Warm pools reduce provider startup time for CoreWeave and Kubernetes editor and app sessions. They are disabled by default.
+Warm pools reduce provider startup time for CoreWeave, Kubernetes, and Docker editor and app sessions. They are disabled by default.
 
 These are the initial built-in backends. External compute adapters can opt into the same provider contract.
 
@@ -18,12 +18,14 @@ MARIMOHUB_COMPUTE_WARM_POOL_PROFILES=default
 
 | Variable                                 | Default   | Meaning                                                                                                                                                                           |
 | ---------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MARIMOHUB_COMPUTE_WARM_POOL_ENABLED`    | `false`   | Enable warm pools for `coreweave` or `kubernetes`.                                                                                                                                |
+| `MARIMOHUB_COMPUTE_WARM_POOL_ENABLED`    | `false`   | Enable warm pools for `coreweave`, `kubernetes`, or `docker`.                                                                                                                     |
 | `MARIMOHUB_COMPUTE_WARM_POOL_SIZE`       | `1`       | Positive integer target of idle sandboxes per selected profile.                                                                                                                   |
 | `MARIMOHUB_COMPUTE_WARM_POOL_PROFILES`   | `default` | `default` warms the first profile in each editing and app list; `all` warms every profile in both lists.                                                                          |
 | `MARIMOHUB_COMPUTE_WARM_POOL_PRECONNECT` | `true`    | Prepare CoreWeave Direct credentials and channels for ready members on every Node process. Set `false` to disable. See [Compute](./compute.md#warm-pool-transport-preconnection). |
 
 When `MARIMOHUB_COMPUTE_APP_PROFILES` is set, `default` warms the first profile in each list and `all` warms both lists. Profiles with identical names and resources share a pool; the same name with different resources gets separate pools.
+
+Docker pools create idle containers on the configured daemon. When several hubs share a daemon, set a distinct `MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG` for each hub so discovery and cleanup stay scoped to its containers. Pool ownership fingerprints the effective Docker endpoint, including the endpoint selected by the active Docker context, without storing Docker credentials in pool records. Changes to the context endpoint invalidate the pool configuration even when the context name stays the same. If pooling is enabled with a non-default context, that context must be resolvable from `DOCKER_CONFIG`; startup fails closed if its endpoint is unavailable.
 
 When no editing profiles are configured, both `default` and `all` include an adapter-default editing pool, in addition to any selected app pools. Without either profile list, one pool uses adapter defaults. Capacity is shared across server replicas. Three profiles with size two maintain six idle sandboxes.
 
@@ -71,13 +73,9 @@ Creation, health, and cleanup failures produce structured `warm_pool_*` logs. Ex
 
 The pool stores ownership under `_system/warm-pools/{backend}.json`. Preserve these records during upgrades. Corrupt ownership records block orphan deletion until the records are repaired.
 
-With backend credentials exported, run the opt-in live smoke test separately for each backend:
+The `Docker warm-pool lifecycle` CI job runs the opt-in smoke on a GitHub-hosted ephemeral runner. The test refuses other runners and generates a fresh owner tag for every run; do not adapt it to a local, shared, or production Docker Engine.
 
-```sh
-MARIMOHUB_WARM_POOL_LIVE_TEST=true pnpm --filter @marimo-hub/config test warmPool.live --run
-```
-
-The test creates billable sandboxes, reconnects through another provider instance, checks replenishment, and destroys its sandboxes. It reports cold preparation and warm claim times.
+The test creates disposable sandboxes, starts real Hub sessions through the API, executes both live kernels, verifies cross-session kernel-token rejection and clean notebook state, stops each session through the API, and confirms exact container removal and pool replenishment. A separate control kernel remains executable throughout. The CI log artifact reports cold and warm session startup, notebook execution, pool preparation, and warm-claim timings.
 
 ### Readiness budgets
 

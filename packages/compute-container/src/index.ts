@@ -654,7 +654,11 @@ export class ContainerCompute implements SandboxProvider {
 			'--format',
 			'{{.Names}}',
 		]);
-		if (res.exitCode !== 0) return [];
+		if (res.exitCode !== 0) {
+			throw new Error(
+				`${this.config.engine} failed to list active sandboxes (exit ${res.exitCode})`,
+			);
+		}
 		const active: ActiveSandbox[] = [];
 		for (const name of res.stdout.split('\n')) {
 			const trimmed = name.trim();

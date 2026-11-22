@@ -80,6 +80,20 @@ describe('warm pool configuration', () => {
 		expect(changed.config.profiles[0].key).not.toBe(parsed.config.profiles[0].key);
 	});
 
+	it('accepts Docker with reconnect support and a stable daemon identity', () => {
+		const compute = makeCompute({
+			MARIMOHUB_COMPUTE_BACKEND: 'docker',
+			MARIMOHUB_COMPUTE_WARM_POOL_ENABLED: 'true',
+			MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG: 'hub-test',
+			DOCKER_HOST: 'ssh://user:secret@docker.example.test:2222',
+		});
+		const parsed = parseWarmPoolConfig(enabled, { ...options, backend: 'docker', compute });
+
+		expect(parsed?.config.enabled).toBe(true);
+		expect(parsed?.backend).toBe('docker');
+		expect(JSON.stringify(parsed?.config)).not.toContain('secret');
+	});
+
 	it('requires strict reconnect even if a provider advertises pooling', () => {
 		expect(() =>
 			parseWarmPoolConfig(enabled, {

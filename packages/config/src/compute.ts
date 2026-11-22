@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto';
+import { readFileSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { Millis, Seconds } from '@marimo-hub/core';
 import type { SandboxExposureMode, SandboxProvider, WarmPoolSupport } from '@marimo-hub/core';
 import type { SandboxConfig } from '@marimo-hub/api';
@@ -375,6 +379,104 @@ function withWarmPoolSupport(provider: SandboxProvider, support: WarmPoolSupport
 	return Object.assign(provider, { warmPool: support });
 }
 
+function dockerConfigDir(env: Env): string {
+	return env.DOCKER_CONFIG?.trim() || join(env.HOME?.trim() || homedir(), '.docker');
+}
+
+function dockerContextEndpoint(
+	env: Env,
+	context: string,
+): { host: string; skipTlsVerify?: boolean } {
+	const metadataDir = join(dockerConfigDir(env), 'contexts', 'meta');
+	try {
+		for (const entry of readdirSync(metadataDir, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			try {
+				const metadata = JSON.parse(
+					readFileSync(join(metadataDir, entry.name, 'meta.json'), 'utf8'),
+				) as {
+					Name?: unknown;
+					Endpoints?: { docker?: { Host?: unknown; SkipTLSVerify?: unknown } };
+				};
+				const endpoint = metadata.Endpoints?.docker;
+				if (metadata.Name === context && typeof endpoint?.Host === 'string') {
+					return {
+						host: endpoint.Host,
+						...(typeof endpoint.SkipTLSVerify === 'boolean'
+							? { skipTlsVerify: endpoint.SkipTLSVerify }
+							: {}),
+					};
+				}
+			} catch {
+				// Ignore other or incomplete context records while searching for the selected context.
+			}
+		}
+	} catch {
+		// The built-in default context does not require a metadata directory.
+	}
+	if (context === 'default') return { host: 'unix:///var/run/docker.sock' };
+	throw new ConfigError('Cannot resolve the selected Docker context endpoint for warm pools', {
+		variable: 'DOCKER_CONTEXT',
+		remediation:
+			'Keep the selected Docker context present in DOCKER_CONFIG so warm-pool ownership follows its daemon endpoint.',
+	});
+}
+
+function dockerDaemonIdentity(env: Env): string {
+	let endpoint: { host: string; context?: string; skipTlsVerify?: boolean };
+	const explicitContext = env.DOCKER_CONTEXT?.trim();
+	if (explicitContext) {
+		endpoint = { ...dockerContextEndpoint(env, explicitContext), context: explicitContext };
+	} else if (env.DOCKER_HOST?.trim()) {
+		endpoint = { host: env.DOCKER_HOST.trim() };
+	} else {
+		let context = 'default';
+		try {
+			const config = JSON.parse(
+				readFileSync(join(dockerConfigDir(env), 'config.json'), 'utf8'),
+			) as {
+				currentContext?: unknown;
+			};
+			if (typeof config.currentContext === 'string' && config.currentContext.trim()) {
+				context = config.currentContext.trim();
+			}
+		} catch (error) {
+			if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+				throw new ConfigError('Cannot read the Docker CLI context configuration for warm pools', {
+					variable: 'DOCKER_CONFIG',
+				});
+			}
+		}
+		endpoint = { ...dockerContextEndpoint(env, context), context };
+	}
+	let host = endpoint.host;
+	let userIdentity: string | undefined;
+	try {
+		const parsed = new URL(host);
+		if (parsed.username) {
+			userIdentity = createHash('sha256').update(parsed.username).digest('hex');
+		}
+		parsed.username = '';
+		parsed.password = '';
+		parsed.search = '';
+		parsed.hash = '';
+		host = parsed.toString();
+	} catch {
+		// Docker accepts socket paths in addition to URLs; they contain no URL user-info.
+	}
+	const selection = {
+		...endpoint,
+		host,
+		userIdentity,
+		tls: {
+			enabled: env.DOCKER_TLS,
+			verify: env.DOCKER_TLS_VERIFY,
+			certificatePath: env.DOCKER_CERT_PATH,
+		},
+	};
+	return createHash('sha256').update(JSON.stringify(selection)).digest('hex');
+}
+
 export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 	const backend = computeBackend(env);
 	if (!backend) {
@@ -559,29 +661,37 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 					opts?.sessionMaxLifetimeSeconds,
 				),
 			});
-		case 'docker':
-		case 'podman': {
-			const Container = backend === 'docker' ? DockerCompute : PodmanCompute;
-			const variables =
-				backend === 'docker'
-					? {
-							host: 'MARIMOHUB_COMPUTE_DOCKER_HOST',
-							bindHost: 'MARIMOHUB_COMPUTE_DOCKER_BIND_HOST',
-							network: 'MARIMOHUB_COMPUTE_DOCKER_NETWORK',
-							ownerTag: 'MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG',
-						}
-					: {
-							host: 'MARIMOHUB_COMPUTE_PODMAN_HOST',
-							bindHost: 'MARIMOHUB_COMPUTE_PODMAN_BIND_HOST',
-							network: 'MARIMOHUB_COMPUTE_PODMAN_NETWORK',
-							ownerTag: 'MARIMOHUB_COMPUTE_PODMAN_OWNER_TAG',
-						};
-			return new Container({
+		case 'docker': {
+			const ownerTag = containerOwnerTag(env, 'MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG');
+			const provider = new DockerCompute({
 				image: defaultImage,
-				host: env[variables.host],
-				bindHost: env[variables.bindHost],
-				network: env[variables.network],
-				ownerTag: containerOwnerTag(env, variables.ownerTag),
+				host: env.MARIMOHUB_COMPUTE_DOCKER_HOST,
+				bindHost: env.MARIMOHUB_COMPUTE_DOCKER_BIND_HOST,
+				network: env.MARIMOHUB_COMPUTE_DOCKER_NETWORK,
+				ownerTag,
+				surfacePorts: surfacePorts(opts?.surfaces),
+			});
+			return withWarmPoolSupport(provider, {
+				maxLifetimeMs: null,
+				configuration: {
+					host: env.MARIMOHUB_COMPUTE_DOCKER_HOST,
+					bindHost: env.MARIMOHUB_COMPUTE_DOCKER_BIND_HOST,
+					network: env.MARIMOHUB_COMPUTE_DOCKER_NETWORK,
+					ownerTag,
+					// Non-pooling Docker deployments must not depend on local CLI context files.
+					daemon: parseBool(env, 'MARIMOHUB_COMPUTE_WARM_POOL_ENABLED')
+						? dockerDaemonIdentity(env)
+						: 'disabled',
+				},
+			});
+		}
+		case 'podman': {
+			return new PodmanCompute({
+				image: defaultImage,
+				host: env.MARIMOHUB_COMPUTE_PODMAN_HOST,
+				bindHost: env.MARIMOHUB_COMPUTE_PODMAN_BIND_HOST,
+				network: env.MARIMOHUB_COMPUTE_PODMAN_NETWORK,
+				ownerTag: containerOwnerTag(env, 'MARIMOHUB_COMPUTE_PODMAN_OWNER_TAG'),
 				surfacePorts: surfacePorts(opts?.surfaces),
 			});
 		}

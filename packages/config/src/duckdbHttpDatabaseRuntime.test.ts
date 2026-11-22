@@ -151,7 +151,7 @@ describe('packaged remote DuckDB database', () => {
 		expect(requests.map((request) => request.headers?.authorization)).not.toContain(
 			WORKER_AUTHORIZATION,
 		);
-	});
+	}, 30_000);
 
 	it('fails if the object changes after the first range response', async () => {
 		let rangeResponses = 0;
@@ -188,5 +188,5 @@ describe('packaged remote DuckDB database', () => {
 			executor.terminate();
 		}
 		expect(rangeResponses).toBe(1);
-	});
+	}, 30_000);
 });

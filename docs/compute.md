@@ -212,7 +212,7 @@ and [Sandbox image](./sandbox-image.md).
 
 ## Warm sandbox pools
 
-CoreWeave and Kubernetes support opt-in [warm sandbox pools](./warm-pools.md). Pools keep the default image running for faster editor and app startup.
+CoreWeave, Kubernetes, and Docker support opt-in [warm sandbox pools](./warm-pools.md). Pools keep the default image running for faster editor and app startup.
 
 ### Warm pool transport preconnection
 
