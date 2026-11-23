@@ -1,9 +1,13 @@
-import { RunListQuery, resolveRunFilter, matchesRunFilter } from '../jobs/runQuery';
+import {
+	RunListQuery,
+	prepareRunListQuery,
+	matchesRunFilter,
+	RUN_LIST_DESCRIPTION,
+} from '../jobs/runQuery';
 import { createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import {
 	JobId,
-	BadRequestError,
 	ForbiddenError,
 	NotFoundError,
 	RunId,
@@ -36,14 +40,7 @@ import {
 } from '../jobs/operations';
 import { idempotentCreate } from '../idempotency';
 import { appendAudit, describeError, logEvent } from '../log';
-import {
-	decodeCursor,
-	DEFAULT_PAGE_SIZE,
-	encodeCursor,
-	MAX_PAGE_SIZE,
-	pageSchema,
-	PaginationQuery,
-} from '../pagination';
+import { pageSchema, PaginationQuery } from '../pagination';
 import {
 	commonErrors,
 	createApp,
@@ -206,8 +203,7 @@ const listRuns = createRoute({
 	operationId: 'jobs.runs.list',
 	tags: ['Jobs'],
 	summary: 'List a job’s runs',
-	description:
-		'Optional status and triggered_by filters. Filtered requests scan at most limit entries (maximum 500). Follow continuation cursors even on empty pages. Status is read live; restart the scan to refresh earlier results.',
+	description: RUN_LIST_DESCRIPTION,
 	request: { params: JobIdParam, query: RunListQuery },
 	responses: {
 		200: jsonContent(
@@ -454,25 +450,15 @@ app.openapi(listRuns, async (c) => {
 	const target = await loadAuthorizedJob(c.get('deps'), c.get('user'), pid, nid, jid);
 	const { job } = target;
 	const query = c.req.valid('query');
-	const filter = resolveRunFilter(query, c.get('user').id);
-	const filtered = filter.status !== undefined || filter.triggered_by !== undefined;
-	const scope = encodeURIComponent(JSON.stringify([pid, nid, job.id, filter]));
-	const cursor = decodeCursor(query.cursor);
-	let afterRunId: RunId | undefined;
-	if (cursor) {
-		if (!RunId.is(cursor[1]) || cursor[0] !== (filtered ? scope : cursor[1]))
-			throw new BadRequestError('Invalid pagination cursor');
-		afterRunId = RunId.parse(cursor[1]);
-	}
-	const limit = Math.min(query.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
-	const page = await deps.services.jobRuns.listRunsPage(
-		pid,
-		nid,
-		job.id,
-		limit,
-		afterRunId,
-		filtered,
+	const { filter, filtered, limit, afterRunId, nextCursor } = prepareRunListQuery(
+		query,
+		c.get('user').id,
+		[pid, nid, job.id],
+		{ legacyJobCursor: true },
 	);
+	const page = filtered
+		? await deps.services.jobRuns.scanRunsPage(pid, nid, job.id, limit, afterRunId)
+		: await deps.services.jobRuns.listRunsPage(pid, nid, job.id, limit, afterRunId);
 	return c.json(
 		{
 			success: true,
@@ -480,9 +466,7 @@ app.openapi(listRuns, async (c) => {
 				items: (await Promise.all(page.items.map((run) => visibleJobRun(deps, target, job, run))))
 					.filter((run) => run !== null)
 					.filter((run) => matchesRunFilter(run, filter)),
-				next_cursor: page.nextRunId
-					? encodeCursor(filtered ? scope : page.nextRunId, page.nextRunId)
-					: null,
+				next_cursor: nextCursor(page.nextRunId),
 			},
 		},
 		200,

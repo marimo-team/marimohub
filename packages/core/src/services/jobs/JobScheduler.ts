@@ -22,7 +22,7 @@ import { occurrenceKey, parseCron, previousOccurrence } from './cron';
 import { indexedJobs } from './JobsService';
 import type { IndexedJob, JobsService } from './JobsService';
 import type { JobRunService } from './JobRunService';
-import { isActiveRunStatus, isTerminalRunStatus } from './runState';
+import { isSandboxHoldingRunStatus, isTerminalRunStatus } from './runState';
 
 const IDLE_RECOVERY_BATCH = 25;
 
@@ -541,7 +541,7 @@ export class JobScheduler {
 	 * CAS `timed_out`. Also covers a scheduler process that died mid-execution.
 	 */
 	private async watchdog(run: JobRun, now: number): Promise<boolean> {
-		if (!isActiveRunStatus(run.status)) return false;
+		if (!isSandboxHoldingRunStatus(run.status)) return false;
 		const grace = this.deps.config.watchdogGraceMs ?? DEFAULT_WATCHDOG_GRACE_MS;
 		const deadline = run.deadline_at
 			? Date.parse(run.deadline_at)

@@ -722,6 +722,7 @@ export function createServices(
 		runExists: run,
 		listRuns: job,
 		listRunsPage: job,
+		scanRunsPage: job,
 	});
 	const maintenance = wrap('MaintenanceService', new MaintenanceService(bucket, metrics));
 	const idempotency = wrap('IdempotencyService', new IdempotencyService(metadata), {

@@ -3173,7 +3173,7 @@
 			"method": "GET",
 			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs",
 			"summary": "List a job’s runs",
-			"description": "Optional status and triggered_by filters. Filtered requests scan at most limit entries (maximum 500). Follow continuation cursors even on empty pages. Status is read live; restart the scan to refresh earlier results.",
+			"description": "Runs are ordered by descending run ID. Project lists and filtered job lists scan at most limit entries (maximum 500). Follow next_cursor even on empty pages. Status and access are read live. Restart from the first page to refresh active runs.",
 			"parameters": [
 				{
 					"name": "jid",
@@ -3229,7 +3229,16 @@
 					"cli_name": "triggered-by",
 					"in": "query",
 					"required": false,
-					"description": "Exact triggering user ID, or me for the authenticated user.",
+					"description": "Exact triggering user ID.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "triggered_by_me",
+					"cli_name": "triggered-by-me",
+					"in": "query",
+					"required": false,
+					"description": "Filter to the authenticated user. Cannot be combined with triggered_by.",
 					"value_type": "string",
 					"repeatable": false
 				}
@@ -6132,8 +6141,8 @@
 			"command": ["projects", "runs", "list"],
 			"method": "GET",
 			"path": "/api/v1/projects/{pid}/runs",
-			"summary": "List project runs with an optional exact-match submission tag",
-			"description": "Scans at most limit index entries (maximum 500), newest run ID first. Empty filtered pages can have a continuation cursor. Tags are conventions, never authorization: each result requires current source job access.",
+			"summary": "List project runs by status, triggering user, or submission tag",
+			"description": "Runs are ordered by descending run ID. Project lists and filtered job lists scan at most limit entries (maximum 500). Follow next_cursor even on empty pages. Status and access are read live. Restart from the first page to refresh active runs.",
 			"parameters": [
 				{
 					"name": "pid",
@@ -6189,7 +6198,16 @@
 					"cli_name": "triggered-by",
 					"in": "query",
 					"required": false,
-					"description": "Exact triggering user ID, or me for the authenticated user.",
+					"description": "Exact triggering user ID.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "triggered_by_me",
+					"cli_name": "triggered-by-me",
+					"in": "query",
+					"required": false,
+					"description": "Filter to the authenticated user. Cannot be combined with triggered_by.",
 					"value_type": "string",
 					"repeatable": false
 				}

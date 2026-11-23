@@ -23130,10 +23130,10 @@ paths:
       tags:
         - Jobs
       summary: List a job’s runs
-      description: Optional status and triggered_by filters. Filtered requests scan at
-        most limit entries (maximum 500). Follow continuation cursors even on
-        empty pages. Status is read live; restart the scan to refresh earlier
-        results.
+      description: Runs are ordered by descending run ID. Project lists and filtered
+        job lists scan at most limit entries (maximum 500). Follow next_cursor
+        even on empty pages. Status and access are read live. Restart from the
+        first page to refresh active runs.
       parameters:
         - schema:
             type: string
@@ -23190,10 +23190,21 @@ paths:
             type: string
             minLength: 1
             maxLength: 1024
-            description: Exact triggering user ID, or me for the authenticated user.
+            description: Exact triggering user ID.
           required: false
-          description: Exact triggering user ID, or me for the authenticated user.
+          description: Exact triggering user ID.
           name: triggered_by
+          in: query
+        - schema:
+            type: string
+            enum:
+              - 'true'
+            description: Filter to the authenticated user. Cannot be combined with
+              triggered_by.
+          required: false
+          description: Filter to the authenticated user. Cannot be combined with
+            triggered_by.
+          name: triggered_by_me
           in: query
       responses:
         '200':
@@ -23670,11 +23681,11 @@ paths:
       operationId: projects.runs.list
       tags:
         - Jobs
-      summary: List project runs with an optional exact-match submission tag
-      description: 'Scans at most limit index entries (maximum 500), newest run ID
-        first. Empty filtered pages can have a continuation cursor. Tags are
-        conventions, never authorization: each result requires current source
-        job access.'
+      summary: List project runs by status, triggering user, or submission tag
+      description: Runs are ordered by descending run ID. Project lists and filtered
+        job lists scan at most limit entries (maximum 500). Follow next_cursor
+        even on empty pages. Status and access are read live. Restart from the
+        first page to refresh active runs.
       parameters:
         - schema:
             type: string
@@ -23717,10 +23728,21 @@ paths:
             type: string
             minLength: 1
             maxLength: 1024
-            description: Exact triggering user ID, or me for the authenticated user.
+            description: Exact triggering user ID.
           required: false
-          description: Exact triggering user ID, or me for the authenticated user.
+          description: Exact triggering user ID.
           name: triggered_by
+          in: query
+        - schema:
+            type: string
+            enum:
+              - 'true'
+            description: Filter to the authenticated user. Cannot be combined with
+              triggered_by.
+          required: false
+          description: Filter to the authenticated user. Cannot be combined with
+            triggered_by.
+          name: triggered_by_me
           in: query
         - schema:
             type: string

@@ -23,7 +23,7 @@ export const TERMINAL_RUN_STATUSES = [
 ] as const;
 
 /** Statuses that hold (or are about to hold) a sandbox. */
-export const ACTIVE_RUN_STATUSES = ['provisioning', 'running'] as const;
+export const SANDBOX_HOLDING_RUN_STATUSES = ['provisioning', 'running'] as const;
 
 const machine = createStateMachine<RunStatus, RunEvent>({
 	transitions: {
@@ -48,8 +48,8 @@ export function isTerminalRunStatus(status: RunStatus): boolean {
 	return machine.isTerminal(status);
 }
 
-export function isActiveRunStatus(status: RunStatus): boolean {
-	return (ACTIVE_RUN_STATUSES as readonly RunStatus[]).includes(status);
+export function isSandboxHoldingRunStatus(status: RunStatus): boolean {
+	return (SANDBOX_HOLDING_RUN_STATUSES as readonly RunStatus[]).includes(status);
 }
 
 /** The status after `event`, or `null` when the edge is illegal (so callers skip the write). */

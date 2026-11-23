@@ -97,20 +97,38 @@ describe('JobRunService', () => {
 		expect(second.nextRunId).toBeNull();
 	});
 
+	it('uses the run ID to break timestamp ties across bounded pages', async () => {
+		const ids = [
+			runIdAt(1_700_000_000_000),
+			runIdAt(1_700_000_000_000),
+			runIdAt(1_700_000_000_000),
+		];
+		for (const runId of ids) await enqueue({ runId });
+		const expected = [...ids].sort().reverse();
+		let cursor: RunId | undefined;
+		const seen: RunId[] = [];
+		do {
+			const page = await runs.scanRunsPage(pid, nid, job.id, 1, cursor);
+			seen.push(...page.items.map((r) => r.run_id));
+			cursor = page.nextRunId ?? undefined;
+		} while (cursor);
+		expect(seen).toEqual(expected);
+	});
+
 	it('bounds filtered scans and continues past missing records', async () => {
 		const older = await enqueue();
 		const newer = await enqueue();
 		await env.bucket.delete(paths.project(pid).notebook(nid).job(job.id).run(newer.run_id).record);
 		const list = vi.spyOn(env.bucket, 'list');
-		const first = await runs.listRunsPage(pid, nid, job.id, 1, undefined, true);
+		const first = await runs.scanRunsPage(pid, nid, job.id, 1, undefined);
 		expect(first.items).toEqual([]);
 		expect(first.nextRunId).toBe(newer.run_id);
 		expect(list).toHaveBeenCalledTimes(1);
-		const last = await runs.listRunsPage(pid, nid, job.id, 1, first.nextRunId!, true);
+		const last = await runs.scanRunsPage(pid, nid, job.id, 1, first.nextRunId!);
 		expect(last.items.map((r) => r.run_id)).toEqual([older.run_id]);
 		expect(last.nextRunId).toBeNull();
-		await runs.listRunsPage(pid, nid, job.id, 9999, undefined, true);
-		expect(list.mock.lastCall?.[0].limit).toBe(500);
+		await runs.scanRunsPage(pid, nid, job.id, 9999, undefined);
+		expect(list.mock.lastCall?.[0]?.limit).toBe(500);
 	});
 
 	it('fetches only the records needed for one history page', async () => {
@@ -878,15 +896,26 @@ describe('JobRunService', () => {
 			).toBe(true);
 		});
 
-		it('skips a corrupt run record when listing history', async () => {
-			vi.spyOn(console, 'error').mockImplementation(() => {});
-			const good = await enqueue();
-			const corrupt = createRunId();
-			const jobPaths = paths.project(pid).notebook(nid).job(job.id);
-			await env.bucket.put(jobPaths.runIndex(corrupt), '');
-			await env.bucket.put(jobPaths.run(corrupt).record, '{"status":"queued"}');
-			expect((await runs.listRuns(pid, nid, job.id)).map((r) => r.run_id)).toEqual([good.run_id]);
-		});
+		it.each(['{bad json', '{"status":"queued"}'])(
+			'skips and logs corrupt history %s in list and scan pages',
+			async (payload) => {
+				const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+				const good = await enqueue();
+				const corrupt = createRunId();
+				const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+				await env.bucket.put(jobPaths.runIndex(corrupt), '');
+				await env.bucket.put(jobPaths.run(corrupt).record, payload);
+				expect((await runs.listRuns(pid, nid, job.id)).map((r) => r.run_id)).toEqual([good.run_id]);
+				const first = await runs.scanRunsPage(pid, nid, job.id, 1);
+				expect(first).toEqual({ items: [], nextRunId: corrupt });
+				const last = await runs.scanRunsPage(pid, nid, job.id, 1, first.nextRunId!);
+				expect(last.items.map((r) => r.run_id)).toEqual([good.run_id]);
+				expect(last.nextRunId).toBeNull();
+				expect(
+					error.mock.calls.some((call) => String(call[0]).includes('stored_object_skipped')),
+				).toBe(true);
+			},
+		);
 
 		it('throws NotFoundError when transitioning a missing run', async () => {
 			await expect(
