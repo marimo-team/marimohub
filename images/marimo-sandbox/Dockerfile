@@ -79,7 +79,7 @@ COPY --from=notebook_bridge src/runtime.generated.ts /tmp/notebook-bridge.ts
 COPY install-bridge.py /tmp/install-bridge.py
 RUN python3 /tmp/install-bridge.py /tmp/notebook-bridge.ts \
  && rm /tmp/install-bridge.py /tmp/notebook-bridge.ts \
- && chown -R appuser:appuser /opt/marimohub/venv/lib/python*/site-packages/marimohub_notebook_bridge*
+ && chown -R appuser:appuser /opt/marimohub/venv/lib/python*/site-packages/marimohub*
 
 ENV VIRTUAL_ENV=/opt/marimohub/venv \
     PATH=/opt/marimohub/venv/bin:$PATH

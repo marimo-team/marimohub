@@ -26,6 +26,25 @@ with tempfile.TemporaryDirectory() as directory:
         check=True,
     )
 
+from marimohub.jobs import Jobs
+
+assert Jobs.__module__ == "marimohub.jobs"
+
+from marimo._runtime.commands import HTTPRequest
+from starlette.requests import Request
+
+request = HTTPRequest.from_request(Request({
+    "type": "http", "method": "GET", "scheme": "https", "path": "/",
+    "query_string": b"", "server": ("hub.test", 443),
+    "headers": [
+        (b"x-mhub-app-jobs-url", b"https://hub.test/api/app-jobs/v1"),
+        (b"x-mhub-app-jobs-credential", b"visitor-credential"),
+    ],
+}))
+client = Jobs.from_request(request)
+assert client._endpoint == "https://hub.test/api/app-jobs/v1"
+assert client._credential == "visitor-credential"
+
 actual = importlib.resources.files("marimohub_notebook_bridge").joinpath("identity").read_text()
 assert actual == identity, f"Bridge identity mismatch: {actual} != {identity}"
 

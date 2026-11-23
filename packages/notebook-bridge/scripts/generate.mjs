@@ -19,6 +19,7 @@ const built = await build({
 const output = (Array.isArray(built) ? built[0] : built).output;
 const script = output.find((item) => item.type === 'chunk').code;
 const launcher = await readFile(`${root}python/launcher.py`, 'utf8');
+const jobs = await readFile(`${root}python/jobs.py`, 'utf8');
 const extension = await readFile(`${root}python/extension.py`, 'utf8');
 const lifecycleFiles = Object.fromEntries(
 	await Promise.all(
@@ -28,12 +29,16 @@ const lifecycleFiles = Object.fromEntries(
 		]),
 	),
 );
+const sdkFiles = { 'marimohub/__init__.py': '', 'marimohub/jobs.py': jobs };
 const hash = (value) => createHash('sha256').update(value).digest('hex');
-const identity = hash(extension + script + launcher + JSON.stringify(lifecycleFiles));
+const identity = hash(
+	JSON.stringify(sdkFiles) + extension + script + launcher + JSON.stringify(lifecycleFiles),
+);
 const version = `0.1.0+${identity.slice(0, 16)}`;
 const dist = `marimohub_notebook_bridge-${version}.dist-info`;
 const files = {
 	'marimohub_notebook_bridge/__init__.py': extension,
+	...sdkFiles,
 	'marimohub_notebook_bridge/bridge.js': script,
 	'marimohub_notebook_bridge/identity': identity,
 	[`${dist}/METADATA`]: `Metadata-Version: 2.1\nName: marimohub-notebook-bridge\nVersion: ${version}\nRequires-Python: >=3.10\n`,

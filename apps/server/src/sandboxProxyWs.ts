@@ -112,6 +112,12 @@ export function attachSandboxProxyUpgrade(
 				}
 				const headers = {
 					...forwarded,
+					...(decision.appJobCredential
+						? {
+								'x-mhub-app-jobs-credential': decision.appJobCredential,
+								'x-mhub-app-jobs-url': decision.appJobsEndpoint,
+							}
+						: {}),
 					host: target.host,
 					origin: target.origin,
 					...(decision.kernelAuthToken

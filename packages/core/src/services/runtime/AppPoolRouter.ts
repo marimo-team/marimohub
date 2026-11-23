@@ -177,6 +177,9 @@ export function routeApp(
 		(assignment) => assignment.user_id === input.userId && assignment.visit_id === input.visitId,
 	);
 	if (existing) {
+		// A new visit must not revive credentials from the departed visit.
+		if (!existing.visits.some((visit) => visit.visit_id === input.visitId))
+			existing.generation = input.generation;
 		const member = next.members.find((item) => item.session_id === existing.session_id)!;
 		renewAppVisit(existing, input.visitId, input.now + policy.userLeaseMs);
 		delete member.idle_since;

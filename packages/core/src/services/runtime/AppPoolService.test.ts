@@ -596,8 +596,10 @@ describe('app pool admission and lifecycle', () => {
 	it('retains stickiness during grace but uses the latest version after departure', async () => {
 		const first = await ready(await admit());
 		await pool.leave(pid, nid, UserId.parse('alice'), first.member.session_id, visit(first));
-		expect((await admit('alice', v2)).member.session_id).toBe(first.member.session_id);
-		await pool.leave(pid, nid, UserId.parse('alice'), first.member.session_id, visit(first));
+		const reconnected = await admit('alice', v2);
+		expect(reconnected.member.session_id).toBe(first.member.session_id);
+		expect(reconnected.assignment.generation).not.toBe(first.assignment.generation);
+		await pool.leave(pid, nid, UserId.parse('alice'), first.member.session_id, visit(reconnected));
 		now += policy.reconnectGraceMs + 1;
 		const next = await admit('alice', v2);
 		expect(next.member.source_version_id).toBe(v2);
