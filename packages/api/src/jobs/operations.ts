@@ -150,6 +150,7 @@ export async function triggerJobRun(
 				trigger: 'manual',
 				triggeredBy: user.id,
 				parameters: body?.parameters ?? current.parameters,
+				tags: body?.tags,
 				sourceVersionId:
 					(await deps.services.notebooks.getNotebookSource(project.id, notebook.id))
 						.current_version_id ?? undefined,

@@ -66,6 +66,7 @@ export function classifyMetadataKey(key: string): StoragePlacement {
 		return 'metadata';
 	const project = /^projects\/[^/]+\/(.+)$/.exec(key)?.[1];
 	if (project) {
+		if (/^run-index\/[^/]+\.json$/.test(project)) return 'metadata';
 		if (
 			/^(project|alerts)\.json$/.test(project) ||
 			/^conversations\/[^/]+\/[^/]+\.json$/.test(project) ||

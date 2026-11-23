@@ -4760,6 +4760,21 @@ components:
     JobRun:
       type: object
       properties:
+        tags:
+          type: object
+          additionalProperties:
+            type: string
+            maxLength: 256
+          maxProperties: 32
+        metadata:
+          type: object
+          additionalProperties:
+            anyOf:
+              - type: string
+                maxLength: 1024
+              - type: number
+              - type: boolean
+          maxProperties: 32
         run_id:
           type: string
           pattern: ^run_[0-9A-HJKMNP-TV-Z]{26}$
@@ -4879,10 +4894,35 @@ components:
     JobRunTriggerBody:
       type: object
       properties:
+        tags:
+          type: object
+          additionalProperties:
+            type: string
+            maxLength: 256
+          maxProperties: 32
+          description: Immutable submission tags. Exact-match history filters use these
+            values; tags never grant access.
+          example:
+            app: calibration-runner
+            app_version: v3
         parameters:
           $ref: '#/components/schemas/JobParameters'
       additionalProperties: false
     JobRunPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobRun'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+      required:
+        - items
+        - next_cursor
+    ProjectRunPage:
       type: object
       properties:
         items:
@@ -23507,6 +23547,243 @@ paths:
             text/plain:
               schema:
                 type: string
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/runs:
+    get:
+      operationId: projects.runs.list
+      tags:
+        - Jobs
+      summary: List project runs with an optional exact-match submission tag
+      description: 'Scans at most limit index entries (maximum 500), newest run ID
+        first. Empty filtered pages can have a continuation cursor. Tags are
+        conventions, never authorization: each result requires current source
+        job access.'
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+            example: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            example: WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ
+          required: false
+          name: cursor
+          in: query
+        - schema:
+            type: string
+            pattern: ^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$
+          required: false
+          name: tag_key
+          in: query
+        - schema:
+            type: string
+            maxLength: 256
+          required: false
+          name: tag_value
+          in: query
+      responses:
+        '200':
+          description: Authorized run history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/ProjectRunPage'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/history-backfill:
+    post:
+      operationId: jobs.history.backfill
+      tags:
+        - Jobs
+      summary: Repair one bounded page of the project run index
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^job-[0-9a-z]{16}$
+            example: job-7h2k9qm4xz7rp3w8
+          required: true
+          name: jid
+          in: path
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+            example: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            example: WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ
+          required: false
+          name: cursor
+          in: query
+      responses:
+        '200':
+          description: Backfill progress
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      next_cursor:
+                        type:
+                          - string
+                          - 'null'
+                    required:
+                      - next_cursor
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Authentication required
           content:

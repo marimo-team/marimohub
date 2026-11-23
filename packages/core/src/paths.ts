@@ -153,6 +153,8 @@ export interface NotebookImportPaths {
 }
 
 export interface ProjectPaths {
+	runIndexPrefix: string;
+	runIndex: (rid: RunId) => string;
 	objectUploadsPrefix: string;
 	meta: string;
 	/** CAS-owned project alert destinations. */
@@ -279,6 +281,8 @@ function integrationPaths(projectBase: string, iid: IntegrationId): IntegrationP
 function projectPaths(pid: ProjectId): ProjectPaths {
 	const base = `projects/${pid}`;
 	return {
+		runIndexPrefix: `projects/${pid}/run-index/`,
+		runIndex: (rid) => `projects/${pid}/run-index/${reverseRunId(rid)}.json`,
 		objectUploadsPrefix: `${base}/object-uploads/`,
 		meta: `${base}/project.json`,
 		alerts: `${base}/alerts.json`,

@@ -2043,6 +2043,43 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/runs': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * List project runs with an optional exact-match submission tag
+		 * @description Scans at most limit index entries (maximum 500), newest run ID first. Empty filtered pages can have a continuation cursor. Tags are conventions, never authorization: each result requires current source job access.
+		 */
+		get: operations['projects.runs.list'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/history-backfill': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Repair one bounded page of the project run index */
+		post: operations['jobs.history.backfill'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/integrations/reconcile/plan': {
 		parameters: {
 			query?: never;
@@ -4985,6 +5022,12 @@ export interface components {
 			} | null;
 		};
 		JobRun: {
+			tags?: {
+				[key: string]: string;
+			};
+			metadata?: {
+				[key: string]: string | number | boolean;
+			};
 			run_id: string;
 			job_id: string;
 			notebook_id: string;
@@ -5056,9 +5099,23 @@ export interface components {
 			cancelled_by?: string;
 		};
 		JobRunTriggerBody: {
+			/**
+			 * @description Immutable submission tags. Exact-match history filters use these values; tags never grant access.
+			 * @example {
+			 *       "app": "calibration-runner",
+			 *       "app_version": "v3"
+			 *     }
+			 */
+			tags?: {
+				[key: string]: string;
+			};
 			parameters?: components['schemas']['JobParameters'];
 		};
 		JobRunPage: {
+			items: components['schemas']['JobRun'][];
+			next_cursor: string | null;
+		};
+		ProjectRunPage: {
 			items: components['schemas']['JobRun'][];
 			next_cursor: string | null;
 		};
@@ -20849,6 +20906,218 @@ export interface operations {
 				};
 				content: {
 					'text/plain': string;
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.runs.list': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+				tag_key?: string;
+				tag_value?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Authorized run history */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['ProjectRunPage'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'jobs.history.backfill': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				jid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Backfill progress */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							next_cursor: string | null;
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
 				};
 			};
 			/** @description Authentication required */
