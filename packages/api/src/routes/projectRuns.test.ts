@@ -28,7 +28,12 @@ describe('project run history routes', () => {
 			{ title: 'app', description: '', code: 'v1' },
 			ACTOR,
 		);
-		job = await services.jobs.createJob(p.id, n.id, { name: 'job' }, ACTOR);
+		job = await services.jobs.createJob(
+			p.id,
+			n.id,
+			{ name: 'job', consumer_history: 'shared' },
+			ACTOR,
+		);
 	});
 	it('returns accepted tags across notebooks and versions, without claiming identity isolation', async () => {
 		const first = await trigger({ app: 'calibration', app_version: 'v1' });
@@ -39,7 +44,12 @@ describe('project run history routes', () => {
 			{ title: 'app', description: '', code: 'other' },
 			ACTOR,
 		);
-		const other = await services.jobs.createJob(job.project_id, n.id, { name: 'job' }, ACTOR);
+		const other = await services.jobs.createJob(
+			job.project_id,
+			n.id,
+			{ name: 'job', consumer_history: 'shared' },
+			ACTOR,
+		);
 		const collision = await trigger({ app: 'calibration' }, other);
 		await trigger({ app: 'distinct' });
 		await trigger();
@@ -55,6 +65,82 @@ describe('project run history routes', () => {
 		expect(first.tags).toEqual({ app: 'calibration', app_version: 'v1' });
 		expect((await expectOk<Page>(await request()('GET', base()))).items).toHaveLength(5);
 		await expectOk(await request(VIEWER)('GET', `${jobBase()}/runs/${first.run_id}`));
+	});
+
+	it.each(['private', 'shared'] as const)(
+		'loads each job once per request while applying %s history per run',
+		async (history) => {
+			job = await services.jobs.updateJob(
+				job.project_id,
+				job.notebook_id,
+				job.id,
+				{ consumer_history: history },
+				ACTOR,
+			);
+			const enqueue = (triggeredBy: UserId) =>
+				services.jobRuns.enqueue({
+					job,
+					trigger: 'manual',
+					triggeredBy,
+					timeoutSeconds: 60,
+					parameters: { region: 'eu' },
+				});
+			const own = await enqueue(VIEWER);
+			const active = await enqueue(ACTOR);
+			const completed = await enqueue(ACTOR);
+			await services.jobRuns.cancel(completed, ACTOR);
+			const other = await services.jobs.createJob(
+				job.project_id,
+				job.notebook_id,
+				{ name: 'other' },
+				ACTOR,
+			);
+			await trigger(undefined, other);
+			const get = vi.spyOn(bucket, 'get');
+			const head = paths.project(job.project_id).notebook(job.notebook_id).job(job.id).head;
+			const otherHead = paths.project(job.project_id).notebook(job.notebook_id).job(other.id).head;
+			const reader = request(VIEWER);
+			const page = await expectOk<Page>(await reader('GET', base()));
+			expect(get.mock.calls.filter(([key]) => key === head)).toHaveLength(1);
+			expect(get.mock.calls.filter(([key]) => key === otherHead)).toHaveLength(1);
+			expect(page.items.find((run) => run.run_id === own.run_id)?.parameters).toEqual({
+				region: 'eu',
+			});
+			expect(page.items.some((run) => run.job_id === other.id)).toBe(false);
+			if (history === 'private') {
+				expect(page.items.map((run) => run.run_id)).toEqual([own.run_id]);
+			} else {
+				expect(page.items).toHaveLength(3);
+				expect(page.items.find((run) => run.run_id === active.run_id)?.parameters).toBeUndefined();
+				expect(page.items.find((run) => run.run_id === completed.run_id)?.parameters).toEqual({
+					region: 'eu',
+				});
+			}
+			await services.jobs.updateJob(
+				job.project_id,
+				job.notebook_id,
+				job.id,
+				{ consumer_history: history === 'shared' ? 'private' : 'shared' },
+				ACTOR,
+			);
+			get.mockClear();
+			const next = await expectOk<Page>(await reader('GET', base()));
+			expect(next.items).toHaveLength(history === 'shared' ? 1 : 3);
+			expect(get.mock.calls.filter(([key]) => key === head)).toHaveLength(1);
+			get.mockRestore();
+		},
+	);
+
+	it('loads a missing job only once for multiple retained run locators', async () => {
+		await trigger();
+		await trigger();
+		const head = paths.project(job.project_id).notebook(job.notebook_id).job(job.id).head;
+		await bucket.delete(head);
+		const get = vi.spyOn(bucket, 'get');
+		const page = await expectOk<Page>(await request(VIEWER)('GET', base()));
+		expect(page.items).toEqual([]);
+		expect(get.mock.calls.filter(([key]) => key === head)).toHaveLength(1);
+		get.mockRestore();
 	});
 	it('preserves empty-page continuation and binds cursors to the project and exact filter, including Unicode', async () => {
 		const first = await trigger({ app: '🚀' });
@@ -99,7 +185,12 @@ describe('project run history routes', () => {
 			{ title: 'restricted', description: '', code: '' },
 			ACTOR,
 		);
-		const restricted = await services.jobs.createJob(job.project_id, n.id, { name: 'job' }, ACTOR);
+		const restricted = await services.jobs.createJob(
+			job.project_id,
+			n.id,
+			{ name: 'job', consumer_history: 'shared' },
+			ACTOR,
+		);
 		await trigger({ app: 'shared' }, restricted);
 		const key = paths.project(job.project_id).notebook(n.id).meta;
 		const meta = await (await bucket.get(key))!.json<Record<string, unknown>>();
@@ -129,7 +220,12 @@ describe('project run history routes', () => {
 			{ title: 'other', description: '', code: '' },
 			ACTOR,
 		);
-		const otherJob = await services.jobs.createJob(p.id, otherNotebook.id, { name: 'job' }, ACTOR);
+		const otherJob = await services.jobs.createJob(
+			p.id,
+			otherNotebook.id,
+			{ name: 'job', consumer_history: 'shared' },
+			ACTOR,
+		);
 		await trigger({ app: 'shared' }, otherJob);
 		expect(
 			(await expectOk<Page>(await request()('GET', base()))).items.map((run) => run.run_id),

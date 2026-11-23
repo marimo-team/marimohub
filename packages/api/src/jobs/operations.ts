@@ -1,5 +1,9 @@
+import { jobCapabilities, toSharedJobRunSummary } from '@marimo-hub/core/jobs';
+import type { JobCapabilities } from '@marimo-hub/core/jobs';
 import {
 	BadRequestError,
+	ForbiddenError,
+	toPublicJobRun,
 	JobId,
 	MAX_QUEUED_RUNS_PER_JOB,
 	Millis,
@@ -21,7 +25,12 @@ import type { ApiDeps, JobsConfig } from '../context';
 import { idempotentOperation } from '../idempotency';
 import { appendAudit } from '../log';
 import { decodeCursor, DEFAULT_PAGE_SIZE, encodeCursor, MAX_PAGE_SIZE } from '../pagination';
-import { assertProjectRole, loadAuthorizedNotebookMeta, loadVisibleProject } from '../shared';
+import {
+	authorizationService,
+	assertProjectRole,
+	loadAuthorizedNotebookMeta,
+	loadSessionProject,
+} from '../shared';
 import type { CreateJobBody, TriggerRunBody, UpdateJobBody } from './schemas';
 
 export function requireJobs(deps: ApiDeps): JobsConfig {
@@ -48,9 +57,44 @@ export async function authorizeJobNotebook(
 	const project =
 		action === 'notebook.write'
 			? await assertProjectRole(deps.services.projects, pid, user, action, deps)
-			: await loadVisibleProject(deps.services.projects, pid, user, deps);
-	const notebook = await loadAuthorizedNotebookMeta(deps, project, nid, user, action);
+			: await loadSessionProject(deps.services.projects, pid, user, deps);
+	const notebook = await loadAuthorizedNotebookMeta(
+		deps,
+		project,
+		nid,
+		user,
+		action === 'project.read' ? authorizationService(deps).appReadAction(user, project) : action,
+	);
 	return { project, notebook, user };
+}
+
+export type JobNotebookAction = 'project.read' | 'notebook.write';
+export type JobAction = JobNotebookAction | 'job.trigger';
+
+export async function resolveJobAccess<T>(
+	action: JobAction,
+	resolve: (action: JobNotebookAction) => Promise<T>,
+): Promise<{ target: T; action: JobNotebookAction }> {
+	if (action !== 'job.trigger') return { target: await resolve(action), action };
+	// Write-only credentials must keep working without a separate read grant.
+	try {
+		return { target: await resolve('notebook.write'), action: 'notebook.write' };
+	} catch (error) {
+		if (!(error instanceof ForbiddenError || error instanceof NotFoundError)) throw error;
+		return { target: await resolve('project.read'), action: 'project.read' };
+	}
+}
+
+export async function loadAuthorizedJob(
+	deps: ApiDeps,
+	user: AuthenticatedPrincipal,
+	pid: ProjectId,
+	nid: NotebookId,
+	jid: JobId,
+	action: JobNotebookAction = 'project.read',
+) {
+	const target = await authorizeJobNotebook(deps, user, pid, nid, action);
+	return { ...target, job: await deps.services.jobs.getJob(pid, nid, jid) };
 }
 
 export type AuthorizedNotebook = Awaited<ReturnType<typeof authorizeJobNotebook>>;
@@ -129,8 +173,9 @@ export async function triggerJobRun(
 		if (await deps.services.jobs.isDeleting(job))
 			throw new NotFoundError(`Job ${job.id} not found`);
 		signal?.throwIfAborted();
+		const current = await deps.services.jobs.getJob(project.id, notebook.id, job.id);
+		await authorizeJobTrigger(deps, target, current);
 		const enqueue = async () => {
-			const current = await deps.services.jobs.getJob(project.id, notebook.id, job.id);
 			const queued = (await deps.services.jobRuns.listActive()).filter(
 				({ marker, run }) => marker.job_id === job.id && run?.status === 'queued',
 			);
@@ -183,4 +228,56 @@ export async function loadJobRun(deps: ApiDeps, job: JobDefinition, rid: RunId) 
 	const run = await deps.services.jobRuns.getRun(job.project_id, job.notebook_id, job.id, rid);
 	if (run.job_id !== job.id) throw new NotFoundError(`Run ${rid} not found`);
 	return run;
+}
+
+export async function getJobCapabilities(
+	deps: ApiDeps,
+	target: AuthorizedNotebook,
+	job: JobDefinition,
+	run?: JobRun,
+): Promise<JobCapabilities> {
+	const authz = authorizationService(deps);
+	const resource = {
+		kind: 'project' as const,
+		project: target.project,
+		notebookLabels: target.notebook.security_labels ?? null,
+	};
+	const editor = await authz.authorize(target.user, 'notebook.write', resource);
+	const trigger = await authz.authorize(target.user, 'job.trigger', resource);
+	return jobCapabilities({
+		job,
+		run,
+		userId: target.user.id,
+		editor: editor.allowed,
+		triggerAllowed: trigger.allowed,
+	});
+}
+
+export async function authorizeJobTrigger(
+	deps: ApiDeps,
+	target: AuthorizedNotebook,
+	job: JobDefinition,
+) {
+	if (!(await getJobCapabilities(deps, target, job)).canTrigger)
+		throw new ForbiddenError('This job does not permit execution by this caller');
+}
+
+export function projectJobRun(run: JobRun, capabilities: JobCapabilities) {
+	switch (capabilities.history) {
+		case 'full':
+			return toPublicJobRun(run);
+		case 'summary':
+			return toSharedJobRunSummary(run);
+		case 'none':
+			return null;
+	}
+}
+
+export async function visibleJobRun(
+	deps: ApiDeps,
+	target: AuthorizedNotebook,
+	job: JobDefinition,
+	run: JobRun,
+) {
+	return projectJobRun(run, await getJobCapabilities(deps, target, job, run));
 }

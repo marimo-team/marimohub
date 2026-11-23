@@ -1284,6 +1284,8 @@ export const JobDefinitionSchema = z.looseObject({
 	project_id: ProjectIdSchema,
 	name: z.string().min(1).max(MAX_JOB_NAME_LENGTH),
 	enabled: z.boolean(),
+	consumer_execution: z.boolean().optional(),
+	consumer_history: z.enum(['private', 'shared']).optional(),
 	/** Absent = manual-trigger only. */
 	schedule: JobScheduleSchema.optional(),
 	/** Passed to the notebook as `mo.cli_args()`. */
@@ -1439,6 +1441,8 @@ export type PublicJobDefinition = Pick<
 	| 'project_id'
 	| 'name'
 	| 'enabled'
+	| 'consumer_execution'
+	| 'consumer_history'
 	| 'schedule'
 	| 'parameters'
 	| 'retry'
@@ -1457,6 +1461,8 @@ export function toPublicJobDefinition(job: JobDefinition): PublicJobDefinition {
 		project_id: job.project_id,
 		name: job.name,
 		enabled: job.enabled,
+		consumer_execution: job.consumer_execution ?? false,
+		consumer_history: job.consumer_history ?? 'private',
 		...(job.schedule !== undefined
 			? { schedule: { cron: job.schedule.cron, timezone: job.schedule.timezone } }
 			: {}),

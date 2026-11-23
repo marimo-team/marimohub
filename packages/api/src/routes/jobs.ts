@@ -3,13 +3,14 @@ import type { Context } from 'hono';
 import {
 	JobId,
 	BadRequestError,
+	ForbiddenError,
 	NotFoundError,
 	RunId,
 	toPublicJobDefinition,
 	toPublicJobRun,
 } from '@marimo-hub/core';
 import { appendJobRunFinishEvent, isTerminalRunStatus } from '@marimo-hub/core/jobs';
-import type { JobDefinition, JobRun } from '@marimo-hub/core';
+import type { JobRun } from '@marimo-hub/core';
 import type { HonoEnv } from '../context';
 import {
 	CreateJobBody,
@@ -20,6 +21,11 @@ import {
 } from '../jobs/schemas';
 import {
 	requireJobs,
+	resolveJobAccess,
+	authorizeJobTrigger,
+	visibleJobRun,
+	getJobCapabilities,
+	loadAuthorizedJob,
 	authorizeJobNotebook,
 	listNotebookJobs,
 	loadJobRun,
@@ -281,18 +287,6 @@ const getRunLogs = createRoute({
 
 // --- Helpers ---
 
-export async function loadAuthorizedJob(
-	c: Context<HonoEnv>,
-	pid: JobRun['project_id'],
-	nid: JobRun['notebook_id'],
-	jid: JobDefinition['id'],
-	action: 'project.read' | 'notebook.write' = 'project.read',
-) {
-	const deps = c.get('deps');
-	const target = await authorizeJobNotebook(deps, c.get('user'), pid, nid, action);
-	return { ...target, job: await deps.services.jobs.getJob(pid, nid, jid) };
-}
-
 function rawOutputHeaders(c: Context<HonoEnv>, run: JobRun): void {
 	c.header('X-Content-Type-Options', 'nosniff');
 	c.header('Cache-Control', 'private, no-store');
@@ -340,7 +334,7 @@ app.openapi(createJob, async (c) => {
 
 app.openapi(getJob, async (c) => {
 	const { pid, nid, jid } = c.req.valid('param');
-	const { job } = await loadAuthorizedJob(c, pid, nid, jid);
+	const { job } = await loadAuthorizedJob(c.get('deps'), c.get('user'), pid, nid, jid);
 	c.header('ETag', etagFor(job.updated_at));
 	return c.json({ success: true, data: toPublicJobDefinition(job) }, 200);
 });
@@ -348,7 +342,14 @@ app.openapi(getJob, async (c) => {
 app.openapi(updateJob, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid, jid } = c.req.valid('param');
-	const target = await loadAuthorizedJob(c, pid, nid, jid, 'notebook.write');
+	const target = await loadAuthorizedJob(
+		c.get('deps'),
+		c.get('user'),
+		pid,
+		nid,
+		jid,
+		'notebook.write',
+	);
 	const job = await updateNotebookJob(
 		deps,
 		target,
@@ -364,7 +365,14 @@ app.openapi(deleteJob, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid, nid, jid } = c.req.valid('param');
-	const { job: loaded } = await loadAuthorizedJob(c, pid, nid, jid, 'notebook.write');
+	const { job: loaded } = await loadAuthorizedJob(
+		c.get('deps'),
+		c.get('user'),
+		pid,
+		nid,
+		jid,
+		'notebook.write',
+	);
 	const cancelled = await deps.services.jobRuns.withJobMutation(loaded, async () => {
 		const job = await deps.services.jobs.beginDelete(pid, nid, jid, user.id, ifMatchToken(c));
 		const result = await deps.services.jobRuns.cancelRunsOfJob(job, user.id);
@@ -417,7 +425,10 @@ app.openapi(deleteJob, async (c) => {
 app.openapi(triggerRun, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid, jid } = c.req.valid('param');
-	const target = await loadAuthorizedJob(c, pid, nid, jid, 'notebook.write');
+	const { target } = await resolveJobAccess('job.trigger', (action) =>
+		loadAuthorizedJob(c.get('deps'), c.get('user'), pid, nid, jid, action),
+	);
+	await authorizeJobTrigger(deps, target, target.job);
 	const body = c.req.valid('json');
 	const data = await idempotentCreate(
 		c,
@@ -437,7 +448,8 @@ app.openapi(triggerRun, async (c) => {
 app.openapi(listRuns, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid, jid } = c.req.valid('param');
-	const { job } = await loadAuthorizedJob(c, pid, nid, jid);
+	const target = await loadAuthorizedJob(c.get('deps'), c.get('user'), pid, nid, jid);
+	const { job } = target;
 	const query = c.req.valid('query');
 	const cursor = decodeCursor(query.cursor);
 	let afterRunId: RunId | undefined;
@@ -451,7 +463,9 @@ app.openapi(listRuns, async (c) => {
 		{
 			success: true,
 			data: {
-				items: page.items.map(toPublicJobRun),
+				items: (
+					await Promise.all(page.items.map((run) => visibleJobRun(deps, target, job, run)))
+				).filter((run) => run !== null),
 				next_cursor: page.nextRunId ? encodeCursor(page.nextRunId, page.nextRunId) : null,
 			},
 		},
@@ -462,16 +476,26 @@ app.openapi(listRuns, async (c) => {
 app.openapi(getRun, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid, jid, rid } = c.req.valid('param');
-	const { job } = await loadAuthorizedJob(c, pid, nid, jid);
+	const target = await loadAuthorizedJob(c.get('deps'), c.get('user'), pid, nid, jid);
+	const { job } = target;
 	const run = await loadJobRun(deps, job, rid);
-	return c.json({ success: true, data: toPublicJobRun(run) }, 200);
+	const data = await visibleJobRun(deps, target, job, run);
+	if (!data) throw new NotFoundError('Run not found');
+	return c.json({ success: true, data }, 200);
 });
 
 app.openapi(cancelRun, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid, nid, jid, rid } = c.req.valid('param');
-	const { job } = await loadAuthorizedJob(c, pid, nid, jid, 'notebook.write');
+	const { job } = await loadAuthorizedJob(
+		c.get('deps'),
+		c.get('user'),
+		pid,
+		nid,
+		jid,
+		'notebook.write',
+	);
 	const existing = await loadJobRun(deps, job, rid);
 	const { run, transitioned } = await deps.services.jobRuns.cancel(existing, user.id);
 	if (transitioned) {
@@ -510,8 +534,11 @@ app.openapi(cancelRun, async (c) => {
 app.openapi(getRunHtml, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid, jid, rid } = c.req.valid('param');
-	const { job } = await loadAuthorizedJob(c, pid, nid, jid);
+	const target = await loadAuthorizedJob(c.get('deps'), c.get('user'), pid, nid, jid);
+	const { job } = target;
 	const run = await loadJobRun(deps, job, rid);
+	if (!(await getJobCapabilities(deps, target, job, run)).canReadHtml)
+		throw new NotFoundError('Run output not found');
 	const html = await deps.services.jobRuns.readHtml(run);
 	if (html === null) return fail(c, 'NO_RUN_OUTPUT', 'This run captured no output', 404);
 	rawOutputHeaders(c, run);
@@ -530,8 +557,18 @@ app.get('/projects/:pid/notebooks/:nid/jobs/:jid/runs/:rid/logs', async (c) => {
 	const params = RunIdParam.safeParse(c.req.param());
 	if (!params.success) throw new NotFoundError('Run not found');
 	const { pid, nid, jid, rid } = params.data;
-	const { job } = await loadAuthorizedJob(c, pid, nid, jid, 'notebook.write');
+	const target = await loadAuthorizedJob(
+		c.get('deps'),
+		c.get('user'),
+		pid,
+		nid,
+		jid,
+		'notebook.write',
+	);
+	const { job } = target;
 	const run = await loadJobRun(deps, job, rid);
+	if (!(await getJobCapabilities(deps, target, job, run)).canReadLogs)
+		throw new ForbiddenError('Run logs require edit access');
 	const logs = await deps.services.jobRuns.readLogs(run);
 	if (logs === null) return fail(c, 'NO_RUN_OUTPUT', 'This run captured no logs', 404);
 	rawOutputHeaders(c, run);

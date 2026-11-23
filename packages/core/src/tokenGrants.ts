@@ -50,6 +50,7 @@ export function serviceAccountGrantAllowsAction(
 const READ_TOKEN_ACTIONS = ['app.read', 'project.read', 'integration.read'] as const;
 const RUN_TOKEN_ACTIONS = [
 	...READ_TOKEN_ACTIONS,
+	'job.trigger',
 	'integration.use',
 	'session.start',
 	'session.attach',

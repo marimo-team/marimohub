@@ -2820,6 +2820,22 @@
 						"repeatable": false
 					},
 					{
+						"name": "consumer_execution",
+						"cli_name": "consumer-execution",
+						"required": false,
+						"description": "Allow authorized consumers to trigger this job. Scoped credentials also need job.trigger and source access. Defaults to false.",
+						"value_type": "boolean",
+						"repeatable": false
+					},
+					{
+						"name": "consumer_history",
+						"cli_name": "consumer-history",
+						"required": false,
+						"description": "Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to current source readers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.",
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
 						"name": "enabled",
 						"cli_name": "enabled",
 						"required": false,
@@ -3369,6 +3385,22 @@
 						"name": "concurrency_policy",
 						"cli_name": "concurrency-policy",
 						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "consumer_execution",
+						"cli_name": "consumer-execution",
+						"required": false,
+						"description": "Allow authorized consumers to trigger this job. Scoped credentials also need job.trigger and source access. Defaults to false.",
+						"value_type": "boolean",
+						"repeatable": false
+					},
+					{
+						"name": "consumer_history",
+						"cli_name": "consumer-history",
+						"required": false,
+						"description": "Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to current source readers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.",
 						"value_type": "string",
 						"repeatable": false
 					},

@@ -133,13 +133,30 @@ export async function resolveAuthorizedNotebook(
 	projectRef: string,
 	notebookRef: string,
 	action: 'project.read' | 'notebook.write' | 'working-branch.write',
+	appAccess = false,
 ) {
-	const project = await resolveProject(deps, principal, projectRef, action);
+	const project = await resolveProject(deps, principal, projectRef, action, appAccess);
+	const readAction =
+		appAccess && action === 'project.read'
+			? authorizationService(deps).appReadAction(principal, project)
+			: action;
 	if (NotebookId.is(notebookRef)) {
-		const detail = await loadAuthorizedNotebookMeta(deps, project, notebookRef, principal, action);
+		const detail = await loadAuthorizedNotebookMeta(
+			deps,
+			project,
+			notebookRef,
+			principal,
+			readAction,
+		);
 		return { project, notebook: detail, detail };
 	}
 	const notebook = await resolveNotebook(deps, principal, project, notebookRef);
-	const detail = await loadAuthorizedNotebookMeta(deps, project, notebook.id, principal, action);
+	const detail = await loadAuthorizedNotebookMeta(
+		deps,
+		project,
+		notebook.id,
+		principal,
+		readAction,
+	);
 	return { project, notebook, detail };
 }

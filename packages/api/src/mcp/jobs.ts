@@ -13,13 +13,14 @@ import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
 import { idempotentOperation } from '../idempotency';
 import {
+	resolveJobAccess,
 	createNotebookJob,
 	listNotebookJobs,
 	requireJobs,
 	triggerJobRun,
 	updateNotebookJob,
 } from '../jobs/operations';
-import type { AuthorizedNotebook } from '../jobs/operations';
+import type { AuthorizedNotebook, JobAction, JobNotebookAction } from '../jobs/operations';
 import { CreateJobBody, JobScheduleShape, TriggerRunBody } from '../jobs/schemas';
 import { IdempotencyKeyHeader } from '../shared';
 import { observeJobRun, WaitShape } from './jobRuns';
@@ -45,8 +46,8 @@ const JobSelector = NotebookSelector.extend({
 		),
 });
 const IdempotencyShape = { idempotency_key: IdempotencyKeyHeader.shape['idempotency-key'] };
-type JobAction = 'project.read' | 'notebook.write';
 interface ToolContext {
+	action: JobNotebookAction;
 	target: AuthorizedNotebook;
 	extra: JobToolExtra;
 	signal: AbortSignal;
@@ -99,16 +100,24 @@ export function registerJobTools(
 				try {
 					signal.throwIfAborted();
 					requireJobs(deps);
-					const { project, detail } = await resolveAuthorizedNotebook(
-						deps,
-						principal,
-						input.project,
-						input.notebook,
+
+					const { target: resolved, action: authorizedAction } = await resolveJobAccess(
 						action,
+						(requested) =>
+							resolveAuthorizedNotebook(
+								deps,
+								principal,
+								input.project,
+								input.notebook,
+								requested,
+								requested === 'project.read',
+							),
 					);
+					const { project, detail } = resolved;
 					signal.throwIfAborted();
 					return await handler(input, {
 						target: { project, notebook: detail, user: principal },
+						action: authorizedAction,
 						extra,
 						signal,
 					});
@@ -196,7 +205,7 @@ export function registerJobTools(
 		'run_job',
 		'Enqueue a saved job for headless execution by the maintenance scheduler. Optional parameters replace the stored map for this run. Returns status and authenticated output links; poll get_job_run or wait with optional MCP progress. Tracks one attempt, not automatic retries. Reuse idempotency_key when retrying this call.',
 		JobSelector.extend({ ...TriggerRunBody.shape, ...WaitShape, ...IdempotencyShape }),
-		'notebook.write',
+		'job.trigger',
 		async (input, context) => {
 			const { target, signal } = context;
 			const job = await resolveJob(deps, target, input.job);
@@ -204,7 +213,7 @@ export function registerJobTools(
 				deps,
 				target,
 				job,
-				{ parameters: input.parameters },
+				{ parameters: input.parameters, tags: input.tags },
 				request,
 				signal,
 				{
@@ -212,16 +221,14 @@ export function registerJobTools(
 					key: input.idempotency_key,
 				},
 			);
-			const runId = run.run_id;
 			return result(
 				await observeJobRun({
 					deps,
 					...context,
 					job,
-					runId,
+					runId: run.run_id,
 					input,
 					request,
-					action: 'notebook.write',
 				}),
 			);
 		},
@@ -242,7 +249,6 @@ export function registerJobTools(
 					runId: input.run_id,
 					input,
 					request,
-					action: 'project.read',
 				}),
 			);
 		},

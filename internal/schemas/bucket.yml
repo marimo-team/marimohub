@@ -7222,6 +7222,13 @@ components:
           maxLength: 120
         enabled:
           type: boolean
+        consumer_execution:
+          type: boolean
+        consumer_history:
+          type: string
+          enum:
+            - private
+            - shared
         schedule:
           type: object
           properties:
@@ -8971,6 +8978,7 @@ components:
                       - audit.global.read
                       - directory.search
                       - app.read
+                      - job.trigger
                       - project.read
                       - project.update
                       - project.delete

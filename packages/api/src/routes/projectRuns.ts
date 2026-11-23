@@ -7,11 +7,9 @@ import {
 	RunTagKeySchema,
 	RunTagValueSchema,
 	mapWithConcurrency,
-	toPublicJobRun,
 } from '@marimo-hub/core';
-import { requireJobs } from '../jobs/operations';
+import { requireJobs, visibleJobRun, loadAuthorizedJob } from '../jobs/operations';
 import { JobRunResponseSchema } from '../jobs/schemas';
-import { loadAuthorizedJob } from './jobs';
 import {
 	DEFAULT_PAGE_SIZE,
 	PaginationQuery,
@@ -24,7 +22,7 @@ import {
 	createApp,
 	errorResponses,
 	jsonContent,
-	loadVisibleProject,
+	loadSessionProject,
 	ProjectIdParam,
 } from '../shared';
 
@@ -72,7 +70,7 @@ app.openapi(
 		const deps = c.get('deps');
 		requireJobs(deps);
 		const { pid } = c.req.valid('param');
-		await loadVisibleProject(deps.services.projects, pid, c.get('user'), deps);
+		await loadSessionProject(deps.services.projects, pid, c.get('user'), deps);
 		const query = c.req.valid('query');
 		const tag =
 			query.tag_key === undefined ? undefined : { key: query.tag_key, value: query.tag_value! };
@@ -83,21 +81,24 @@ app.openapi(
 			afterRun(query.cursor, scope),
 			tag,
 		);
-		const permissions = new Map<string, Promise<boolean>>();
+
+		const targets = new Map<string, ReturnType<typeof loadAuthorizedJob>>();
 		const visible = await mapWithConcurrency(page.items, 16, async (run) => {
-			const key = `${run.notebook_id}/${run.job_id}`;
-			let permission = permissions.get(key);
-			if (!permission) {
-				permission = loadAuthorizedJob(c, pid, run.notebook_id, run.job_id)
-					.then(() => true)
-					.catch((error: unknown) => {
-						if (error instanceof NotFoundError || error instanceof ForbiddenError) return false;
-						throw error;
-					});
-				permissions.set(key, permission);
+			try {
+				const key = `${run.notebook_id}/${run.job_id}`;
+				let pending = targets.get(key);
+				if (!pending) {
+					pending = loadAuthorizedJob(deps, c.get('user'), pid, run.notebook_id, run.job_id);
+					targets.set(key, pending);
+				}
+				const target = await pending;
+				return await visibleJobRun(deps, target, target.job, run);
+			} catch (error) {
+				if (error instanceof NotFoundError || error instanceof ForbiddenError) return null;
+				throw error;
 			}
-			return (await permission) ? toPublicJobRun(run) : null;
 		});
+
 		return c.json(
 			{
 				success: true as const,

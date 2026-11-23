@@ -26,6 +26,8 @@ describe('TokenGrant', () => {
 			'integration.read',
 		]);
 		expect(expandTokenGrantPreset('run')).toContain('session.start');
+		expect(expandTokenGrantPreset('run')).toContain('job.trigger');
+		expect(expandTokenGrantPreset('read')).not.toContain('job.trigger');
 		expect(expandTokenGrantPreset('edit')).toContain('notebook.write');
 		expect(expandTokenGrantPreset('full')).toBe('*');
 	});

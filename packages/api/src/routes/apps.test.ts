@@ -219,7 +219,6 @@ describe('app-user access', () => {
 		'/workspace.zip',
 		'/versions',
 		'/html',
-		'/jobs',
 		'/deep-links',
 	])('denies %s', async (suffix) => {
 		await expectError(await api.request('GET', `${base}${suffix}`), 404);

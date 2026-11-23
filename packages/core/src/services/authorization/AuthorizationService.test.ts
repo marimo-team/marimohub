@@ -178,7 +178,7 @@ describe('AuthorizationService: project actions', () => {
 			const authz = service({ defaultRole: 'manager' });
 			const principal = pat(APP_USER, { actions: [...AUTHORIZATION_ACTIONS], projects: '*' });
 			const decision = await authz.authorize(principal, action, onProject());
-			expect(decision.allowed).toBe(action === 'app.read');
+			expect(decision.allowed).toBe(action === 'app.read' || action === 'job.trigger');
 			expect(decision.role).toBe('app-user');
 		},
 	);
@@ -189,7 +189,7 @@ describe('AuthorizationService: project actions', () => {
 			const authz = service({ defaultRole: 'app-user' });
 			const principal = pat(STRANGER, { actions: [...AUTHORIZATION_ACTIONS], projects: '*' });
 			const decision = await authz.authorize(principal, action, onProject());
-			expect(decision.allowed).toBe(action === 'app.read');
+			expect(decision.allowed).toBe(action === 'app.read' || action === 'job.trigger');
 			expect(decision.role).toBe('app-user');
 		},
 	);
