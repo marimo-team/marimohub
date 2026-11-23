@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import type { Socket } from 'node:net';
 import os from 'node:os';
@@ -162,4 +162,22 @@ it('closes a timed-out socket even if the peer keeps sending partial data', asyn
 		'CAPTURE_UNAVAILABLE',
 	);
 	await closed.promise;
+});
+
+it.skipIf(process.platform !== 'linux')('connects through a long sandbox path', async () => {
+	const root = await fixture();
+	const directory = path.join(root, 'sandbox-'.repeat(20), 'lifecycle');
+	await mkdir(directory, { recursive: true });
+	await writeFile(path.join(directory, 'capability.json'), '{"supported":true,"protocol":1}');
+	const handle = await open(directory, 'r');
+	const server = createServer((socket) => socket.once('data', () => socket.end('{"ok":true}\n')));
+	try {
+		await new Promise<void>((resolve) =>
+			server.listen(`/proc/self/fd/${handle.fd}/control.sock`, resolve),
+		);
+		expect(await requestLifecycle(directory, { action: 'status' })).toBe('{"ok":true}');
+	} finally {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await handle.close();
+	}
 });

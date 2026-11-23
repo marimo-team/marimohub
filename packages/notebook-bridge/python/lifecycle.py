@@ -10,6 +10,8 @@ import signal
 import stat
 import threading
 
+from lifecycle_socket import socket_path
+
 
 class CaptureUnsupported(Exception):
     pass
@@ -229,13 +231,14 @@ class DrainMiddleware:
             path = Path(os.environ["MARIMOHUB_LIFECYCLE_DIR"]) / "native.sock"
             if path.exists():
                 path.unlink()
-            gate.server = await asyncio.start_unix_server(gate.control, str(path), limit=64 * 1024)
-            os.chmod(path, 0o600)
-            try:
-                await self.app(scope, receive, send)
-            finally:
-                gate.server.close()
-                await gate.server.wait_closed()
+            with socket_path(path) as address:
+                gate.server = await asyncio.start_unix_server(gate.control, address, limit=64 * 1024)
+                os.chmod(path, 0o600)
+                try:
+                    await self.app(scope, receive, send)
+                finally:
+                    gate.server.close()
+                    await gate.server.wait_closed()
             return
         if scope["type"] not in ("http", "websocket"):
             return await self.app(scope, receive, send)
@@ -292,7 +295,8 @@ def install_status_only(directory):
 
     path = Path(directory) / 'native.sock'
     path.unlink(missing_ok=True)
-    server = socketserver.ThreadingUnixStreamServer(str(path), Handler)
+    with socket_path(path) as address:
+        server = socketserver.ThreadingUnixStreamServer(address, Handler)
     os.chmod(path, 0o600)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server

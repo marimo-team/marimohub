@@ -14,6 +14,8 @@ import threading
 import time
 import uuid
 
+from lifecycle_socket import socket_path
+
 
 class LifecycleError(Exception):
     pass
@@ -22,7 +24,8 @@ class LifecycleError(Exception):
 def exchange(path, request, timeout=20):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(timeout)
-        connection.connect(str(path))
+        with socket_path(path) as address:
+            connection.connect(address)
         connection.sendall(json.dumps(request).encode() + b"\n")
         response = connection.makefile("rb").readline(1024 * 1024)
     result = json.loads(response)
@@ -131,7 +134,8 @@ class Supervisor:
         ready = checkpoint / "ready.json"
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(20)
-            connection.connect(str(self.directory / "native.sock"))
+            with socket_path(self.directory / "native.sock") as address:
+                connection.connect(address)
             connection.sendall(json.dumps({"action": "checkpoint", "checkpoint": str(checkpoint), "entry": request["entry"], "workdir": request["workdir"]}).encode() + b"\n")
             deadline = self.clock() + 20
             while self.clock() < deadline:
@@ -308,7 +312,8 @@ def supervise(argv):
     control = directory / "control.sock"
     if control.exists():
         control.unlink()
-    server = Server(str(control), Handler)
+    with socket_path(control) as address:
+        server = Server(address, Handler)
     os.chmod(control, 0o600)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
