@@ -35,6 +35,93 @@ describe('project run history routes', () => {
 			ACTOR,
 		);
 	});
+	it.each(['project', 'job'])(
+		'reconnects with live user/status filters on %s history',
+		async (kind) => {
+			const url = () => (kind === 'project' ? base() : `${jobBase()}/runs`);
+			const enqueue = (triggeredBy: UserId, tags = { app: 'reconnect' }) =>
+				services.jobRuns.enqueue({ job, trigger: 'manual', triggeredBy, tags, timeoutSeconds: 60 });
+			const older = await enqueue(VIEWER);
+			await services.notebooks.updateNotebook(
+				job.project_id,
+				job.notebook_id,
+				{ code: 'v2' },
+				ACTOR,
+			);
+			const newer = await enqueue(VIEWER);
+			const other = await enqueue(ACTOR);
+			const tag = kind === 'project' ? '&tag_key=app&tag_value=reconnect' : '';
+			const query = `status=active&triggered_by=me${tag}`;
+			const reader = request(VIEWER);
+			const all = await expectOk<Page>(await reader('GET', `${url()}?${query}`));
+			expect(all.items.map((r) => r.run_id)).toEqual([newer.run_id, older.run_id]);
+			const first = await expectOk<Page>(await reader('GET', `${url()}?${query}&limit=1`));
+			expect(first.items).toEqual([]);
+			expect(first.next_cursor).not.toBeNull();
+			const cursor = encodeURIComponent(first.next_cursor!);
+			for (const changed of [
+				'status=queued&triggered_by=me',
+				'status=active',
+				'triggered_by=me',
+				'',
+			]) {
+				await expectError(await reader('GET', `${url()}?${changed}${tag}&cursor=${cursor}`), 400);
+			}
+			await expectError(await request()('GET', `${url()}?${query}&cursor=${cursor}`), 400);
+			await expectError(await reader('GET', `${url()}?${query}&cursor=bad`), 400);
+			await expectError(await reader('GET', `${url()}?status=invalid`), 422);
+			await services.jobRuns.transition(newer, 'fail');
+			await enqueue(VIEWER);
+			const second = await expectOk<Page>(
+				await reader('GET', `${url()}?${query}&limit=1&cursor=${cursor}`),
+			);
+			expect(second.items).toEqual([]);
+			expect(second.next_cursor).not.toBeNull();
+			const last = await expectOk<Page>(
+				await reader(
+					'GET',
+					`${url()}?${query}&limit=1&cursor=${encodeURIComponent(second.next_cursor!)}`,
+				),
+			);
+			expect(last.items.map((r) => r.run_id)).toEqual([older.run_id]);
+			expect(last.next_cursor).toBeNull();
+			const explicit = await expectOk<Page>(
+				await request()(
+					'GET',
+					`${url()}?status=queued&triggered_by=${encodeURIComponent(ACTOR)}${tag}`,
+				),
+			);
+			expect(explicit.items.map((r) => r.run_id)).toEqual([other.run_id]);
+			await services.projects.removeMember(job.project_id, VIEWER, ACTOR);
+			await expectError(await reader('GET', `${url()}?${query}&cursor=${cursor}`), 404);
+		},
+	);
+
+	it('combines active and user predicates with immutable tags across versions', async () => {
+		const first = await trigger({ app: 'reconnect', version: 'v1' });
+		await services.notebooks.updateNotebook(job.project_id, job.notebook_id, { code: 'v2' }, ACTOR);
+		const second = await trigger({ app: 'reconnect', version: 'v2' });
+		await trigger({ app: 'wrong' });
+		await trigger();
+		const finished = await trigger({ app: 'reconnect' });
+		await services.jobRuns.cancel(finished, ACTOR);
+		await services.jobRuns.enqueue({
+			job,
+			trigger: 'manual',
+			triggeredBy: VIEWER,
+			timeoutSeconds: 60,
+			tags: { app: 'reconnect' },
+		});
+		const page = await expectOk<Page>(
+			await request()(
+				'GET',
+				`${base()}?tag_key=app&tag_value=reconnect&status=active&triggered_by=me`,
+			),
+		);
+		expect(page.items.map((r) => r.run_id)).toEqual([second.run_id, first.run_id]);
+		expect(first.source_version_id).not.toBe(second.source_version_id);
+	});
+
 	it('returns accepted tags across notebooks and versions, without claiming identity isolation', async () => {
 		const first = await trigger({ app: 'calibration', app_version: 'v1' });
 		await services.notebooks.updateNotebook(job.project_id, job.notebook_id, { code: 'v2' }, ACTOR);

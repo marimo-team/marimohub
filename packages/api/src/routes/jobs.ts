@@ -1,3 +1,4 @@
+import { RunListQuery, resolveRunFilter, matchesRunFilter } from '../jobs/runQuery';
 import { createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import {
@@ -205,7 +206,9 @@ const listRuns = createRoute({
 	operationId: 'jobs.runs.list',
 	tags: ['Jobs'],
 	summary: 'List a job’s runs',
-	request: { params: JobIdParam, query: PaginationQuery },
+	description:
+		'Optional status and triggered_by filters. Filtered requests scan at most limit entries (maximum 500). Follow continuation cursors even on empty pages. Status is read live; restart the scan to refresh earlier results.',
+	request: { params: JobIdParam, query: RunListQuery },
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: pageSchema(JobRunResponseSchema, 'JobRunPage') }),
@@ -451,22 +454,35 @@ app.openapi(listRuns, async (c) => {
 	const target = await loadAuthorizedJob(c.get('deps'), c.get('user'), pid, nid, jid);
 	const { job } = target;
 	const query = c.req.valid('query');
+	const filter = resolveRunFilter(query, c.get('user').id);
+	const filtered = filter.status !== undefined || filter.triggered_by !== undefined;
+	const scope = encodeURIComponent(JSON.stringify([pid, nid, job.id, filter]));
 	const cursor = decodeCursor(query.cursor);
 	let afterRunId: RunId | undefined;
-	if (cursor && (cursor[0] !== cursor[1] || !RunId.is(cursor[0]))) {
-		throw new BadRequestError('Invalid pagination cursor');
+	if (cursor) {
+		if (!RunId.is(cursor[1]) || cursor[0] !== (filtered ? scope : cursor[1]))
+			throw new BadRequestError('Invalid pagination cursor');
+		afterRunId = RunId.parse(cursor[1]);
 	}
-	if (cursor) afterRunId = RunId.parse(cursor[0]);
 	const limit = Math.min(query.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
-	const page = await deps.services.jobRuns.listRunsPage(pid, nid, job.id, limit, afterRunId);
+	const page = await deps.services.jobRuns.listRunsPage(
+		pid,
+		nid,
+		job.id,
+		limit,
+		afterRunId,
+		filtered,
+	);
 	return c.json(
 		{
 			success: true,
 			data: {
-				items: (
-					await Promise.all(page.items.map((run) => visibleJobRun(deps, target, job, run)))
-				).filter((run) => run !== null),
-				next_cursor: page.nextRunId ? encodeCursor(page.nextRunId, page.nextRunId) : null,
+				items: (await Promise.all(page.items.map((run) => visibleJobRun(deps, target, job, run))))
+					.filter((run) => run !== null)
+					.filter((run) => matchesRunFilter(run, filter)),
+				next_cursor: page.nextRunId
+					? encodeCursor(filtered ? scope : page.nextRunId, page.nextRunId)
+					: null,
 			},
 		},
 		200,

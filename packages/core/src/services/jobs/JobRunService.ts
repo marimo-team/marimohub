@@ -499,8 +499,23 @@ export class JobRunService {
 		jobId: JobId,
 		limit: number,
 		afterRunId?: RunId,
+		boundedScan = false,
 	): Promise<RunPage> {
 		const job = paths.project(projectId).notebook(notebookId).job(jobId);
+		if (boundedScan) {
+			return this.readHistoryPage(
+				job.runIndexPrefix,
+				limit,
+				afterRunId ? job.runIndex(afterRunId) : undefined,
+				(_key, run_id) =>
+					this.readHistoryRun({
+						project_id: projectId,
+						notebook_id: notebookId,
+						job_id: jobId,
+						run_id,
+					}),
+			);
+		}
 		const items: JobRun[] = [];
 		let startAfter = afterRunId ? job.runIndex(afterRunId) : undefined;
 		let hasMore = false;

@@ -1,3 +1,4 @@
+import { RunListQuery, resolveRunFilter, matchesRunFilter } from '../jobs/runQuery';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	BadRequestError,
@@ -10,13 +11,7 @@ import {
 } from '@marimo-hub/core';
 import { requireJobs, visibleJobRun, loadAuthorizedJob } from '../jobs/operations';
 import { JobRunResponseSchema } from '../jobs/schemas';
-import {
-	DEFAULT_PAGE_SIZE,
-	PaginationQuery,
-	decodeCursor,
-	encodeCursor,
-	pageSchema,
-} from '../pagination';
+import { DEFAULT_PAGE_SIZE, decodeCursor, encodeCursor, pageSchema } from '../pagination';
 import {
 	commonErrors,
 	createApp,
@@ -26,7 +21,7 @@ import {
 	ProjectIdParam,
 } from '../shared';
 
-const ProjectRunQuery = PaginationQuery.extend({
+const ProjectRunQuery = RunListQuery.extend({
 	tag_key: RunTagKeySchema.optional(),
 	tag_value: RunTagValueSchema.optional(),
 })
@@ -74,7 +69,11 @@ app.openapi(
 		const query = c.req.valid('query');
 		const tag =
 			query.tag_key === undefined ? undefined : { key: query.tag_key, value: query.tag_value! };
-		const scope = encodeURIComponent(JSON.stringify([pid, tag ?? null]));
+		const filter = resolveRunFilter(query, c.get('user').id);
+		const filtered = filter.status !== undefined || filter.triggered_by !== undefined;
+		const scope = encodeURIComponent(
+			JSON.stringify(filtered ? [pid, tag ?? null, filter] : [pid, tag ?? null]),
+		);
 		const page = await deps.services.jobRuns.listProjectRunsPage(
 			pid,
 			query.limit ?? DEFAULT_PAGE_SIZE,
@@ -103,7 +102,9 @@ app.openapi(
 			{
 				success: true as const,
 				data: {
-					items: visible.filter((run) => run !== null),
+					items: visible
+						.filter((run) => run !== null)
+						.filter((run) => matchesRunFilter(run, filter)),
 					next_cursor: page.nextRunId ? encodeCursor(scope, page.nextRunId) : null,
 				},
 			},

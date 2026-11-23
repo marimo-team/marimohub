@@ -30,6 +30,24 @@ Run metadata and run-scoped credentials belong to MO-8718; this API does not def
 Reports, files, and metrics remain external. A reference does not grant access to an external service.
 Existing job-scoped history and run lookups remain available.
 
+## Reconnect queries
+
+Both project history and job history accept optional `status` and `triggered_by`.
+Use `status=active` for queued, provisioning, and running runs, or supply one exact run status.
+Use `triggered_by=me` for the authenticated user, or an exact user ID.
+Combine these predicates with the project tag filter:
+
+`GET /runs?tag_key=app&tag_value=calibration-runner&status=active&triggered_by=me`
+
+Filters do not grant access to another user's history. Existing history permissions still apply.
+Filtered job cursors bind to the source job and resolved status/user query.
+Project cursors also bind to the exact tag predicate. Changing users with `me` requires a new scan.
+Unfiltered job history retains its existing cursor format and pagination behavior.
+
+Status is read live for each page. Runs can finish between pages and disappear from active results.
+Already scanned entries are not revisited, and newer runs fall before the cursor.
+Restart from the first page to refresh the active set; pagination is not a snapshot.
+
 ## Pagination and access
 
 `limit` bounds scanned index entries, with a maximum of 500. Results can contain fewer entries.
@@ -41,7 +59,7 @@ Newer submissions do not shift an existing page boundary.
 Every read uses current project and source job permissions, including source notebook security labels.
 Tags never bypass these checks. Existing reader permissions remain unchanged; consumer execution and sharing policies are separate work.
 Deleted or inaccessible jobs contribute no results. This iteration does not grant access through archived source records.
-Source-deletion survival and retention policy changes belong to MO-8720; additional status/user filters belong to MO-8721.
+Source-deletion survival and retention policy changes belong to MO-8720; date ranges and alternative sort orders remain follow-ups.
 
 ## Index and repair
 

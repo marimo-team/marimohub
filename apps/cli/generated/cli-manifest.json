@@ -3173,6 +3173,7 @@
 			"method": "GET",
 			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs",
 			"summary": "List a job’s runs",
+			"description": "Optional status and triggered_by filters. Filtered requests scan at most limit entries (maximum 500). Follow continuation cursors even on empty pages. Status is read live; restart the scan to refresh earlier results.",
 			"parameters": [
 				{
 					"name": "jid",
@@ -3212,6 +3213,24 @@
 					"in": "query",
 					"required": false,
 					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "status",
+					"cli_name": "status",
+					"in": "query",
+					"required": false,
+					"description": "Exact status, or active for queued, provisioning, and running.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "triggered_by",
+					"cli_name": "triggered-by",
+					"in": "query",
+					"required": false,
+					"description": "Exact triggering user ID, or me for the authenticated user.",
+					"value_type": "string",
 					"repeatable": false
 				}
 			],
@@ -6141,6 +6160,15 @@
 					"repeatable": false
 				},
 				{
+					"name": "status",
+					"cli_name": "status",
+					"in": "query",
+					"required": false,
+					"description": "Exact status, or active for queued, provisioning, and running.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
 					"name": "tag_key",
 					"cli_name": "tag-key",
 					"in": "query",
@@ -6153,6 +6181,15 @@
 					"cli_name": "tag-value",
 					"in": "query",
 					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "triggered_by",
+					"cli_name": "triggered-by",
+					"in": "query",
+					"required": false,
+					"description": "Exact triggering user ID, or me for the authenticated user.",
 					"value_type": "string",
 					"repeatable": false
 				}

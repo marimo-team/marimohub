@@ -97,6 +97,22 @@ describe('JobRunService', () => {
 		expect(second.nextRunId).toBeNull();
 	});
 
+	it('bounds filtered scans and continues past missing records', async () => {
+		const older = await enqueue();
+		const newer = await enqueue();
+		await env.bucket.delete(paths.project(pid).notebook(nid).job(job.id).run(newer.run_id).record);
+		const list = vi.spyOn(env.bucket, 'list');
+		const first = await runs.listRunsPage(pid, nid, job.id, 1, undefined, true);
+		expect(first.items).toEqual([]);
+		expect(first.nextRunId).toBe(newer.run_id);
+		expect(list).toHaveBeenCalledTimes(1);
+		const last = await runs.listRunsPage(pid, nid, job.id, 1, first.nextRunId!, true);
+		expect(last.items.map((r) => r.run_id)).toEqual([older.run_id]);
+		expect(last.nextRunId).toBeNull();
+		await runs.listRunsPage(pid, nid, job.id, 9999, undefined, true);
+		expect(list.mock.lastCall?.[0].limit).toBe(500);
+	});
+
 	it('fetches only the records needed for one history page', async () => {
 		const created = [];
 		for (let i = 0; i < 6; i++) created.push(await enqueue());

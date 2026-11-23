@@ -1952,7 +1952,10 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		/** List a job’s runs */
+		/**
+		 * List a job’s runs
+		 * @description Optional status and triggered_by filters. Filtered requests scan at most limit entries (maximum 500). Follow continuation cursors even on empty pages. Status is read live; restart the scan to refresh earlier results.
+		 */
 		get: operations['jobs.runs.list'];
 		put?: never;
 		/**
@@ -20402,6 +20405,19 @@ export interface operations {
 			query?: {
 				limit?: number;
 				cursor?: string;
+				/** @description Exact status, or active for queued, provisioning, and running. */
+				status?:
+					| 'queued'
+					| 'provisioning'
+					| 'running'
+					| 'succeeded'
+					| 'failed'
+					| 'timed_out'
+					| 'cancelled'
+					| 'skipped'
+					| 'active';
+				/** @description Exact triggering user ID, or me for the authenticated user. */
+				triggered_by?: string;
 			};
 			header?: never;
 			path: {
@@ -20986,6 +21002,19 @@ export interface operations {
 			query?: {
 				limit?: number;
 				cursor?: string;
+				/** @description Exact status, or active for queued, provisioning, and running. */
+				status?:
+					| 'queued'
+					| 'provisioning'
+					| 'running'
+					| 'succeeded'
+					| 'failed'
+					| 'timed_out'
+					| 'cancelled'
+					| 'skipped'
+					| 'active';
+				/** @description Exact triggering user ID, or me for the authenticated user. */
+				triggered_by?: string;
 				tag_key?: string;
 				tag_value?: string;
 			};
