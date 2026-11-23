@@ -1,3 +1,4 @@
+import { subscribeSessionStopped } from '@/api/sessionStop';
 import { RetainedEditorContext } from '@/context/RetainedEditorContext';
 import { Activity, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -16,22 +17,36 @@ export function RetainedEditorRoute({
 	const location = useLocation();
 	const active = Boolean(matchPath(EDITOR_PATH, location.pathname));
 	const [retained, setRetained] = useState(active ? location : null);
-	const [ready, setReady] = useState(false);
+	const [retainedSessionId, setRetainedSessionId] = useState<string>();
 	if (active && retained !== location) {
 		setRetained(location);
-		if (retained?.pathname !== location.pathname) setReady(false);
+		if (retained?.pathname !== location.pathname) setRetainedSessionId(undefined);
 	}
-	if (!active && retained && !ready) setRetained(null);
+	if (!active && retained && !retainedSessionId) setRetained(null);
 	useEffect(() => {
 		if (active || !retained) return;
-		const timer = setTimeout(() => setRetained(null), EDITOR_RETENTION_MS);
-		return () => clearTimeout(timer);
-	}, [active, retained]);
+		const match = matchPath(EDITOR_PATH, retained.pathname);
+		const evict = () => setRetained(null);
+		const timer = setTimeout(evict, EDITOR_RETENTION_MS);
+		const unsubscribe = subscribeSessionStopped(({ projectId, notebookId, sessionId }) => {
+			if (
+				sessionId === retainedSessionId &&
+				match?.params.pid === projectId &&
+				match.params.nid === notebookId
+			) {
+				evict();
+			}
+		});
+		return () => {
+			clearTimeout(timer);
+			unsubscribe();
+		};
+	}, [active, retained, retainedSessionId]);
 	return (
 		<>
 			{retained ? (
 				<Activity mode={active ? 'visible' : 'hidden'}>
-					<RetainedEditorContext value={setReady}>
+					<RetainedEditorContext value={setRetainedSessionId}>
 						<Routes location={retained} key={retained.pathname}>
 							<Route path={EDITOR_PATH} element={editor} />
 						</Routes>

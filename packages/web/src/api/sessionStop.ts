@@ -35,7 +35,28 @@ function ask(session: Session): Promise<StopDecision> {
 	});
 }
 
+type StoppedSession = { projectId: string; notebookId: string; sessionId: string };
+const stoppedListeners = new Set<(session: StoppedSession) => void>();
+
+export function subscribeSessionStopped(listener: (session: StoppedSession) => void) {
+	stoppedListeners.add(listener);
+	return () => {
+		stoppedListeners.delete(listener);
+	};
+}
+
 export async function stopSessionSafely(
+	projectId: string,
+	notebookId: string,
+	sessionId: string,
+	decision = ask,
+	signal?: AbortSignal,
+): Promise<void> {
+	await stopSessionRequest(projectId, notebookId, sessionId, decision, signal);
+	for (const listener of stoppedListeners) listener({ projectId, notebookId, sessionId });
+}
+
+async function stopSessionRequest(
 	projectId: string,
 	notebookId: string,
 	sessionId: string,

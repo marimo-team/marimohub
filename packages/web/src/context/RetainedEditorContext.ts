@@ -1,5 +1,5 @@
 import { createContext } from 'react';
 
-export const RetainedEditorContext = createContext<((ready: boolean) => void) | undefined>(
+export const RetainedEditorContext = createContext<((sessionId?: string) => void) | undefined>(
 	undefined,
 );

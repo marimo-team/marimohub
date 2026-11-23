@@ -633,7 +633,10 @@ export function useNotebookSession(
 		(session?.status === 'running' || (!!session?.stop && session.stop.outcome !== 'stopped')) &&
 		!!session?.sandbox_url;
 	const reportRetentionReady = useContext(RetainedEditorContext);
-	useEffect(() => reportRetentionReady?.(isRunning), [isRunning, reportRetentionReady]);
+	useEffect(
+		() => reportRetentionReady?.(isRunning ? session?.session_id : undefined),
+		[isRunning, session?.session_id, reportRetentionReady],
+	);
 
 	return {
 		acknowledgeWorkingBranchSave,
