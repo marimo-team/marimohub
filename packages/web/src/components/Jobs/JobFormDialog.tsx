@@ -17,6 +17,8 @@ const MIN_TIMEOUT_SECONDS = 60;
 type JobFormValues = {
 	name: string;
 	enabled: boolean;
+	consumerExecution: boolean;
+	consumerHistory: NonNullable<Job['consumer_history']>;
 	scheduled: boolean;
 	cron: string;
 	timezone: string;
@@ -32,6 +34,8 @@ type JobFormValues = {
 const baseSchema = z.object({
 	name: requiredText('Name'),
 	enabled: z.boolean(),
+	consumerExecution: z.boolean(),
+	consumerHistory: z.enum(['private', 'shared']),
 	scheduled: z.boolean(),
 	cron: z.string().trim(),
 	timezone: z.string().trim(),
@@ -111,6 +115,8 @@ function seedValues(job: Job | null | undefined): JobFormValues {
 	return {
 		name: job?.name ?? '',
 		enabled: job?.enabled ?? true,
+		consumerExecution: job?.consumer_execution ?? false,
+		consumerHistory: job?.consumer_history ?? 'private',
 		scheduled: !!job?.schedule,
 		cron: job?.schedule?.cron ?? '0 6 * * *',
 		timezone: job?.schedule?.timezone ?? localTimeZone(),
@@ -124,7 +130,6 @@ function seedValues(job: Job | null | undefined): JobFormValues {
 	};
 }
 
-/** The create body, with each optional section present only when set. */
 function toCreateBody(values: JobFormValues): JobCreateBody {
 	const parameters = parseJobParameters(values.parameters);
 	const maxRetries = Number(values.maxRetries);
@@ -135,6 +140,8 @@ function toCreateBody(values: JobFormValues): JobCreateBody {
 	return {
 		name: values.name.trim(),
 		enabled: values.enabled,
+		consumer_execution: values.consumerExecution,
+		consumer_history: values.consumerHistory,
 		...(values.scheduled
 			? { schedule: { cron: values.cron.trim(), timezone: values.timezone.trim() } }
 			: {}),
@@ -153,17 +160,15 @@ function supportedConcurrencyPolicy(policy: Job['concurrency_policy']): 'forbid'
 	return policy;
 }
 
-/** The update body: every optional section is sent, `null` clearing what the form left empty. */
+// PATCH requires null to clear optional sections; omission preserves their saved values.
 function toUpdateBody(values: JobFormValues): JobUpdateBody {
 	const body = toCreateBody(values);
 	return {
-		name: body.name,
-		enabled: body.enabled,
+		...body,
 		schedule: body.schedule ?? null,
 		parameters: body.parameters ?? null,
 		retry: body.retry ?? null,
 		timeout_seconds: body.timeout_seconds ?? null,
-		concurrency_policy: body.concurrency_policy,
 		notifications: body.notifications ?? null,
 	};
 }
@@ -240,6 +245,38 @@ export function JobFormDialog({
 					</field.SwitchField>
 				)}
 			</form.AppField>
+
+			<fieldset className="flex flex-col gap-3 rounded-md border border-border p-3">
+				<legend className="px-1 text-xs font-medium text-muted-foreground">App users</legend>
+				<form.AppField name="consumerExecution">
+					{(field) => (
+						<field.SwitchField>
+							{() => <span className="text-sm">Allow app users to run this job</span>}
+						</field.SwitchField>
+					)}
+				</form.AppField>
+				<form.AppField name="consumerHistory">
+					{(field) => (
+						<field.RadioGroupField
+							label="Run history"
+							options={[
+								{
+									value: 'private',
+									label: 'Private',
+									description: 'Visible only to the person who started the run and editors.',
+								},
+								{
+									value: 'shared',
+									label: 'Shared',
+									description:
+										'Other authorized app users can see run summaries and completed parameters.',
+								},
+							]}
+						/>
+					)}
+				</form.AppField>
+				<p className="text-xs text-muted-foreground">Only editors can view raw logs.</p>
+			</fieldset>
 
 			<fieldset className="flex flex-col gap-3 rounded-md border border-border p-3">
 				<legend className="px-1 text-xs font-medium text-muted-foreground">Schedule</legend>
