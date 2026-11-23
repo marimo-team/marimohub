@@ -159,6 +159,10 @@ export function updateNotebookJob(
 	});
 }
 
+type JobRunReplay =
+	| { scope: string; key?: string }
+	| ((enqueue: () => Promise<JobRun>) => Promise<JobRun>);
+
 export async function triggerJobRun(
 	deps: ApiDeps,
 	target: AuthorizedNotebook,
@@ -166,7 +170,7 @@ export async function triggerJobRun(
 	body: z.infer<typeof TriggerRunBody> | undefined,
 	request: { requestId?: string; method: string; path: string },
 	signal?: AbortSignal,
-	replay?: { scope: string; key?: string } | ((enqueue: () => Promise<JobRun>) => Promise<JobRun>),
+	replay?: JobRunReplay,
 ) {
 	const { project, notebook, user } = target;
 	return deps.services.jobRuns.withJobMutation(job, async () => {
