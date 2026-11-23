@@ -96,7 +96,7 @@ export function createAppJobsApp(deps: ApiDeps) {
 				data: { credential: await signAppJobCredential(claims, exposure.signingSecret) },
 			});
 		}
-		if (!['trigger', 'get_run', 'list_active_runs', 'list_history'].includes(operation))
+		if (!jobRequest.options.some((schema) => schema.shape.operation.value === operation))
 			return fail(c, 'NOT_FOUND', 'Unknown app job operation', 404);
 		const parsed = jobRequest.safeParse({ operation, body: await c.req.json().catch(() => null) });
 		if (!parsed.success) return fail(c, 'BAD_REQUEST', 'Invalid app job request', 400);

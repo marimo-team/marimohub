@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { PublicJobRun } from '@marimo-hub/core';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { expectOk } from '../testing';
+import type { Page } from '../pagination';
 import { createAppJobsFixture } from '../testing/appJobs';
 
-type Page = { items: PublicJobRun[]; next_cursor: string | null };
+type RunPage = Page<PublicJobRun>;
 const tags = { app: 'immutable-demo' };
 const query = { tag_key: 'app', tag_value: tags.app };
 
@@ -40,7 +41,7 @@ describe('app project history', () => {
 		const newer = await enqueue();
 		expect(newer.source_version_id).not.toBe(older.source_version_id);
 		const privateRun = await enqueue(f.job);
-		const history = () => f.call('list_history', query).then(expectOk<Page>);
+		const history = () => f.call('list_history', query).then(expectOk<RunPage>);
 		const page = await history();
 		expect(page.items.map((r) => r.run_id)).toEqual([newer.run_id, older.run_id]);
 		expect(page.items[0]).not.toHaveProperty('parameters');
@@ -79,9 +80,11 @@ describe('app project history', () => {
 		for (let i = 0; i < 2; i++) {
 			await expectOk(await other.call('trigger', { job_id: other.job.id, input: { tags } }));
 		}
-		const foreign = await expectOk<Page>(await other.call('list_history', { ...query, limit: 1 }));
+		const foreign = await expectOk<RunPage>(
+			await other.call('list_history', { ...query, limit: 1 }),
+		);
 		expect(foreign.next_cursor).not.toBeNull();
-		expect((await expectOk<Page>(await f.call('list_history', query))).items).toEqual([]);
+		expect((await expectOk<RunPage>(await f.call('list_history', query))).items).toEqual([]);
 		expect((await f.call('list_history', { ...query, cursor: foreign.next_cursor })).status).toBe(
 			400,
 		);
@@ -89,7 +92,7 @@ describe('app project history', () => {
 		const [scope, position] = JSON.parse(atob(foreign.next_cursor!)) as [string, string];
 		const forged = btoa(JSON.stringify([scope.replace(other.project.id, f.project.id), position]));
 		expect(
-			(await expectOk<Page>(await f.call('list_history', { ...query, cursor: forged }))).items,
+			(await expectOk<RunPage>(await f.call('list_history', { ...query, cursor: forged }))).items,
 		).toEqual([]);
 		await f.services.projects.removeMember(f.project.id, f.user, ACTOR);
 		expect((await f.call('list_history', query)).status).not.toBe(200);
@@ -103,10 +106,10 @@ describe('app project history', () => {
 		);
 		await expectOk(await bob.call('trigger', { job_id: f.job.id, input: { tags } }));
 		const filter = { ...query, status: 'active', triggered_by_me: 'true', limit: 1 };
-		const first = await expectOk<Page>(await f.call('list_history', filter));
+		const first = await expectOk<RunPage>(await f.call('list_history', filter));
 		expect(first.items).toEqual([]);
 		expect(first.next_cursor).not.toBeNull();
-		const next = await expectOk<Page>(
+		const next = await expectOk<RunPage>(
 			await f.call('list_history', { ...filter, cursor: first.next_cursor }),
 		);
 		expect(next.items.map((r) => r.run_id)).toEqual([own.run_id]);

@@ -3,9 +3,10 @@ import { signAppJobCredential, UnavailableError } from '@marimo-hub/core';
 import type { PublicJobRun } from '@marimo-hub/core';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { expectOk } from '../testing';
+import type { Page } from '../pagination';
 import { createAppJobsFixture } from '../testing/appJobs';
 
-type Page = { items: PublicJobRun[]; next_cursor: string | null };
+type RunPage = Page<PublicJobRun>;
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -73,13 +74,13 @@ describe('app history failure boundaries', () => {
 		await expectOk(await f.call('trigger'));
 		await expectOk(await f.call('trigger'));
 		const scan = vi.spyOn(f.client.deps.services.jobRuns, 'listProjectRunsPage');
-		const first = await expectOk<Page>(
+		const first = await expectOk<RunPage>(
 			await f.call('list_history', { status: 'succeeded', limit: 1 }),
 		);
 		expect(first.items).toEqual([]);
 		expect(first.next_cursor).not.toBeNull();
 		expect(scan).toHaveBeenCalledTimes(1);
-		const last = await expectOk<Page>(
+		const last = await expectOk<RunPage>(
 			await f.call('list_history', {
 				status: 'succeeded',
 				limit: 1,
@@ -118,38 +119,22 @@ describe('app history failure boundaries', () => {
 	it('rechecks sharing and run status between pages without losing continuation', async () => {
 		const f = await createAppJobsFixture();
 		const bob = await f.visitAs(uid('history-bob'));
-		await f.services.jobs.updateJob(
-			f.project.id,
-			f.notebook.id,
-			f.job.id,
-			{ consumer_history: 'shared' },
-			ACTOR,
-		);
+		const setSharing = (consumer_history: 'shared' | 'private') =>
+			f.services.jobs.updateJob(f.project.id, f.notebook.id, f.job.id, { consumer_history }, ACTOR);
+		await setSharing('shared');
 		const older = await expectOk<PublicJobRun>(await bob.call('trigger'));
 		await expectOk(await bob.call('trigger'));
 		await expectOk(await bob.call('trigger'));
 		const filter = { status: 'active', triggered_by: bob.user, limit: 1 };
-		const first = await expectOk<Page>(await f.call('list_history', filter));
+		const first = await expectOk<RunPage>(await f.call('list_history', filter));
 		expect(first.items).toHaveLength(1);
-		await f.services.jobs.updateJob(
-			f.project.id,
-			f.notebook.id,
-			f.job.id,
-			{ consumer_history: 'private' },
-			ACTOR,
-		);
-		const second = await expectOk<Page>(
+		await setSharing('private');
+		const second = await expectOk<RunPage>(
 			await f.call('list_history', { ...filter, cursor: first.next_cursor }),
 		);
 		expect(second.items).toEqual([]);
 		expect(second.next_cursor).not.toBeNull();
-		await f.services.jobs.updateJob(
-			f.project.id,
-			f.notebook.id,
-			f.job.id,
-			{ consumer_history: 'shared' },
-			ACTOR,
-		);
+		await setSharing('shared');
 		const run = await f.services.jobRuns.getRun(
 			f.project.id,
 			f.notebook.id,
@@ -157,7 +142,7 @@ describe('app history failure boundaries', () => {
 			older.run_id,
 		);
 		await f.services.jobRuns.transition(run, 'fail');
-		const last = await expectOk<Page>(
+		const last = await expectOk<RunPage>(
 			await f.call('list_history', { ...filter, cursor: second.next_cursor }),
 		);
 		expect(last).toEqual({ items: [], next_cursor: null });
