@@ -1,3 +1,4 @@
+import { appJobsEndpoint } from './jobs/appJobsEndpoint';
 import { deploymentState, withRequestMemo } from './requestMemo';
 /**
  * HTTP and WebSocket proxies share admission checks. Each request keeps its own
@@ -6,6 +7,8 @@ import { deploymentState, withRequestMemo } from './requestMemo';
 import type { MiddlewareHandler } from 'hono';
 import {
 	AppPoolService,
+	APP_JOB_CREDENTIAL_REFRESH_WINDOW_MS,
+	signAppJobCredential,
 	LazyMap,
 	sessionMode,
 	sessionResourceNotebookId,
@@ -50,6 +53,8 @@ export type ProxyDecision =
 			sessionId: string;
 			projectId?: ProjectId;
 			kernelAuthToken?: string;
+			appJobCredential?: string;
+			appJobsEndpoint?: string;
 			authorizationDeadline?: number;
 	  };
 
@@ -58,6 +63,7 @@ type Admission = Omit<Extract<ProxyDecision, { kind: 'forward' }>, 'targetUrl'> 
 	originUrl: string;
 	proxyPath: 'strip-prefix' | 'preserve-prefix';
 	cacheable: boolean;
+	assignmentGenerations?: string[];
 };
 type CachedAdmission = { admission: Admission; expiresAt: number };
 type AdmissionCache = LazyMap<string, CachedAdmission>;
@@ -117,6 +123,7 @@ function trimTrailingSlash(s: string): string {
 export async function authorizeProxyRequest(
 	request: Request,
 	rawDeps: ApiDeps,
+	issueJobCredential = true,
 ): Promise<ProxyDecision> {
 	const url = new URL(request.url);
 	const kernelMatch = PROXY_PREFIX.exec(url.pathname);
@@ -230,13 +237,40 @@ export async function authorizeProxyRequest(
 		cache.delete(key);
 		return rejectProxy(410, 'GONE', 'Session authorization has expired');
 	}
-	const { originUrl, proxyPath, cacheable, ...forward } = admission;
+	const { originUrl, proxyPath, cacheable, assignmentGenerations, ...forward } = admission;
 	if (!cacheable) cache.delete(key);
 	const upstreamPath =
 		surfaceMatch && proxyPath === 'strip-prefix'
 			? url.pathname.slice(surfaceMatch[0].length) || '/'
 			: url.pathname;
-	return { ...forward, targetUrl: `${trimTrailingSlash(originUrl)}${upstreamPath}${url.search}` };
+	let appJobAccess = {};
+	if (
+		issueJobCredential &&
+		assignmentGenerations?.length &&
+		!surfaceMatch &&
+		deps.jobs &&
+		['sso', 'development'].includes(user.credential.kind)
+	) {
+		const endpoint = appJobsEndpoint(deps, request);
+		const refreshUntil = Math.min(
+			Date.now() + APP_JOB_CREDENTIAL_REFRESH_WINDOW_MS,
+			...[user.credential.expiresAt, user.entitlementsExpiresAt]
+				.filter((v): v is string => !!v)
+				.map(Date.parse),
+		);
+		appJobAccess = {
+			appJobsEndpoint: endpoint,
+			appJobCredential: await signAppJobCredential(
+				{ principal: user, routingToken: token, assignmentGenerations, endpoint, refreshUntil },
+				secret,
+			),
+		};
+	}
+	return {
+		...forward,
+		...appJobAccess,
+		targetUrl: `${trimTrailingSlash(originUrl)}${upstreamPath}${url.search}`,
+	};
 }
 
 async function loadAdmission(
@@ -334,14 +368,18 @@ async function loadAdmission(
 		);
 	}
 
+	let assignmentGenerations: string[] | undefined;
 	if (sessionMode(session) === 'app') {
 		try {
-			const allowed = await new AppPoolService(
+			const view = await new AppPoolService(
 				deps.bucket,
 				deps.services.sessions,
 				deps.policy.appPool,
 				deps.metrics,
-			).canAccess(projectId, session.notebook_id, user.id, sessionId, !session.app_pool);
+			).view(projectId, session.notebook_id);
+			const allowed = view.canAccess(user.id, sessionId, !session.app_pool);
+			if (!session.preview)
+				assignmentGenerations = view.activeAssignmentGenerations(user.id, sessionId);
 			if (!allowed) {
 				return rejectProxy(410, 'GONE', 'The app assignment expired. Open the app again.');
 			}
@@ -369,6 +407,7 @@ async function loadAdmission(
 		kind: 'forward',
 		originUrl,
 		proxyPath,
+		assignmentGenerations,
 		cacheable: sessionMode(session) !== 'app' && session.origin?.type !== 'preview',
 		sessionId,
 		projectId: session.project_id,
@@ -399,6 +438,8 @@ const HOP_BY_HOP = new Set([
  */
 export const CREDENTIAL_HEADERS = new Set([
 	'cookie',
+	'x-mhub-app-jobs-credential',
+	'x-mhub-app-jobs-url',
 	'authorization',
 	'x-goog-iap-jwt-assertion',
 	'x-forwarded-email',
@@ -465,12 +506,17 @@ export async function forwardHttp(
 	sessionId?: string,
 	kernelAuthToken?: string,
 	credentialHeaders?: readonly string[],
+	appJobs?: { appJobCredential?: string; appJobsEndpoint?: string },
 ): Promise<Response> {
 	const init: RequestInit = {
 		method: request.method,
 		headers: requestHeaders(request, targetUrl, kernelAuthToken, credentialHeaders),
 		redirect: 'manual',
 	};
+	if (appJobs?.appJobCredential && appJobs.appJobsEndpoint) {
+		(init.headers as Headers).set('x-mhub-app-jobs-credential', appJobs.appJobCredential);
+		(init.headers as Headers).set('x-mhub-app-jobs-url', appJobs.appJobsEndpoint);
+	}
 	const retryable = request.method === 'GET' || request.method === 'HEAD';
 	if (!retryable) {
 		init.body = request.body;
@@ -675,6 +721,7 @@ export function sandboxProxyMiddleware(deps: ApiDeps): MiddlewareHandler<HonoEnv
 			decision.sessionId,
 			decision.kernelAuthToken,
 			deps.sandbox.credentialHeaders,
+			decision,
 		);
 		await observeRuntimeSave(deps, c.req.raw, response, decision);
 		return response;

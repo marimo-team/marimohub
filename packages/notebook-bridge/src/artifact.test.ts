@@ -61,6 +61,29 @@ describe('runtime artifact', () => {
 			}),
 		).not.toThrow();
 	}, 30_000);
+	it('imports the jobs SDK from the packaged marimohub namespace', () => {
+		expect(() =>
+			execFileSync(
+				'python3',
+				[
+					'-B',
+					'-c',
+					`
+import base64, io, sys, tempfile, zipfile
+with tempfile.TemporaryDirectory() as directory:
+    with zipfile.ZipFile(io.BytesIO(base64.b64decode(sys.stdin.read()))) as wheel:
+        wheel.extractall(directory)
+    sys.path.insert(0, directory)
+    from marimohub.jobs import Jobs
+    from marimohub import jobs
+    assert Jobs is jobs.Jobs
+    assert Jobs.__module__ == "marimohub.jobs"
+`,
+				],
+				{ input: WHEEL_BASE64, stdio: ['pipe', 'pipe', 'pipe'] },
+			),
+		).not.toThrow();
+	});
 	it('contains an offline wheel with a lifespan entrypoint and no dependency on marimo internals', () => {
 		const files = unzipSync(Buffer.from(WHEEL_BASE64, 'base64'));
 		expect(strFromU8(files['marimohub_notebook_bridge/identity'])).toBe(ARTIFACT_ID);
@@ -70,7 +93,9 @@ describe('runtime artifact', () => {
 		);
 		for (const [path, content] of Object.entries(files)) {
 			if (path.endsWith('.py')) {
-				expect(marimoImports(strFromU8(content)), path).toEqual([]);
+				expect(marimoImports(strFromU8(content)), path).toEqual(
+					path === 'marimohub/jobs.py' ? ['marimo'] : [],
+				);
 			}
 		}
 	});

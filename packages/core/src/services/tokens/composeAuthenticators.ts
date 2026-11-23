@@ -1,3 +1,4 @@
+import { APP_JOB_CREDENTIAL_PREFIX } from '../runtime/appJobCredential';
 import { parseBearerAuthorization } from '../../bearerToken';
 import type { AuthenticatedPrincipal, Authenticator } from '../../ports/auth';
 import { isPersonalAccessToken } from './TokenService';
@@ -21,6 +22,8 @@ export function composeAuthenticators(
 		async authenticate(request) {
 			const bearer = parseBearerAuthorization(request);
 			if (bearer.kind === 'invalid') return null;
+			if (bearer.kind === 'bearer' && bearer.token.startsWith(APP_JOB_CREDENTIAL_PREFIX))
+				return null;
 			if (bearer.kind === 'bearer' && bearer.token.startsWith(SERVICE_ACCOUNT_PREFIX)) {
 				return serviceAccounts?.verify(bearer.token) ?? null;
 			}
