@@ -1879,6 +1879,7 @@ describe('createFromEnv jobs config', () => {
 			tickMs: 60_000,
 			maxConcurrentRuns: 5,
 			maxConcurrentRunsPerProject: 2,
+			maxQueuedRunsPerJob: 20,
 			maxPerNotebook: 5,
 			defaultTimeoutMs: 1_800_000,
 			maxTimeoutMs: 14_400_000,
@@ -1891,8 +1892,9 @@ describe('createFromEnv jobs config', () => {
 		const cfg = createFromEnv({
 			...baseEnv,
 			MARIMOHUB_JOBS_TICK_SECONDS: '30',
-			MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS: '8',
-			MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT: '3',
+			MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS: '100',
+			MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT: '100',
+			MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB: '100',
 			MARIMOHUB_JOBS_MAX_PER_NOTEBOOK: '0',
 			MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS: '600',
 			MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS: '900',
@@ -1901,8 +1903,9 @@ describe('createFromEnv jobs config', () => {
 		}).jobs;
 		expect(cfg).toEqual({
 			tickMs: 30_000,
-			maxConcurrentRuns: 8,
-			maxConcurrentRunsPerProject: 3,
+			maxConcurrentRuns: 100,
+			maxConcurrentRunsPerProject: 100,
+			maxQueuedRunsPerJob: 100,
 			maxPerNotebook: undefined,
 			defaultTimeoutMs: 600_000,
 			maxTimeoutMs: 900_000,
@@ -1923,6 +1926,10 @@ describe('createFromEnv jobs config', () => {
 
 	it.each([
 		['MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS', '0'],
+		['MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB', '0'],
+		['MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB', '-1'],
+		['MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB', '1.5'],
+		['MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB', 'many'],
 		['MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT', '-1'],
 		['MARIMOHUB_JOBS_RUN_RETENTION_DAYS', '1.5'],
 		['MARIMOHUB_JOBS_TICK_SECONDS', 'soon'],

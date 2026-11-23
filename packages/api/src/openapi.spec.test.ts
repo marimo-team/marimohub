@@ -7,7 +7,7 @@ import {
 	ROLES,
 	JOB_PARAMETER_KEY_PATTERN,
 	MAX_JOB_PARAMETERS,
-	MAX_QUEUED_RUNS_PER_JOB,
+	DEFAULT_MAX_QUEUED_RUNS_PER_JOB,
 } from '@marimo-hub/core';
 import { generateOpenApiDocument } from './createApi';
 
@@ -146,7 +146,7 @@ describe('OpenAPI spec', () => {
 		expect(property(create, 'concurrency_policy').default).toBe('forbid');
 		expect(runOutput.minimum).toBe(0);
 		expect(property(jobsCapability, 'max_queued_runs_per_job').exclusiveMinimum).toBe(0);
-		expect(MAX_QUEUED_RUNS_PER_JOB).toBe(20);
+		expect(DEFAULT_MAX_QUEUED_RUNS_PER_JOB).toBe(20);
 	});
 
 	it('documents If-Match on job mutations but not reads', () => {

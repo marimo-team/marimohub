@@ -5,7 +5,7 @@ import {
 	ForbiddenError,
 	toPublicJobRun,
 	JobId,
-	MAX_QUEUED_RUNS_PER_JOB,
+	DEFAULT_MAX_QUEUED_RUNS_PER_JOB,
 	Millis,
 	NotFoundError,
 	ResourceExhaustedError,
@@ -176,15 +176,16 @@ export async function triggerJobRun(
 		const current = await deps.services.jobs.getJob(project.id, notebook.id, job.id);
 		await authorizeJobTrigger(deps, target, current);
 		const enqueue = async () => {
+			const config = requireJobs(deps);
+			const queueLimit = config.maxQueuedRunsPerJob ?? DEFAULT_MAX_QUEUED_RUNS_PER_JOB;
 			const queued = (await deps.services.jobRuns.listActive()).filter(
 				({ marker, run }) => marker.job_id === job.id && run?.status === 'queued',
 			);
-			if (queued.length >= MAX_QUEUED_RUNS_PER_JOB) {
+			if (queued.length >= queueLimit) {
 				throw new ResourceExhaustedError(
-					`Too many queued runs for this job (${MAX_QUEUED_RUNS_PER_JOB}); wait for the queue to drain.`,
+					`Too many queued runs for this job (${queueLimit}); wait for the queue to drain.`,
 				);
 			}
-			const config = requireJobs(deps);
 			const requestedMs =
 				current.timeout_seconds !== undefined
 					? current.timeout_seconds * 1000

@@ -660,6 +660,38 @@ describe('Job routes', () => {
 		expect(await expectPage(await request('GET', `${base()}/${job.id}/runs`))).toHaveLength(20);
 	});
 
+	it('accepts a 100-run burst across API replicas and replays at capacity', async () => {
+		const deps = { jobs: { ...DEFAULT_JOBS_CONFIG, maxQueuedRunsPerJob: 100 } };
+		const replicas = [
+			createTestApi({ bucket, compute, deps }).request,
+			createTestApi({ bucket, compute, deps }).request,
+		];
+		const job = await createJob();
+		const url = `${base()}/${job.id}/runs`;
+		const responses = await Promise.all(
+			Array.from({ length: 100 }, (_, i) =>
+				Promise.resolve(
+					replicas[i % 2]('POST', url, undefined, { 'idempotency-key': `burst-${i}` }),
+				),
+			),
+		);
+		const runs = await Promise.all(responses.map((response) => expectOk<any>(response, 201)));
+		expect(new Set(runs.map((run) => run.run_id)).size).toBe(100);
+		expect(runs.every((run) => run.status === 'queued')).toBe(true);
+		await expectError(await replicas[0]('POST', url), 429, 'RESOURCE_EXHAUSTED');
+		const replay = await expectOk<any>(
+			await replicas[1]('POST', url, undefined, {
+				'idempotency-key': 'burst-0',
+			}),
+			201,
+		);
+		expect(replay.run_id).toBe(runs[0].run_id);
+		await expectOk(await replicas[0]('POST', `${url}/${runs[0].run_id}/cancel`));
+		await expectOk(await replicas[1]('POST', url), 201);
+		const capabilities = await expectOk<any>(await replicas[0]('GET', '/capabilities'));
+		expect(capabilities.jobs.max_queued_runs_per_job).toBe(100);
+	}, 30_000);
+
 	it('advertises the job limits on capabilities', async () => {
 		const capabilities = await expectOk<any>(await request('GET', '/capabilities'));
 		expect(capabilities.jobs).toEqual({

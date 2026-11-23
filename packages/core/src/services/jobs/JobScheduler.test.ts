@@ -670,6 +670,28 @@ describe('JobScheduler', () => {
 		await settle(s);
 	});
 
+	it('shares capacity accounting across scheduler instances and drains overflow after 100 runs', async () => {
+		const job = await createJob({ schedule: undefined });
+		for (let i = 0; i < 101; i++) {
+			await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 14400 });
+		}
+		const config = { ...CONFIG, maxConcurrentRuns: 100, maxConcurrentRunsPerProject: 100 };
+		const runner = fakeRunner(env, 'hang');
+		const first = scheduler(runner, { config });
+		expect((await first.tick()).dispatched).toBe(100);
+		await vi.waitFor(() => expect(runner.release.size).toBe(100));
+		const second = scheduler(fakeRunner(env), { config });
+		expect((await second.tick()).dispatched).toBe(0);
+		expect(
+			(await env.jobRuns.listActive()).filter(({ run }) => run?.status === 'queued'),
+		).toHaveLength(1);
+		for (const release of runner.release.values()) release();
+		await settle(first);
+		expect((await second.tick()).dispatched).toBe(1);
+		await settle(second);
+		expect(await env.jobRuns.listActive()).toHaveLength(0);
+	}, 30_000);
+
 	it('holds a retry back until its eligible_at', async () => {
 		const job = await createJob({ schedule: undefined });
 		await env.jobRuns.enqueue({
@@ -1784,6 +1806,25 @@ describe('admit', () => {
 		const p2 = run('p2', '2026-09-02T10:02:00Z');
 		expect(admit([p1a, p1b, p2], running, caps)).toEqual([p1a, p2]);
 		expect(admit([p1a, p1b, p2], running, { ...caps, maxConcurrentRuns: 1 })).toEqual([]);
+	});
+
+	it('admits a retry at the 100-run project cap without blocking another project', () => {
+		const running = Array.from({ length: 99 }, () => run('p1', '2026-09-02T09:00:00Z'));
+		const retry = run('p1', '2026-09-02T09:30:00Z', '2026-09-02T10:00:00Z');
+		const excess = run('p1', '2026-09-02T10:01:00Z');
+		const other = run('p2', '2026-09-02T10:02:00Z');
+		expect(
+			admit([excess, other, retry], running, {
+				maxConcurrentRuns: 101,
+				maxConcurrentRunsPerProject: 100,
+			}),
+		).toEqual([retry, other]);
+		expect(
+			admit([excess, other, retry], running, {
+				maxConcurrentRuns: 100,
+				maxConcurrentRunsPerProject: 100,
+			}),
+		).toEqual([retry]);
 	});
 
 	it('breaks ties on run id so the order is total', () => {

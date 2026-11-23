@@ -548,6 +548,7 @@ Headless notebook runs on a cron schedule or on demand, with a durable run histo
 | `MARIMOHUB_JOBS_TICK_SECONDS` | Node only: how often the maintenance replica evaluates schedules, dispatches queued runs, and enforces run deadlines. Also bounds the start latency of a manual trigger. | — | `60` | — |
 | `MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS` | Node only: deployment-wide cap on runs holding a sandbox (provisioning or running). Further runs wait in the queue. | — | `5` | — |
 | `MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT` | Node only: per-project slice of the deployment-wide run cap. | — | `2` | — |
+| `MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB` | Node only: per-job queued-run limit for manual admission; positive integer. Scheduled runs and retries can exceed it. See [Jobs](./jobs.md#queue-admission-and-capacity). | — | `20` | — |
 | `MARIMOHUB_JOBS_MAX_PER_NOTEBOOK` | Node only: job definitions per notebook (`0` = unlimited). | — | `5` | — |
 | `MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS` | Node only: run deadline when a job sets no `timeout_seconds`. The sandbox is destroyed and the run lands `timed_out` past it. | — | `1800` | — |
 | `MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS` | Node only: ceiling on a job’s own `timeout_seconds`; larger values are rejected. | — | `14400` | — |
