@@ -47,6 +47,26 @@ class JobsTest(unittest.TestCase):
             "refresh", "trigger", "refresh", "list_active_runs", "refresh", "get_run",
         ])
 
+    def test_history_returns_one_empty_page_and_preserves_cursor(self):
+        client = visitor("alice")
+        page = {"items": [], "next_cursor": "continue"}
+        with patch.object(client, "_send", side_effect=[
+            {"credential": "renewed"}, page,
+            {"credential": "renewed-again"}, {"items": [{"run_id": "run"}], "next_cursor": None},
+        ]) as send:
+            self.assertEqual(client.list_history(tag_key="app", tag_value="demo",
+                status="active", triggered_by_me=True, limit=1), page)
+            self.assertEqual(send.call_count, 2)
+            self.assertEqual(send.call_args.args, ("list_history", {
+                "tag_key": "app", "tag_value": "demo", "status": "active",
+                "triggered_by_me": "true", "limit": 1,
+            }))
+            result = client.list_history(cursor=page["next_cursor"], triggered_by="alice")
+            self.assertIsNone(result["next_cursor"])
+            self.assertEqual(send.call_args.args, ("list_history", {
+                "cursor": "continue", "triggered_by": "alice",
+            }))
+
     def test_refresh_failure_never_submits_a_run(self):
         client = visitor("expired")
         for status in [401, 403, 503]:

@@ -1,3 +1,4 @@
+import { ProjectRunListQuery, listProjectRunHistory } from './projectHistory';
 import { APP_JOBS_PATH, appJobsEndpoint } from './appJobsEndpoint';
 import { z } from 'zod';
 import { bodyLimit } from 'hono/body-limit';
@@ -25,6 +26,7 @@ import { TriggerRunBody } from './schemas';
 
 const jobBody = z.strictObject({ job_id: z.string().regex(JobId.regex).transform(JobId.parse) });
 const jobRequest = z.discriminatedUnion('operation', [
+	z.object({ operation: z.literal('list_history'), body: ProjectRunListQuery }),
 	z.object({
 		operation: z.literal('trigger'),
 		body: jobBody.extend({ input: TriggerRunBody.optional() }),
@@ -94,11 +96,18 @@ export function createAppJobsApp(deps: ApiDeps) {
 				data: { credential: await signAppJobCredential(claims, exposure.signingSecret) },
 			});
 		}
-		if (!['trigger', 'get_run', 'list_active_runs'].includes(operation))
+		if (!['trigger', 'get_run', 'list_active_runs', 'list_history'].includes(operation))
 			return fail(c, 'NOT_FOUND', 'Unknown app job operation', 404);
 		const parsed = jobRequest.safeParse({ operation, body: await c.req.json().catch(() => null) });
 		if (!parsed.success) return fail(c, 'BAD_REQUEST', 'Invalid app job request', 400);
 		const request = parsed.data;
+		if (request.operation === 'list_history') {
+			await authorizeJobNotebook(deps, user, pid, nid, 'project.read');
+			return c.json({
+				success: true,
+				data: await listProjectRunHistory(deps, user, pid, request.body),
+			});
+		}
 		const jid = request.body.job_id;
 		const target = await loadAuthorizedJob(deps, user, pid, nid, jid);
 		if (request.operation === 'trigger') {
