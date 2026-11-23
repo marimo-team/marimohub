@@ -122,7 +122,7 @@ beforeEach(async () => {
 	job = await deps.services.jobs.createJob(
 		pid,
 		nid,
-		{ name: 'Nightly', parameters: { region: 'eu', currency: 'eur' } },
+		{ name: 'Nightly', consumer_history: 'shared', parameters: { region: 'eu', currency: 'eur' } },
 		USER.id,
 	);
 	client = await connectMcpClient(deps, USER, requestContext);
@@ -417,14 +417,84 @@ describe('MCP run execution and authorization', () => {
 		expect((await call('run_job')).structuredContent).toMatchObject({ code: 'RESOURCE_EXHAUSTED' });
 	});
 
-	it('allows viewer reads and HTML links but denies mutations and log links', async () => {
+	it.each(['app.read', 'project.read'] as const)(
+		'requires job.trigger with a scoped %s MCP credential',
+		async (readAction) => {
+			await deps.services.jobs.updateJob(pid, nid, job.id, { consumer_execution: true }, USER.id);
+			const principal = (execute: boolean): AuthenticatedPrincipal => ({
+				...USER,
+				credential: {
+					...USER.credential,
+					grant: {
+						actions: execute ? [readAction, 'job.trigger'] : [readAction],
+						projects: [pid],
+					},
+				},
+			});
+			client = await connectMcpClient(deps, principal(false), requestContext);
+			expect(await call('run_job')).toMatchObject({
+				isError: true,
+				structuredContent: { code: 'FORBIDDEN' },
+			});
+			client = await connectMcpClient(deps, principal(true), requestContext);
+			expect(
+				(await call('run_job', { idempotency_key: 'consumer-grant' })).structuredContent?.run,
+			).toMatchObject({ triggered_by: USER.id, status: 'queued' });
+			client = await connectMcpClient(deps, principal(false), requestContext);
+			expect(await call('run_job', { idempotency_key: 'consumer-grant' })).toMatchObject({
+				isError: true,
+				structuredContent: { code: 'FORBIDDEN' },
+			});
+			expect(await deps.services.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(1);
+		},
+	);
+	it('lets app users trigger enabled jobs through MCP', async () => {
+		await deps.services.projects.removeMember(pid, VIEWER.id, USER.id);
+		await deps.services.projects.addMember(pid, { user_id: VIEWER.id }, 'app-user', USER.id);
+		await deps.services.jobs.updateJob(pid, nid, job.id, { consumer_execution: true }, USER.id);
+		client = await connectMcpClient(deps, VIEWER, requestContext);
+		const response = await call('run_job');
+		expect(response.isError).not.toBe(true);
+		expect(response.structuredContent?.run).toMatchObject({
+			triggered_by: VIEWER.id,
+			status: 'queued',
+		});
+	});
+
+	it('gives a consumer owner HTML links and full details but never raw log links', async () => {
+		job = await deps.services.jobs.updateJob(
+			pid,
+			nid,
+			job.id,
+			{ consumer_history: 'private' },
+			USER.id,
+		);
+		const run = await finish(
+			await deps.services.jobRuns.enqueue({
+				job,
+				trigger: 'manual',
+				triggeredBy: VIEWER.id,
+				timeoutSeconds: 60,
+				parameters: { region: 'eu' },
+			}),
+		);
+		client = await connectMcpClient(deps, VIEWER, requestContext);
+		const response = await call('get_job_run', { run_id: run.run_id });
+		expect(response.structuredContent?.run).toMatchObject({
+			parameters: { region: 'eu' },
+			output: { html_bytes: expect.any(Number) },
+		});
+		expect(response.structuredContent?.links).toHaveProperty('html');
+		expect(response.structuredContent?.links).not.toHaveProperty('logs');
+	});
+	it('allows shared viewer reads but denies mutations and artifact links', async () => {
 		const run = await finish(await enqueue());
 		const ownerRead = await call('get_job_run', { run_id: run.run_id });
 		expect(ownerRead.structuredContent?.links).toHaveProperty('logs');
 		client = await connectMcpClient(deps, VIEWER, requestContext);
 		expect((await call('list_jobs')).isError).not.toBe(true);
 		const viewerRead = await call('get_job_run', { run_id: run.run_id });
-		expect(viewerRead.structuredContent?.links).toHaveProperty('html');
+		expect(viewerRead.structuredContent?.links).not.toHaveProperty('html');
 		expect(viewerRead.structuredContent?.links).not.toHaveProperty('logs');
 		expect(
 			await client.callTool({
@@ -784,6 +854,20 @@ describe('MCP waiting', () => {
 		expect(read).toHaveBeenCalledTimes(2);
 		await vi.advanceTimersByTimeAsync(4000);
 		expect(read).toHaveBeenCalledTimes(2);
+	});
+
+	it.each([1, 3])('revokes shared history during a %s-second MCP wait', async (seconds) => {
+		const run = await enqueue();
+		client = await connectMcpClient(deps, VIEWER, requestContext);
+		vi.useFakeTimers();
+		const pending = call('get_job_run', { run_id: run.run_id, wait: true, wait_seconds: seconds });
+		await vi.advanceTimersByTimeAsync(1);
+		await deps.services.jobs.updateJob(pid, nid, job.id, { consumer_history: 'private' }, USER.id);
+		await vi.advanceTimersByTimeAsync(seconds * 1000);
+		const response = await pending;
+		expect(response).toMatchObject({ isError: true, structuredContent: { code: 'NOT_FOUND' } });
+		expect(response.structuredContent).not.toHaveProperty('run');
+		expect(response.structuredContent).not.toHaveProperty('links');
 	});
 
 	it.each([1, 3, 10])(

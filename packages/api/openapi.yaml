@@ -1971,6 +1971,7 @@ components:
                   - audit.global.read
                   - directory.search
                   - app.read
+                  - job.trigger
                   - project.read
                   - project.update
                   - project.delete
@@ -2435,6 +2436,7 @@ components:
                           - audit.global.read
                           - directory.search
                           - app.read
+                          - job.trigger
                           - project.read
                           - project.update
                           - project.delete
@@ -2490,6 +2492,7 @@ components:
             - audit.global.read
             - directory.search
             - app.read
+            - job.trigger
             - project.read
             - project.update
             - project.delete
@@ -4535,6 +4538,20 @@ components:
           type: string
         name:
           type: string
+        consumer_execution:
+          type: boolean
+          description: Allow authorized consumers to trigger this job. Scoped credentials
+            also need job.trigger and source access. Defaults to false.
+        consumer_history:
+          type: string
+          enum:
+            - private
+            - shared
+          description: Defaults to private (triggerer and editors). Shared exposes run
+            identity, status, triggerer, timestamps, tags and completed
+            parameters to current source readers. Active inputs and diagnostics
+            remain private. Disabling sharing restricts future reads; viewed
+            data cannot be recalled.
         enabled:
           type: boolean
         schedule:
@@ -4646,6 +4663,20 @@ components:
           minLength: 1
           maxLength: 120
           example: Nightly refresh
+        consumer_execution:
+          type: boolean
+          description: Allow authorized consumers to trigger this job. Scoped credentials
+            also need job.trigger and source access. Defaults to false.
+        consumer_history:
+          type: string
+          enum:
+            - private
+            - shared
+          description: Defaults to private (triggerer and editors). Shared exposes run
+            identity, status, triggerer, timestamps, tags and completed
+            parameters to current source readers. Active inputs and diagnostics
+            remain private. Disabling sharing restricts future reads; viewed
+            data cannot be recalled.
         enabled:
           type: boolean
           default: true
@@ -4679,6 +4710,20 @@ components:
           type: string
           minLength: 1
           maxLength: 120
+        consumer_execution:
+          type: boolean
+          description: Allow authorized consumers to trigger this job. Scoped credentials
+            also need job.trigger and source access. Defaults to false.
+        consumer_history:
+          type: string
+          enum:
+            - private
+            - shared
+          description: Defaults to private (triggerer and editors). Shared exposes run
+            identity, status, triggerer, timestamps, tags and completed
+            parameters to current source readers. Active inputs and diagnostics
+            remain private. Disabling sharing restricts future reads; viewed
+            data cannot be recalled.
         enabled:
           type: boolean
         schedule:
@@ -5926,6 +5971,7 @@ components:
                       - audit.global.read
                       - directory.search
                       - app.read
+                      - job.trigger
                       - project.read
                       - project.update
                       - project.delete
@@ -6269,6 +6315,7 @@ paths:
                               - audit.global.read
                               - directory.search
                               - app.read
+                              - job.trigger
                               - project.read
                               - project.update
                               - project.delete
@@ -28763,6 +28810,7 @@ paths:
                               - audit.global.read
                               - directory.search
                               - app.read
+                              - job.trigger
                               - project.read
                               - project.update
                               - project.delete
@@ -28937,6 +28985,7 @@ paths:
                               - audit.global.read
                               - directory.search
                               - app.read
+                              - job.trigger
                               - project.read
                               - project.update
                               - project.delete
@@ -29337,6 +29386,7 @@ paths:
                               - audit.global.read
                               - directory.search
                               - app.read
+                              - job.trigger
                               - project.read
                               - project.update
                               - project.delete
@@ -29396,6 +29446,7 @@ paths:
                               - audit.global.read
                               - directory.search
                               - app.read
+                              - job.trigger
                               - project.read
                               - project.update
                               - project.delete
@@ -29732,6 +29783,7 @@ paths:
                                         - audit.global.read
                                         - directory.search
                                         - app.read
+                                        - job.trigger
                                         - project.read
                                         - project.update
                                         - project.delete
@@ -29900,6 +29952,7 @@ paths:
                               - audit.global.read
                               - directory.search
                               - app.read
+                              - job.trigger
                               - project.read
                               - project.update
                               - project.delete
@@ -30167,6 +30220,7 @@ paths:
                               - audit.global.read
                               - directory.search
                               - app.read
+                              - job.trigger
                               - project.read
                               - project.update
                               - project.delete

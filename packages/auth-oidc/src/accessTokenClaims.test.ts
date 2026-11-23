@@ -97,6 +97,7 @@ describe('access-token claim boundaries', () => {
 							'app.read',
 							'project.read',
 							'integration.read',
+							'job.trigger',
 							'integration.use',
 							'session.start',
 							'session.attach',

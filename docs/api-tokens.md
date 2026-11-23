@@ -28,12 +28,12 @@ preset and a project mode. You can also set an expiry in days.
 Read, Run notebooks, and Edit notebooks expand to fixed action lists when you
 create the token. Full stores the `"*"` action wildcard instead.
 
-| Preset         | Access                                                                             |
-| -------------- | ---------------------------------------------------------------------------------- |
-| Read           | Read projects and integrations                                                     |
-| Run notebooks  | Read access, use integrations, and start, attach, stop, surface, or proxy sessions |
-| Edit notebooks | Run access, write notebooks, save working branches, and publish change requests    |
-| Full           | Every PAT-accessible action, including actions added in later releases             |
+| Preset         | Access                                                                                                   |
+| -------------- | -------------------------------------------------------------------------------------------------------- |
+| Read           | Read projects and integrations                                                                           |
+| Run notebooks  | Read access, invoke opted-in jobs, use integrations, and start, attach, stop, surface, or proxy sessions |
+| Edit notebooks | Run access, write notebooks, save working branches, and publish change requests                          |
+| Full           | Every PAT-accessible action, including actions added in later releases                                   |
 
 Use **Advanced** to select individual actions. An explicit list excludes
 actions that the Hub adds in later releases.

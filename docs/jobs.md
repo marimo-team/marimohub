@@ -21,6 +21,32 @@ UI, the Node maintenance scheduler or Cloudflare `scheduled()` handler, and the
 its entry points, and stored job definitions and run history are left untouched
 so the feature can be turned back on without loss.
 
+## App-consumer execution and history
+
+Editors configure two independent job settings through the create or update API:
+
+| Setting              | Default   | Effect                                                                                                     |
+| -------------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| `consumer_execution` | `false`   | Lets authorized consumers trigger runs when enabled.                                                       |
+| `consumer_history`   | `private` | Limits history to the triggerer and editors. `shared` also lets other authorized consumers read summaries. |
+
+Scoped credentials need `job.trigger` plus source access (`app.read` or `project.read`) to invoke an opted-in job.
+The `run` token preset includes `job.trigger`; the `read` preset does not.
+Existing `notebook.write` credentials retain editor execution without a separate read grant.
+Signed-in consumers still need current source access and the job's execution opt-in.
+
+Shared summaries include run/source identity, status, triggerer, timestamps, tags,
+and completed parameters. Active parameters, diagnostics, and rendered output stay
+restricted to the triggerer and editors. Raw logs remain editor-only.
+
+Every request checks current project and notebook access. Disabling sharing restricts
+future reads but cannot recall viewed data. Deleted sources are unavailable.
+Tags only filter history: matching tags never grant access or combine job policies.
+
+To reuse completed inputs, submit their parameters to the current job.
+The new run records the current caller and source version. It continues after the
+initiating visit closes. Applications own progress displays; external links grant no external access.
+
 ## Create a schedule
 
 1. Open **Jobs & schedules** from the notebook’s actions menu.
@@ -123,18 +149,17 @@ messages or secrets. Editors can read the captured logs.
 
 ## Who can do what
 
-| Action                               | `viewer` | `editor` | `manager` | `admin` |
-| ------------------------------------ | :------: | :------: | :-------: | :-----: |
-| See jobs and run history             |    x     |    x     |     x     |    x    |
-| Open a run's rendered output         |    x     |    x     |     x     |    x    |
-| Create, edit, enable, or delete jobs |          |    x     |     x     |    x    |
-| Run a job now or cancel a run        |          |    x     |     x     |    x    |
-| Read a run's stdout/stderr logs      |          |    x     |     x     |    x    |
+| Action                            | Consumers (`app-user`, `viewer`)  | `editor`, `manager`, `admin` |
+| --------------------------------- | --------------------------------- | ---------------------------- |
+| See job definitions               | Yes                               | Yes                          |
+| See run history                   | Own runs, or shared history       | Yes                          |
+| Open rendered output              | Own runs                          | Yes                          |
+| Create, configure, or delete jobs | No                                | Yes                          |
+| Trigger a run                     | With `consumer_execution` enabled | Yes                          |
+| Cancel a run or read raw logs     | No                                | Yes                          |
 
-Triggering a job starts a kernel, so it takes the same editor gate as starting
-a session. Run history and outputs follow the static-snapshot posture (viewers
-can see rendered documents); logs are editor-only because stdout can echo
-environment values and tracebacks.
+All access requires current project and notebook authorization.
+Raw logs can contain environment values and tracebacks.
 
 > **Security note.** A run executes the notebook's code with the project's
 > resolved [integration secrets](./integration-secrets.md) and federated

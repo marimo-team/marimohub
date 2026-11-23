@@ -38,6 +38,7 @@ export const DEPLOYMENT_ACTIONS = [
 
 export const PROJECT_ACTIONS = [
 	'app.read',
+	'job.trigger',
 	/** See the project and its read-tier content (metadata, notebooks, versions, downloads). */
 	'project.read',
 	'project.update',
@@ -136,6 +137,7 @@ export const ACTION_RULES: {
 	'directory.search': { scope: 'deployment' },
 
 	'app.read': project('app-user', 'not-found'),
+	'job.trigger': project('app-user', 'forbidden'),
 	'project.read': project('viewer', 'not-found'),
 	'project.update': project('manager', 'forbidden'),
 	'project.delete': project('manager', 'forbidden'),

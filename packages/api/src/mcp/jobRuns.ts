@@ -2,13 +2,18 @@ import { withRequestMemo } from '../requestMemo';
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import type { ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { toPublicJobRun, withAbortSignal, withDeadline } from '@marimo-hub/core';
-import type { JobDefinition, JobRun, RunId } from '@marimo-hub/core';
+import { NotFoundError, withAbortSignal, withDeadline } from '@marimo-hub/core';
+import type { JobDefinition, JobRun, PublicJobRun, RunId } from '@marimo-hub/core';
 import { isTerminalRunStatus } from '@marimo-hub/core/jobs';
 import type { ApiDeps } from '../context';
-import { authorizeJobNotebook, loadJobRun } from '../jobs/operations';
+import {
+	getJobCapabilities,
+	projectJobRun,
+	visibleJobRun,
+	authorizeJobNotebook,
+	loadJobRun,
+} from '../jobs/operations';
 import type { AuthorizedNotebook } from '../jobs/operations';
-import { authorizationService } from '../shared';
 import type { StartRequestContext } from './server';
 
 export type JobToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
@@ -97,7 +102,7 @@ async function waitForRun(
 }
 
 function runResult(
-	run: JobRun,
+	run: PublicJobRun,
 	waitExpired: boolean,
 	appBaseUrl: string,
 	artifacts: { html: boolean; logs: boolean },
@@ -107,7 +112,7 @@ function runResult(
 	const notebookPath = `/projects/${run.project_id}/notebooks/${run.notebook_id}`;
 	const statusUrl = `${base}/api/v1${notebookPath}/jobs/${run.job_id}/runs/${run.run_id}`;
 	return {
-		run: toPublicJobRun(run),
+		run,
 		completed,
 		wait_expired: waitExpired && !completed,
 		links: {
@@ -155,6 +160,7 @@ export async function observeJobRun({
 	action: 'project.read' | 'notebook.write';
 }) {
 	let authorized = target;
+	let currentJob = job;
 	let authorizationDeps = deps;
 	const authorize = async (checkSignal: AbortSignal) => {
 		authorizationDeps = withRequestMemo(deps);
@@ -162,19 +168,22 @@ export async function observeJobRun({
 			authorizeJobNotebook(authorizationDeps, target.user, job.project_id, job.notebook_id, action),
 			checkSignal,
 		);
-		await withAbortSignal(
+		currentJob = await withAbortSignal(
 			deps.services.jobs.getJob(job.project_id, job.notebook_id, job.id),
 			checkSignal,
 		);
 		return current;
 	};
 	const initial = await withAbortSignal(loadJobRun(deps, job, runId), signal);
+	if (!(await visibleJobRun(deps, target, job, initial))) throw new NotFoundError('Run not found');
 	const { run, waitExpired } = await waitForRun(
 		initial,
 		async (waitSignal) => {
 			// Membership and notebook visibility can change while a call waits.
 			const current = await authorize(waitSignal);
 			const next = await withAbortSignal(loadJobRun(deps, job, runId), waitSignal);
+			if (!(await visibleJobRun(authorizationDeps, current, currentJob, next)))
+				throw new NotFoundError('Run not found');
 			waitSignal.throwIfAborted();
 			authorized = current;
 			return next;
@@ -192,22 +201,19 @@ export async function observeJobRun({
 			signal,
 		});
 	}
-	const logs =
-		run.output?.logs_bytes !== undefined &&
-		(
-			await withAbortSignal(
-				authorizationService(authorizationDeps).authorize(authorized.user, 'notebook.write', {
-					kind: 'project',
-					project: authorized.project,
-					notebookLabels: authorized.notebook.security_labels ?? null,
-				}),
-				signal,
-			)
-		).allowed;
+	const capabilities = await withAbortSignal(
+		getJobCapabilities(authorizationDeps, authorized, currentJob, run),
+		signal,
+	);
+	const visible = projectJobRun(run, capabilities);
+	if (!visible) throw new NotFoundError('Run not found');
+
+	const logs = run.output?.logs_bytes !== undefined && capabilities.canReadLogs;
 	// Zero bytes can mean either an empty HTML file or a run that only captured logs.
 	const html =
+		capabilities.canReadHtml &&
 		run.output !== undefined &&
 		(run.output.html_bytes > 0 ||
 			(await withAbortSignal(deps.services.jobRuns.readHtml(run), signal)) !== null);
-	return runResult(run, waitExpired, request.appBaseUrl, { html, logs });
+	return runResult(visible, waitExpired, request.appBaseUrl, { html, logs });
 }

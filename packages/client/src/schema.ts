@@ -3763,6 +3763,7 @@ export interface components {
 					| 'audit.global.read'
 					| 'directory.search'
 					| 'app.read'
+					| 'job.trigger'
 					| 'project.read'
 					| 'project.update'
 					| 'project.delete'
@@ -3958,6 +3959,7 @@ export interface components {
 								| 'audit.global.read'
 								| 'directory.search'
 								| 'app.read'
+								| 'job.trigger'
 								| 'project.read'
 								| 'project.update'
 								| 'project.delete'
@@ -3994,6 +3996,7 @@ export interface components {
 				| 'audit.global.read'
 				| 'directory.search'
 				| 'app.read'
+				| 'job.trigger'
 				| 'project.read'
 				| 'project.update'
 				| 'project.delete'
@@ -4902,6 +4905,13 @@ export interface components {
 			notebook_id: string;
 			project_id: string;
 			name: string;
+			/** @description Allow authorized consumers to trigger this job. Scoped credentials also need job.trigger and source access. Defaults to false. */
+			consumer_execution?: boolean;
+			/**
+			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to current source readers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
+			 * @enum {string}
+			 */
+			consumer_history?: 'private' | 'shared';
 			enabled: boolean;
 			schedule?: components['schemas']['JobSchedule'];
 			parameters?: components['schemas']['JobParameters'];
@@ -4953,6 +4963,13 @@ export interface components {
 		JobCreateBody: {
 			/** @example Nightly refresh */
 			name: string;
+			/** @description Allow authorized consumers to trigger this job. Scoped credentials also need job.trigger and source access. Defaults to false. */
+			consumer_execution?: boolean;
+			/**
+			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to current source readers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
+			 * @enum {string}
+			 */
+			consumer_history?: 'private' | 'shared';
 			/** @default true */
 			enabled: boolean;
 			schedule?: components['schemas']['JobSchedule'];
@@ -4972,6 +4989,13 @@ export interface components {
 		};
 		JobUpdateBody: {
 			name?: string;
+			/** @description Allow authorized consumers to trigger this job. Scoped credentials also need job.trigger and source access. Defaults to false. */
+			consumer_execution?: boolean;
+			/**
+			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to current source readers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
+			 * @enum {string}
+			 */
+			consumer_history?: 'private' | 'shared';
 			enabled?: boolean;
 			schedule?: {
 				/**
@@ -5488,6 +5512,7 @@ export interface components {
 							| 'audit.global.read'
 							| 'directory.search'
 							| 'app.read'
+							| 'job.trigger'
 							| 'project.read'
 							| 'project.update'
 							| 'project.delete'
@@ -5704,6 +5729,7 @@ export interface operations {
 									| 'audit.global.read'
 									| 'directory.search'
 									| 'app.read'
+									| 'job.trigger'
 									| 'project.read'
 									| 'project.update'
 									| 'project.delete'
@@ -25587,6 +25613,7 @@ export interface operations {
 									| 'audit.global.read'
 									| 'directory.search'
 									| 'app.read'
+									| 'job.trigger'
 									| 'project.read'
 									| 'project.update'
 									| 'project.delete'
@@ -25736,6 +25763,7 @@ export interface operations {
 									| 'audit.global.read'
 									| 'directory.search'
 									| 'app.read'
+									| 'job.trigger'
 									| 'project.read'
 									| 'project.update'
 									| 'project.delete'
@@ -26103,6 +26131,7 @@ export interface operations {
 									| 'audit.global.read'
 									| 'directory.search'
 									| 'app.read'
+									| 'job.trigger'
 									| 'project.read'
 									| 'project.update'
 									| 'project.delete'
@@ -26140,6 +26169,7 @@ export interface operations {
 									| 'audit.global.read'
 									| 'directory.search'
 									| 'app.read'
+									| 'job.trigger'
 									| 'project.read'
 									| 'project.update'
 									| 'project.delete'
@@ -26429,6 +26459,7 @@ export interface operations {
 													| 'audit.global.read'
 													| 'directory.search'
 													| 'app.read'
+													| 'job.trigger'
 													| 'project.read'
 													| 'project.update'
 													| 'project.delete'
@@ -26574,6 +26605,7 @@ export interface operations {
 									| 'audit.global.read'
 									| 'directory.search'
 									| 'app.read'
+									| 'job.trigger'
 									| 'project.read'
 									| 'project.update'
 									| 'project.delete'
@@ -26810,6 +26842,7 @@ export interface operations {
 									| 'audit.global.read'
 									| 'directory.search'
 									| 'app.read'
+									| 'job.trigger'
 									| 'project.read'
 									| 'project.update'
 									| 'project.delete'

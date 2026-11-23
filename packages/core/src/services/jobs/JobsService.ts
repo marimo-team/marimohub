@@ -42,6 +42,8 @@ import { isValidTimeZone, parseCron } from './cron';
 export interface CreateJobInput {
 	name: string;
 	enabled?: boolean;
+	consumer_execution?: boolean;
+	consumer_history?: 'private' | 'shared';
 	schedule?: JobSchedule;
 	parameters?: JobParameters;
 	retry?: JobRetryPolicy;
@@ -54,6 +56,8 @@ export interface CreateJobInput {
 export interface UpdateJobInput {
 	name?: string;
 	enabled?: boolean;
+	consumer_execution?: boolean;
+	consumer_history?: 'private' | 'shared';
 	schedule?: JobSchedule | null;
 	parameters?: JobParameters | null;
 	retry?: JobRetryPolicy | null;
@@ -250,6 +254,8 @@ export class JobsService {
 			project_id: projectId,
 			name: input.name,
 			enabled: input.enabled ?? true,
+			consumer_execution: input.consumer_execution ?? false,
+			consumer_history: input.consumer_history ?? 'private',
 			...(input.schedule ? { schedule: input.schedule } : {}),
 			...(input.parameters ? { parameters: input.parameters } : {}),
 			...(input.retry ? { retry: input.retry } : {}),
@@ -295,6 +301,9 @@ export class JobsService {
 				previous = current;
 				assertVersionMatch(current.updated_at, expectedVersion);
 				const next: JobDefinition = { ...current };
+				if (input.consumer_execution !== undefined)
+					next.consumer_execution = input.consumer_execution;
+				if (input.consumer_history !== undefined) next.consumer_history = input.consumer_history;
 				if (input.name !== undefined) next.name = input.name;
 				if (input.enabled !== undefined) next.enabled = input.enabled;
 				if (input.concurrency_policy !== undefined)
