@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { RUN_STATUSES } from '../../schema';
 import {
-	ACTIVE_RUN_STATUSES,
-	isActiveRunStatus,
+	SANDBOX_HOLDING_RUN_STATUSES,
+	isSandboxHoldingRunStatus,
 	isTerminalRunStatus,
 	nextRunStatus,
 	TERMINAL_RUN_STATUSES,
@@ -38,12 +38,12 @@ describe('run state machine', () => {
 
 	it('classifies every status', () => {
 		for (const status of RUN_STATUSES) {
-			expect(isActiveRunStatus(status)).toBe(
-				(ACTIVE_RUN_STATUSES as readonly (typeof status)[]).includes(status),
+			expect(isSandboxHoldingRunStatus(status)).toBe(
+				(SANDBOX_HOLDING_RUN_STATUSES as readonly (typeof status)[]).includes(status),
 			);
-			expect(isTerminalRunStatus(status) || status === 'queued' || isActiveRunStatus(status)).toBe(
-				true,
-			);
+			expect(
+				isTerminalRunStatus(status) || status === 'queued' || isSandboxHoldingRunStatus(status),
+			).toBe(true);
 		}
 	});
 });

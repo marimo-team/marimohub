@@ -1,22 +1,20 @@
+import {
+	RunListQuery,
+	prepareRunListQuery,
+	matchesRunFilter,
+	RUN_LIST_DESCRIPTION,
+} from '../jobs/runQuery';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
-	BadRequestError,
 	ForbiddenError,
 	NotFoundError,
-	RunId,
 	RunTagKeySchema,
 	RunTagValueSchema,
 	mapWithConcurrency,
 } from '@marimo-hub/core';
 import { requireJobs, visibleJobRun, loadAuthorizedJob } from '../jobs/operations';
 import { JobRunResponseSchema } from '../jobs/schemas';
-import {
-	DEFAULT_PAGE_SIZE,
-	PaginationQuery,
-	decodeCursor,
-	encodeCursor,
-	pageSchema,
-} from '../pagination';
+import { pageSchema } from '../pagination';
 import {
 	commonErrors,
 	createApp,
@@ -26,7 +24,7 @@ import {
 	ProjectIdParam,
 } from '../shared';
 
-const ProjectRunQuery = PaginationQuery.extend({
+const ProjectRunListQuery = RunListQuery.safeExtend({
 	tag_key: RunTagKeySchema.optional(),
 	tag_value: RunTagValueSchema.optional(),
 })
@@ -35,14 +33,6 @@ const ProjectRunQuery = PaginationQuery.extend({
 		message: 'tag_key and tag_value must be supplied together',
 	});
 
-function afterRun(cursor: string | undefined, scope: string): RunId | undefined {
-	const decoded = decodeCursor(cursor);
-	if (!decoded) return;
-	if (decoded[0] !== scope || !RunId.is(decoded[1]))
-		throw new BadRequestError('Invalid pagination cursor');
-	return RunId.parse(decoded[1]);
-}
-
 const app = createApp();
 app.openapi(
 	createRoute({
@@ -50,10 +40,9 @@ app.openapi(
 		path: '/projects/{pid}/runs',
 		operationId: 'projects.runs.list',
 		tags: ['Jobs'],
-		summary: 'List project runs with an optional exact-match submission tag',
-		description:
-			'Scans at most limit index entries (maximum 500), newest run ID first. Empty filtered pages can have a continuation cursor. Tags are conventions, never authorization: each result requires current source job access.',
-		request: { params: ProjectIdParam, query: ProjectRunQuery },
+		summary: 'List project runs by status, triggering user, or submission tag',
+		description: RUN_LIST_DESCRIPTION,
+		request: { params: ProjectIdParam, query: ProjectRunListQuery },
 		responses: {
 			200: jsonContent(
 				z.object({
@@ -74,13 +63,11 @@ app.openapi(
 		const query = c.req.valid('query');
 		const tag =
 			query.tag_key === undefined ? undefined : { key: query.tag_key, value: query.tag_value! };
-		const scope = encodeURIComponent(JSON.stringify([pid, tag ?? null]));
-		const page = await deps.services.jobRuns.listProjectRunsPage(
+		const { filter, limit, afterRunId, nextCursor } = prepareRunListQuery(query, c.get('user').id, [
 			pid,
-			query.limit ?? DEFAULT_PAGE_SIZE,
-			afterRun(query.cursor, scope),
-			tag,
-		);
+			tag ?? null,
+		]);
+		const page = await deps.services.jobRuns.listProjectRunsPage(pid, limit, afterRunId, tag);
 
 		const targets = new Map<string, ReturnType<typeof loadAuthorizedJob>>();
 		const visible = await mapWithConcurrency(page.items, 16, async (run) => {
@@ -103,8 +90,10 @@ app.openapi(
 			{
 				success: true as const,
 				data: {
-					items: visible.filter((run) => run !== null),
-					next_cursor: page.nextRunId ? encodeCursor(scope, page.nextRunId) : null,
+					items: visible
+						.filter((run) => run !== null)
+						.filter((run) => matchesRunFilter(run, filter)),
+					next_cursor: nextCursor(page.nextRunId),
 				},
 			},
 			200,

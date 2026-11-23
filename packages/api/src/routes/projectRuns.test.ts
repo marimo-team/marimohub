@@ -35,6 +35,282 @@ describe('project run history routes', () => {
 			ACTOR,
 		);
 	});
+	it.each(['project', 'job'])(
+		'reconnects with live user/status filters on %s history',
+		async (kind) => {
+			const url = () => (kind === 'project' ? base() : `${jobBase()}/runs`);
+			const enqueue = (triggeredBy: UserId, tags = { app: 'reconnect' }) =>
+				services.jobRuns.enqueue({ job, trigger: 'manual', triggeredBy, tags, timeoutSeconds: 60 });
+			const older = await enqueue(VIEWER);
+			await services.notebooks.updateNotebook(
+				job.project_id,
+				job.notebook_id,
+				{ code: 'v2' },
+				ACTOR,
+			);
+			const newer = await enqueue(VIEWER);
+			const other = await enqueue(ACTOR);
+			const tag = kind === 'project' ? '&tag_key=app&tag_value=reconnect' : '';
+			const query = `status=active&triggered_by_me=true${tag}`;
+			const reader = request(VIEWER);
+			const all = await expectOk<Page>(await reader('GET', `${url()}?${query}`));
+			expect(all.items.map((r) => r.run_id)).toEqual([newer.run_id, older.run_id]);
+			const first = await expectOk<Page>(await reader('GET', `${url()}?${query}&limit=1`));
+			expect(first.items).toEqual([]);
+			expect(first.next_cursor).not.toBeNull();
+			const cursor = encodeURIComponent(first.next_cursor!);
+			for (const changed of [
+				'status=queued&triggered_by_me=true',
+				'status=active',
+				'triggered_by_me=true',
+				'',
+			]) {
+				await expectError(await reader('GET', `${url()}?${changed}${tag}&cursor=${cursor}`), 400);
+			}
+			await expectError(await request()('GET', `${url()}?${query}&cursor=${cursor}`), 400);
+			await expectError(await reader('GET', `${url()}?${query}&cursor=bad`), 400);
+			await expectError(await reader('GET', `${url()}?status=invalid`), 422);
+			await services.jobRuns.transition(newer, 'fail');
+			await enqueue(VIEWER);
+			const second = await expectOk<Page>(
+				await reader('GET', `${url()}?${query}&limit=1&cursor=${cursor}`),
+			);
+			expect(second.items).toEqual([]);
+			expect(second.next_cursor).not.toBeNull();
+			const last = await expectOk<Page>(
+				await reader(
+					'GET',
+					`${url()}?${query}&limit=1&cursor=${encodeURIComponent(second.next_cursor!)}`,
+				),
+			);
+			expect(last.items.map((r) => r.run_id)).toEqual([older.run_id]);
+			expect(last.next_cursor).toBeNull();
+			const explicit = await expectOk<Page>(
+				await request()(
+					'GET',
+					`${url()}?status=queued&triggered_by=${encodeURIComponent(ACTOR)}${tag}`,
+				),
+			);
+			expect(explicit.items.map((r) => r.run_id)).toEqual([other.run_id]);
+			await services.projects.removeMember(job.project_id, VIEWER, ACTOR);
+			await expectError(await reader('GET', `${url()}?${query}&cursor=${cursor}`), 404);
+		},
+	);
+
+	it.each(['project', 'job'])(
+		'rejects malformed and foreign cursors on %s history',
+		async (kind) => {
+			await trigger();
+			await trigger();
+			const url = kind === 'project' ? base() : `${jobBase()}/runs`;
+			const query = 'status=active&triggered_by_me=true';
+			const page = await expectOk<Page>(await request()('GET', `${url}?${query}&limit=1`));
+			const [scope, id] = JSON.parse(atob(page.next_cursor!)) as [string, string];
+			for (const value of [
+				null,
+				{},
+				[],
+				[scope],
+				[scope, id, id],
+				[scope, 1],
+				[scope, 'bad'],
+				[id, id],
+			]) {
+				const cursor = encodeURIComponent(btoa(JSON.stringify(value)));
+				await expectError(await request()('GET', `${url}?${query}&cursor=${cursor}`), 400);
+			}
+			for (const suffix of ['triggered_by=', 'status=', 'limit=0', 'limit=-1', 'limit=1.5']) {
+				await expectError(await request()('GET', `${url}?${suffix}`), 422);
+			}
+			const other = await services.jobs.createJob(
+				job.project_id,
+				job.notebook_id,
+				{ name: 'other' },
+				ACTOR,
+			);
+			const foreign = kind === 'project' ? `${jobBase()}/runs` : `${jobBase(other)}/runs`;
+			await expectError(
+				await request()(
+					'GET',
+					`${foreign}?${query}&cursor=${encodeURIComponent(page.next_cursor!)}`,
+				),
+				400,
+			);
+		},
+	);
+
+	it.each(['project', 'job'])(
+		'matches all active states and excludes terminal runs on %s history',
+		async (kind) => {
+			const queued = await trigger();
+			const provisioning = await trigger();
+			await services.jobRuns.transition(provisioning, 'provision');
+			const running = await trigger();
+			await services.jobRuns.transition(running, 'provision');
+			await services.jobRuns.transition(running, 'start');
+			for (const event of ['fail', 'timeout', 'cancel'] as const) {
+				await services.jobRuns.transition(await trigger(), event);
+			}
+			const succeeded = await trigger();
+			await services.jobRuns.transition(succeeded, 'provision');
+			await services.jobRuns.transition(succeeded, 'start');
+			await services.jobRuns.transition(succeeded, 'succeed');
+			const url = kind === 'project' ? base() : `${jobBase()}/runs`;
+			const page = await expectOk<Page>(
+				await request()('GET', `${url}?status=active&triggered_by_me=true`),
+			);
+			expect(page.items.map((r) => r.run_id)).toEqual([
+				running.run_id,
+				provisioning.run_id,
+				queued.run_id,
+			]);
+			for (const [status, run] of [
+				['queued', queued],
+				['provisioning', provisioning],
+				['running', running],
+				['succeeded', succeeded],
+			] as const) {
+				const exact = await expectOk<Page>(await request()('GET', `${url}?status=${status}`));
+				expect(exact.items.map((r) => r.run_id)).toEqual([run.run_id]);
+			}
+			const absent = await expectOk<Page>(await request()('GET', `${url}?triggered_by=nobody`));
+			expect(absent).toEqual({ items: [], next_cursor: null });
+		},
+	);
+
+	it.each(['project', 'job'])(
+		'does not grant private history through explicit user filters on %s history',
+		async (kind) => {
+			await trigger({ app: 'private' });
+			const own = await services.jobRuns.enqueue({
+				job,
+				trigger: 'manual',
+				triggeredBy: VIEWER,
+				timeoutSeconds: 60,
+				tags: { app: 'private' },
+			});
+			const url = kind === 'project' ? base() : `${jobBase()}/runs`;
+			const tag = kind === 'project' ? '&tag_key=app&tag_value=private' : '';
+			const reader = request(VIEWER);
+			const first = await expectOk<Page>(await reader('GET', `${url}?status=active&limit=1${tag}`));
+			expect(first.items.map((r) => r.run_id)).toEqual([own.run_id]);
+			await services.jobs.updateJob(
+				job.project_id,
+				job.notebook_id,
+				job.id,
+				{ consumer_history: 'private' },
+				ACTOR,
+			);
+			const next = await expectOk<Page>(
+				await reader(
+					'GET',
+					`${url}?status=active&limit=1${tag}&cursor=${encodeURIComponent(first.next_cursor!)}`,
+				),
+			);
+			expect(next).toEqual({ items: [], next_cursor: null });
+			const other = await expectOk<Page>(
+				await reader('GET', `${url}?status=active&triggered_by=${encodeURIComponent(ACTOR)}${tag}`),
+			);
+			expect(other.items).toEqual([]);
+			const mine = await expectOk<Page>(
+				await reader('GET', `${url}?status=active&triggered_by_me=true${tag}`),
+			);
+			expect(mine.items.map((r) => r.run_id)).toEqual([own.run_id]);
+		},
+	);
+
+	it.each(['project', 'job'])(
+		'distinguishes literal me from the authenticated user on %s history',
+		async (kind) => {
+			const own = await trigger();
+			const literal = await services.jobRuns.enqueue({
+				job,
+				trigger: 'manual',
+				triggeredBy: uid('me'),
+				timeoutSeconds: 60,
+			});
+			const url = kind === 'project' ? base() : `${jobBase()}/runs`;
+			const exact = await expectOk<Page>(await request()('GET', `${url}?triggered_by=me`));
+			expect(exact.items.map((r) => r.run_id)).toEqual([literal.run_id]);
+			const mine = await expectOk<Page>(
+				await request()('GET', `${url}?triggered_by_me=true&limit=1`),
+			);
+			expect(mine.items).toEqual([]);
+			expect(mine.next_cursor).not.toBeNull();
+			const cursor = encodeURIComponent(mine.next_cursor!);
+			const equivalent = await expectOk<Page>(
+				await request()('GET', `${url}?triggered_by=${encodeURIComponent(ACTOR)}&cursor=${cursor}`),
+			);
+			expect(equivalent.items.map((r) => r.run_id)).toEqual([own.run_id]);
+			await expectError(await request()('GET', `${url}?triggered_by=me&cursor=${cursor}`), 400);
+			for (const invalid of [
+				'triggered_by=me&triggered_by_me=true',
+				'triggered_by_me=false',
+				'triggered_by_me=1',
+			]) {
+				await expectError(await request()('GET', `${url}?${invalid}`), 422);
+			}
+		},
+	);
+
+	it.each(['project', 'job'])(
+		'continues past corrupt run records on filtered %s history',
+		async (kind) => {
+			const good = await trigger();
+			const corrupt = await trigger();
+			await bucket.put(
+				paths.project(job.project_id).notebook(job.notebook_id).job(job.id).run(corrupt.run_id)
+					.record,
+				'{"status":"failed"}',
+			);
+			const url = kind === 'project' ? base() : `${jobBase()}/runs`;
+			const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+			try {
+				const first = await expectOk<Page>(await request()('GET', `${url}?status=queued&limit=1`));
+				expect(first.items).toEqual([]);
+				expect(first.next_cursor).not.toBeNull();
+				const last = await expectOk<Page>(
+					await request()(
+						'GET',
+						`${url}?status=queued&limit=1&cursor=${encodeURIComponent(first.next_cursor!)}`,
+					),
+				);
+				expect(last.items.map((r) => r.run_id)).toEqual([good.run_id]);
+				expect(last.next_cursor).toBeNull();
+				expect(
+					error.mock.calls.some((call) => String(call[0]).includes('stored_object_skipped')),
+				).toBe(true);
+			} finally {
+				error.mockRestore();
+			}
+		},
+	);
+
+	it('combines active and user predicates with immutable tags across versions', async () => {
+		const first = await trigger({ app: 'reconnect', version: 'v1' });
+		await services.notebooks.updateNotebook(job.project_id, job.notebook_id, { code: 'v2' }, ACTOR);
+		const second = await trigger({ app: 'reconnect', version: 'v2' });
+		await trigger({ app: 'wrong' });
+		await trigger();
+		const finished = await trigger({ app: 'reconnect' });
+		await services.jobRuns.cancel(finished, ACTOR);
+		await services.jobRuns.enqueue({
+			job,
+			trigger: 'manual',
+			triggeredBy: VIEWER,
+			timeoutSeconds: 60,
+			tags: { app: 'reconnect' },
+		});
+		const page = await expectOk<Page>(
+			await request()(
+				'GET',
+				`${base()}?tag_key=app&tag_value=reconnect&status=active&triggered_by_me=true`,
+			),
+		);
+		expect(page.items.map((r) => r.run_id)).toEqual([second.run_id, first.run_id]);
+		expect(first.source_version_id).not.toBe(second.source_version_id);
+	});
+
 	it('returns accepted tags across notebooks and versions, without claiming identity isolation', async () => {
 		const first = await trigger({ app: 'calibration', app_version: 'v1' });
 		await services.notebooks.updateNotebook(job.project_id, job.notebook_id, { code: 'v2' }, ACTOR);

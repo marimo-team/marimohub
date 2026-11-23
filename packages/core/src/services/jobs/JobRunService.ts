@@ -414,7 +414,17 @@ export class JobRunService {
 		const key = this.runPaths(ref).record;
 		const object = await this.bucket.get(key);
 		if (!object) return null;
-		const run = await readStoredJobRun(object, key);
+		let run: JobRun;
+		try {
+			run = await readStoredJobRun(object, key);
+		} catch (error) {
+			logOperationalError(
+				'stored_object_skipped',
+				{ operation: 'job.run.list', object: key },
+				error,
+			);
+			return null;
+		}
 		if (
 			run.project_id !== ref.project_id ||
 			run.notebook_id !== ref.notebook_id ||
@@ -492,7 +502,29 @@ export class JobRunService {
 		} while (cursor);
 	}
 
-	/** Read one newest-first history page without fetching records outside that page. */
+	/** Scan at most limit index entries. Empty pages can carry a continuation. */
+	async scanRunsPage(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		jobId: JobId,
+		limit: number,
+		afterRunId?: RunId,
+	): Promise<RunPage> {
+		const job = paths.project(projectId).notebook(notebookId).job(jobId);
+		return this.readHistoryPage(
+			job.runIndexPrefix,
+			limit,
+			afterRunId ? job.runIndex(afterRunId) : undefined,
+			(_key, run_id) =>
+				this.readHistoryRun({
+					project_id: projectId,
+					notebook_id: notebookId,
+					job_id: jobId,
+					run_id,
+				}),
+		);
+	}
+
 	async listRunsPage(
 		projectId: ProjectId,
 		notebookId: NotebookId,

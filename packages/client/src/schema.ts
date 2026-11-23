@@ -1952,7 +1952,10 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		/** List a job’s runs */
+		/**
+		 * List a job’s runs
+		 * @description Runs are ordered by descending run ID. Project lists and filtered job lists scan at most limit entries (maximum 500). Follow next_cursor even on empty pages. Status and access are read live. Restart from the first page to refresh active runs.
+		 */
 		get: operations['jobs.runs.list'];
 		put?: never;
 		/**
@@ -2051,8 +2054,8 @@ export interface paths {
 			cookie?: never;
 		};
 		/**
-		 * List project runs with an optional exact-match submission tag
-		 * @description Scans at most limit index entries (maximum 500), newest run ID first. Empty filtered pages can have a continuation cursor. Tags are conventions, never authorization: each result requires current source job access.
+		 * List project runs by status, triggering user, or submission tag
+		 * @description Runs are ordered by descending run ID. Project lists and filtered job lists scan at most limit entries (maximum 500). Follow next_cursor even on empty pages. Status and access are read live. Restart from the first page to refresh active runs.
 		 */
 		get: operations['projects.runs.list'];
 		put?: never;
@@ -20402,6 +20405,21 @@ export interface operations {
 			query?: {
 				limit?: number;
 				cursor?: string;
+				/** @description Exact status, or active for queued, provisioning, and running. */
+				status?:
+					| 'queued'
+					| 'provisioning'
+					| 'running'
+					| 'succeeded'
+					| 'failed'
+					| 'timed_out'
+					| 'cancelled'
+					| 'skipped'
+					| 'active';
+				/** @description Exact triggering user ID. */
+				triggered_by?: string;
+				/** @description Filter to the authenticated user. Cannot be combined with triggered_by. */
+				triggered_by_me?: 'true';
 			};
 			header?: never;
 			path: {
@@ -20986,6 +21004,21 @@ export interface operations {
 			query?: {
 				limit?: number;
 				cursor?: string;
+				/** @description Exact status, or active for queued, provisioning, and running. */
+				status?:
+					| 'queued'
+					| 'provisioning'
+					| 'running'
+					| 'succeeded'
+					| 'failed'
+					| 'timed_out'
+					| 'cancelled'
+					| 'skipped'
+					| 'active';
+				/** @description Exact triggering user ID. */
+				triggered_by?: string;
+				/** @description Filter to the authenticated user. Cannot be combined with triggered_by. */
+				triggered_by_me?: 'true';
 				tag_key?: string;
 				tag_value?: string;
 			};
