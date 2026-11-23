@@ -156,6 +156,30 @@ describe('MemoryBucket', () => {
 	});
 
 	describe('pagination', () => {
+		it('reflects mutations between pages and keeps cloned key spaces independent', async () => {
+			for (const key of ['p/a', 'p/c', 'p/e', 'q/a']) await bucket.put(key, 'old');
+			const first = await bucket.list({ prefix: 'p/', limit: 1 });
+			const clone = bucket.clone();
+			const updated = await bucket.put('p/c', 'new value');
+			expect(
+				(await bucket.list({ prefix: 'p/', cursor: first.cursor, limit: 1 })).objects[0],
+			).toMatchObject({ key: 'p/c', etag: updated.etag, size: 9 });
+			await bucket.put('p/b', 'inserted');
+			await bucket.delete(['p/c', 'p/e']);
+			expect(
+				(await bucket.list({ prefix: 'p/', cursor: first.cursor })).objects.map((o) => o.key),
+			).toEqual(['p/b']);
+			expect(
+				(await clone.list({ prefix: 'p/', cursor: first.cursor })).objects.map((o) => o.key),
+			).toEqual(['p/c', 'p/e']);
+			await clone.delete('p/c');
+			await clone.put('p/d', 'copy only');
+			expect(
+				(await clone.list({ prefix: 'p/', cursor: first.cursor })).objects.map((o) => o.key),
+			).toEqual(['p/d', 'p/e']);
+			expect((await bucket.list({ prefix: 'p/', startAfter: 'q/a' })).objects).toEqual([]);
+		});
+
 		it('returns the first page with truncated=true and a cursor when there are more than limit objects', async () => {
 			// Put 1500 objects under a common prefix
 			for (let i = 0; i < 1500; i++) {

@@ -20,6 +20,7 @@ interface StoredObject {
 
 export class MemoryBucket implements Bucket {
 	private store = new Map<string, StoredObject>();
+	private sortedKeys?: string[];
 	private etagCounter = 0;
 	private etagPrefix = 'etag-';
 	private clones = 0;
@@ -39,6 +40,7 @@ export class MemoryBucket implements Bucket {
 	clone(): MemoryBucket {
 		const copy = new MemoryBucket();
 		copy.store = new Map(this.store);
+		copy.sortedKeys = this.sortedKeys;
 		copy.etagCounter = this.etagCounter;
 		copy.etagPrefix = `${this.etagPrefix}c${++this.clones}-`;
 		return copy;
@@ -106,6 +108,7 @@ export class MemoryBucket implements Bucket {
 			...(options?.httpMetadata ? { httpMetadata: options.httpMetadata } : {}),
 			...(options?.customMetadata ? { customMetadata: options.customMetadata } : {}),
 		});
+		if (!this.store.has(key)) this.sortedKeys = undefined;
 		this.store.set(key, { body, etag, uploaded, metadata });
 
 		return { key, etag, size: body.length, uploaded };
@@ -114,7 +117,7 @@ export class MemoryBucket implements Bucket {
 	async delete(key: string | string[]): Promise<void> {
 		const keys = Array.isArray(key) ? key : [key];
 		for (const k of keys) {
-			this.store.delete(k);
+			if (this.store.delete(k)) this.sortedKeys = undefined;
 		}
 	}
 
@@ -130,17 +133,28 @@ export class MemoryBucket implements Bucket {
 			.sort(compareBucketKeys)
 			.pop();
 
-		const sorted = [...this.store.keys()]
-			.filter((k) => k.startsWith(prefix))
-			.sort(compareBucketKeys);
+		// Migration pages must not re-sort or revisit the entire fixture on each request.
+		const sorted = (this.sortedKeys ??= [...this.store.keys()].sort(compareBucketKeys));
+		let start = 0;
+		let end = sorted.length;
+		while (start < end) {
+			const mid = Math.floor((start + end) / 2);
+			if (
+				compareBucketKeys(sorted[mid], prefix) < 0 ||
+				(after && compareBucketKeys(sorted[mid], after) <= 0)
+			)
+				start = mid + 1;
+			else end = mid;
+		}
 
 		const prefixes = new Set<string>();
 		const objectKeys: string[] = [];
 		let emitted = 0;
 		let lastConsumed: string | undefined;
 		let truncated = false;
-		for (const key of sorted) {
-			if (after && compareBucketKeys(key, after) <= 0) continue;
+		for (let i = start; i < sorted.length; i++) {
+			const key = sorted[i];
+			if (!key.startsWith(prefix)) break;
 			if (delimiter) {
 				const rest = key.slice(prefix.length);
 				const idx = rest.indexOf(delimiter);
