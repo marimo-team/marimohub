@@ -1305,7 +1305,25 @@ export const RunErrorSchema = z.looseObject({ code: z.string(), message: z.strin
 
 export type RunError = z.infer<typeof RunErrorSchema>;
 
+export const RunTagKeySchema = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/);
+export const RunTagValueSchema = z.string().max(256);
+export const RunTagsSchema = z
+	.record(RunTagKeySchema, RunTagValueSchema)
+	.refine((tags) => Object.keys(tags).length <= 32, 'At most 32 tags are allowed')
+	.refine(
+		(tags) => new TextEncoder().encode(JSON.stringify(tags)).length <= 8192,
+		'Tags must fit in 8192 UTF-8 bytes',
+	)
+	.meta({ maxProperties: 32 });
+export type RunTags = z.infer<typeof RunTagsSchema>;
+export const ProjectRunIndexSchema = z.object({
+	notebook_id: NotebookIdSchema,
+	job_id: JobIdSchema,
+	run_id: RunIdSchema,
+});
+
 export const JobRunSchema = z.looseObject({
+	tags: RunTagsSchema.optional(),
 	schema_version: z.literal(CURRENT_JOB_RUN_VERSION),
 	run_id: RunIdSchema,
 	job_id: JobIdSchema,
@@ -1462,6 +1480,7 @@ export function toPublicJobDefinition(job: JobDefinition): PublicJobDefinition {
 
 export type PublicJobRun = Pick<
 	JobRun,
+	| 'tags'
 	| 'run_id'
 	| 'job_id'
 	| 'notebook_id'
@@ -1491,6 +1510,7 @@ export type PublicJobRun = Pick<
 
 export function toPublicJobRun(run: JobRun): PublicJobRun {
 	return {
+		tags: run.tags,
 		run_id: run.run_id,
 		job_id: run.job_id,
 		notebook_id: run.notebook_id,

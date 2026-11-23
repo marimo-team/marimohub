@@ -42,6 +42,7 @@ import projectsApp from './routes/projects';
 import projectAlertsApp from './routes/projectAlerts';
 import integrationsApp from './routes/integrations';
 import jobsApp from './routes/jobs';
+import projectRunsApp from './routes/projectRuns';
 import deepLinksApp from './routes/deepLinks';
 import appsApp from './routes/apps';
 import sessionsApp from './routes/sessions';
@@ -635,6 +636,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, workingBranchesApp);
 	app.route(API_PREFIX, sessionsApp);
 	app.route(API_PREFIX, jobsApp);
+	app.route(API_PREFIX, projectRunsApp);
 	app.route(API_PREFIX, integrationsApp);
 	app.route(API_PREFIX, usersApp);
 	app.route(API_PREFIX, tokensApp);

@@ -1625,6 +1625,48 @@ paths:
       responses:
         '204':
           description: Stored.
+  /projects/{pid}/run-index/{reverse_ulid}.json:
+    summary: Rebuildable newest-first run locator. Tags, state and authorization
+      remain in authoritative records.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: reverse_ulid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: JobRunService
+    get:
+      operationId: read_projects_run_index_json
+      summary: Read ProjectRunIndex
+      tags:
+        - job
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectRunIndex'
+    put:
+      operationId: write_projects_run_index_json
+      summary: Write ProjectRunIndex
+      tags:
+        - job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectRunIndex'
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/notebooks/{nid}/jobs/{job_id}/runs/{run_id}/run.json:
     summary: 'Job run record: CAS-managed status transitions; terminal runs are
       never rewritten.'
@@ -7282,9 +7324,31 @@ components:
       required:
         - run_id
         - fired_at
+    ProjectRunIndex:
+      type: object
+      properties:
+        notebook_id:
+          type: string
+        job_id:
+          type: string
+        run_id:
+          type: string
+      required:
+        - notebook_id
+        - job_id
+        - run_id
     JobRun:
       type: object
       properties:
+        tags:
+          type: object
+          propertyNames:
+            type: string
+            pattern: ^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$
+          additionalProperties:
+            type: string
+            maxLength: 256
+          maxProperties: 32
         schema_version:
           type: number
           const: 1

@@ -15,6 +15,7 @@ import {
 	RUN_STATUSES,
 	RUN_TRIGGERS,
 	RunId,
+	RunTagsSchema,
 } from '@marimo-hub/core';
 import { ComputeResourcesResponseSchema, extensibleResponseEnum } from '../shared';
 
@@ -104,6 +105,11 @@ export const UpdateJobBody = z
 
 export const TriggerRunBody = z
 	.strictObject({
+		tags: RunTagsSchema.optional().openapi({
+			description:
+				'Immutable submission tags. Exact-match history filters use these values; tags never grant access.',
+			example: { app: 'calibration-runner', app_version: 'v3' },
+		}),
 		/** Overrides the job's stored parameters for this run only. */
 		parameters: JobParametersSchema.optional(),
 	})
@@ -132,6 +138,7 @@ const RunErrorSchema = z.object({ code: z.string(), message: z.string() });
 
 export const JobRunResponseSchema = z
 	.object({
+		tags: RunTagsSchema.optional(),
 		run_id: z.string().regex(RunId.regex),
 		job_id: z.string(),
 		notebook_id: z.string(),

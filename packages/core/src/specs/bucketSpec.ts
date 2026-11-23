@@ -76,6 +76,7 @@ import {
 	JobOccurrenceSchema,
 	JobRunMarkerSchema,
 	JobRunSchema,
+	ProjectRunIndexSchema,
 	NotebookMetaSchema,
 	PreviewRuntimeMetaSchema,
 	NotebookProposalSchema,
@@ -494,6 +495,16 @@ export const STORED_OBJECTS: BucketObject[] = [
 		mutability: 'immutable',
 		owner: 'JobRunService',
 		tag: 'job',
+	},
+	{
+		name: 'ProjectRunIndex',
+		key: `${project.runIndexPrefix}{reverse_ulid}.json`,
+		schema: ProjectRunIndexSchema,
+		summary:
+			'Rebuildable newest-first run locator. Tags, state and authorization remain in authoritative records.',
+		tag: 'job',
+		mutability: 'immutable',
+		owner: 'JobRunService',
 	},
 	{
 		name: 'JobRun',

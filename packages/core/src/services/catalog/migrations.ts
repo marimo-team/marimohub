@@ -1,3 +1,4 @@
+import type { JobRunService } from '../jobs/JobRunService';
 import type { Bucket } from '../../ports/bucket';
 import { paths } from '../../paths';
 import type { SessionService } from '../runtime/SessionService';
@@ -13,6 +14,7 @@ export function backgroundMigrations(
 	bucket: Bucket,
 	projects: ProjectService,
 	sessions: SessionService,
+	jobRuns: JobRunService,
 ): readonly BackgroundMigration[] {
 	return [
 		{
@@ -48,6 +50,20 @@ export function backgroundMigrations(
 			description: 'Build per-user session indexes.',
 			impact: 'The app stays available. Session reads use existing scans until the index is ready.',
 			progressUnit: 'sessions',
+			after: [],
+		},
+		{
+			...bucketMigration({
+				id: 'project-run-index-v1',
+				batchSize: 500,
+				bucket,
+				prefix: 'projects/',
+				migrate: (key, signal) => jobRuns.migrateProjectRunIndexEntry(key, signal),
+			}),
+			title: 'Index project run history',
+			description: 'Build project run locators in bounded batches.',
+			impact: 'Existing job history remains available while project history is populated.',
+			progressUnit: 'objects',
 			after: [],
 		},
 	];

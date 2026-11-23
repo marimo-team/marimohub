@@ -20,6 +20,7 @@ import {
 	JobOccurrenceSchema,
 	JobRunMarkerSchema,
 	JobRunSchema,
+	ProjectRunIndexSchema,
 	parseStoredJobRun,
 	readStored,
 	readStoredJobRun,
@@ -33,6 +34,7 @@ import type {
 	JobRunMarker,
 	RunError,
 	RunTrigger,
+	RunTags,
 } from '../../schema';
 import {
 	acquireSingletonClaim,
@@ -52,6 +54,7 @@ export interface EnqueueRunInput {
 	triggeredBy?: UserId;
 	scheduledFor?: string;
 	parameters?: JobParameters;
+	tags?: RunTags;
 	sourceVersionId?: VersionId;
 	timeoutSeconds: number;
 	attempt?: number;
@@ -259,6 +262,7 @@ export class JobRunService {
 			project_id: job.project_id,
 			status: 'queued',
 			trigger: input.trigger,
+			tags: input.tags,
 			...(input.triggeredBy ? { triggered_by: input.triggeredBy } : {}),
 			...(input.scheduledFor ? { scheduled_for: input.scheduledFor } : {}),
 			...(input.sourceVersionId ? { source_version_id: input.sourceVersionId } : {}),
@@ -271,28 +275,9 @@ export class JobRunService {
 			queued_at: now,
 			...(input.eligibleAt ? { eligible_at: input.eligibleAt } : {}),
 		});
-		const marker: JobRunMarker = {
-			run_id: runId,
-			continuation_run_id: createRunId(),
-			job_id: job.id,
-			notebook_id: job.notebook_id,
-			project_id: job.project_id,
-			created_at: now,
-		};
-		await putIfAbsent(
-			this.bucket,
-			paths.jobRunMarker(job.project_id, runId),
-			JSON.stringify(marker),
-		);
-		const jobPaths = paths.project(job.project_id).notebook(job.notebook_id).job(job.id);
-		await putIfAbsent(this.bucket, jobPaths.runIndex(runId), '');
-		const key = this.runPaths(run).record;
-		const created = await putIfAbsent(this.bucket, key, JSON.stringify(run));
-		if (created) {
-			this.metrics.increment('jobs.runs.enqueued', 1, { trigger: input.trigger });
-			return run;
-		}
-		return this.getRun(job.project_id, job.notebook_id, job.id, runId);
+		const result = await this.createRun(run);
+		if (result.created) this.metrics.increment('jobs.runs.enqueued', 1, { trigger: input.trigger });
+		return result.run;
 	}
 
 	/** A terminal-at-birth record for a scheduled fire the concurrency policy declined. */
@@ -318,25 +303,151 @@ export class JobRunService {
 			finished_at: now,
 			error: input.reason,
 		});
+		const result = await this.createRun(run);
+		if (result.created) this.metrics.increment('jobs.runs.skipped');
+		return result.run;
+	}
+
+	private async createRun(run: JobRun): Promise<{ run: JobRun; created: boolean }> {
+		const { project_id: pid, notebook_id: nid, job_id: jid, run_id: rid } = run;
 		const marker: JobRunMarker = {
-			run_id: runId,
+			project_id: pid,
+			notebook_id: nid,
+			job_id: jid,
+			run_id: rid,
 			continuation_run_id: createRunId(),
-			job_id: job.id,
-			notebook_id: job.notebook_id,
-			project_id: job.project_id,
-			created_at: now,
+			created_at: run.queued_at,
 		};
+		await putIfAbsent(this.bucket, paths.jobRunMarker(pid, rid), JSON.stringify(marker));
+		const job = paths.project(pid).notebook(nid).job(jid);
+		await putIfAbsent(this.bucket, job.runIndex(rid), '');
+		const created = await putIfAbsent(this.bucket, job.run(rid).record, JSON.stringify(run));
+		const persisted = created ? run : await this.getRun(pid, nid, jid, rid);
+		// Acceptance is durable already; the marker keeps failed indexing retryable.
+		try {
+			await this.publishProjectRun(persisted);
+		} catch (error) {
+			logOperationalError(
+				'job_run_index_publish_failed',
+				{ operation: 'job.run.index', run_id: rid },
+				error,
+			);
+		}
+		return { run: persisted, created };
+	}
+
+	async migrateProjectRunIndexEntry(key: string, signal?: AbortSignal): Promise<void> {
+		if (!/^projects\/[^/]+\/notebooks\/[^/]+\/jobs\/[^/]+\/runs\/[^/]+\/run\.json$/.test(key))
+			return;
+		signal?.throwIfAborted();
+		const object = await this.bucket.get(key);
+		if (!object) return;
+		const run = await readStoredJobRun(object, key);
+		if (this.runPaths(run).record !== key)
+			throw new Error('Run attribution does not match its storage key');
+		signal?.throwIfAborted();
+		await this.publishProjectRun(run);
+	}
+
+	async publishProjectRun(run: JobRun): Promise<void> {
+		const locator = ProjectRunIndexSchema.parse(run);
 		await putIfAbsent(
 			this.bucket,
-			paths.jobRunMarker(job.project_id, runId),
-			JSON.stringify(marker),
+			paths.project(run.project_id).runIndex(run.run_id),
+			JSON.stringify(locator),
 		);
-		const jobPaths = paths.project(job.project_id).notebook(job.notebook_id).job(job.id);
-		await putIfAbsent(this.bucket, jobPaths.runIndex(runId), '');
-		const created = await putIfAbsent(this.bucket, this.runPaths(run).record, JSON.stringify(run));
-		if (!created) return this.getRun(job.project_id, job.notebook_id, job.id, runId);
-		this.metrics.increment('jobs.runs.skipped');
+	}
+
+	async listProjectRunsPage(
+		pid: ProjectId,
+		limit: number,
+		after?: RunId,
+		tag?: { key: string; value: string },
+	): Promise<RunPage> {
+		const project = paths.project(pid);
+		const page = await this.readHistoryPage(
+			project.runIndexPrefix,
+			limit,
+			after ? project.runIndex(after) : undefined,
+			async (key, rid) => {
+				const object = await this.bucket.get(key);
+				if (!object) return null;
+				const ref = await readStored(ProjectRunIndexSchema, object, key);
+				if (ref.run_id !== rid) throw new Error('Invalid project run locator');
+				return this.readHistoryRun({ ...ref, project_id: pid });
+			},
+		);
+		return {
+			...page,
+			items: tag
+				? page.items.filter(
+						(run) =>
+							run.tags && Object.hasOwn(run.tags, tag.key) && run.tags[tag.key] === tag.value,
+					)
+				: page.items,
+		};
+	}
+
+	async backfillProjectRuns(job: JobDefinition, limit: number, after?: RunId): Promise<RunPage> {
+		const source = paths.project(job.project_id).notebook(job.notebook_id).job(job.id);
+		const page = await this.readHistoryPage(
+			source.runIndexPrefix,
+			limit,
+			after ? source.runIndex(after) : undefined,
+			(_key, rid) =>
+				this.readHistoryRun({
+					project_id: job.project_id,
+					notebook_id: job.notebook_id,
+					job_id: job.id,
+					run_id: rid,
+				}),
+		);
+		await mapWithConcurrency(page.items, BUCKET_SCAN_CONCURRENCY, (run) =>
+			this.publishProjectRun(run),
+		);
+		return page;
+	}
+
+	private async readHistoryRun(
+		ref: Pick<JobRun, 'project_id' | 'notebook_id' | 'job_id' | 'run_id'>,
+	): Promise<JobRun | null> {
+		const key = this.runPaths(ref).record;
+		const object = await this.bucket.get(key);
+		if (!object) return null;
+		const run = await readStoredJobRun(object, key);
+		if (
+			run.project_id !== ref.project_id ||
+			run.notebook_id !== ref.notebook_id ||
+			run.job_id !== ref.job_id ||
+			run.run_id !== ref.run_id
+		)
+			throw new Error('Run attribution does not match its history locator');
 		return run;
+	}
+
+	private async readHistoryPage(
+		prefix: string,
+		limit: number,
+		startAfter: string | undefined,
+		read: (key: string, rid: RunId) => Promise<JobRun | null>,
+	): Promise<RunPage> {
+		const listed = await this.bucket.list({
+			prefix,
+			limit: Math.max(1, Math.min(500, limit)),
+			...(startAfter ? { startAfter } : {}),
+		});
+		const ids = listed.objects.map(({ key }) => {
+			const rid = this.runIdFromIndex(prefix, key);
+			if (!rid) throw new Error('Invalid run history index');
+			return rid;
+		});
+		const runs = await mapWithConcurrency(listed.objects, BUCKET_SCAN_CONCURRENCY, (entry, index) =>
+			read(entry.key, ids[index]),
+		);
+		return {
+			items: runs.filter((run) => run !== null),
+			nextRunId: listed.truncated && ids.length > 0 ? ids[ids.length - 1] : null,
+		};
 	}
 
 	async getRun(
@@ -463,7 +574,9 @@ export class JobRunService {
 			(current) => {
 				const status = nextRunStatus(current.status, event);
 				if (status === null) return null;
-				return JobRunSchema.parse({ ...current, ...patch(current), status });
+				const update = patch(current);
+				if (Object.hasOwn(update, 'tags')) throw new Error('Run tags are immutable');
+				return JobRunSchema.parse({ ...current, ...update, status });
 			},
 			{
 				notFound: () => new NotFoundError(`Run ${ref.run_id} not found`),
@@ -573,6 +686,12 @@ export class JobRunService {
 	}
 
 	async deleteMarker(run: Pick<JobRun, 'project_id' | 'run_id'>): Promise<void> {
+		const marker = await this.getMarker(run);
+		if (marker) {
+			const source = await this.bucket.get(this.runPaths(marker).record);
+			if (source)
+				await this.publishProjectRun(await readStoredJobRun(source, this.runPaths(marker).record));
+		}
 		await this.bucket.delete(paths.jobRunMarker(run.project_id, run.run_id)).catch((err) => {
 			logOperationalError(
 				'job_run_marker_delete_failed',
@@ -870,7 +989,7 @@ export class JobRunService {
 			return false;
 		if (await this.bucket.head(paths.jobRunMarker(run.project_id, run.run_id))) return false;
 		await deleteByPrefix(this.bucket, jobPaths.run(run.run_id).base);
-		await this.bucket.delete(indexKey);
+		await this.bucket.delete([indexKey, paths.project(run.project_id).runIndex(run.run_id)]);
 		return true;
 	}
 

@@ -648,6 +648,7 @@ export class JobScheduler {
 				triggeredBy: finished.triggered_by,
 				scheduledFor: finished.scheduled_for,
 				parameters: finished.parameters,
+				tags: finished.tags,
 				sourceVersionId: finished.source_version_id,
 				timeoutSeconds: finished.timeout_seconds,
 				attempt: finished.attempt + 1,

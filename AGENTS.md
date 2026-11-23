@@ -299,3 +299,8 @@ See [`development_docs/bucket_spec.md`](./development_docs/bucket_spec.md).
 ## Outstanding work
 
 See [`plans/`](./plans) for planned changes and their status.
+
+`JobRunService` also owns immutable project run locators at
+`projects/{pid}/run-index/{reverse_ulid}.json`. These are rebuildable pointers;
+run records and live source authorization remain authoritative. See
+[`development_docs/project-run-history.md`](./development_docs/project-run-history.md).

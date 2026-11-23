@@ -725,6 +725,7 @@ describe('JobScheduler', () => {
 			job,
 			trigger: 'manual',
 			triggeredBy: ACTOR,
+			tags: { app: 'calibration', app_version: 'v1' },
 			timeoutSeconds: 60,
 		});
 		const runner = fakeRunner(env, 'fail');
@@ -740,6 +741,7 @@ describe('JobScheduler', () => {
 			status: 'queued',
 			attempt: 2,
 			retry_of: first.run_id,
+			tags: first.tags,
 			triggered_by: ACTOR,
 			eligible_at: new Date(now + 120_000).toISOString(),
 		});

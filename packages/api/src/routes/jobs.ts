@@ -281,7 +281,7 @@ const getRunLogs = createRoute({
 
 // --- Helpers ---
 
-async function loadAuthorizedJob(
+export async function loadAuthorizedJob(
 	c: Context<HonoEnv>,
 	pid: JobRun['project_id'],
 	nid: JobRun['notebook_id'],

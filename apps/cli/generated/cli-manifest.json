@@ -3304,6 +3304,14 @@
 						"description": "String parameters passed to the notebook as `--key value` after `--`, readable via `mo.cli_args()`. Parameters are visible to every project member who can read the job or its run history; do not store secrets here.",
 						"value_type": "object",
 						"repeatable": false
+					},
+					{
+						"name": "tags",
+						"cli_name": "tags",
+						"required": false,
+						"description": "Immutable submission tags. Exact-match history filters use these values; tags never grant access.",
+						"value_type": "object",
+						"repeatable": false
 					}
 				]
 			},
@@ -6064,6 +6072,61 @@
 			},
 			"destructive": false,
 			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "projects.runs.list",
+			"command": ["projects", "runs", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/runs",
+			"summary": "List project runs with an optional exact-match submission tag",
+			"description": "Scans at most limit index entries (maximum 500), newest run ID first. Empty filtered pages can have a continuation cursor. Tags are conventions, never authorization: each result requires current source job access.",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "tag_key",
+					"cli_name": "tag-key",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "tag_value",
+					"cli_name": "tag-value",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
 			"response_kind": "json",
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false
