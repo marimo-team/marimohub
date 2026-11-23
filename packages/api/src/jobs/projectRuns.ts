@@ -10,22 +10,35 @@ import type { AuthenticatedPrincipal, ProjectId } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
 import { loadSessionProject } from '../shared';
 import { requireJobs, visibleJobRun, loadAuthorizedJob } from './operations';
-import { RunListQuery, prepareRunListQuery, matchesRunFilter } from './runQuery';
+import {
+	RunListQuery,
+	RunListOptionsSchema,
+	prepareRunListQuery,
+	matchesRunFilter,
+} from './runQuery';
 
-export const ProjectRunListQuery = RunListQuery.safeExtend({
+const tagFields = {
 	tag_key: RunTagKeySchema.optional(),
 	tag_value: RunTagValueSchema.optional(),
-})
-	.strict()
-	.refine((query) => (query.tag_key === undefined) === (query.tag_value === undefined), {
-		message: 'tag_key and tag_value must be supplied together',
-	});
+};
+const hasTagPair = (options: { tag_key?: string; tag_value?: string }) =>
+	(options.tag_key === undefined) === (options.tag_value === undefined);
+const tagPairError = { message: 'tag_key and tag_value must be supplied together' };
 
-export async function listProjectRunHistory(
+export const ProjectRunListQuery = RunListQuery.safeExtend(tagFields)
+	.strict()
+	.refine(hasTagPair, tagPairError);
+export const ProjectRunListBody = RunListOptionsSchema.safeExtend(tagFields)
+	.strict()
+	.refine(hasTagPair, tagPairError);
+
+export type ProjectRunListOptions = z.infer<typeof ProjectRunListBody>;
+
+export async function listProjectRuns(
 	deps: ApiDeps,
 	user: AuthenticatedPrincipal,
 	pid: ProjectId,
-	query: z.infer<typeof ProjectRunListQuery>,
+	query: ProjectRunListOptions,
 ) {
 	requireJobs(deps);
 	await loadSessionProject(deps.services.projects, pid, user, deps);

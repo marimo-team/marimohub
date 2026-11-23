@@ -58,13 +58,13 @@ class Jobs:
     def list_active_runs(self, job_id):
         return self._call("list_active_runs", {"job_id": job_id})
 
-    def list_history(self, *, tag_key=None, tag_value=None, status=None,
+    def list_project_runs(self, *, tag_key=None, tag_value=None, status=None,
                      triggered_by=None, triggered_by_me=False, limit=None, cursor=None):
-        """Read one project history page; follow next_cursor even on empty pages."""
+        """Read one project run page; follow next_cursor even on empty pages."""
         body = {key: value for key, value in {
             "tag_key": tag_key, "tag_value": tag_value, "status": status,
             "triggered_by": triggered_by, "limit": limit, "cursor": cursor,
         }.items() if value is not None}
         if triggered_by_me:
-            body["triggered_by_me"] = "true"
-        return self._call("list_history", body)
+            body["triggered_by_me"] = triggered_by_me
+        return self._call("list_project_runs", body)

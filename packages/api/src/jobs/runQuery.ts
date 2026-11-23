@@ -10,7 +10,7 @@ import {
 	encodeCursor,
 } from '../pagination';
 
-export const RunListQuery = PaginationQuery.extend({
+const RunFilterFields = {
 	status: z
 		.enum([...RUN_STATUSES, 'active'])
 		.optional()
@@ -20,9 +20,30 @@ export const RunListQuery = PaginationQuery.extend({
 	triggered_by: z.string().min(1).max(1024).optional().openapi({
 		description: 'Exact triggering user ID.',
 	}),
-	triggered_by_me: z.enum(['true']).optional().openapi({
-		description: 'Filter to the authenticated user. Cannot be combined with triggered_by.',
-	}),
+};
+
+export const RunListOptionsSchema = z
+	.object({
+		limit: z.number().int().positive().optional(),
+		cursor: z.string().optional(),
+		...RunFilterFields,
+		triggered_by_me: z.boolean().optional(),
+	})
+	.refine((options) => !options.triggered_by_me || options.triggered_by === undefined, {
+		message: 'triggered_by and triggered_by_me cannot be combined',
+	});
+
+export type RunListOptions = z.infer<typeof RunListOptionsSchema>;
+
+export const RunListQuery = PaginationQuery.extend({
+	...RunFilterFields,
+	triggered_by_me: z
+		.enum(['true'])
+		.transform(() => true)
+		.optional()
+		.openapi({
+			description: 'Filter to the authenticated user. Cannot be combined with triggered_by.',
+		}),
 }).refine((query) => query.triggered_by === undefined || query.triggered_by_me === undefined, {
 	message: 'triggered_by and triggered_by_me cannot be combined',
 });
@@ -31,14 +52,14 @@ export const RUN_LIST_DESCRIPTION =
 	'Runs are ordered by descending run ID. Project lists and filtered job lists scan at most limit entries (maximum 500). Follow next_cursor even on empty pages. Status and access are read live. Restart from the first page to refresh active runs.';
 
 export function prepareRunListQuery(
-	query: z.infer<typeof RunListQuery>,
+	query: RunListOptions,
 	userId: string,
 	resource: readonly unknown[],
 	options: { legacyJobCursor?: boolean } = {},
 ) {
 	const filter = {
 		status: query.status,
-		triggered_by: query.triggered_by_me === 'true' ? userId : query.triggered_by,
+		triggered_by: query.triggered_by_me ? userId : query.triggered_by,
 	};
 	const filtered = filter.status !== undefined || filter.triggered_by !== undefined;
 	// Unfiltered callers retain their existing project or job cursor format.

@@ -23,12 +23,20 @@ run = jobs.get_run(job_id, run["run_id"])
 `Jobs.from_request(request)` accepts an explicit request.
 Keep the client inside the visitor session. Poll with `get_run` in a separate cell or callback.
 
-`trigger`, `get_run`, and `list_active_runs` are limited to the app notebook.
-The two read methods return only the visitor's runs, even for project editors.
+| Method                     | Scope                                      | Visibility                                                           | Return shape           |
+| -------------------------- | ------------------------------------------ | -------------------------------------------------------------------- | ---------------------- |
+| `trigger(job_id, ...)`     | App notebook                               | Creates a run as the visitor                                         | Run object             |
+| `get_run(job_id, run_id)`  | App notebook                               | Visitor's own run, even for editors                                  | Run object             |
+| `list_active_runs(job_id)` | App notebook, one job                      | Visitor's own active runs, even for editors                          | List of run objects    |
+| `list_project_runs(...)`   | App project, across notebooks and versions | Authorized own runs and shared summaries, or full fields for editors | `{items, next_cursor}` |
 
-## Project history
+Project-list items cannot necessarily be fetched through `get_run`.
+A run from another notebook returns 404. Another user's run in the app notebook returns 403.
+Use the fields returned by `list_project_runs` to display shared runs.
 
-`jobs.list_history(tag_key="app", tag_value="demo", limit=20)` reads across notebooks
+## Project runs
+
+`jobs.list_project_runs(tag_key="app", tag_value="demo", limit=20)` reads across notebooks
 and source versions in the admitted app's project.
 It returns `items` and `next_cursor`.
 
@@ -42,6 +50,10 @@ Optional filters match the project REST API:
 - `tag_key` and `tag_value`: an exact pair.
 - `status`: a run status, or `"active"` for queued, provisioning, and running runs.
 - `triggered_by` or `triggered_by_me=True`: an exact user ID or the current visitor.
+
+The JSON endpoint accepts native booleans for `triggered_by_me` and numbers for `limit`.
+`triggered_by_me=false` disables the current-user filter.
+The REST endpoint retains URL query values such as `triggered_by_me=true&limit=20`.
 
 Restart without a cursor to refresh live statuses.
 

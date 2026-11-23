@@ -1,5 +1,5 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { ProjectRunListQuery, listProjectRunHistory } from '../jobs/projectHistory';
+import { ProjectRunListQuery, listProjectRuns } from '../jobs/projectRuns';
 import { RUN_LIST_DESCRIPTION } from '../jobs/runQuery';
 import { JobRunResponseSchema } from '../jobs/schemas';
 import { pageSchema } from '../pagination';
@@ -28,7 +28,7 @@ app.openapi(
 		},
 	}),
 	async (c) => {
-		const data = await listProjectRunHistory(
+		const data = await listProjectRuns(
 			c.get('deps'),
 			c.get('user'),
 			c.req.valid('param').pid,

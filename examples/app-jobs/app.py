@@ -22,7 +22,7 @@ def _():
             "completed": {"status": "succeeded"},
             "active": {"status": "active", "triggered_by_me": True},
         }
-        return jobs.list_history(
+        return jobs.list_project_runs(
             tag_key="app", tag_value=tag["app"], limit=1,
             cursor=cursor, **filters[kind],
         )
