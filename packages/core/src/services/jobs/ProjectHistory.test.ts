@@ -1,7 +1,8 @@
+import { backgroundMigrations } from '../catalog/migrations';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRunId } from '../../ids';
 import { paths } from '../../paths';
-import { RunTagsSchema, RunMetadataSchema } from '../../schema';
+import { RunTagsSchema } from '../../schema';
 import type { JobDefinition, RunTags } from '../../schema';
 import { ACTOR, setupTestEnv } from '../../testing';
 
@@ -104,7 +105,7 @@ describe('project run history', () => {
 				throw new Error('response lost');
 			return result;
 		});
-		await expect(enqueue({ app: 'calibration' }, id)).rejects.toThrow('response lost');
+		expect((await enqueue({ app: 'calibration' }, id)).tags).toEqual({ app: 'calibration' });
 		fault.mockRestore();
 		const run = await enqueue({ app: 'different' }, id);
 		expect(run.tags).toEqual({ app: 'calibration' });
@@ -141,6 +142,41 @@ describe('project run history', () => {
 		expect((await listing()).items).toEqual([tagged]);
 	});
 
+	it('automatically backfills in bounded migration batches and replays failed batches safely', async () => {
+		const run = await enqueue();
+		const project = paths.project(job.project_id);
+		await env.bucket.delete(project.runIndex(run.run_id));
+		for (let i = 0; i < 501; i++)
+			await env.bucket.put(`projects/${job.project_id}/a-padding/${i}`, 'ignored');
+		const migration = () =>
+			backgroundMigrations(env.bucket, env.projects, env.sessions, env.jobRuns).find(
+				(entry) => entry.id === 'project-run-index-v1',
+			)!;
+		const list = vi.spyOn(env.bucket, 'list');
+		const first = await migration().runBatch({});
+		expect(first.done).toBe(false);
+		expect(list).toHaveBeenCalledTimes(1);
+		expect(list.mock.calls[0]?.[0]?.limit).toBe(500);
+		list.mockRestore();
+		if (first.done) throw new Error('Expected continuation');
+		const fault = vi
+			.spyOn(env.jobRuns, 'publishProjectRun')
+			.mockRejectedValueOnce(new Error('offline'));
+		await expect(migration().runBatch({ cursor: first.cursor })).rejects.toThrow('offline');
+		fault.mockRestore();
+		let cursor = first.cursor;
+		for (let i = 0; i < 10; i++) {
+			const batch = await migration().runBatch({ cursor });
+			if (batch.done) break;
+			cursor = batch.cursor;
+		}
+		await migration().runBatch({ cursor: first.cursor });
+		expect((await env.jobRuns.listProjectRunsPage(job.project_id, 10)).items).toEqual([run]);
+		expect(
+			(await env.jobRuns.getRun(job.project_id, job.notebook_id, job.id, run.run_id)).tags,
+		).toBeUndefined();
+	});
+
 	it('does not expose a deleted run after a delayed publisher and fails closed on corrupt attribution', async () => {
 		const run = await enqueue({ app: 'calibration' });
 		const source = paths
@@ -167,11 +203,4 @@ describe('submission context bounds', () => {
 	])('rejects invalid or oversized tags %j', (tags) =>
 		expect(RunTagsSchema.safeParse(tags).success).toBe(false),
 	);
-	it('supports bounded flat metadata and rejects nested and non-finite values', () => {
-		expect(
-			RunMetadataSchema.parse({ report: 'https://reports.example/123', score: 1, passed: true }),
-		).toEqual({ report: 'https://reports.example/123', score: 1, passed: true });
-		for (const value of [null, [], {}, Infinity, 'x'.repeat(1025)])
-			expect(RunMetadataSchema.safeParse({ result: value }).success).toBe(false);
-	});
 });

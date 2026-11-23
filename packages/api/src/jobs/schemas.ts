@@ -16,7 +16,6 @@ import {
 	RUN_TRIGGERS,
 	RunId,
 	RunTagsSchema,
-	RunMetadataSchema,
 } from '@marimo-hub/core';
 import { ComputeResourcesResponseSchema, extensibleResponseEnum } from '../shared';
 
@@ -140,7 +139,6 @@ const RunErrorSchema = z.object({ code: z.string(), message: z.string() });
 export const JobRunResponseSchema = z
 	.object({
 		tags: RunTagsSchema.optional(),
-		metadata: RunMetadataSchema.optional(),
 		run_id: z.string().regex(RunId.regex),
 		job_id: z.string(),
 		notebook_id: z.string(),

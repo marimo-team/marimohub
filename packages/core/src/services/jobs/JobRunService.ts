@@ -323,8 +323,30 @@ export class JobRunService {
 		await putIfAbsent(this.bucket, job.runIndex(rid), '');
 		const created = await putIfAbsent(this.bucket, job.run(rid).record, JSON.stringify(run));
 		const persisted = created ? run : await this.getRun(pid, nid, jid, rid);
-		await this.publishProjectRun(persisted);
+		// Acceptance is durable already; the marker keeps failed indexing retryable.
+		try {
+			await this.publishProjectRun(persisted);
+		} catch (error) {
+			logOperationalError(
+				'job_run_index_publish_failed',
+				{ operation: 'job.run.index', run_id: rid },
+				error,
+			);
+		}
 		return { run: persisted, created };
+	}
+
+	async migrateProjectRunIndexEntry(key: string, signal?: AbortSignal): Promise<void> {
+		if (!/^projects\/[^/]+\/notebooks\/[^/]+\/jobs\/[^/]+\/runs\/[^/]+\/run\.json$/.test(key))
+			return;
+		signal?.throwIfAborted();
+		const object = await this.bucket.get(key);
+		if (!object) return;
+		const run = await readStoredJobRun(object, key);
+		if (this.runPaths(run).record !== key)
+			throw new Error('Run attribution does not match its storage key');
+		signal?.throwIfAborted();
+		await this.publishProjectRun(run);
 	}
 
 	async publishProjectRun(run: JobRun): Promise<void> {

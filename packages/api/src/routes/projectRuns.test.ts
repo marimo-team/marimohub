@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServices, paths } from '@marimo-hub/core';
 import type { JobDefinition, JobRun, UserId } from '@marimo-hub/core';
 import { ACTOR, uid, localResourceSecurity, makeSubjectContext } from '@marimo-hub/core/testing';
@@ -139,20 +139,45 @@ describe('project run history routes', () => {
 		await bucket.delete(paths.project(job.project_id).notebook(job.notebook_id).meta);
 		expect((await expectOk<Page>(await constrained('GET', base()))).items).toEqual([]);
 	});
-	it('requires editor access for repeatable backfill and does not resurrect deleted jobs', async () => {
+	it('does not resurrect deleted jobs', async () => {
 		const run = await trigger();
-		await bucket.delete(paths.project(job.project_id).runIndex(run.run_id));
-		await expectError(await request(VIEWER)('POST', `${jobBase()}/history-backfill`), 403);
-		for (let i = 0; i < 2; i++)
-			await expectOk(await request()('POST', `${jobBase()}/history-backfill?limit=1`));
-		expect(
-			(await expectOk<Page>(await request()('GET', base()))).items.map((r) => r.run_id),
-		).toEqual([run.run_id]);
 		await services.jobRuns.cancel(run, ACTOR);
 		await expectOk(await request()('DELETE', jobBase(), undefined, { 'if-match': job.updated_at }));
 		await services.jobRuns.publishProjectRun(run);
 		expect((await expectOk<Page>(await request()('GET', base()))).items).toEqual([]);
 	});
+	it.each([false, true])(
+		'acknowledges an accepted run when index publication fails afterWrite=%s',
+		async (afterWrite) => {
+			const put = bucket.put.bind(bucket);
+			const fault = vi.spyOn(bucket, 'put').mockImplementation(async (key, ...args) => {
+				if (!key.startsWith(paths.project(job.project_id).runIndexPrefix)) return put(key, ...args);
+				if (afterWrite) await put(key, ...args);
+				throw new Error('index unavailable');
+			});
+			const send = () =>
+				request()(
+					'POST',
+					`${jobBase()}/runs`,
+					{ tags: { app: 'calibration' } },
+					{ 'idempotency-key': 'accepted-run' },
+				);
+			const first = await expectOk<JobRun>(await send(), 201);
+			const replay = await expectOk<JobRun>(await send(), 201);
+			expect(replay.run_id).toBe(first.run_id);
+			expect(await services.jobRuns.listRuns(job.project_id, job.notebook_id, job.id)).toHaveLength(
+				1,
+			);
+			expect(await services.jobRuns.getMarker(first)).not.toBeNull();
+			fault.mockRestore();
+			await services.jobRuns.cancel(first, ACTOR);
+			await services.jobRuns.deleteMarker(first);
+			expect(
+				(await expectOk<Page>(await request()('GET', base()))).items.map((run) => run.run_id),
+			).toEqual([first.run_id]);
+		},
+	);
+
 	it('gates the new routes when jobs are disabled', async () => {
 		const off = createTestApi({ bucket, deps: { jobs: undefined } }).request;
 		await expectError(await off('GET', base()), 404);

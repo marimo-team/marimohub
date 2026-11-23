@@ -7349,18 +7349,6 @@ components:
             type: string
             maxLength: 256
           maxProperties: 32
-        metadata:
-          type: object
-          propertyNames:
-            type: string
-            pattern: ^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$
-          additionalProperties:
-            anyOf:
-              - type: string
-                maxLength: 1024
-              - type: number
-              - type: boolean
-          maxProperties: 32
         schema_version:
           type: number
           const: 1

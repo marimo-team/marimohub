@@ -33,10 +33,12 @@ it('runs after project access, backfills once, and activates cold replicas witho
 	expect(await services.migrations.tick()).toBe(false);
 	expect(await bucket.get(receipt)).toBeNull();
 	expect(await services.sessions.countActiveForUser(ACTOR)).toBe(1);
-	expect(await services.migrations.tick()).toBe(true);
+	expect(await services.migrations.tick()).toBe(false);
+	expect(services.migrations.isComplete(SESSION_INDEX_MIGRATION)).toBe(true);
 	expect((await index.read(ACTOR))?.entries).toEqual([
 		{ project_id: records[0].project_id, session_id: records[0].session_id },
 	]);
+	await finish(services);
 	const cold = createServices(bucket);
 	const list = vi.spyOn(bucket, 'list');
 	expect(await cold.migrations.tick()).toBe(true);
@@ -67,7 +69,8 @@ it('bounds history traversal, keeps partial indexes untrusted, and resumes after
 	expect(await services.sessions.countActiveForUser(ACTOR)).toBe(105);
 	list.mockClear();
 	const cold = createServices(bucket);
-	expect(await cold.migrations.tick()).toBe(true);
+	expect(await cold.migrations.tick()).toBe(false);
+	expect(cold.migrations.isComplete(SESSION_INDEX_MIGRATION)).toBe(true);
 	expect(list).toHaveBeenCalledTimes(1);
 	expect((await index.read(ACTOR))?.entries).toHaveLength(105);
 	expect(await cold.sessions.countActiveForUser(ACTOR)).toBe(105);
@@ -192,7 +195,8 @@ it('skips a record deleted between listing and reading', async () => {
 		await bucket.delete(paths.session(records[0].project_id, records[0].session_id));
 		return page;
 	});
-	expect(await services.migrations.tick()).toBe(true);
+	expect(await services.migrations.tick()).toBe(false);
+	expect(services.migrations.isComplete(SESSION_INDEX_MIGRATION)).toBe(true);
 });
 
 it('does not treat a lost index as an empty queue after migration', async () => {
@@ -220,7 +224,9 @@ it('cancels during a session read without publishing an index or completion', as
 		status: 'pending',
 	});
 	spy.mockRestore();
-	expect(await createServices(bucket).migrations.tick()).toBe(true);
+	const cold = createServices(bucket);
+	expect(await cold.migrations.tick()).toBe(false);
+	expect(cold.migrations.isComplete(SESSION_INDEX_MIGRATION)).toBe(true);
 });
 
 it('coalesces initial recovery for same-user visitors without trusting a partial index', async () => {

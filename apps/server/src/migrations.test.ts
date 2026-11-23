@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 describe('startup migrations', () => {
-	it('runs the next migration on a later tick and stops after both complete', async () => {
+	it('runs the next migration on a later tick and stops after all complete', async () => {
 		const bucket = await createInitializedBucket();
 		const deps = makeTestDeps(bucket);
 		const project = await deps.services.projects.createProject(
@@ -37,9 +37,12 @@ describe('startup migrations', () => {
 			await vi.advanceTimersByTimeAsync(5_000);
 			await loops.drain();
 			expect(deps.services.migrations.isComplete('session-index-v1')).toBe(true);
+			await vi.advanceTimersByTimeAsync(5_000);
+			await loops.drain();
+			expect(deps.services.migrations.isComplete('project-run-index-v1')).toBe(true);
 			const get = vi.spyOn(bucket, 'get');
 			await vi.advanceTimersByTimeAsync(60_000);
-			expect(tick).toHaveBeenCalledTimes(2);
+			expect(tick).toHaveBeenCalledTimes(3);
 			expect(get).not.toHaveBeenCalled();
 		} finally {
 			stop();
@@ -65,8 +68,11 @@ describe('startup migrations', () => {
 			await vi.advanceTimersByTimeAsync(5_000);
 			await loops.drain();
 			expect(deps.services.migrations.isComplete('session-index-v1')).toBe(true);
+			await vi.advanceTimersByTimeAsync(5_000);
+			await loops.drain();
+			expect(deps.services.migrations.isComplete('project-run-index-v1')).toBe(true);
 			await vi.advanceTimersByTimeAsync(60_000);
-			expect(tick).toHaveBeenCalledTimes(3);
+			expect(tick).toHaveBeenCalledTimes(4);
 		} finally {
 			stop();
 			await loops.drain();
@@ -117,8 +123,11 @@ it('does not overlap a timed-out attempt and retries after the stalled work sett
 		await vi.advanceTimersByTimeAsync(5_000);
 		await loops.drain();
 		expect(deps.services.migrations.isComplete('session-index-v1')).toBe(true);
+		await vi.advanceTimersByTimeAsync(5_000);
+		await loops.drain();
+		expect(deps.services.migrations.isComplete('project-run-index-v1')).toBe(true);
 		await vi.advanceTimersByTimeAsync(60_000);
-		expect(tick).toHaveBeenCalledTimes(3);
+		expect(tick).toHaveBeenCalledTimes(4);
 	} finally {
 		pending.resolve(false);
 		stop();

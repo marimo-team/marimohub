@@ -748,7 +748,7 @@ export function createServices(
 		'MigrationService',
 		new MigrationService(
 			bucket,
-			backgroundMigrations(bucket, projects, sessions),
+			backgroundMigrations(bucket, projects, sessions, jobRuns),
 			retiredMigrations,
 		),
 	);

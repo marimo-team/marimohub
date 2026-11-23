@@ -2966,60 +2966,6 @@
 			"accepts_idempotency_key": false
 		},
 		{
-			"id": "jobs.history.backfill",
-			"command": ["jobs", "history", "backfill"],
-			"method": "POST",
-			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/history-backfill",
-			"summary": "Repair one bounded page of the project run index",
-			"parameters": [
-				{
-					"name": "jid",
-					"cli_name": "jid",
-					"in": "path",
-					"required": true,
-					"value_type": "string",
-					"repeatable": false
-				},
-				{
-					"name": "nid",
-					"cli_name": "nid",
-					"in": "path",
-					"required": true,
-					"value_type": "string",
-					"repeatable": false
-				},
-				{
-					"name": "pid",
-					"cli_name": "pid",
-					"in": "path",
-					"required": true,
-					"value_type": "string",
-					"repeatable": false
-				},
-				{
-					"name": "cursor",
-					"cli_name": "cursor",
-					"in": "query",
-					"required": false,
-					"value_type": "string",
-					"repeatable": false
-				},
-				{
-					"name": "limit",
-					"cli_name": "limit",
-					"in": "query",
-					"required": false,
-					"value_type": "integer",
-					"repeatable": false
-				}
-			],
-			"destructive": false,
-			"paginated": false,
-			"response_kind": "json",
-			"accepts_if_match": false,
-			"accepts_idempotency_key": false
-		},
-		{
 			"id": "jobs.list",
 			"command": ["jobs", "list"],
 			"method": "GET",

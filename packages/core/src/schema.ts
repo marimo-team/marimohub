@@ -1316,18 +1316,6 @@ export const RunTagsSchema = z
 	)
 	.meta({ maxProperties: 32 });
 export type RunTags = z.infer<typeof RunTagsSchema>;
-export const RunMetadataSchema = z
-	.record(RunTagKeySchema, z.union([z.string().max(1024), z.number(), z.boolean()]))
-	.refine(
-		(metadata) => Object.keys(metadata).length <= 32,
-		'At most 32 metadata entries are allowed',
-	)
-	.refine(
-		(metadata) => new TextEncoder().encode(JSON.stringify(metadata)).length <= 16384,
-		'Metadata must fit in 16384 UTF-8 bytes',
-	)
-	.meta({ maxProperties: 32 });
-
 export const ProjectRunIndexSchema = z.object({
 	notebook_id: NotebookIdSchema,
 	job_id: JobIdSchema,
@@ -1336,7 +1324,6 @@ export const ProjectRunIndexSchema = z.object({
 
 export const JobRunSchema = z.looseObject({
 	tags: RunTagsSchema.optional(),
-	metadata: RunMetadataSchema.optional(),
 	schema_version: z.literal(CURRENT_JOB_RUN_VERSION),
 	run_id: RunIdSchema,
 	job_id: JobIdSchema,
@@ -1494,7 +1481,6 @@ export function toPublicJobDefinition(job: JobDefinition): PublicJobDefinition {
 export type PublicJobRun = Pick<
 	JobRun,
 	| 'tags'
-	| 'metadata'
 	| 'run_id'
 	| 'job_id'
 	| 'notebook_id'
@@ -1525,7 +1511,6 @@ export type PublicJobRun = Pick<
 export function toPublicJobRun(run: JobRun): PublicJobRun {
 	return {
 		tags: run.tags,
-		metadata: run.metadata,
 		run_id: run.run_id,
 		job_id: run.job_id,
 		notebook_id: run.notebook_id,

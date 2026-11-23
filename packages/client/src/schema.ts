@@ -2063,23 +2063,6 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/history-backfill': {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		get?: never;
-		put?: never;
-		/** Repair one bounded page of the project run index */
-		post: operations['jobs.history.backfill'];
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
 	'/api/v1/projects/{pid}/integrations/reconcile/plan': {
 		parameters: {
 			query?: never;
@@ -5024,9 +5007,6 @@ export interface components {
 		JobRun: {
 			tags?: {
 				[key: string]: string;
-			};
-			metadata?: {
-				[key: string]: string | number | boolean;
 			};
 			run_id: string;
 			job_id: string;
@@ -21001,113 +20981,6 @@ export interface operations {
 						/** @enum {boolean} */
 						success: true;
 						data: components['schemas']['ProjectRunPage'];
-					};
-				};
-			};
-			/** @description Bad request */
-			400: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Authentication required */
-			401: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Access forbidden */
-			403: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Not found */
-			404: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Request body too large */
-			413: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Validation error */
-			422: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Internal server error */
-			500: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Service unavailable */
-			503: {
-				headers: {
-					/** @description Seconds to wait before retrying. */
-					'Retry-After': string;
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-		};
-	};
-	'jobs.history.backfill': {
-		parameters: {
-			query?: {
-				limit?: number;
-				cursor?: string;
-			};
-			header?: never;
-			path: {
-				pid: string;
-				nid: string;
-				jid: string;
-			};
-			cookie?: never;
-		};
-		requestBody?: never;
-		responses: {
-			/** @description Backfill progress */
-			200: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': {
-						/** @enum {boolean} */
-						success: true;
-						data: {
-							next_cursor: string | null;
-						};
 					};
 				};
 			};

@@ -11,7 +11,7 @@ import {
 } from '@marimo-hub/core';
 import { requireJobs } from '../jobs/operations';
 import { JobRunResponseSchema } from '../jobs/schemas';
-import { JobIdParam, loadAuthorizedJob } from './jobs';
+import { loadAuthorizedJob } from './jobs';
 import {
 	DEFAULT_PAGE_SIZE,
 	PaginationQuery,
@@ -111,45 +111,4 @@ app.openapi(
 	},
 );
 
-app.openapi(
-	createRoute({
-		method: 'post',
-		path: '/projects/{pid}/notebooks/{nid}/jobs/{jid}/history-backfill',
-		operationId: 'jobs.history.backfill',
-		tags: ['Jobs'],
-		summary: 'Repair one bounded page of the project run index',
-		request: { params: JobIdParam, query: PaginationQuery },
-		responses: {
-			200: jsonContent(
-				z.object({
-					success: z.literal(true),
-					data: z.object({ next_cursor: z.string().nullable() }),
-				}),
-				'Backfill progress',
-			),
-			...commonErrors(),
-			...errorResponses(400, 403, 404),
-		},
-	}),
-	async (c) => {
-		const { pid, nid, jid } = c.req.valid('param');
-		const { job } = await loadAuthorizedJob(c, pid, nid, jid, 'notebook.write');
-		const query = c.req.valid('query');
-		const scope = `${pid}/${nid}/${jid}`;
-		const page = await c
-			.get('deps')
-			.services.jobRuns.backfillProjectRuns(
-				job,
-				query.limit ?? DEFAULT_PAGE_SIZE,
-				afterRun(query.cursor, scope),
-			);
-		return c.json(
-			{
-				success: true as const,
-				data: { next_cursor: page.nextRunId ? encodeCursor(scope, page.nextRunId) : null },
-			},
-			200,
-		);
-	},
-);
 export default app;

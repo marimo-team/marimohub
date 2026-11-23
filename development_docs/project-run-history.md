@@ -18,7 +18,6 @@ All paths start with `/api/v1/projects/{pid}`.
 - Trigger: `POST /notebooks/{nid}/jobs/{jid}/runs` with optional `tags`.
 - List: `GET /runs?tag_key=app&tag_value=calibration-runner`.
 - Diagnose missing tags: inspect the trigger response, then use authorized `GET /runs` without a filter.
-- Repair: `POST /notebooks/{nid}/jobs/{jid}/history-backfill?limit=100`.
 
 The list accepts one exact, case-sensitive key/value predicate. Supply both filter fields or neither.
 Tags have at most 32 entries. Keys start with an ASCII letter and contain up to 64 letters, digits, dots, underscores, or hyphens.
@@ -26,9 +25,8 @@ Values contain at most 256 characters. Serialized tags must fit in 8,192 UTF-8 b
 Tags cannot change after submission. Automatic retries inherit the accepted tags.
 Scheduled runs without submitted tags remain untagged.
 
-Responses use the existing run shape, including source attribution, status, timestamps, triggerer, tags, and metadata when present.
-Metadata is a separate bounded flat map of strings, numbers, and booleans. It is never used by this filter.
-The metadata update API and run-scoped credentials belong to MO-8718; this change adds no metadata mutation endpoint.
+Responses use the existing run shape, including source attribution, status, timestamps, triggerer, and tags.
+Run metadata and run-scoped credentials belong to MO-8718; this API does not define their contract.
 Reports, files, and metrics remain external. A reference does not grant access to an external service.
 Existing job-scoped history and run lookups remain available.
 
@@ -48,13 +46,16 @@ Source-deletion survival and retention policy changes belong to MO-8720; additio
 ## Index and repair
 
 `JobRunService` owns immutable locators at `projects/{pid}/run-index/{reverse_ulid}.json`.
-Locators contain notebook, job, and run IDs. Run records remain authoritative for tags, metadata, and status.
+Locators contain notebook, job, and run IDs. Run records remain authoritative for tags and status.
 One listing reads at most one index page and two objects per scanned entry, plus bounded live authorization reads.
 No request scans every notebook history. Missing records are skipped without losing the continuation.
 
 Enqueue writes the recovery marker and canonical run before publishing the project locator.
 Publication is create-if-absent, so concurrent retries converge on one entry and preserve accepted tags.
+If indexing fails after acceptance, the trigger still returns the accepted run. History can lag until marker repair succeeds.
 Finalization repairs the locator before removing the marker. A failed repair retains the marker for retry.
-Backfill requires editor access and scans one bounded job-index page per request. Follow its cursor and repeat pages safely after failures.
+The `project-run-index-v1` background migration scans at most 500 project objects per batch and indexes canonical run records.
+MigrationService checkpoints progress and retries failed batches; JobRunService owns the index writes. Builders do not call a repair endpoint.
+Operators can inspect migration progress through the existing migration tooling.
 Backfill never infers tags or rewrites runs; untagged history stays available in unfiltered and job-scoped reads.
 Finite retention removes the project locator alongside the run. A delayed locator or a locator left by source deletion cannot expose a missing run.

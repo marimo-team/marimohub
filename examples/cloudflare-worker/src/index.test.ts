@@ -792,6 +792,10 @@ describe('scheduled migrations', () => {
 		await worker.scheduled({} as ScheduledController, env, makeContext());
 		expect((await services.catalog.getCurrentSnapshot()).projects[0].access?.version).toBe(1);
 		await worker.scheduled({} as ScheduledController, env, makeContext());
+		await worker.scheduled({} as ScheduledController, env, makeContext());
+		expect(await (await bucket.get(paths.migration('project-run-index-v1')))!.json()).toMatchObject(
+			{ status: 'complete' },
+		);
 		get.mockClear();
 		await worker.scheduled({} as ScheduledController, env, makeContext());
 		expect(get.mock.calls.some(([key]) => key.startsWith('_system/migrations/'))).toBe(false);
