@@ -18,13 +18,34 @@ import {
 	serviceInstanceIdDetector,
 } from '@opentelemetry/resources';
 import { BatchLogRecordProcessor, LoggerProvider } from '@opentelemetry/sdk-logs';
-import type { IMetricReader } from '@opentelemetry/sdk-metrics';
-import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+import type { IMetricReader, ViewOptions } from '@opentelemetry/sdk-metrics';
+import {
+	AggregationType,
+	MeterProvider,
+	PeriodicExportingMetricReader,
+} from '@opentelemetry/sdk-metrics';
 import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { BackgroundSpanProcessor } from './backgroundSpanProcessor';
 import { LoopSampler } from './loopSampler';
 import { logEvent } from './log';
+
+/**
+ * @hono/otel advises buckets that stop at 10 s. Opening a session can wait for a
+ * sandbox pod to start, so the upper buckets keep those requests out of +Inf.
+ */
+export const httpDurationView: ViewOptions = {
+	instrumentName: 'http.server.request.duration',
+	aggregation: {
+		type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+		options: {
+			boundaries: [
+				0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10, 30, 60, 120, 180,
+				300,
+			],
+		},
+	},
+};
 
 export interface OtelHandle {
 	/** True when the request middleware should create SERVER spans. */
@@ -139,7 +160,11 @@ export function startOtel(version: string): OtelHandle | null {
 					// (default: all interfaces, :9464).
 					new PrometheusExporter()
 				: otlpMetricReader();
-		const meterProvider = new MeterProvider({ resource, readers: [reader] });
+		const meterProvider = new MeterProvider({
+			resource,
+			readers: [reader],
+			views: [httpDurationView],
+		});
 		// Lights up the RED metrics the @hono/otel middleware records.
 		metricsApi.setGlobalMeterProvider(meterProvider);
 		shutdowns.push(() => meterProvider.shutdown());

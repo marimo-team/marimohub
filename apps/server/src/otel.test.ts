@@ -14,6 +14,7 @@ import {
 	MeterProvider,
 	PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics';
+import type { Histogram } from '@opentelemetry/sdk-metrics';
 import {
 	BasicTracerProvider,
 	InMemorySpanExporter,
@@ -23,7 +24,14 @@ import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildVersion, isLogsEnabled, isTracingEnabled, metricsExporter, startOtel } from './otel';
+import {
+	buildVersion,
+	httpDurationView,
+	isLogsEnabled,
+	isTracingEnabled,
+	metricsExporter,
+	startOtel,
+} from './otel';
 
 describe('isTracingEnabled', () => {
 	it('is off without an OTLP endpoint', () => {
@@ -441,6 +449,33 @@ describe('instrumentation middleware', () => {
 		const point = duration?.dataPoints[0];
 		expect(point?.attributes['http.route']).toBe('/api/health');
 		expect(point?.attributes['http.response.status_code']).toBe(200);
+		await meterProvider.shutdown();
+	});
+
+	it('buckets request durations past the 10 s middleware default', async () => {
+		const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+		const meterProvider = new MeterProvider({
+			readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+			views: [httpDurationView],
+		});
+		const now = vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValueOnce(90_000);
+		const app = new Hono();
+		app.use('*', httpInstrumentationMiddleware({ meterProvider, disableTracing: true }));
+		app.post('/sessions', (c) => c.json({ ok: true }));
+
+		await app.request('/sessions', { method: 'POST' });
+		now.mockRestore();
+
+		await meterProvider.forceFlush();
+		const duration = exporter
+			.getMetrics()
+			.flatMap((rm) => rm.scopeMetrics)
+			.flatMap((sm) => sm.metrics)
+			.find((m) => m.descriptor.name === 'http.server.request.duration');
+		const value = duration?.dataPoints[0]?.value as Histogram;
+		const bucket = value.buckets.counts.findIndex((n) => n > 0);
+		expect(value.buckets.boundaries[bucket - 1]).toBe(60);
+		expect(value.buckets.boundaries[bucket]).toBe(120);
 		await meterProvider.shutdown();
 	});
 });
