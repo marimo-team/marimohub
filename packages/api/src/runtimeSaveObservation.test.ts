@@ -106,6 +106,54 @@ it('persists intent before admission without waiting for artifact capture', asyn
 	expect(env.capture).toHaveBeenCalledOnce();
 });
 
+it.each([
+	'/api/marimo/v1/notebooks/nb-test/save',
+	'/base/api/marimo/v1/notebooks/folder%2Fnotebook/save?view=edit',
+])('observes acknowledged host notebook saves at %s', async (path) => {
+	const env = fixture();
+	await env.save({ targetUrl: `http://runtime${path}` });
+	expect(env.acknowledge).toHaveBeenCalledOnce();
+	expect(env.response.bodyUsed).toBe(false);
+	await env.background.runAll();
+	expect(env.capture).toHaveBeenCalledOnce();
+});
+
+it.each([
+	'/api/marimo/v1/notebooks//save',
+	'/api/marimo/v1/notebooks/nb-test/edits',
+	'/api/marimo/v1/notebooks/nb-test/runtime/runs',
+	'/api/marimo/v1/notebooks/nb-test/save/extra',
+	'/api/marimo/v2/notebooks/nb-test/save',
+	'/api/notebooks/nb-test/save',
+	'/other?next=/api/marimo/v1/notebooks/nb-test/save',
+])('does not treat unrelated host requests as saves: %s', async (path) => {
+	const env = fixture();
+	await env.save({ targetUrl: `http://runtime${path}` });
+	expect(env.acknowledge).not.toHaveBeenCalled();
+	expect(env.background.pending()).toBe(0);
+});
+
+it.each([
+	['GET', 200],
+	['PUT', 200],
+	['POST', 409],
+	['POST', 412],
+	['POST', 503],
+])('ignores host saves without successful POST acknowledgement (%s %s)', async (method, status) => {
+	const env = fixture();
+	await observeRuntimeSave(
+		env.deps,
+		new Request(env.request.url, { method }),
+		new Response(null, { status }),
+		{
+			...env.decision,
+			targetUrl: 'http://runtime/api/marimo/v1/notebooks/nb-test/save',
+		},
+	);
+	expect(env.acknowledge).not.toHaveBeenCalled();
+	expect(env.background.pending()).toBe(0);
+});
+
 it('records every generation while coalescing capture work', async () => {
 	const env = fixture();
 	await Promise.all(Array.from({ length: 30 }, () => env.save()));

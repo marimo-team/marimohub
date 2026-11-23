@@ -536,18 +536,22 @@ const SAVE_CAPTURE_RETRY_MS = 100;
 
 const pendingSaveCaptures = deploymentState(() => new Map<string, { again: boolean }>());
 
+/** Native editor saves, including runtimes mounted under a base URL. */
+export function isRuntimeSaveRequest(request: Request, targetUrl: string): boolean {
+	if (request.method !== 'POST') return false;
+	const path = new URL(targetUrl).pathname;
+	return (
+		path.endsWith('/api/kernel/save') || /\/api\/marimo\/v1\/notebooks\/[^/]+\/save$/.test(path)
+	);
+}
+
 export async function observeRuntimeSave(
 	deps: ApiDeps,
 	request: Request,
 	response: Response,
 	decision: Extract<ProxyDecision, { kind: 'forward' }>,
 ): Promise<void> {
-	if (
-		request.method !== 'POST' ||
-		!response.ok ||
-		!decision.projectId ||
-		!new URL(decision.targetUrl).pathname.endsWith('/api/kernel/save')
-	)
+	if (!response.ok || !decision.projectId || !isRuntimeSaveRequest(request, decision.targetUrl))
 		return;
 	const metric = (name: string) => {
 		try {
