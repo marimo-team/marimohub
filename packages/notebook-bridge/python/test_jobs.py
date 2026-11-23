@@ -47,6 +47,65 @@ class JobsTest(unittest.TestCase):
             "refresh", "trigger", "refresh", "list_active_runs", "refresh", "get_run",
         ])
 
+    def test_history_returns_one_empty_page_and_preserves_cursor(self):
+        client = visitor("alice")
+        page = {"items": [], "next_cursor": "continue"}
+        with patch.object(client, "_send", side_effect=[
+            {"credential": "renewed"}, page,
+            {"credential": "renewed-again"}, {"items": [{"run_id": "run"}], "next_cursor": None},
+        ]) as send:
+            self.assertEqual(client.list_project_runs(tag_key="app", tag_value="demo",
+                status="active", triggered_by_me=True, limit=1), page)
+            self.assertEqual(send.call_count, 2)
+            self.assertEqual(send.call_args.args, ("list_project_runs", {
+                "tag_key": "app", "tag_value": "demo", "status": "active",
+                "triggered_by_me": True, "limit": 1,
+            }))
+            result = client.list_project_runs(tag_key="app", tag_value="demo",
+                status="active", triggered_by_me=True, limit=1, cursor=page["next_cursor"])
+            self.assertIsNone(result["next_cursor"])
+            self.assertEqual(send.call_args.args, ("list_project_runs", {
+                "tag_key": "app", "tag_value": "demo", "status": "active",
+                "triggered_by_me": True, "limit": 1, "cursor": "continue",
+            }))
+
+    def test_project_runs_explicit_user_filter(self):
+        client = visitor("alice")
+        with patch.object(client, "_call", return_value={"items": [], "next_cursor": None}) as call:
+            client.list_project_runs(triggered_by="bob", limit=5)
+            call.assert_called_once_with("list_project_runs", {"triggered_by": "bob", "limit": 5})
+
+    def test_history_refresh_failure_never_reads_history(self):
+        for status in [401, 403, 503]:
+            with self.subTest(status=status):
+                client = visitor("expired")
+                error = HTTPError("https://hub.test", status, "failure", {}, None)
+                with patch.object(client, "_send", side_effect=error) as send:
+                    with self.assertRaises(HTTPError) as raised:
+                        client.list_project_runs(cursor="continue")
+                    self.assertIs(raised.exception, error)
+                    send.assert_called_once_with("refresh", {})
+
+    def test_history_failure_does_not_retry_or_advance_the_cursor(self):
+        for error in [
+            HTTPError("https://hub.test", 400, "invalid cursor", {}, None),
+            HTTPError("https://hub.test", 403, "revoked", {}, None),
+            HTTPError("https://hub.test", 503, "unavailable", {}, None),
+            TimeoutError("response lost"),
+        ]:
+            with self.subTest(error=error):
+                client = visitor("original")
+                with patch.object(client, "_send", side_effect=[
+                    {"credential": "renewed"}, error,
+                ]) as send:
+                    with self.assertRaises(type(error)) as raised:
+                        client.list_project_runs(cursor="continue", limit=1)
+                    self.assertIs(raised.exception, error)
+                    self.assertEqual(send.call_count, 2)
+                    self.assertEqual(send.call_args.args, (
+                        "list_project_runs", {"cursor": "continue", "limit": 1},
+                    ))
+
     def test_refresh_failure_never_submits_a_run(self):
         client = visitor("expired")
         for status in [401, 403, 503]:
