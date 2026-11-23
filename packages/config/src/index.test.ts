@@ -1914,6 +1914,18 @@ describe('createFromEnv jobs config', () => {
 		});
 	});
 
+	it.each([
+		['1', 1],
+		[' 100 ', 100],
+		['', 20],
+		['   ', 20],
+	])('parses the queue boundary or fallback %j as %i', (value, expected) => {
+		expect(
+			createFromEnv({ ...baseEnv, MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB: value }).jobs
+				?.maxQueuedRunsPerJob,
+		).toBe(expected);
+	});
+
 	it('rejects a default timeout above the ceiling', () => {
 		expect(() =>
 			createFromEnv({
@@ -1930,6 +1942,9 @@ describe('createFromEnv jobs config', () => {
 		['MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB', '-1'],
 		['MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB', '1.5'],
 		['MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB', 'many'],
+		['MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB', '9007199254740992'],
+		['MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB', 'Infinity'],
+		['MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB', 'NaN'],
 		['MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT', '-1'],
 		['MARIMOHUB_JOBS_RUN_RETENTION_DAYS', '1.5'],
 		['MARIMOHUB_JOBS_TICK_SECONDS', 'soon'],

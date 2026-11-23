@@ -166,7 +166,7 @@ export async function triggerJobRun(
 	body: z.infer<typeof TriggerRunBody> | undefined,
 	request: { requestId?: string; method: string; path: string },
 	signal?: AbortSignal,
-	replay?: { scope: string; key?: string },
+	replay?: { scope: string; key?: string } | ((enqueue: () => Promise<JobRun>) => Promise<JobRun>),
 ) {
 	const { project, notebook, user } = target;
 	return deps.services.jobRuns.withJobMutation(job, async () => {
@@ -214,8 +214,9 @@ export async function triggerJobRun(
 			);
 			return run;
 		};
-		if (!replay?.key) return enqueue();
 		// Keep lookup, enqueue, and recording under the same distributed job claim.
+		if (typeof replay === 'function') return replay(enqueue);
+		if (!replay?.key) return enqueue();
 		let created: JobRun | undefined;
 		const runId = await idempotentOperation(deps, replay.scope, replay.key, async () => {
 			created = await enqueue();
