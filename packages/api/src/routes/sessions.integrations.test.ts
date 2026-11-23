@@ -387,7 +387,12 @@ describe('Session provisioning with integrations', () => {
 		const { request, calls } = api(makeStore(false));
 		await expectError(await request('POST', `/projects/${pid}/notebooks/${nid}/sessions`), 422);
 		expect(calls.setEnvVars).toHaveLength(0);
-		expect(calls.writeFile).toHaveLength(0);
+		expect(calls.writeFile).toEqual([
+			{
+				path: expect.stringMatching(/^\/tmp\/marimohub-bridge\/[^/]+\/marimo-bridge\.py$/),
+				content: makeTestDeps(bucket).sandbox.notebookBridge!.files[0].content,
+			},
+		]);
 		expect(calls.startProcess).toHaveLength(0);
 	});
 
@@ -406,7 +411,12 @@ describe('Session provisioning with integrations', () => {
 		const { request, calls } = api(makeStore(false));
 		await expectError(await request('POST', `/projects/${pid}/notebooks/${nid}/sessions`), 422);
 		expect(calls.setEnvVars).toHaveLength(0);
-		expect(calls.writeFile).toHaveLength(0);
+		expect(calls.writeFile).toEqual([
+			{
+				path: expect.stringMatching(/^\/tmp\/marimohub-bridge\/[^/]+\/marimo-bridge\.py$/),
+				content: makeTestDeps(bucket).sandbox.notebookBridge!.files[0].content,
+			},
+		]);
 		expect(calls.startProcess).toHaveLength(0);
 
 		// The per-project escape hatch: a disabled same-name project instance

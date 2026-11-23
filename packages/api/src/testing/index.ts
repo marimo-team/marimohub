@@ -26,6 +26,19 @@ export function makeTestDeps(
 	bucket: MemoryBucket,
 	overrides: Partial<ApiDeps> = {},
 ): ResolvedApiDeps {
+	const sandbox: ApiDeps['sandbox'] = {
+		notebookBridge: {
+			launcher: 'marimo-bridge.py',
+			files: [
+				{ name: 'marimo-bridge.py', content: '# Fake compute does not execute the launcher.' },
+			],
+		},
+		bucket: { name: 'test', endpoint: '' },
+		hostname: 'localhost',
+		workdir: '/workspace',
+		persistWorkspace: 'source',
+		...overrides.sandbox,
+	};
 	return resolveApiDeps({
 		services: createServices(bucket, undefined, { sourceControl: overrides.sourceControl }),
 		bucket,
@@ -33,16 +46,11 @@ export function makeTestDeps(
 		authenticator: { authenticate: async () => null },
 		// Alive by default so reused sessions resume; override per test for the dead path.
 		kernelProbe: async () => 'alive',
-		sandbox: {
-			bucket: { name: 'test', endpoint: '' },
-			hostname: 'localhost',
-			workdir: '/workspace',
-			persistWorkspace: 'source',
-		},
 		policy: {},
 		// On in tests; pass `jobs: undefined` for the off-deployment paths.
 		jobs: { ...DEFAULT_JOBS_CONFIG },
 		...overrides,
+		sandbox,
 	});
 }
 

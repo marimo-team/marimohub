@@ -4,6 +4,15 @@ import { makeTestDeps } from './index';
 import { MemoryBucket } from '@marimo-hub/core/testing';
 
 describe('makeTestDeps', () => {
+	it('supplies the fake capture bridge while respecting explicit absence for failure tests', () => {
+		const bucket = new MemoryBucket();
+		const defaults = makeTestDeps(bucket);
+		expect(defaults.sandbox.notebookBridge?.files).toHaveLength(1);
+		const withoutBridge = makeTestDeps(bucket, {
+			sandbox: { ...defaults.sandbox, notebookBridge: undefined },
+		});
+		expect(withoutBridge.sandbox.notebookBridge).toBeUndefined();
+	});
 	it('clones the default jobs config for each dependency bundle', () => {
 		const first = makeTestDeps(new MemoryBucket());
 		const second = makeTestDeps(new MemoryBucket());

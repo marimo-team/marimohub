@@ -5653,7 +5653,7 @@ describe('Session routes', () => {
 
 			const data = await expectOk<ApiSession>(await req('POST', sessionsPath()));
 			expect(data.status).toBe('running');
-			expect(calls.setEnvVars).toHaveLength(1);
+			expect(calls.setEnvVars.filter((vars) => 'AWS_ACCESS_KEY_ID' in vars)).toHaveLength(1);
 			expect(calls.setEnvVars[0]).toMatchObject({
 				AWS_ACCESS_KEY_ID: 'CWAK',
 				AWS_SECRET_ACCESS_KEY: 'sk',
