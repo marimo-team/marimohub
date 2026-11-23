@@ -202,6 +202,8 @@ Writes containing overlays stay sequential. If the budget is full, reads run seq
 Packed archives and mounts do not use batch prefetch.
 Failed restores drain pending reads and writes. Cold cleanup cancels prefetch before sandbox destruction.
 
+For launches that require runtime capture, bridge upload and environment configuration failures abort provisioning before kernel launch. Fresh compute is reclaimed; supplied compute follows the caller's cleanup policy. Optional UI bridge failures still allow the ordinary launch. Jobs and `uv-sandbox` retain their separate launch paths.
+
 Successful proxied kernel saves queue captures without delaying the response.
 Each process coalesces hints for up to 64 sessions and permits four capture attempts per burst.
 Each follow-up uses a separate queue task. Retryable failures use exponential backoff from 100 ms.

@@ -478,6 +478,20 @@ function provisionFailure(step: string, err: unknown): UnavailableError {
 	return new UnavailableError(parts.join(' '), { cause: err });
 }
 
+function notebookBridgeFailure(options: ProvisionOptions, error: unknown): void {
+	// Capture is required for safe publication and stop; the UI extension is optional.
+	if (options.runtimeCapture) throw provisionFailure('preparing runtime capture', error);
+	logEvent(
+		{
+			level: 'warn',
+			event: 'notebook_bridge_unavailable',
+			reason: 'prepare_failed',
+			sandbox_id: options.sandboxId,
+		},
+		{ channel: 'warn' },
+	);
+}
+
 function supervisedLaunchFailure(result: SandboxLaunchFailure, timeoutMs: number): Error {
 	if (result.reason === 'setup_timeout') return pythonEnvironmentSetupTimeout(timeoutMs);
 	if (result.reason === 'setup_exit') {
@@ -1012,17 +1026,9 @@ export class SandboxProvisioner {
 					await sandbox.writeFiles([...batch, ...bridgeFiles]);
 				} catch (error) {
 					if (bridgeFiles.length === 0) throw error;
+					notebookBridgeFailure(options, error);
 					if (batch.length > 0) await writeFiles(batch);
 					bridgeUnavailable = true;
-					logEvent(
-						{
-							level: 'warn',
-							event: 'notebook_bridge_unavailable',
-							reason: 'prepare_failed',
-							sandbox_id: options.sandboxId,
-						},
-						{ channel: 'warn' },
-					);
 				}
 			})();
 			const started = Date.now();
@@ -1224,14 +1230,14 @@ export class SandboxProvisioner {
 		launchStrategy: MarimoLaunchStrategyName,
 		writeFiles = sandbox.writeFiles.bind(sandbox),
 	): Promise<string | undefined> {
+		if (options.launchMode === 'job' || launchStrategy === 'uv-sandbox') return;
+		if (!options.bridgeParentOrigin && !options.runtimeCapture) return;
 		const payload = options.notebookBridge;
-		if (
-			!payload ||
-			(!options.bridgeParentOrigin && !options.runtimeCapture) ||
-			options.launchMode === 'job' ||
-			launchStrategy === 'uv-sandbox'
-		)
+		if (!payload) {
+			if (options.runtimeCapture)
+				notebookBridgeFailure(options, new Error('Capture bridge payload is required'));
 			return;
+		}
 		const { directory } = notebookBridgePaths(options.sandboxId, payload.launcher);
 		try {
 			await withSandboxSpan(sw, 'bridge_prepare', (time) =>
@@ -1247,20 +1253,15 @@ export class SandboxProvisioner {
 					),
 				),
 			);
-			return resolveBridgeLauncher(sandbox, {
+			const launcher = resolveBridgeLauncher(sandbox, {
 				sandboxId: options.sandboxId,
 				launcher: payload.launcher,
 			});
-		} catch {
-			logEvent(
-				{
-					level: 'warn',
-					event: 'notebook_bridge_unavailable',
-					reason: 'prepare_failed',
-					sandbox_id: options.sandboxId,
-				},
-				{ channel: 'warn' },
-			);
+			if (options.runtimeCapture && !launcher)
+				throw new Error('Capture bridge launcher is required');
+			return launcher;
+		} catch (error) {
+			notebookBridgeFailure(options, error);
 			return;
 		}
 	}
@@ -1274,7 +1275,7 @@ export class SandboxProvisioner {
 		if (!options.bridgeParentOrigin && !options.runtimeCapture) return;
 		try {
 			const budget = startup.deadline.timeoutMs === 0 ? 10_000 : remainingStartupMs(startup);
-			if (budget <= 0) return;
+			if (budget <= 0) throw new Error('Bridge configuration deadline exceeded');
 			await withDeadline(
 				sandbox.setEnvVars({
 					...(options.bridgeParentOrigin
@@ -1303,20 +1304,15 @@ export class SandboxProvisioner {
 					timeoutError: () => new Error('Bridge configuration timed out'),
 				},
 			);
-			startup.plan.start = startup.plan.start.replace(
+			const start = startup.plan.start.replace(
 				/(?:python -m )?marimo --quiet /,
 				`python ${shellQuote(launcher)} --quiet `,
 			);
-		} catch {
-			logEvent(
-				{
-					level: 'warn',
-					event: 'notebook_bridge_unavailable',
-					reason: 'prepare_failed',
-					sandbox_id: options.sandboxId,
-				},
-				{ channel: 'warn' },
-			);
+			if (options.runtimeCapture && start === startup.plan.start)
+				throw new Error('Capture launcher could not be configured');
+			startup.plan.start = start;
+		} catch (error) {
+			notebookBridgeFailure(options, error);
 		}
 	}
 

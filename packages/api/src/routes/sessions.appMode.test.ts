@@ -285,7 +285,7 @@ describe('Session routes (app mode)', () => {
 		await expectOk<any>(await api.request('POST', sessionsPath(), { mode: 'app' }));
 
 		expect(fake.calls.mountBucket).toHaveLength(0);
-		expect(fake.calls.startProcess[0].cmd).toContain('marimo --quiet run');
+		expect(fake.calls.startProcess[0].cmd).toContain(' --quiet run ');
 		expect(fake.calls.startProcess[0].cmd).not.toContain('--convert');
 	});
 

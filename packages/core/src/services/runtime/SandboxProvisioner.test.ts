@@ -39,6 +39,7 @@ import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import type { BucketConfig, ProvisionOptions, WorkspaceLoadStrategies } from './SandboxProvisioner';
 import { EMPTY_PYPROJECT } from './marimoLaunch';
+import * as marimoLaunch from './marimoLaunch';
 import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { sandboxContextPath } from './sandboxContext';
 import { captureWorkspace } from './sandboxFiles';
@@ -1435,6 +1436,129 @@ describe('SandboxProvisioner', () => {
 				);
 			},
 		);
+		it.each(['upload', 'configuration', 'payload', 'launcher'] as const)(
+			'refuses capture-enabled launch after %s failure and reclaims fresh compute',
+			async (failure) => {
+				const { instance, calls } = makeFakeSandbox();
+				const error = new Error('private-provider-detail');
+				if (failure === 'launcher') instance.resolveProcessPath = () => '';
+				if (failure === 'upload') vi.spyOn(instance, 'writeFiles').mockRejectedValue(error);
+				if (failure === 'configuration') {
+					const original = instance.setEnvVars.bind(instance);
+					vi.spyOn(instance, 'setEnvVars').mockImplementation((vars) =>
+						vars.MARIMOHUB_LIFECYCLE_DIR ? Promise.reject(error) : original(vars),
+					);
+				}
+				const destroyed = vi.fn();
+				const result = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					...options,
+					runtimeCapture: true,
+					notebookBridge: failure === 'payload' ? undefined : payload,
+					onSandboxDestroyed: destroyed,
+				});
+				await expect(result).rejects.toBeInstanceOf(UnavailableError);
+				await expect(result).rejects.not.toThrow('private-provider-detail');
+				if (failure === 'upload' || failure === 'configuration')
+					await expect(result).rejects.toMatchObject({ cause: error });
+				expect(calls.startProcess).toHaveLength(0);
+				expect(calls.destroy).toBe(1);
+				expect(destroyed).toHaveBeenCalledOnce();
+			},
+		);
+		it('rejects capture configuration after the startup budget expires', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			let now = Date.now();
+			const clock = vi.spyOn(Date, 'now').mockImplementation(() => ++now);
+			try {
+				await expect(
+					new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+						...options,
+						runtimeCapture: true,
+						startupTimeoutMs: Millis.of(1),
+					}),
+				).rejects.toMatchObject({ cause: { message: 'Bridge configuration deadline exceeded' } });
+				expect(calls.startProcess).toHaveLength(0);
+				expect(calls.destroy).toBe(1);
+			} finally {
+				clock.mockRestore();
+			}
+		});
+		it('rejects capture when the launch command cannot install the bridge', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const build = marimoLaunch.buildMarimoLaunch;
+			const plan = vi
+				.spyOn(marimoLaunch, 'buildMarimoLaunch')
+				.mockImplementation((...args) => ({ ...build(...args), start: 'python custom.py' }));
+			try {
+				await expect(
+					new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+						...options,
+						runtimeCapture: true,
+					}),
+				).rejects.toBeInstanceOf(UnavailableError);
+				expect(calls.startProcess).toHaveLength(0);
+				expect(calls.destroy).toBe(1);
+			} finally {
+				plan.mockRestore();
+			}
+		});
+		it.each([false, true])(
+			'preserves supplied sandbox cleanup ownership (destroyOnFailure=%s)',
+			async (destroyOnFailure) => {
+				const { instance, calls } = makeFakeSandbox();
+				vi.spyOn(instance, 'writeFiles').mockRejectedValue(new Error('write failed'));
+				await expect(
+					new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+						...options,
+						runtimeCapture: true,
+						existingSandbox: instance,
+						destroyOnFailure,
+					}),
+				).rejects.toBeInstanceOf(UnavailableError);
+				expect(calls.destroy).toBe(destroyOnFailure ? 1 : 0);
+				expect(calls.startProcess).toHaveLength(0);
+			},
+		);
+		it.each(['upload', 'configuration'] as const)(
+			'rejects stalled capture %s and ignores late completion',
+			async (failure) => {
+				vi.useFakeTimers();
+				try {
+					const { instance, calls } = makeFakeSandbox();
+					const pending = deferred<void>();
+					const entered = vi.fn();
+					if (failure === 'upload')
+						vi.spyOn(instance, 'writeFiles').mockImplementation(() => {
+							entered();
+							return pending.promise;
+						});
+					else {
+						const original = instance.setEnvVars.bind(instance);
+						vi.spyOn(instance, 'setEnvVars').mockImplementation((vars) => {
+							if (vars.MARIMOHUB_LIFECYCLE_DIR) {
+								entered();
+								return pending.promise;
+							}
+							return original(vars);
+						});
+					}
+					const result = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+						...options,
+						runtimeCapture: true,
+					});
+					const rejected = expect(result).rejects.toBeInstanceOf(UnavailableError);
+					await vi.waitFor(() => expect(entered).toHaveBeenCalled());
+					await vi.advanceTimersByTimeAsync(10_001);
+					await rejected;
+					pending.resolve();
+					await vi.advanceTimersByTimeAsync(1000);
+					expect(calls.startProcess).toHaveLength(0);
+					expect(calls.destroy).toBe(1);
+				} finally {
+					vi.useRealTimers();
+				}
+			},
+		);
 		it('keeps the original launch when optional bridge preparation fails', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			vi.spyOn(instance, 'writeFiles').mockRejectedValue(new Error('write unavailable'));
@@ -1459,6 +1583,7 @@ describe('SandboxProvisioner', () => {
 			const prepared = await new SandboxProvisioner(fakeComputeFrom(instance)).prepare({
 				...options,
 				launchMode: 'job',
+				runtimeCapture: true,
 			});
 			expect(prepared.launch.start).toContain('uv run --no-sync marimo export html ');
 			expect(prepared.launch.start).not.toContain('marimo-bridge.py');
@@ -5194,39 +5319,53 @@ describe('combined sandbox preparation', () => {
 	});
 });
 
-it('keeps a combined provision usable when the optional bridge upload fails', async () => {
-	const { instance, calls } = makeFakeSandbox();
-	Object.assign(instance, { supportsLaunchSetupOutput: true });
-	instance.ready = async () => {};
-	const writeFiles = instance.writeFiles.bind(instance);
-	instance.writeFiles = async (files) => {
-		if (files.some(({ path }) => path.includes('/marimohub-bridge/')))
-			throw new Error('optional write failed');
-		await writeFiles(files);
-	};
-	instance.launchProcess = async (command, options) => ({
-		success: true,
-		process: await instance.startProcess(command, options),
-		setupOutput: { stdout: '', stderr: '' },
-		timings: { setup: 0, start: 0, waitport: 0 },
-	});
-	await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
-		sandboxId: createSandboxId(),
-		projectId: createProjectId(),
-		notebookId: createNotebookId(),
-		hostname: 'localhost',
-		bucket: bucketConfig,
-		kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
-		notebookBridge: { launcher: 'bridge.py', files: [{ name: 'bridge.py', content: 'optional' }] },
-		bridgeParentOrigin: 'https://hub.test',
-	});
-	expect(calls.startProcess[0].cmd).toContain('marimo --quiet edit');
-	expect(calls.startProcess[0].cmd).not.toContain('bridge.py');
-	expect(calls.writeFiles.flat()).toContainEqual({
-		path: KERNEL_AUTH_TOKEN_FILE,
-		content: TEST_KERNEL_AUTH_TOKEN,
-	});
-});
+it.each([false, true])(
+	'handles combined bridge upload failure with capture required: %s',
+	async (runtimeCapture) => {
+		const { instance, calls } = makeFakeSandbox();
+		Object.assign(instance, { supportsLaunchSetupOutput: true });
+		instance.ready = async () => {};
+		const writeFiles = instance.writeFiles.bind(instance);
+		instance.writeFiles = async (files) => {
+			if (files.some(({ path }) => path.includes('/marimohub-bridge/')))
+				throw new Error('optional write failed');
+			await writeFiles(files);
+		};
+		instance.launchProcess = async (command, options) => ({
+			success: true,
+			process: await instance.startProcess(command, options),
+			setupOutput: { stdout: '', stderr: '' },
+			timings: { setup: 0, start: 0, waitport: 0 },
+		});
+		const result = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+			sandboxId: createSandboxId(),
+			projectId: createProjectId(),
+			notebookId: createNotebookId(),
+			hostname: 'localhost',
+			bucket: bucketConfig,
+			kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
+			notebookBridge: {
+				launcher: 'bridge.py',
+				files: [{ name: 'bridge.py', content: 'optional' }],
+			},
+			bridgeParentOrigin: 'https://hub.test',
+			runtimeCapture,
+		});
+		if (runtimeCapture) {
+			await expect(result).rejects.toBeInstanceOf(UnavailableError);
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
+			return;
+		}
+		await result;
+		expect(calls.startProcess[0].cmd).toContain('marimo --quiet edit');
+		expect(calls.startProcess[0].cmd).not.toContain('bridge.py');
+		expect(calls.writeFiles.flat()).toContainEqual({
+			path: KERNEL_AUTH_TOKEN_FILE,
+			content: TEST_KERNEL_AUTH_TOKEN,
+		});
+	},
+);
 
 describe('combined preparation failure cleanup', () => {
 	it.each(['readiness', 'credentials', 'files', 'exposure'] as const)(
