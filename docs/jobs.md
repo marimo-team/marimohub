@@ -147,35 +147,28 @@ usually has output showing where it stopped. The run's `error` carries a
 sanitized code (`NOTEBOOK_FAILED`, `RUN_TIMED_OUT`, …) — never provider
 messages or secrets. Editors can read the captured logs.
 
-Manual submissions return the stored run status. An accepted `queued` run is
-waiting, not executing. Applications can read its status through the run API,
-or recover active runs after reconnecting. Closing the browser or app session
-does not cancel an accepted run. The scheduler provides no queue position or
-start-time estimate.
+Applications can read run status through the API and recover active runs after
+reconnecting. Closing a browser or app session does not cancel accepted runs.
+`queued` means waiting; no queue position or start-time estimate is available.
 
 ## Queue admission and capacity
 
-`MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB` sets the manual admission limit for
-each job on Node. The default is 20. The value must be a positive integer;
-zero does not mean unlimited. All API replicas must use the same value.
-The capabilities endpoint reports it as `jobs.max_queued_runs_per_job`.
+`MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB` sets each job's manual admission
+threshold on Node: a positive integer, default 20. All API replicas must use
+the same value. Capabilities expose it as `jobs.max_queued_runs_per_job`.
 
-Admission counts queued runs for that job, including scheduled runs and retries.
-The distributed job claim serializes concurrent manual submissions across replicas.
-At capacity, a new manual submission returns HTTP 429 with `RESOURCE_EXHAUSTED`.
-Replaying an accepted request with its original `Idempotency-Key` returns the
-original run, even at capacity.
+Admission counts all queued runs for the job, including schedules and retries.
+Scheduled fires and automatic retries can exceed the threshold. There is no
+project-wide queue limit. Lowering the threshold preserves accepted runs.
 
-This setting does not limit job definitions or create a project-wide queue budget.
-Each job has its own admission limit. Scheduled fires and automatic retries retain
-their existing policies and can increase the queue beyond this manual admission limit.
-Reducing the limit preserves accepted runs and blocks new submissions until space is available.
+Concurrent manual submissions share a distributed job claim. At the threshold,
+new submissions return HTTP 429 with `RESOURCE_EXHAUSTED`. An accepted request's
+`Idempotency-Key` still replays its original run.
 
-Execution uses separate deployment and project caps. Both provisioning and running
-runs consume execution capacity. Accepted excess runs stay queued. The scheduler
-selects eligible runs oldest first and skips projects at their execution cap.
-There is no reserved share or round-robin guarantee between projects.
-The job's `forbid` policy applies to scheduled fires, not manual submissions.
+Separate deployment and project caps bound provisioning and running runs;
+accepted excess stays queued. Dispatch selects eligible runs oldest first and
+skips saturated projects, without reserving a share for each project.
+The `forbid` policy applies only to scheduled fires.
 
 ### Node configuration for 100 runs
 
@@ -188,25 +181,20 @@ MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS=100
 MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT=100
 ```
 
-Enable `MARIMOHUB_RUN_MAINTENANCE=true` on the designated maintenance replica.
-Use durable shared storage across replicas. Keep scheduler dispatch under the
-maintenance lease; do not run independent dispatch loops on multiple replicas.
+Use durable shared storage and enable `MARIMOHUB_RUN_MAINTENANCE=true` on the
+designated maintenance replica. Keep dispatch under the maintenance lease.
 
-Set `timeout_seconds: 14400` on jobs that need four hours.
-The default timeout remains 1800 seconds (30 minutes); 14400 seconds is the
-existing ceiling. The execution timeout starts at dispatch and includes provisioning. Queue waiting does not consume it.
+Set `timeout_seconds: 14400` on jobs that need four hours. The default remains
+1800 seconds (30 minutes); 14400 is the ceiling. Timeouts start at dispatch,
+include provisioning, and exclude queue waiting.
 
-A queue limit of 100 accepts 100 submissions to an empty job before a scheduler tick.
-A project execution cap of 100 allows that project to use the whole deployment cap.
-For multiple projects, choose a lower project cap to leave capacity for other projects.
-The global defaults remain 5 concurrent runs, 2 per project, and 20 queued runs per job.
+This configuration accepts 100 submissions to an empty job before a scheduler
+tick and lets one project use all execution capacity. For multiple projects,
+choose a lower project cap to leave capacity for others. Defaults remain
+5 concurrent runs, 2 per project, and a manual admission threshold of 20 per job.
 
-These values are admission settings, not measured compute capacity.
-No staged compute load test accompanies this configuration.
-Automated tests cover a 100-request burst, overload, idempotent replay, queue drain,
-shared scheduler capacity accounting, and app-session reconnect behavior using test doubles.
-Production scheduler latency, bucket operations, provisioning throughput, and resource
-use remain unmeasured. Size compute quotas, CPU, memory, and storage throughput
+Production capacity is unmeasured: automated tests use test doubles, and no staged
+compute load test was run. Size compute quotas, CPU, memory, and storage throughput
 for the intended notebooks before using this configuration in production.
 
 ## Who can do what

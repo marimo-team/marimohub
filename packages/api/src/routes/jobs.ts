@@ -27,7 +27,6 @@ import {
 import {
 	requireJobs,
 	resolveJobAccess,
-	authorizeJobTrigger,
 	visibleJobRun,
 	getJobCapabilities,
 	loadAuthorizedJob,
@@ -427,7 +426,6 @@ app.openapi(triggerRun, async (c) => {
 	const { target } = await resolveJobAccess('job.trigger', (action) =>
 		loadAuthorizedJob(c.get('deps'), c.get('user'), pid, nid, jid, action),
 	);
-	await authorizeJobTrigger(deps, target, target.job);
 	const body = c.req.valid('json');
 	const data = toPublicJobRun(
 		await triggerJobRun(
