@@ -83,7 +83,7 @@ class LinuxRuntimeTests(unittest.TestCase):
                 target = root / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(content)
-        directory = root / 'lifecycle'
+        directory = root / ('sandbox-' + 'x' * 100) / 'lifecycle' / 'captures' / str(uuid.uuid4())
         log = (root / 'server.log').open('w+')
         self.addCleanup(log.close)
         process = subprocess.Popen([sys.executable, __file__, '--worker', str(source)], cwd=root, env={**os.environ, 'MARIMOHUB_LIFECYCLE_DIR': str(directory), **({'TEST_CRASH_AFTER_READY': '1'} if crash else {}), **({'TEST_PAUSE_SAVE': '1'} if pause_save else {}), **({'TEST_CRASH_AFTER_STOP_RECEIPT': '1'} if crash_stop else {})}, start_new_session=True, stdout=log, stderr=log)

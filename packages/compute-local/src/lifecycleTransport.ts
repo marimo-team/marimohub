@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { open, readFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import path from 'node:path';
 
@@ -24,8 +24,26 @@ export async function requestLifecycle(
 	} catch {
 		return undefined;
 	}
+	// Linux resolves the socket through this directory fd without the long sandbox prefix.
+	const handle = process.platform === 'linux' ? await open(directory, 'r') : undefined;
+	try {
+		return await exchange(
+			handle ? `/proc/self/fd/${handle.fd}/control.sock` : path.join(directory, 'control.sock'),
+			payload,
+			timeoutMs,
+		);
+	} finally {
+		await handle?.close();
+	}
+}
+
+function exchange(
+	address: string,
+	payload: string,
+	timeoutMs: number,
+): Promise<string | undefined> {
 	return new Promise((resolve, reject) => {
-		const socket = createConnection(path.join(directory, 'control.sock'));
+		const socket = createConnection(address);
 		let dispatched = false;
 		let bytes = 0;
 		const chunks: Buffer[] = [];
