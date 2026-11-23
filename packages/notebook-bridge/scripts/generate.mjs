@@ -22,10 +22,9 @@ const launcher = await readFile(`${root}python/launcher.py`, 'utf8');
 const extension = await readFile(`${root}python/extension.py`, 'utf8');
 const lifecycleFiles = Object.fromEntries(
 	await Promise.all(
-		['lifecycle.py', 'lifecycle_supervisor.py', 'lifecycle_client.py'].map(async (name) => [
-			name,
-			await readFile(`${root}python/${name}`, 'utf8'),
-		]),
+		['lifecycle.py', 'lifecycle_supervisor.py', 'lifecycle_client.py', 'lifecycle_socket.py'].map(
+			async (name) => [name, await readFile(`${root}python/${name}`, 'utf8')],
+		),
 	),
 );
 const hash = (value) => createHash('sha256').update(value).digest('hex');
