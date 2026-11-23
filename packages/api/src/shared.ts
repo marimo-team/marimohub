@@ -1767,7 +1767,10 @@ export const CapabilitiesResponseSchema = z
 		jobs: z.object({
 			available: z.boolean(),
 			max_per_notebook: z.number().int().nullable(),
-			max_queued_runs_per_job: z.number().int().positive().nullable(),
+			max_queued_runs_per_job: z.number().int().positive().nullable().openapi({
+				description:
+					'Queued-run threshold for accepting new manual submissions. Scheduled runs and retries may exceed this value.',
+			}),
 			default_timeout_seconds: z.number().int().nullable(),
 			max_timeout_seconds: z.number().int().nullable(),
 			run_retention_days: z.number().nullable(),

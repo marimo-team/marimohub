@@ -2053,6 +2053,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: '2',
 					},
 					{
+						id: 'MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB',
+						name: 'Max queued runs per job',
+						description:
+							'Node only: per-job queued-run limit for manual admission; positive integer. Scheduled runs and retries can exceed it. See [Jobs](./jobs.md#queue-admission-and-capacity).',
+						default: '20',
+					},
+					{
 						id: 'MARIMOHUB_JOBS_MAX_PER_NOTEBOOK',
 						name: 'Max jobs per notebook',
 						description: 'Node only: job definitions per notebook (`0` = unlimited).',

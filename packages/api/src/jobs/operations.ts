@@ -5,7 +5,7 @@ import {
 	ForbiddenError,
 	toPublicJobRun,
 	JobId,
-	MAX_QUEUED_RUNS_PER_JOB,
+	DEFAULT_MAX_QUEUED_RUNS_PER_JOB,
 	Millis,
 	NotFoundError,
 	ResourceExhaustedError,
@@ -159,6 +159,10 @@ export function updateNotebookJob(
 	});
 }
 
+type JobRunReplay =
+	| { scope: string; key?: string }
+	| ((enqueue: () => Promise<JobRun>) => Promise<JobRun>);
+
 export async function triggerJobRun(
 	deps: ApiDeps,
 	target: AuthorizedNotebook,
@@ -166,7 +170,7 @@ export async function triggerJobRun(
 	body: z.infer<typeof TriggerRunBody> | undefined,
 	request: { requestId?: string; method: string; path: string },
 	signal?: AbortSignal,
-	replay?: { scope: string; key?: string },
+	replay?: JobRunReplay,
 ) {
 	const { project, notebook, user } = target;
 	return deps.services.jobRuns.withJobMutation(job, async () => {
@@ -176,15 +180,16 @@ export async function triggerJobRun(
 		const current = await deps.services.jobs.getJob(project.id, notebook.id, job.id);
 		await authorizeJobTrigger(deps, target, current);
 		const enqueue = async () => {
+			const config = requireJobs(deps);
+			const queueLimit = config.maxQueuedRunsPerJob ?? DEFAULT_MAX_QUEUED_RUNS_PER_JOB;
 			const queued = (await deps.services.jobRuns.listActive()).filter(
 				({ marker, run }) => marker.job_id === job.id && run?.status === 'queued',
 			);
-			if (queued.length >= MAX_QUEUED_RUNS_PER_JOB) {
+			if (queued.length >= queueLimit) {
 				throw new ResourceExhaustedError(
-					`Too many queued runs for this job (${MAX_QUEUED_RUNS_PER_JOB}); wait for the queue to drain.`,
+					`Too many queued runs for this job (${queueLimit}); wait for the queue to drain.`,
 				);
 			}
-			const config = requireJobs(deps);
 			const requestedMs =
 				current.timeout_seconds !== undefined
 					? current.timeout_seconds * 1000
@@ -213,8 +218,9 @@ export async function triggerJobRun(
 			);
 			return run;
 		};
-		if (!replay?.key) return enqueue();
 		// Keep lookup, enqueue, and recording under the same distributed job claim.
+		if (typeof replay === 'function') return replay(enqueue);
+		if (!replay?.key) return enqueue();
 		let created: JobRun | undefined;
 		const runId = await idempotentOperation(deps, replay.scope, replay.key, async () => {
 			created = await enqueue();

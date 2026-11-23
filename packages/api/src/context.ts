@@ -1,3 +1,4 @@
+import { DEFAULT_MAX_QUEUED_RUNS_PER_JOB } from '@marimo-hub/core';
 import type { PromiseMemo } from '@marimo-hub/core/cache';
 import type { SearchService, SearchIndexer } from '@marimo-hub/core/search';
 import type { WorkspaceLimits } from '@marimo-hub/core/remote-workspace';
@@ -93,6 +94,8 @@ export interface JobsConfig {
 	maxConcurrentRuns: number;
 	/** Per-project slice of the above. */
 	maxConcurrentRunsPerProject: number;
+	/** Manual admission cap per job; undefined uses DEFAULT_MAX_QUEUED_RUNS_PER_JOB. */
+	maxQueuedRunsPerJob?: number;
 	/** Definition cap per notebook; undefined = unlimited. */
 	maxPerNotebook?: number;
 	/** Run deadline when the job sets none. */
@@ -109,6 +112,7 @@ export const DEFAULT_JOBS_CONFIG: JobsConfig = {
 	tickMs: 60_000 as Millis,
 	maxConcurrentRuns: 5,
 	maxConcurrentRunsPerProject: 2,
+	maxQueuedRunsPerJob: DEFAULT_MAX_QUEUED_RUNS_PER_JOB,
 	maxPerNotebook: 5,
 	defaultTimeoutMs: 1_800_000 as Millis,
 	maxTimeoutMs: 14_400_000 as Millis,

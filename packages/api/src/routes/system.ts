@@ -6,7 +6,7 @@ import {
 	DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
 	isSuperAdmin,
 	MAX_REQUEST_BYTES,
-	MAX_QUEUED_RUNS_PER_JOB,
+	DEFAULT_MAX_QUEUED_RUNS_PER_JOB,
 	MAX_VERSIONS,
 	Millis,
 	PROJECT_ALERT_KINDS,
@@ -156,7 +156,7 @@ app.openapi(capabilitiesRoute, (c) => {
 			? {
 					available: true,
 					max_per_notebook: deps.jobs.maxPerNotebook ?? null,
-					max_queued_runs_per_job: MAX_QUEUED_RUNS_PER_JOB,
+					max_queued_runs_per_job: deps.jobs.maxQueuedRunsPerJob ?? DEFAULT_MAX_QUEUED_RUNS_PER_JOB,
 					default_timeout_seconds: Millis.toSeconds(deps.jobs.defaultTimeoutMs),
 					max_timeout_seconds: Millis.toSeconds(deps.jobs.maxTimeoutMs),
 					run_retention_days: deps.jobs.runRetentionMs / Millis.days(1),

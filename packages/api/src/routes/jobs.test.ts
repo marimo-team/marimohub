@@ -52,6 +52,13 @@ describe('Job routes', () => {
 		}).request;
 	});
 
+	const withLimit = (maxQueuedRunsPerJob?: number) =>
+		createTestApi({
+			bucket,
+			compute,
+			deps: { jobs: { ...DEFAULT_JOBS_CONFIG, maxQueuedRunsPerJob } },
+		}).request;
+
 	const base = (notebookId = nid) => `/projects/${pid}/notebooks/${notebookId}/jobs`;
 	const createJob = async (body: Record<string, unknown> = { name: 'nightly' }, who = request) =>
 		expectOk<any>(await who('POST', base(), body), 201);
@@ -640,13 +647,18 @@ describe('Job routes', () => {
 		await expectError(await request('POST', `${base()}/${job.id}/runs`), 404, 'NOT_FOUND');
 	});
 
-	it('bounds how many manual runs may queue up', async () => {
-		const job = await createJob();
-		for (let i = 0; i < 20; i++) {
-			await expectOk(await request('POST', `${base()}/${job.id}/runs`), 201);
-		}
-		await expectError(await request('POST', `${base()}/${job.id}/runs`), 429, 'RESOURCE_EXHAUSTED');
-	});
+	it.each([20, undefined])(
+		'bounds and advertises the default queue with setting %s',
+		async (limit) => {
+			const job = await createJob();
+			const api = withLimit(limit);
+			const url = `${base()}/${job.id}/runs`;
+			for (let i = 0; i < 20; i++) await expectOk(await api('POST', url), 201);
+			await expectError(await api('POST', url), 429, 'RESOURCE_EXHAUSTED');
+			const capabilities = await expectOk<any>(await api('GET', '/capabilities'));
+			expect(capabilities.jobs.max_queued_runs_per_job).toBe(20);
+		},
+	);
 
 	it('bounds concurrent manual triggers atomically', async () => {
 		const job = await createJob();
@@ -658,6 +670,125 @@ describe('Job routes', () => {
 		expect(responses.filter((response) => response.status === 201)).toHaveLength(20);
 		expect(responses.filter((response) => response.status === 429)).toHaveLength(4);
 		expect(await expectPage(await request('GET', `${base()}/${job.id}/runs`))).toHaveLength(20);
+	});
+
+	it('accepts a 100-run burst across API replicas and replays at capacity', async () => {
+		const replicas = [withLimit(100), withLimit(100)];
+		const job = await createJob();
+		const url = `${base()}/${job.id}/runs`;
+		const responses = await Promise.all(
+			Array.from({ length: 100 }, (_, i) =>
+				Promise.resolve(
+					replicas[i % 2]('POST', url, undefined, { 'idempotency-key': `burst-${i}` }),
+				),
+			),
+		);
+		const runs = await Promise.all(responses.map((response) => expectOk<any>(response, 201)));
+		expect(new Set(runs.map((run) => run.run_id)).size).toBe(100);
+		expect(runs.every((run) => run.status === 'queued')).toBe(true);
+		await expectError(await replicas[0]('POST', url), 429, 'RESOURCE_EXHAUSTED');
+		const replay = await expectOk<any>(
+			await replicas[1]('POST', url, undefined, {
+				'idempotency-key': 'burst-0',
+			}),
+			201,
+		);
+		expect(replay.run_id).toBe(runs[0].run_id);
+		await expectOk(await replicas[0]('POST', `${url}/${runs[0].run_id}/cancel`));
+		await expectOk(await replicas[1]('POST', url), 201);
+		const capabilities = await expectOk<any>(await replicas[0]('GET', '/capabilities'));
+		expect(capabilities.jobs.max_queued_runs_per_job).toBe(100);
+	}, 30_000);
+
+	describe('queue admission boundaries', () => {
+		it('preserves queued runs when the limit decreases and admits again only below it', async () => {
+			const job = await createJob();
+			const url = `${base()}/${job.id}/runs`;
+			const high = withLimit(3);
+			const runs = [];
+			for (let i = 0; i < 3; i++) runs.push(await expectOk<JobRun>(await high('POST', url), 201));
+			const low = withLimit(1);
+			await expectError(await low('POST', url), 429, 'RESOURCE_EXHAUSTED');
+			expect(
+				(await expectPage<JobRun>(await low('GET', url))).every((run) => run.status === 'queued'),
+			).toBe(true);
+			for (const run of runs) {
+				await expectError(await low('POST', url), 429, 'RESOURCE_EXHAUSTED');
+				await expectOk(await low('POST', `${url}/${run.run_id}/cancel`));
+			}
+			expect((await expectOk<JobRun>(await low('POST', url), 201)).status).toBe('queued');
+		});
+
+		it('counts scheduled runs and delayed retries while isolating each job queue', async () => {
+			const job = await createJob();
+			const other = await createJob({ name: 'other' });
+			const definition = await services.jobs.getJob(pid, nid as never, job.id);
+			const scheduled = await services.jobRuns.enqueue({
+				job: definition,
+				trigger: 'schedule',
+				timeoutSeconds: 60,
+				scheduledFor: new Date().toISOString(),
+			});
+			await services.jobRuns.enqueue({
+				job: definition,
+				trigger: 'schedule',
+				timeoutSeconds: 60,
+				retryOf: scheduled.run_id,
+				eligibleAt: new Date(Date.now() + 60_000).toISOString(),
+			});
+			const limited = withLimit(1);
+			const url = `${base()}/${job.id}/runs`;
+			await expectError(await limited('POST', url), 429, 'RESOURCE_EXHAUSTED');
+			await expectOk(await limited('POST', `${base()}/${other.id}/runs`), 201);
+			await expectOk(await limited('POST', `${url}/${scheduled.run_id}/cancel`));
+			await expectError(await limited('POST', url), 429, 'RESOURCE_EXHAUSTED');
+		});
+
+		it.each([
+			['provisioning', ['provision']],
+			['running', ['provision', 'start']],
+			['failed', ['provision', 'fail']],
+			['timed_out', ['provision', 'timeout']],
+			['cancelled', ['provision', 'cancel']],
+			['succeeded', ['provision', 'start', 'succeed']],
+		] as const)(
+			'excludes %s runs even before their markers are cleaned up',
+			async (status, events) => {
+				const job = await createJob();
+				const limited = withLimit(1);
+				const url = `${base()}/${job.id}/runs`;
+				const accepted = await expectOk<JobRun>(await limited('POST', url), 201);
+				const run = await services.jobRuns.getRun(pid, nid as never, job.id, accepted.run_id);
+				for (const event of events) await services.jobRuns.transition(run, event);
+				expect((await services.jobRuns.getRun(pid, nid as never, job.id, run.run_id)).status).toBe(
+					status,
+				);
+				expect(await bucket.head(paths.jobRunMarker(pid, run.run_id))).not.toBeNull();
+				expect((await expectOk<JobRun>(await limited('POST', url), 201)).status).toBe('queued');
+				await expectError(await limited('POST', url), 429, 'RESOURCE_EXHAUSTED');
+			},
+		);
+
+		it('does not consume an idempotency key on overload and serializes duplicate retries', async () => {
+			const job = await createJob();
+			const url = `${base()}/${job.id}/runs`;
+			const limited = withLimit(1);
+			const accepted = await expectOk<JobRun>(await limited('POST', url), 201);
+			const headers = { 'idempotency-key': 'retry-after-overload' };
+			await expectError(await limited('POST', url, undefined, headers), 429, 'RESOURCE_EXHAUSTED');
+			await expectOk(await limited('POST', `${url}/${accepted.run_id}/cancel`));
+			const responses = await Promise.all(
+				Array.from({ length: 8 }, () =>
+					Promise.resolve(withLimit(1)('POST', url, undefined, headers)),
+				),
+			);
+			const retries = await Promise.all(
+				responses.map((response) => expectOk<JobRun>(response, 201)),
+			);
+			expect(new Set(retries.map((run) => run.run_id)).size).toBe(1);
+			expect(retries[0].run_id).not.toBe(accepted.run_id);
+			expect(await expectPage(await limited('GET', url))).toHaveLength(2);
+		});
 	});
 
 	it('advertises the job limits on capabilities', async () => {

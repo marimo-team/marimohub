@@ -27,7 +27,6 @@ import {
 import {
 	requireJobs,
 	resolveJobAccess,
-	authorizeJobTrigger,
 	visibleJobRun,
 	getJobCapabilities,
 	loadAuthorizedJob,
@@ -427,19 +426,18 @@ app.openapi(triggerRun, async (c) => {
 	const { target } = await resolveJobAccess('job.trigger', (action) =>
 		loadAuthorizedJob(c.get('deps'), c.get('user'), pid, nid, jid, action),
 	);
-	await authorizeJobTrigger(deps, target, target.job);
 	const body = c.req.valid('json');
-	const data = await idempotentCreate(
-		c,
-		'POST /projects/{pid}/notebooks/{nid}/jobs/{jid}/runs',
-		async () =>
-			toPublicJobRun(
-				await triggerJobRun(deps, target, target.job, body, {
-					requestId: c.get('requestId'),
-					method: c.req.method,
-					path: c.req.path,
-				}),
-			),
+	const data = toPublicJobRun(
+		await triggerJobRun(
+			deps,
+			target,
+			target.job,
+			body,
+			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path },
+			undefined,
+			(enqueue) =>
+				idempotentCreate(c, 'POST /projects/{pid}/notebooks/{nid}/jobs/{jid}/runs', enqueue),
+		),
 	);
 	return c.json({ success: true, data }, 201);
 });

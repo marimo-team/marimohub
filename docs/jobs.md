@@ -147,6 +147,56 @@ usually has output showing where it stopped. The run's `error` carries a
 sanitized code (`NOTEBOOK_FAILED`, `RUN_TIMED_OUT`, …) — never provider
 messages or secrets. Editors can read the captured logs.
 
+Applications can read run status through the API and recover active runs after
+reconnecting. Closing a browser or app session does not cancel accepted runs.
+`queued` means waiting; no queue position or start-time estimate is available.
+
+## Queue admission and capacity
+
+`MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB` sets each job's manual admission
+threshold on Node: a positive integer, default 20. All API replicas must use
+the same value. Capabilities expose it as `jobs.max_queued_runs_per_job`.
+
+Admission counts all queued runs for the job, including schedules and retries.
+Scheduled fires and automatic retries can exceed the threshold. There is no
+project-wide queue limit. Lowering the threshold preserves accepted runs.
+
+Concurrent manual submissions share a distributed job claim. At the threshold,
+new submissions return HTTP 429 with `RESOURCE_EXHAUSTED`. An accepted request's
+`Idempotency-Key` still replays its original run.
+
+Separate deployment and project caps bound provisioning and running runs;
+accepted excess stays queued. Dispatch selects eligible runs oldest first and
+skips saturated projects, without reserving a share for each project.
+The `forbid` policy applies only to scheduled fires.
+
+### Node configuration for 100 runs
+
+Set these variables on every Node replica:
+
+```sh
+MARIMOHUB_JOBS=on
+MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB=100
+MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS=100
+MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT=100
+```
+
+Use durable shared storage and enable `MARIMOHUB_RUN_MAINTENANCE=true` on the
+designated maintenance replica. Keep dispatch under the maintenance lease.
+
+Set `timeout_seconds: 14400` on jobs that need four hours. The default remains
+1800 seconds (30 minutes); 14400 is the ceiling. Timeouts start at dispatch,
+include provisioning, and exclude queue waiting.
+
+This configuration accepts 100 submissions to an empty job before a scheduler
+tick and lets one project use all execution capacity. For multiple projects,
+choose a lower project cap to leave capacity for others. Defaults remain
+5 concurrent runs, 2 per project, and a manual admission threshold of 20 per job.
+
+Production capacity is unmeasured: automated tests use test doubles, and no staged
+compute load test was run. Size compute quotas, CPU, memory, and storage throughput
+for the intended notebooks before using this configuration in production.
+
 ## Who can do what
 
 | Action                            | Consumers (`app-user`, `viewer`)  | `editor`, `manager`, `admin` |
@@ -211,6 +261,7 @@ The CLI exposes the same operations under `jobs …`.
 | `MARIMOHUB_JOBS_TICK_SECONDS`                    | `60`    | Node only: scheduler interval on the maintenance replica.             |
 | `MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS`             | `5`     | Node only: deployment-wide cap on runs holding a sandbox.             |
 | `MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT` | `2`     | Node only: per-project share of the cap.                              |
+| `MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB`         | `20`    | Node only: per-job queued-run limit for new manual submissions.       |
 | `MARIMOHUB_JOBS_MAX_PER_NOTEBOOK`                | `5`     | Node only: job definitions per notebook (`0` = unlimited).            |
 | `MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS`         | `1800`  | Node only: run deadline when the job sets none.                       |
 | `MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS`             | `14400` | Node only: ceiling on a job's `timeout_seconds`.                      |

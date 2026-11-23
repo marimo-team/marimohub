@@ -338,6 +338,8 @@ components:
                 - integer
                 - 'null'
               exclusiveMinimum: 0
+              description: Queued-run threshold for accepting new manual submissions.
+                Scheduled runs and retries may exceed this value.
             default_timeout_seconds:
               type:
                 - integer

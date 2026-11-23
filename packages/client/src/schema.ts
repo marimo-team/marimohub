@@ -3116,6 +3116,7 @@ export interface components {
 			jobs: {
 				available: boolean;
 				max_per_notebook: number | null;
+				/** @description Queued-run threshold for accepting new manual submissions. Scheduled runs and retries may exceed this value. */
 				max_queued_runs_per_job: number | null;
 				default_timeout_seconds: number | null;
 				max_timeout_seconds: number | null;

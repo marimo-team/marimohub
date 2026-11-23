@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CatalogService, MAX_QUEUED_RUNS_PER_JOB, UserId } from '@marimo-hub/core';
+import { CatalogService, DEFAULT_MAX_QUEUED_RUNS_PER_JOB, UserId } from '@marimo-hub/core';
 import type {
 	AuthenticatedPrincipal,
 	JobDefinition,
@@ -413,7 +413,7 @@ describe('MCP run execution and authorization', () => {
 				timeout_seconds: DEFAULT_JOBS_CONFIG.defaultTimeoutMs / 1000,
 			},
 		});
-		for (let i = 1; i < MAX_QUEUED_RUNS_PER_JOB; i++) await enqueue();
+		for (let i = 1; i < DEFAULT_MAX_QUEUED_RUNS_PER_JOB; i++) await enqueue();
 		expect((await call('run_job')).structuredContent).toMatchObject({ code: 'RESOURCE_EXHAUSTED' });
 	});
 
