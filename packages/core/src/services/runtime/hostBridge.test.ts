@@ -196,6 +196,7 @@ assert result["events"][-1]["id"] == "c1"
 cfg["request"] = {"method": "POST", "path": "/edits", "notebookPath": "/workspace/notebook.py",
                   "headers": {"Idempotency-Key": "retry"}, "body": {"changes": []}}
 assert run(cfg)["status"] == 200
+assert seen[0][0] == "/prefix/api/marimo/v1/events?kinds=project,notebook"
 assert seen[-1] == ("/prefix/api/marimo/v1/notebooks/right/edits", "Bearer private-token", "retry", {"changes": []})
 assert all(request[1] == "Bearer private-token" for request in seen)
 assert "private-token" not in json.dumps(result)

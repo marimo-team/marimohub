@@ -183,7 +183,7 @@ describe('hub host protocol', () => {
 			]) {
 				expect(response.status).toBe(404);
 				expect(await response.json()).toMatchObject({
-					type: 'tag:marimo.io,2026:host/not-found',
+					type: 'urn:marimo:problem:not-found',
 					status: 404,
 				});
 			}
@@ -218,7 +218,7 @@ describe('hub host protocol', () => {
 		);
 		expect(response.status).toBe(403);
 		expect(await response.json()).toMatchObject({
-			type: 'tag:marimo.io,2026:host/forbidden',
+			type: 'urn:marimo:problem:forbidden',
 			status: 403,
 		});
 		expect(compute).not.toHaveBeenCalled();
@@ -241,7 +241,7 @@ describe('hub host protocol', () => {
 		for (const response of [malformed, invalid]) {
 			expect(response.status).toBe(400);
 			expect(await response.json()).toMatchObject({
-				type: 'tag:marimo.io,2026:host/invalid-request',
+				type: 'urn:marimo:problem:invalid-request',
 				status: 400,
 			});
 		}
@@ -265,7 +265,7 @@ describe('hub host protocol', () => {
 		expect(failed.status).toBe(503);
 		expect(failed.headers.get('content-type')).toBe('application/problem+json');
 		expect(await failed.json()).toEqual({
-			type: 'tag:marimo.io,2026:host/unavailable',
+			type: 'urn:marimo:problem:unavailable',
 			title: 'unavailable',
 			status: 503,
 			detail: 'The host could not complete the request',
@@ -286,7 +286,7 @@ describe('hub host protocol', () => {
 			.mockResolvedValueOnce(
 				runtimeReply({
 					status: 409,
-					body: { type: 'tag:marimo.io,2026:host/conflict', status: 409 },
+					body: { type: 'urn:marimo:problem:conflict', status: 409 },
 				}),
 			)
 			.mockResolvedValueOnce(
@@ -323,7 +323,7 @@ describe('hub host protocol', () => {
 		const response = await request('POST', `/notebooks/${id}/save`, {}, 'lost-claim');
 		expect(response.status).toBe(409);
 		expect(await response.json()).toMatchObject({
-			type: 'tag:marimo.io,2026:host/conflict',
+			type: 'urn:marimo:problem:conflict',
 			detail: 'The session no longer owns the notebook editor',
 		});
 		expect(await deps.services.notebooks.getNotebookContent(project.id, notebook.id)).toBe(
@@ -337,7 +337,7 @@ describe('hub host protocol', () => {
 		expect(missing.status).toBe(401);
 		expect(missing.headers.get('content-type')).toBe('application/problem+json');
 		expect(await missing.json()).toMatchObject({
-			type: 'tag:marimo.io,2026:host/unauthorized',
+			type: 'urn:marimo:problem:unauthorized',
 			status: 401,
 		});
 		setUser({ ...user, credential: { kind: 'sso' } });
@@ -382,7 +382,7 @@ describe('hub host protocol', () => {
 
 	it('filters stream kinds but always sends ready', async () => {
 		const { request } = await setup();
-		const events = await readSnapshot(await request('GET', '/events?types=project'));
+		const events = await readSnapshot(await request('GET', '/events?kinds=project'));
 		expect(events.map((event) => event.event)).toEqual(['project', 'ready']);
 	});
 
@@ -440,7 +440,7 @@ describe('hub host protocol', () => {
 	it('serves authenticated catalog SSE without CORS when MCP OAuth is enabled', async () => {
 		const { deps } = await setup();
 		const app = createApi({ ...deps, mcp: { publicBaseUrl: 'https://hub.example.com' } });
-		const response = await app.request(`${HOST_PREFIX}/events?types=host,project,notebook`, {
+		const response = await app.request(`${HOST_PREFIX}/events?kinds=host,project,notebook`, {
 			headers: { Authorization: 'Bearer test', Origin: 'https://client.example' },
 		});
 		expect(response.headers.has('Access-Control-Allow-Origin')).toBe(false);
@@ -475,7 +475,7 @@ describe('hub host protocol', () => {
 			'If-Match': `"${notebook.updated_at}"`,
 		});
 		expect(stale.status).toBe(409);
-		expect(await stale.json()).toMatchObject({ type: 'tag:marimo.io,2026:host/conflict' });
+		expect(await stale.json()).toMatchObject({ type: 'urn:marimo:problem:conflict' });
 		expect((await deps.services.notebooks.getNotebook(project.id, notebook.id)).meta.title).toBe(
 			'Newer',
 		);
@@ -500,7 +500,7 @@ describe('hub host protocol', () => {
 		);
 		const snapshots = await Promise.all(
 			Array.from({ length: 3 }, async () =>
-				readSnapshot(await request('GET', '/events?types=runtime')),
+				readSnapshot(await request('GET', '/events?kinds=runtime')),
 			),
 		);
 		for (const snapshot of snapshots)
@@ -509,7 +509,7 @@ describe('hub host protocol', () => {
 				data: { runtime: { notebook_id: id } },
 			});
 		expect(bridge).toHaveBeenCalledTimes(1);
-		await readSnapshot(await request('GET', '/events?types=runtime'));
+		await readSnapshot(await request('GET', '/events?kinds=runtime'));
 		expect(bridge).toHaveBeenCalledTimes(1);
 		setUser({
 			...user,
@@ -519,13 +519,13 @@ describe('hub host protocol', () => {
 			},
 		});
 		expect(
-			(await readSnapshot(await request('GET', '/events?types=runtime'))).map(
+			(await readSnapshot(await request('GET', '/events?kinds=runtime'))).map(
 				(event) => event.event,
 			),
 		).toEqual(['ready']);
 		expect(bridge).toHaveBeenCalledTimes(1);
 		setUser(user);
-		expect((await readSnapshot(await request('GET', '/events?types=runtime')))[0].event).toBe(
+		expect((await readSnapshot(await request('GET', '/events?kinds=runtime')))[0].event).toBe(
 			'runtime',
 		);
 		expect(bridge).toHaveBeenCalledTimes(1);
@@ -550,10 +550,10 @@ describe('hub host protocol', () => {
 			return text;
 		};
 		try {
-			readers.push((await request('GET', '/events?types=notebook')).body!.getReader());
+			readers.push((await request('GET', '/events?kinds=notebook')).body!.getReader());
 			await readUntil(readers[0], 'event: ready');
 			setUser(otherUser);
-			readers.push((await request('GET', '/events?types=notebook')).body!.getReader());
+			readers.push((await request('GET', '/events?kinds=notebook')).body!.getReader());
 			await readUntil(readers[1], 'event: ready');
 			setUser(user);
 			expect(
@@ -599,7 +599,7 @@ describe('hub host protocol', () => {
 		const other = await readSnapshot(await request('GET', `/notebooks/${id}/events`));
 		expect(other.find((event) => event.event === 'runtime')?.data).not.toHaveProperty('request_id');
 		deps.compute.connectExisting = undefined;
-		const catalog = await readSnapshot(await request('GET', '/events?types=runtime'));
+		const catalog = await readSnapshot(await request('GET', '/events?kinds=runtime'));
 		expect(catalog[0].event).toBe('runtime');
 		expect(catalog[0].data).not.toHaveProperty('request_id');
 	});
@@ -629,7 +629,7 @@ describe('hub host protocol', () => {
 		]) {
 			expect(response.status).toBe(409);
 			expect(await response.json()).toMatchObject({
-				type: 'tag:marimo.io,2026:host/conflict',
+				type: 'urn:marimo:problem:conflict',
 				detail: 'Idempotency-Key was used for a different request',
 			});
 		}
@@ -805,10 +805,12 @@ describe('hub host protocol', () => {
 			runtimeReply({
 				status: 409,
 				body: {
-					type: 'tag:marimo.io,2026:host/conflict',
+					type: 'urn:marimo:problem:conflict',
 					title: 'conflict',
 					status: 409,
-					edit: { change: 0, cell: { notebook_id: 'local' }, document: { notebook_id: 'local' } },
+					index: 0,
+					cell: { notebook_id: 'local' },
+					document: { notebook_id: 'local' },
 				},
 			}),
 		);
@@ -816,11 +818,12 @@ describe('hub host protocol', () => {
 		expect(response.status).toBe(409);
 		expect(response.headers.get('content-type')).toBe('application/problem+json');
 		expect(await response.json()).toMatchObject({
-			edit: { cell: { notebook_id: id }, document: { notebook_id: id } },
+			cell: { notebook_id: id },
+			document: { notebook_id: id },
 		});
 	});
 
-	it('forwards execution and interruption and refreshes a retried run', async () => {
+	it('forwards cell execution and cancellation and refreshes a retried run', async () => {
 		const { request, id, runtime } = await setup();
 		await runtime();
 		const bridge = vi.mocked(requestRuntimeHost);
@@ -838,7 +841,7 @@ describe('hub host protocol', () => {
 				await request(
 					'POST',
 					`/notebooks/${id}/runtime/runs`,
-					{ cells: [{ id: 'c1', code_hash: 'hash' }] },
+					{ cells: [{ id: 'c1', etag: 'hash' }] },
 					'run',
 				)
 			).json(),
@@ -848,7 +851,7 @@ describe('hub host protocol', () => {
 				await request(
 					'POST',
 					`/notebooks/${id}/runtime/runs`,
-					{ cells: [{ id: 'c1', code_hash: 'hash' }] },
+					{ cells: [{ id: 'c1', etag: 'hash' }] },
 					'run',
 				)
 			).json(),
@@ -871,7 +874,7 @@ describe('hub host protocol', () => {
 			const bridge = vi.mocked(requestRuntimeHost);
 			bridge.mockRejectedValueOnce(new UnavailableError('Reply lost after acceptance'));
 			const run = () =>
-				request('POST', `/notebooks/${id}/runtime/runs`, { code: 'side_effect()' }, 'lost-run');
+				request('POST', `/notebooks/${id}/runtime/execute`, { code: 'side_effect()' }, 'lost-run');
 			expect((await run()).status).toBe(503);
 			await deps.services.sessions.terminate(project.id, original.session_id);
 			await deps.services.sessions.markSandboxReclaimed(
@@ -896,7 +899,7 @@ describe('hub host protocol', () => {
 			for (let index = 0; index < 2; index++) {
 				const response = await run();
 				expect(response.status).toBe(409);
-				expect(await response.json()).toMatchObject({ type: 'tag:marimo.io,2026:host/no-runtime' });
+				expect(await response.json()).toMatchObject({ type: 'urn:marimo:problem:no-runtime' });
 			}
 			expect(bridge).toHaveBeenCalledOnce();
 			expect(create).not.toHaveBeenCalled();
@@ -916,7 +919,7 @@ describe('hub host protocol', () => {
 			}),
 		);
 		const run = () =>
-			request('POST', `/notebooks/${id}/runtime/runs`, { code: 'side_effect()' }, 'lost-run');
+			request('POST', `/notebooks/${id}/runtime/execute`, { code: 'side_effect()' }, 'lost-run');
 		expect((await run()).status).toBe(503);
 		const response = await run();
 		expect(response.status).toBe(202);
@@ -936,12 +939,12 @@ describe('hub host protocol', () => {
 			}),
 		);
 		expect(
-			(await request('POST', `/notebooks/${id}/runtime/runs`, { code: 'side_effect()' }, 'run'))
+			(await request('POST', `/notebooks/${id}/runtime/execute`, { code: 'side_effect()' }, 'run'))
 				.status,
 		).toBe(202);
 		await deps.services.sessions.terminate(project.id, session.session_id);
 		expect(
-			(await request('POST', `/notebooks/${id}/runtime/runs`, { code: 'side_effect()' }, 'run'))
+			(await request('POST', `/notebooks/${id}/runtime/execute`, { code: 'side_effect()' }, 'run'))
 				.status,
 		).toBe(409);
 		expect(vi.mocked(requestRuntimeHost)).toHaveBeenCalledTimes(1);
@@ -997,7 +1000,7 @@ describe('hub host protocol', () => {
 			await reader.cancel();
 			expect(text).toContain('event: effect/httpapi/stream/failure');
 			expect(text).toContain(
-				`tag:marimo.io,2026:host/${revocation === 'bearer' ? 'unauthorized' : 'forbidden'}`,
+				`urn:marimo:problem:${revocation === 'bearer' ? 'unauthorized' : 'forbidden'}`,
 			);
 			expect(vi.mocked(requestRuntimeHost)).toHaveBeenCalledTimes(1);
 		},
@@ -1138,7 +1141,7 @@ describe('hub host protocol', () => {
 		expect(events[4]).toMatchObject({
 			data: { runtime: { id: `${session.session_id}:kernel`, notebook_id: id } },
 		});
-		const catalog = await readSnapshot(await request('GET', '/events?types=attachment'));
+		const catalog = await readSnapshot(await request('GET', '/events?kinds=attachment'));
 		expect(catalog.map((event) => event.event)).toEqual(['ready']);
 	});
 });
@@ -1147,16 +1150,16 @@ describe('host protocol conformance', () => {
 	it('rejects unknown stream kinds before touching compute', async () => {
 		const { request, id, deps } = await setup();
 		const create = vi.spyOn(deps.compute, 'create');
-		const catalog = await request('GET', '/events?types=notebook,bogus');
+		const catalog = await request('GET', '/events?kinds=notebook,bogus');
 		expect(catalog.status).toBe(400);
 		expect(await catalog.json()).toMatchObject({
-			type: 'tag:marimo.io,2026:host/invalid-request',
-			detail: 'types has no kind named bogus',
+			type: 'urn:marimo:problem:invalid-request',
+			detail: 'kinds has no kind named bogus',
 		});
-		expect((await request('GET', `/notebooks/${id}/events?types=project`)).status).toBe(400);
+		expect((await request('GET', `/notebooks/${id}/events?kinds=project`)).status).toBe(400);
 		expect(create).not.toHaveBeenCalled();
 		expect(requestRuntimeHost).not.toHaveBeenCalled();
-		const events = await readSnapshot(await request('GET', '/events?types=,'));
+		const events = await readSnapshot(await request('GET', '/events?kinds=,'));
 		expect(events.map((event) => event.event)).toContain('host');
 	});
 
@@ -1187,12 +1190,12 @@ describe('host protocol conformance', () => {
 			runtimeReply({ status: 200, events: [{ event: 'ready', id: 'cursor', data: {} }] }),
 		);
 		const events = await readSnapshot(
-			await request('GET', `/notebooks/${id}/events?types=cell,notebook,attachment&run_id=run-1`),
+			await request('GET', `/notebooks/${id}/events?kinds=cell,notebook,attachment&run_id=run-1`),
 		);
 		expect(events.map((event) => event.event)).toEqual(['notebook', 'attachment', 'ready']);
 		expect(bridge.mock.calls.at(-1)?.[1]).toMatchObject({
 			method: 'GET',
-			path: '/events?types=cell%2Cruntime&run_id=run-1',
+			path: '/events?kinds=cell%2Cruntime&run_id=run-1',
 		});
 	});
 
@@ -1207,7 +1210,7 @@ describe('host protocol conformance', () => {
 			await request('POST', `/notebooks/${id}/runtime/inputs/in-1/reply`, { value: '' }, 'reply'),
 		]) {
 			expect(response.status).toBe(409);
-			expect(await response.json()).toMatchObject({ type: 'tag:marimo.io,2026:host/no-runtime' });
+			expect(await response.json()).toMatchObject({ type: 'urn:marimo:problem:no-runtime' });
 		}
 		expect(create).not.toHaveBeenCalled();
 		expect(sessions).not.toHaveBeenCalled();
@@ -1230,7 +1233,7 @@ describe('host protocol conformance', () => {
 		const rejected = await request('POST', '/notebooks', body, 'after-conflict');
 		expect(rejected.status).toBe(409);
 		expect(await rejected.json()).toMatchObject({
-			type: 'tag:marimo.io,2026:host/conflict',
+			type: 'urn:marimo:problem:conflict',
 			detail: 'Name in use',
 		});
 		expect((await request('POST', '/notebooks', body, 'after-conflict')).status).toBe(201);
@@ -1247,7 +1250,7 @@ describe('host protocol conformance', () => {
 	it('recomputes the catalog only when its pointer moves or the refresh interval passes', async () => {
 		const { request, deps, project, notebook } = await setup();
 		const list = vi.spyOn(deps.services.notebooks, 'listNotebooks');
-		const reader = (await request('GET', '/events?types=notebook')).body!.getReader();
+		const reader = (await request('GET', '/events?kinds=notebook')).body!.getReader();
 		const decoder = new TextDecoder();
 		let text = '';
 		const readUntil = async (needle: string) => {
@@ -1296,7 +1299,7 @@ async function ownedEditor() {
 	const response = await fixture.request('PUT', path, {}, 'initial-start');
 	expect(response.status).toBe(409);
 	const problem = (await response.json()) as { type: string; decisions: HostDecision[] };
-	expect(problem.type).toBe('tag:marimo.io,2026:host/decision-required');
+	expect(problem.type).toBe('urn:marimo:problem:decision-required');
 	const decision = problem.decisions[0];
 	const choose = (choice: string, key = choice) =>
 		fixture.request('PUT', path, { decisions: { [decision.id]: choice } }, key);
@@ -1352,7 +1355,7 @@ describe('host editor ownership', () => {
 
 	it.each([
 		['POST', '/edits', { edits: [] }],
-		['POST', '/runtime/runs', { code: '1 + 1' }],
+		['POST', '/runtime/execute', { code: '1 + 1' }],
 		['POST', '/save', {}],
 		['GET', '/events', undefined],
 	] as const)(
@@ -1367,7 +1370,7 @@ describe('host editor ownership', () => {
 			);
 			expect(response.status).toBe(409);
 			expect(await response.json()).toMatchObject({
-				type: 'tag:marimo.io,2026:host/decision-required',
+				type: 'urn:marimo:problem:decision-required',
 			});
 			expect(requestRuntimeHost).not.toHaveBeenCalled();
 		},
@@ -1403,7 +1406,7 @@ describe('host editor ownership', () => {
 		);
 		expect(displaced.status).toBe(409);
 		expect(await displaced.json()).toMatchObject({
-			type: 'tag:marimo.io,2026:host/decision-required',
+			type: 'urn:marimo:problem:decision-required',
 		});
 	});
 
@@ -1432,7 +1435,7 @@ describe('host editor ownership', () => {
 			(await fixture.deps.services.sessions.getEditorClaim(fixture.project.id, fixture.notebook.id))
 				?.session_id,
 		).toBe(fixture.holder.session_id);
-		const events = await readSnapshot(await fixture.request('GET', '/events?types=notebook'));
+		const events = await readSnapshot(await fixture.request('GET', '/events?kinds=notebook'));
 		const notebook = events.find(
 			(event) => (event.data.notebook as { id?: string })?.id === result.notebook_id,
 		)?.data.notebook as { operations: string[] };
@@ -1453,7 +1456,7 @@ describe('host editor ownership', () => {
 		fixture.setUser(user);
 		vi.mocked(requestRuntimeHost).mockClear();
 		expect((await fixture.request('POST', `${path}/edits`, {}, 'wrong-user')).status).toBe(404);
-		const hidden = await readSnapshot(await fixture.request('GET', '/events?types=notebook'));
+		const hidden = await readSnapshot(await fixture.request('GET', '/events?kinds=notebook'));
 		expect(
 			hidden.some((event) => (event.data.notebook as { id?: string })?.id === result.notebook_id),
 		).toBe(false);
@@ -1467,7 +1470,7 @@ describe('host editor ownership', () => {
 		const response = await fixture.choose('takeover');
 		expect(response.status).toBe(409);
 		const problem = (await response.json()) as { type: string; decisions: HostDecision[] };
-		expect(problem.type).toBe('tag:marimo.io,2026:host/decision-required');
+		expect(problem.type).toBe('urn:marimo:problem:decision-required');
 		expect(problem.decisions[0].id).toContain(replacement.session_id);
 		expect(requestRuntimeHost).not.toHaveBeenCalled();
 	});
@@ -1483,7 +1486,7 @@ describe('host editor ownership', () => {
 		);
 		expect(response.status).toBe(409);
 		expect(await response.json()).toMatchObject({
-			type: 'tag:marimo.io,2026:host/decision-required',
+			type: 'urn:marimo:problem:decision-required',
 		});
 		expect(
 			(
@@ -1613,7 +1616,7 @@ describe('host editor ownership', () => {
 		);
 		expect(response.status).toBe(409);
 		expect(await response.json()).toMatchObject({
-			type: 'tag:marimo.io,2026:host/decision-required',
+			type: 'urn:marimo:problem:decision-required',
 		});
 	});
 

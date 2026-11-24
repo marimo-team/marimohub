@@ -26,7 +26,7 @@ import {
 	mapRuntimeProblem,
 	MAX_BODY_BYTES,
 	NOTEBOOK_KINDS,
-	parseTypes,
+	parseKinds,
 	problemResponse,
 	RUNTIME_ROUTES,
 	UpstreamProblemError,
@@ -39,14 +39,29 @@ import { CatalogStream, eventStream } from './streams';
 
 export type HostAppEnv = { Variables: { requestId: string } };
 
+const ROUTE_METHODS: [RegExp, string[]][] = [
+	[/^\/events$/, ['GET']],
+	[/^\/notebooks$/, ['POST']],
+	[/^\/notebooks\/[^/]+$/, ['PATCH', 'DELETE']],
+	[/^\/notebooks\/[^/]+\/events$/, ['GET']],
+	[/^\/notebooks\/[^/]+\/(?:open|runtime\/restart)$/, ['POST']],
+	...RUNTIME_ROUTES.map(({ path, method }): [RegExp, string[]] => [
+		new RegExp(`^/notebooks/[^/]+${path.replaceAll(/:[a-z]+/g, '[^/]+')}$`),
+		[method],
+	]),
+	[/^\/notebooks\/[^/]+\/runtime$/, ['DELETE']],
+];
+
 const NotebookName = z.string().trim().min(1).max(255);
-const UpdateNotebook = z.object({ name: NotebookName.optional(), path: z.string().optional() });
-const CreateNotebook = z.object({
+const UpdateNotebook = z
+	.strictObject({ name: NotebookName.optional(), path: z.string().optional() })
+	.refine((value) => Object.keys(value).length > 0);
+const CreateNotebook = z.strictObject({
 	project_id: z.string(),
 	name: NotebookName,
 	path: z.string().optional(),
 });
-const StartRuntime = z.object({ decisions: z.record(z.string(), z.string()).optional() });
+const StartRuntime = z.strictObject({ decisions: z.record(z.string(), z.string()).optional() });
 // Permission and runtime changes need not move the catalog version; they are picked up on this cadence.
 const CATALOG_REFRESH_MS = 5_000;
 // Bearer and notebook access are rechecked on this cadence, or sooner when the catalog moves.
@@ -97,7 +112,7 @@ function upstreamEventsPath(types: EventKinds, runId: string | undefined): strin
 			[...types].filter((kind) => kind !== 'notebook' && kind !== 'attachment'),
 		);
 		kinds.add('runtime');
-		query.set('types', [...kinds].join(','));
+		query.set('kinds', [...kinds].join(','));
 	}
 	if (runId) query.set('run_id', runId);
 	const encoded = query.toString();
@@ -312,7 +327,7 @@ export function createHostApp<
 	}
 
 	app.get('/events', async (c) => {
-		const types = parseTypes(c.req.query('types'), CATALOG_KINDS);
+		const types = parseKinds(c.req.query('kinds'), CATALOG_KINDS);
 		const requester = principalOf(c);
 		let principal = requester;
 		let catalog = await platform.catalog(principal, c.req.raw.signal);
@@ -415,7 +430,10 @@ export function createHostApp<
 		app.on(route.method, `/notebooks/:id${route.path}`, async (c) => {
 			const principal = principalOf(c);
 			const notebook = await authorizedNotebook(c, route.operation, principal);
-			const body: unknown = route.method === 'DELETE' ? undefined : await c.req.json();
+			const body: unknown =
+				route.method === 'DELETE' || route.operation === 'runtime.interrupt'
+					? undefined
+					: await c.req.json();
 			const start = route.operation === 'runtime.start' ? StartRuntime.parse(body) : undefined;
 			const decisions = splitDecisions(start?.decisions, platform.decisionPrefix);
 			const params = c.req.param() as Record<string, string | undefined>;
@@ -475,13 +493,13 @@ export function createHostApp<
 						);
 					return { status: reply.status, body: mapped.data[kind] };
 				},
-				route.operation === 'runtime.run',
+				route.operation === 'runtime.run' || route.operation === 'runtime.execute',
 			);
 		});
 	}
 
 	app.get('/notebooks/:id/events', async (c) => {
-		const types = parseTypes(c.req.query('types'), NOTEBOOK_KINDS);
+		const types = parseKinds(c.req.query('kinds'), NOTEBOOK_KINDS);
 		const runId = c.req.query('run_id');
 		if (runId === '') throw HostProblemError.invalidRequest('run_id must not be empty');
 		const principal = principalOf(c);
@@ -607,21 +625,15 @@ export function createHostApp<
 	});
 
 	app.all('*', (c) => {
-		// The matched pattern carries the mount prefix, so the table below is prefix-independent.
+		// Hono includes the mount prefix in the wildcard match.
 		const base = routePath(c).replace(/\/\*$/, '');
 		const path = c.req.path.startsWith(base) ? c.req.path.slice(base.length) : c.req.path;
-		const routes: [RegExp, string[]][] = [
-			[/^\/events$/, ['GET']],
-			[/^\/notebooks$/, ['POST']],
-			[/^\/notebooks\/[^/]+$/, ['PATCH', 'DELETE']],
-			[/^\/notebooks\/[^/]+\/events$/, ['GET']],
-			[/^\/notebooks\/[^/]+\/(?:edits|save|open|runtime\/restart|runtime\/runs)$/, ['POST']],
-			[/^\/notebooks\/[^/]+\/runtime$/, ['PUT', 'DELETE']],
-			[/^\/notebooks\/[^/]+\/runtime\/runs\/[^/]+$/, ['DELETE']],
-			[/^\/notebooks\/[^/]+\/runtime\/inputs\/[^/]+\/reply$/, ['POST']],
+		const methods = [
+			...new Set(
+				ROUTE_METHODS.filter(([pattern]) => pattern.test(path)).flatMap(([, methods]) => methods),
+			),
 		];
-		const methods = routes.find(([pattern]) => pattern.test(path))?.[1];
-		if (!methods) return HostProblemError.notFound('Route not found').toResponse();
+		if (methods.length === 0) return HostProblemError.notFound('Route not found').toResponse();
 		if (methods.includes(c.req.method))
 			return HostProblemError.unsupportedOperation(
 				'This operation is not implemented by this host',
