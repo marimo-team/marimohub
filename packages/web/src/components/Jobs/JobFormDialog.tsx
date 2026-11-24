@@ -269,7 +269,7 @@ export function JobFormDialog({
 									value: 'shared',
 									label: 'Shared',
 									description:
-										'Other authorized app users can see run summaries and completed parameters.',
+										'Other authorized app users can see run summaries, metadata, and completed parameters.',
 								},
 							]}
 						/>

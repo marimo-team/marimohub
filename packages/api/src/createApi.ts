@@ -1,3 +1,4 @@
+import { createJobExecutionApp } from './jobs/jobExecution';
 import { createAppJobsApp } from './jobs/appJobs';
 import { APP_JOBS_PATH } from './jobs/appJobsEndpoint';
 import { requestMemoMiddleware } from './requestMemo';
@@ -503,6 +504,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route('/', createMcpApp(deps));
 	app.route('/api/host/v1', createHostApp(deps));
 	app.route(APP_JOBS_PATH, createAppJobsApp(deps));
+	app.route('/api/job-execution/v1', createJobExecutionApp(deps));
 
 	// Managed-AI proxy. Notebook kernels call it server-to-server with a minted
 	// session token (no app cookie), so it mounts OUTSIDE the `/api/v1/*` cookie-auth

@@ -16,6 +16,8 @@ import {
 	RUN_TRIGGERS,
 	RunId,
 	RunTagsSchema,
+	RunMetadataSchema,
+	RunStopRequestSchema,
 } from '@marimo-hub/core';
 import { ComputeResourcesResponseSchema, extensibleResponseEnum } from '../shared';
 
@@ -82,7 +84,7 @@ const ConsumerPolicyShape = {
 		.enum(['private', 'shared'])
 		.optional()
 		.describe(
-			'Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.',
+			'Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags, metadata and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.',
 		),
 };
 
@@ -122,6 +124,7 @@ export const UpdateJobBody = z
 
 export const TriggerRunBody = z
 	.strictObject({
+		metadata: RunMetadataSchema.optional(),
 		tags: RunTagsSchema.optional().openapi({
 			description:
 				'Immutable submission tags. Exact-match history filters use these values; tags never grant access.',
@@ -156,6 +159,8 @@ const RunErrorSchema = z.object({ code: z.string(), message: z.string() });
 
 export const JobRunResponseSchema = z
 	.object({
+		metadata: RunMetadataSchema.optional(),
+		stop_request: RunStopRequestSchema.optional(),
 		tags: RunTagsSchema.optional(),
 		run_id: z.string().regex(RunId.regex),
 		job_id: z.string(),

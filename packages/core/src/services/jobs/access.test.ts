@@ -101,6 +101,7 @@ describe('shared run summary', () => {
 			timeout_seconds: 60,
 			queued_at: '2026-01-01T00:00:00.000Z',
 			tags: { app: 'forecast' },
+			metadata: { rows: 12, report: 's3://results/report' },
 			parameters: { region: 'eu' },
 			image: 'private-image',
 			compute_profile: 'private-profile',
@@ -109,6 +110,8 @@ describe('shared run summary', () => {
 			error: { code: 'FAILED', message: 'owner diagnostics' },
 			output: { html_bytes: 100, logs_bytes: 100 },
 			future_diagnostic: 'must stay private',
+			execution_credential_hash: 'private-hash',
+			initial_metadata: { rows: 0 },
 		});
 		const active = ['queued', 'provisioning', 'running'].includes(status);
 		expect(JSON.parse(JSON.stringify(toSharedJobRunSummary(run)))).toEqual({
@@ -123,6 +126,7 @@ describe('shared run summary', () => {
 			timeout_seconds: 60,
 			queued_at: run.queued_at,
 			tags: { app: 'forecast' },
+			metadata: { rows: 12, report: 's3://results/report' },
 			...(!active ? { parameters: { region: 'eu' } } : {}),
 		});
 	});

@@ -48,6 +48,8 @@ export function toSharedJobRunSummary(run: JobRun): PublicJobRun {
 		triggered_by: run.triggered_by,
 		source_version_id: run.source_version_id,
 		tags: run.tags,
+		metadata: run.metadata,
+		stop_request: run.stop_request,
 		...(isTerminalRunStatus(run.status) ? { parameters: run.parameters } : {}),
 		attempt: run.attempt,
 		retry_of: run.retry_of,

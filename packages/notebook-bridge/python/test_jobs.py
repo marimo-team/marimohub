@@ -7,7 +7,7 @@ from urllib.error import HTTPError
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from jobs import Jobs
+from jobs import Jobs, Run
 
 
 def visitor_request(token, endpoint="https://hub.test/api/app-jobs/v1"):
@@ -22,6 +22,37 @@ def visitor(token, endpoint="https://hub.test/api/app-jobs/v1"):
 
 
 class JobsTest(unittest.TestCase):
+    def test_execution_flush_and_acknowledgement_use_only_run_credential(self):
+        calls = []
+
+        def respond(request, timeout):
+            calls.append((request.full_url, request.headers["Authorization"], json.loads(request.data)))
+            return io.BytesIO(b'{"success":true,"data":{}}')
+
+        with patch.dict("os.environ", {"MARIMOHUB_RUN_URL": "https://hub.test/api/job-execution/v1", "MARIMOHUB_RUN_CREDENTIAL": "run-secret"}):
+            run = Run()
+        with patch("jobs.build_opener", return_value=SimpleNamespace(open=respond)):
+            run.get_run()
+            run.patch_metadata({"report": "s3://results/report", "obsolete": None})
+            run.acknowledge_stop()
+        self.assertEqual([url.rsplit("/", 1)[1] for url, _, _ in calls], ["get_run", "patch_metadata", "acknowledge_stop"])
+        self.assertTrue(all(token == "Bearer run-secret" for _, token, _ in calls))
+        self.assertEqual(calls[1][2], {"report": "s3://results/report", "obsolete": None})
+
+    def test_failed_flush_does_not_continue_to_acknowledgement(self):
+        for status in [403, 409, 503]:
+            with self.subTest(status=status):
+                with patch.dict("os.environ", {"MARIMOHUB_RUN_URL": "https://hub.test/api/job-execution/v1", "MARIMOHUB_RUN_CREDENTIAL": "secret"}):
+                    run = Run()
+                error = HTTPError("https://hub.test", status, "failure", {}, None)
+                opener = SimpleNamespace(open=Mock(side_effect=error))
+                with patch("jobs.build_opener", return_value=opener):
+                    with self.assertRaises(HTTPError):
+                        run.patch_metadata({"saved": True})
+                        run.acknowledge_stop()
+                self.assertEqual(opener.open.call_count, 1)
+                self.assertTrue(opener.open.call_args.args[0].full_url.endswith("/patch_metadata"))
+
     def test_helpers_keep_each_visitors_refreshed_credentials(self):
         calls = []
 

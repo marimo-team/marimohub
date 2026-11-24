@@ -16,16 +16,28 @@ import {
 	sessionMode,
 	toPublicJobRun,
 	ForbiddenError,
+	RunStopBodySchema,
 } from '@marimo-hub/core';
 import { isTerminalRunStatus } from '@marimo-hub/core/jobs';
 import type { ApiDeps, HonoEnv } from '../context';
 import { authorizeProxyRequest } from '../sandboxProxy';
-import { fail } from '../shared';
-import { authorizeJobNotebook, loadAuthorizedJob, loadJobRun, triggerJobRun } from './operations';
+import { fail, destroySandboxes } from '../shared';
+import {
+	authorizeJobNotebook,
+	loadAuthorizedJob,
+	loadJobRun,
+	triggerJobRun,
+	requestJobRunStop,
+} from './operations';
 import { TriggerRunBody } from './schemas';
 
 const jobBody = z.strictObject({ job_id: z.string().regex(JobId.regex).transform(JobId.parse) });
+const runBody = jobBody.extend({ run_id: z.string().regex(RunId.regex).transform(RunId.parse) });
 const jobRequest = z.discriminatedUnion('operation', [
+	z.object({
+		operation: z.literal('stop'),
+		body: runBody.extend({ input: RunStopBodySchema.optional() }),
+	}),
 	z.object({ operation: z.literal('list_project_runs'), body: ProjectRunListBody }),
 	z.object({
 		operation: z.literal('trigger'),
@@ -33,7 +45,7 @@ const jobRequest = z.discriminatedUnion('operation', [
 	}),
 	z.object({
 		operation: z.literal('get_run'),
-		body: jobBody.extend({ run_id: z.string().regex(RunId.regex).transform(RunId.parse) }),
+		body: runBody,
 	}),
 	z.object({ operation: z.literal('list_active_runs'), body: jobBody }),
 ]);
@@ -117,8 +129,16 @@ export function createAppJobsApp(deps: ApiDeps) {
 			});
 			return c.json({ success: true, data: toPublicJobRun(run) });
 		}
-		if (request.operation === 'get_run') {
+		if (request.operation === 'get_run' || request.operation === 'stop') {
 			const run = await loadJobRun(deps, target.job, request.body.run_id);
+			if (request.operation === 'stop') {
+				const stopped = (
+					await requestJobRunStop(deps, target, run, request.body.input?.grace_seconds)
+				).run;
+				if (isTerminalRunStatus(stopped.status) && stopped.sandbox_id)
+					await destroySandboxes(deps, [stopped.sandbox_id], { run_id: stopped.run_id });
+				return c.json({ success: true, data: toPublicJobRun(stopped) });
+			}
 			if (run.triggered_by !== user.id) throw new ForbiddenError('Run belongs to another user');
 			return c.json({ success: true, data: toPublicJobRun(run) });
 		}

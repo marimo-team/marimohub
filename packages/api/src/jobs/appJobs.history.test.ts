@@ -31,6 +31,7 @@ describe('app project history', () => {
 				triggeredBy: bob.user,
 				tags,
 				parameters: { secret: 'input' },
+				metadata: { report: 's3://results/report', rows: 12 },
 				timeoutSeconds: 60,
 				sourceVersionId: (await f.services.notebooks.getNotebookSource(f.project.id, source.id))
 					.current_version_id!,
@@ -46,6 +47,10 @@ describe('app project history', () => {
 		expect(page.items.map((r) => r.run_id)).toEqual([newer.run_id, older.run_id]);
 		expect(page.items[0]).not.toHaveProperty('parameters');
 		expect(page.items[0]).not.toHaveProperty('error');
+		expect(page.items.map((item) => item.metadata)).toEqual([
+			{ report: 's3://results/report', rows: 12 },
+			{ report: 's3://results/report', rows: 12 },
+		]);
 		expect(page.items[1].parameters).toEqual({ secret: 'input' });
 		expect(page.items.some((r) => r.run_id === privateRun.run_id)).toBe(false);
 		expect((await f.call('trigger', { job_id: shared.id })).status).toBe(404);

@@ -1,8 +1,10 @@
+import type { NotebookBridgeRuntime } from '../../ports/notebookBridge';
+import { mergeSessionEnv } from '../runtime/sandboxEnvironment';
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { withDeadline } from '../../async';
-import { Millis } from '../../duration';
+import { Millis, sleep } from '../../duration';
 import { DomainError, NotFoundError, UnavailableError } from '../../errors';
 import { createSandboxId } from '../../ids';
 import { logEvent } from '../../logs';
@@ -74,6 +76,8 @@ export interface JobRunContext {
 }
 
 export interface JobRunnerDeps {
+	notebookBridge?: NotebookBridgeRuntime;
+	appBaseUrl?: string;
 	bucket: Bucket;
 	compute: SandboxProvider;
 	notebooks: NotebookService;
@@ -320,7 +324,7 @@ export class JobRunner {
 			context.run = started.run;
 
 			const { outcome, exitCode, html, logs } = await stopwatch.time('exec', () =>
-				beforeDeadline(this.runExport(prepared, context.run)),
+				beforeDeadline(this.runUntilStopped(prepared, context.run)),
 			);
 			const output = await stopwatch.time('capture', () =>
 				beforeDeadline(
@@ -386,7 +390,43 @@ export class JobRunner {
 	 * The caller's persisted deadline also bounds artifact reads after the shell
 	 * and exec RPC timeouts have stopped covering the operation.
 	 */
-	private async runExport(prepared: PreparedSandbox, run: JobRun): Promise<ExportCapture> {
+	private async runUntilStopped(prepared: PreparedSandbox, run: JobRun): Promise<ExportCapture> {
+		const controller = new AbortController();
+		const observeStop = async (): Promise<never> => {
+			while (true) {
+				await sleep(1000, controller.signal);
+				if (run.deadline_at && Date.parse(run.deadline_at) <= Date.now())
+					throw new RunDeadlineError();
+				const current = await this.deps.runs
+					.getRun(run.project_id, run.notebook_id, run.job_id, run.run_id)
+					.catch((error: unknown) => {
+						logOperationalError(
+							'job_stop_poll_failed',
+							{ operation: 'job.run.stop_poll', run_id: run.run_id },
+							error,
+						);
+						return null;
+					});
+				if (!current) continue;
+				if (current.status === 'cancelled') throw new RunCancelledError();
+				if (current.stop_request && Date.parse(current.stop_request.deadline_at) <= Date.now()) {
+					await this.deps.runs.cancel(current, current.stop_request.requested_by);
+					throw new RunCancelledError();
+				}
+			}
+		};
+		try {
+			return await Promise.race([this.runExport(prepared, run, controller.signal), observeStop()]);
+		} finally {
+			controller.abort();
+		}
+	}
+
+	private async runExport(
+		prepared: PreparedSandbox,
+		run: JobRun,
+		signal: AbortSignal,
+	): Promise<ExportCapture> {
 		const { sandbox, workdir } = prepared;
 		const timeoutMs = run.timeout_seconds * 1000;
 		const command = jobShellCommand(
@@ -397,7 +437,7 @@ export class JobRunner {
 		);
 		const result = await withDeadline(
 			sandbox.exec(command, { timeout: timeoutMs + Millis.minutes(1) }),
-			{ timeoutMs: timeoutMs + EXEC_GRACE_MS, timeoutError: () => new RunDeadlineError() },
+			{ timeoutMs: timeoutMs + EXEC_GRACE_MS, timeoutError: () => new RunDeadlineError(), signal },
 		);
 		const marker = parseExitMarker(result.stdout);
 		const exitCode = marker?.exitCode;
@@ -474,6 +514,8 @@ export class JobRunner {
 		sandboxId: ReturnType<typeof createSandboxId>,
 	) {
 		const { bucket, sandbox } = this.deps;
+		if (this.deps.appBaseUrl && !this.deps.notebookBridge)
+			throw new UnavailableError('Job execution client is not configured');
 		const { run, notebook } = context;
 		const policy = workspaceSourcePolicy(notebook.source);
 		const syncedVersionId = policy.persistSessionEdits
@@ -523,6 +565,14 @@ export class JobRunner {
 			});
 		});
 		void sessionEnv?.catch(() => {});
+		const executionEnv = this.deps.appBaseUrl
+			? mergeSessionEnv(await sessionEnv, {
+					vars: {
+						MARIMOHUB_RUN_URL: `${this.deps.appBaseUrl.replace(/\/$/, '')}/api/job-execution/v1`,
+						MARIMOHUB_RUN_CREDENTIAL: await this.deps.runs.issueExecutionCredential(run),
+					},
+				})
+			: sessionEnv;
 		return {
 			sandboxId,
 			projectId: run.project_id,
@@ -536,10 +586,11 @@ export class JobRunner {
 			startupTimeoutMs: sandbox.startupTimeoutMs,
 			image: context.image,
 			resources: context.computeProfile.resources,
-			sessionEnv,
+			sessionEnv: executionEnv,
 			entryNotebook,
 			launchStrategy: launchStrategy.strategy,
 			launchMode: 'job' as const,
+			notebookBridge: this.deps.appBaseUrl ? this.deps.notebookBridge : undefined,
 			// Never a mount: an unattended sandbox must not write through to the
 			// workspace mirror, and outputs belong under the run prefix only.
 			workspaceLoadMode: 'copy-only' as const,
