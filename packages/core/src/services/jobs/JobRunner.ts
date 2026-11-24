@@ -1,3 +1,4 @@
+import type { NotebookBridgeRuntime } from '../../ports/notebookBridge';
 import { mergeSessionEnv } from '../runtime/sandboxEnvironment';
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
@@ -75,6 +76,7 @@ export interface JobRunContext {
 }
 
 export interface JobRunnerDeps {
+	notebookBridge?: NotebookBridgeRuntime;
 	appBaseUrl?: string;
 	bucket: Bucket;
 	compute: SandboxProvider;
@@ -512,6 +514,8 @@ export class JobRunner {
 		sandboxId: ReturnType<typeof createSandboxId>,
 	) {
 		const { bucket, sandbox } = this.deps;
+		if (this.deps.appBaseUrl && !this.deps.notebookBridge)
+			throw new UnavailableError('Job execution client is not configured');
 		const { run, notebook } = context;
 		const policy = workspaceSourcePolicy(notebook.source);
 		const syncedVersionId = policy.persistSessionEdits
@@ -586,6 +590,7 @@ export class JobRunner {
 			entryNotebook,
 			launchStrategy: launchStrategy.strategy,
 			launchMode: 'job' as const,
+			notebookBridge: this.deps.appBaseUrl ? this.deps.notebookBridge : undefined,
 			// Never a mount: an unattended sandbox must not write through to the
 			// workspace mirror, and outputs belong under the run prefix only.
 			workspaceLoadMode: 'copy-only' as const,

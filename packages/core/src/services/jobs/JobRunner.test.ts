@@ -143,17 +143,32 @@ describe('JobRunner', () => {
 		},
 	);
 
+	it('fails before export when the execution client is not configured', async () => {
+		const sandbox = makeJobSandbox();
+		const result = await runner(sandbox, { appBaseUrl: 'https://hub.test' }).execute(
+			await enqueue(),
+		);
+		expect(result.status).toBe('failed');
+		expect(sandbox.jobCommands).toEqual([]);
+	});
+
 	it('provisions a run credential with the execution environment', async () => {
 		const sandbox = makeJobSandbox();
 		const prepare = vi.spyOn(SandboxProvisioner.prototype, 'prepare');
 		const queued = await enqueue();
 		await runner(sandbox, {
 			appBaseUrl: 'https://hub.test',
+			notebookBridge: {
+				launcher: 'marimo-bridge.py',
+				files: [{ name: 'marimo-bridge.py', content: 'launcher' }],
+			},
 			resolveSessionEnv: async () => ({ vars: { APP_VAR: 'kept' } }),
 		}).execute(queued);
 		const sessionEnv = await prepare.mock.calls[0][0].sessionEnv;
 		expect(sessionEnv?.vars?.MARIMOHUB_RUN_URL).toBe('https://hub.test/api/job-execution/v1');
 		expect(sessionEnv?.vars?.APP_VAR).toBe('kept');
+		expect(sandbox.jobCommands[0]).toContain('marimo-bridge.py');
+		expect(prepare.mock.calls[0][0].notebookBridge).toBeDefined();
 		expect(
 			(await env.jobRuns.authenticateExecution(sessionEnv!.vars!.MARIMOHUB_RUN_CREDENTIAL)).run_id,
 		).toBe(queued.run_id);

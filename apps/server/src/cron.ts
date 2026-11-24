@@ -320,6 +320,7 @@ function createJobScheduler(
 ): JobScheduler {
 	const runner = new JobRunner({
 		appBaseUrl: deps.sandbox.appBaseUrl,
+		notebookBridge: deps.sandbox.notebookBridge,
 		bucket: deps.bucket,
 		compute: deps.compute,
 		notebooks: deps.services.notebooks,

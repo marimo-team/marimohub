@@ -299,7 +299,9 @@ Metadata follows the job's history policy, including shared history. Keep creden
 External result references grant no access to their destination.
 
 Set `MARIMOHUB_APP_BASE_URL` to a hub URL reachable from the sandbox to enable execution updates.
-The platform supplies a credential limited to the current run and attempt, valid until the execution deadline.
+The platform installs the bundled client in the job’s Python environment before export.
+It supplies a credential limited to the current run and attempt.
+The credential remains valid until the execution deadline. Client installation failure stops the job before export.
 
 ```python
 from marimohub.jobs import Run

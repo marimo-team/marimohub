@@ -132,7 +132,7 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/uv-python"
           "$RUNNER_TEMP/uv-python/bin/pip" install "uv==$UV_INTEGRATION_VERSION"
-          PATH="$RUNNER_TEMP/uv-python/bin:$PATH" MARIMOHUB_UV_INTEGRATION=1 vp test packages/core/src/services/runtime/marimoLaunch.integration.test.ts packages/compute-local/src/runtimePackages.integration.test.ts --configLoader=runner --pool=threads
+          PATH="$RUNNER_TEMP/uv-python/bin:$PATH" MARIMOHUB_UV_INTEGRATION=1 vp test packages/core/src/services/runtime/marimoLaunch.integration.test.ts packages/compute-local/src/runtimePackages.integration.test.ts packages/notebook-bridge/src/artifact.test.ts --configLoader=runner --pool=threads
 
       # An apt mirror stall here once consumed the whole job budget; fail fast instead.
       - name: Install Chromium for thumbnail rendering

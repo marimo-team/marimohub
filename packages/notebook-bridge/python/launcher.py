@@ -57,6 +57,8 @@ def main():
     except Exception:
         os.environ.pop("MARIMOHUB_BRIDGE_PARENT_ORIGIN", None)
         print('{"event":"notebook_bridge_unavailable","reason":"install_failed"}', file=sys.stderr)
+        if sys.argv[1:3] == ["export", "html"]:
+            raise SystemExit(1) from None
     if install_only:
         return
     lifecycle = os.environ.get("MARIMOHUB_LIFECYCLE_DIR")
