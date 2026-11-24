@@ -84,7 +84,7 @@ export function hostRetryStoreContract(
 			expect(rejected).toMatchObject({
 				status: 409,
 				replayed: false,
-				body: { type: 'tag:marimo.io,2026:host/conflict', detail: 'Name in use' },
+				body: { type: 'urn:marimo:problem:conflict', detail: 'Name in use' },
 			});
 			const work = vi.fn(async (attempt: HostRetryAttempt) => {
 				await attempt.dispatch();

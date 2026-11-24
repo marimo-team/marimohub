@@ -7,7 +7,7 @@ import {
 	HostProblemError,
 	mapRuntimeEvent,
 	mapRuntimeProblem,
-	parseTypes,
+	parseKinds,
 	sse,
 	UpstreamProblemError,
 } from './protocol';
@@ -25,15 +25,15 @@ const statusOf = (error: unknown) => (error instanceof PlatformError ? error.sta
 
 describe('stream kind filters', () => {
 	it('parses and validates kinds and matches removal events', () => {
-		expect(parseTypes(undefined, CATALOG_KINDS)).toBeUndefined();
-		expect(parseTypes(',', CATALOG_KINDS)).toBeUndefined();
-		const types = parseTypes('notebook,runtime', CATALOG_KINDS);
+		expect(parseKinds(undefined, CATALOG_KINDS)).toBeUndefined();
+		expect(parseKinds(',', CATALOG_KINDS)).toBeUndefined();
+		const types = parseKinds('notebook,runtime', CATALOG_KINDS);
 		expect(acceptsEvent(types, 'runtime.removed')).toBe(true);
 		expect(acceptsEvent(types, 'host')).toBe(false);
 		expect(acceptsEvent(types, 'ready')).toBe(true);
 		expect(acceptsEvent(undefined, 'attachment')).toBe(true);
-		expect(() => parseTypes('cell,bogus', CATALOG_KINDS)).toThrow(
-			'types has no kind named bogus, cell',
+		expect(() => parseKinds('cell,bogus', CATALOG_KINDS)).toThrow(
+			'kinds has no kind named bogus, cell',
 		);
 	});
 });
@@ -77,11 +77,8 @@ describe('runtime identity mapping', () => {
 			).data.edit,
 		).toEqual({ document: { notebook_id: 'proj:nb', etag: 'e' } });
 		expect(
-			mapRuntimeProblem(
-				{ status: 409, edit: { document: { notebook_id: 'local' }, reason: 'stale' } },
-				'proj:nb',
-			),
-		).toEqual({ status: 409, edit: { document: { notebook_id: 'proj:nb' }, reason: 'stale' } });
+			mapRuntimeProblem({ status: 412, document: { notebook_id: 'local' }, index: 0 }, 'proj:nb'),
+		).toEqual({ status: 412, document: { notebook_id: 'proj:nb' }, index: 0 });
 	});
 });
 
@@ -102,19 +99,19 @@ describe('host problem responses', () => {
 		}
 		expect(await Promise.all(responses.map((response) => response.json()))).toEqual([
 			{
-				type: 'tag:marimo.io,2026:host/conflict',
+				type: 'urn:marimo:problem:conflict',
 				title: 'conflict',
 				status: 409,
 				detail: 'Editor changed',
 			},
 			{
-				type: 'tag:marimo.io,2026:host/no-runtime',
+				type: 'urn:marimo:problem:no-runtime',
 				title: 'no-runtime',
 				status: 409,
 				detail: 'Runtime stopped',
 			},
 			{
-				type: 'tag:marimo.io,2026:host/decision-required',
+				type: 'urn:marimo:problem:decision-required',
 				title: 'decision-required',
 				status: 409,
 				detail: 'Choose an editor',
@@ -127,13 +124,13 @@ describe('host problem responses', () => {
 		const tooLarge = errorResponse(HostProblemError.payloadTooLarge('Body exceeds limit'));
 		expect(tooLarge.status).toBe(413);
 		expect(await tooLarge.json()).toMatchObject({
-			type: 'tag:marimo.io,2026:host/invalid-request',
+			type: 'urn:marimo:problem:invalid-request',
 			status: 413,
 		});
 		const invalid = errorResponse(new SyntaxError('private parser details'));
 		expect(invalid.status).toBe(400);
 		expect(await invalid.json()).toMatchObject({
-			type: 'tag:marimo.io,2026:host/invalid-request',
+			type: 'urn:marimo:problem:invalid-request',
 			status: 400,
 			detail: 'Invalid request body or parameters',
 		});
@@ -176,11 +173,39 @@ describe('host problem responses', () => {
 			const response = errorResponse(error, statusOf);
 			expect(response.status).toBe(status);
 			expect(await response.json()).toEqual({
-				type: `tag:marimo.io,2026:host/${type}`,
+				type: `urn:marimo:problem:${type}`,
 				title: type,
 				status,
 				detail,
 			});
 		},
 	);
+});
+
+describe('malformed runtime payloads', () => {
+	it.each([null, undefined, 'error', 42, [], [{ notebook_id: 'local' }]])(
+		'preserves non-record problems: %j',
+		(body) => {
+			expect(mapRuntimeProblem(body, 'hub')).toBe(body);
+		},
+	);
+
+	it.each([null, [], 'missing'])('preserves unavailable cell and document values: %j', (value) => {
+		const body = { status: 412, cell: value, document: value };
+		expect(mapRuntimeProblem(body, 'hub')).toEqual(body);
+		const event = { event: 'edit', data: { edit: { document: value, cells: {} } } };
+		expect(mapRuntimeEvent(event, 'hub', 'session')).toEqual(event);
+	});
+
+	it('does not mutate a shared precondition response', () => {
+		const body = Object.freeze({
+			cell: null,
+			document: Object.freeze({ notebook_id: 'local', etag: 'same' }),
+		});
+		expect(mapRuntimeProblem(body, 'hub')).toEqual({
+			cell: null,
+			document: { notebook_id: 'hub', etag: 'same' },
+		});
+		expect(body.document.notebook_id).toBe('local');
+	});
 });

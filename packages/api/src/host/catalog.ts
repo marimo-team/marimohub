@@ -156,7 +156,7 @@ export async function notebookRecord(
 		project_id: project.id,
 		path: null,
 		name: session ? `${notebook.title} (temporary)` : notebook.title,
-		updated_at: notebook.updated_at,
+		modified_at: notebook.updated_at,
 		operations: [
 			...(write.allowed && !session ? ['notebook.update'] : []),
 			// A viewer's edit session is an ephemeral throwaway by policy (see startNotebookSession);

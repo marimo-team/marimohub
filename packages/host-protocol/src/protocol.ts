@@ -21,16 +21,30 @@ export const RUNTIME_ROUTES = [
 		provision: true,
 	},
 	{
+		method: 'POST',
+		path: '/runtime/execute',
+		operation: 'runtime.execute',
+		event: 'run',
+		provision: true,
+	},
+	{
+		method: 'POST',
+		path: '/runtime/interrupt',
+		operation: 'runtime.interrupt',
+		event: 'runtime',
+		provision: false,
+	},
+	{
 		method: 'DELETE',
 		path: '/runtime/runs/:run',
-		operation: 'runtime.interrupt',
+		operation: 'runtime.cancel',
 		event: 'run',
 		provision: false,
 	},
 	{
 		method: 'POST',
 		path: '/runtime/inputs/:input/reply',
-		operation: 'runtime.input',
+		operation: 'input.reply',
 		event: 'input',
 		provision: false,
 	},
@@ -55,7 +69,7 @@ export const NOTEBOOK_KINDS = [
 	'run',
 	'execution',
 	'console',
-	'display',
+	'output',
 	'input',
 	'variable',
 	'custom',
@@ -136,7 +150,7 @@ function problem(
 ): Response {
 	return problemResponse(
 		{
-			type: `tag:marimo.io,2026:host/${type}`,
+			type: `urn:marimo:problem:${type}`,
 			title: type,
 			status,
 			detail,
@@ -205,12 +219,12 @@ export function sse(event: HostEvent): string {
 	return `${id}event: ${sseField(event.event)}\ndata: ${JSON.stringify(event.data)}\n\n`;
 }
 
-export function parseTypes(raw: string | undefined, kinds: readonly string[]): EventKinds {
+export function parseKinds(raw: string | undefined, kinds: readonly string[]): EventKinds {
 	const asked = new Set((raw ?? '').split(',').filter((kind) => kind !== ''));
 	if (asked.size === 0) return undefined;
 	const unknown = [...asked].filter((kind) => !kinds.includes(kind)).sort();
 	if (unknown.length > 0)
-		throw HostProblemError.invalidRequest(`types has no kind named ${unknown.join(', ')}`);
+		throw HostProblemError.invalidRequest(`kinds has no kind named ${unknown.join(', ')}`);
 	return asked;
 }
 
@@ -223,6 +237,14 @@ export function acceptsEvent(types: EventKinds, kind: string): boolean {
 	);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function withNotebookId(value: unknown, notebookId: string): unknown {
+	return isRecord(value) ? { ...value, notebook_id: notebookId } : value;
+}
+
 /**
  * Rewrite a runtime's event so its notebook ID is the platform's and its runtime IDs are
  * prefixed with the runtime key, since one platform notebook may see several runtimes over time.
@@ -233,14 +255,14 @@ export function mapRuntimeEvent(
 	runtimeKey: string,
 ): HostEvent {
 	const value = event.data[event.event];
-	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+	if (!isRecord(value)) {
 		if (event.event === 'runtime.removed' && typeof event.data.id === 'string')
 			return { ...event, data: { ...event.data, id: `${runtimeKey}:${event.data.id}` } };
 		return event;
 	}
 	const record: Record<string, unknown> = { ...value };
-	if (event.event === 'edit' && record.document && typeof record.document === 'object')
-		record.document = { ...record.document, notebook_id: notebookId };
+	if (event.event === 'edit' && 'document' in record)
+		record.document = withNotebookId(record.document, notebookId);
 	if ('notebook_id' in record) record.notebook_id = notebookId;
 	if (typeof record.runtime_id === 'string')
 		record.runtime_id = `${runtimeKey}:${record.runtime_id}`;
@@ -250,18 +272,11 @@ export function mapRuntimeEvent(
 }
 
 export function mapRuntimeProblem(body: unknown, notebookId: string): unknown {
-	if (!body || typeof body !== 'object' || !('edit' in body)) return body;
-	const edit = body.edit;
-	if (!edit || typeof edit !== 'object') return body;
-	return {
-		...body,
-		edit: Object.fromEntries(
-			Object.entries(edit).map(([key, value]) => [
-				key,
-				(key === 'document' || key === 'cell') && value && typeof value === 'object'
-					? { ...value, notebook_id: notebookId }
-					: value,
-			]),
-		),
-	};
+	if (!isRecord(body)) return body;
+	return Object.fromEntries(
+		Object.entries(body).map(([key, value]) => [
+			key,
+			key === 'document' || key === 'cell' ? withNotebookId(value, notebookId) : value,
+		]),
+	);
 }

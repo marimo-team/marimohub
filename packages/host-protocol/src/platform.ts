@@ -12,7 +12,7 @@ export interface HostNotebookRecord {
 	project_id: string;
 	path: string | null;
 	name: string;
-	updated_at: string;
+	modified_at: string | null;
 	operations: string[];
 }
 
