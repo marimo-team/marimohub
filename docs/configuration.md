@@ -14,32 +14,6 @@ Every marimohub configuration variable, grouped by category and backend. A categ
 
 🔒 marks a sensitive value (a secret).
 
-## Metadata storage
-
-Selected by `MARIMOHUB_METADATA_BACKEND` (default `bucket`); one of `bucket`, `postgres`.
-
-Metadata storage is separate from artifact storage. PostgreSQL requires a Node host and an activated deployment.
-
-### Bucket
-
-`MARIMOHUB_METADATA_BACKEND=bucket`
-
-_No environment variables to set here._
-
-### PostgreSQL
-
-`MARIMOHUB_METADATA_BACKEND=postgres`
-
-| Variable | Description | Required | Default | Example |
-| --- | --- | --- | --- | --- |
-| `MARIMOHUB_METADATA_ADMIN_POSTGRES_URL` 🔒 | Schema-owner connection for explicit metadata administration commands. Do not give this credential to runtime replicas. | — | — | — |
-| `MARIMOHUB_METADATA_POSTGRES_URL` 🔒 | Runtime connection URL. The runtime role must not own the schema. | Yes | — | — |
-| `MARIMOHUB_METADATA_NAMESPACE` | Deployment namespace, from 1 to 128 UTF-8 bytes. | Yes | — | — |
-| `MARIMOHUB_METADATA_POSTGRES_POOL_MAX` | Maximum connections per replica. Multiply by replica count for the deployment connection budget. | — | `10` | — |
-| `MARIMOHUB_METADATA_POSTGRES_CONNECT_TIMEOUT_MS` | Maximum connection acquisition time in milliseconds. | — | `5000` | — |
-| `MARIMOHUB_METADATA_POSTGRES_STATEMENT_TIMEOUT_MS` | Maximum statement time in milliseconds. | — | `10000` | — |
-| `MARIMOHUB_METADATA_POSTGRES_LOCK_TIMEOUT_MS` | Maximum lock wait in milliseconds. Must not exceed the statement timeout. | — | `2000` | — |
-
 ## Theme
 
 Deployment branding and session links for the hub UI. Session link templates stay on the server. Other values are public. See the [theming guide](./theming.md) for examples and asset hosting.
@@ -150,6 +124,33 @@ Loads an external storage adapter from an npm package or ESM file at Node server
 Requires a Cloudflare R2 binding; wired by hand in `examples/cloudflare-worker`, not via env credentials.
 
 _No environment variables to set here._
+
+## Metadata storage
+
+Selected by `MARIMOHUB_METADATA_BACKEND` (default `bucket`); one of `bucket`, `postgres`.
+
+Metadata storage is separate from artifact storage. PostgreSQL requires a Node host and an activated deployment.
+
+### Bucket
+
+`MARIMOHUB_METADATA_BACKEND=bucket`
+
+_No environment variables to set here._
+
+### PostgreSQL
+
+`MARIMOHUB_METADATA_BACKEND=postgres`
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_METADATA_ADMIN_POSTGRES_URL` 🔒 | Schema-owner connection read only by the `metadata:*` administration commands. Do not set it on runtime replicas. | — | — | — |
+| `MARIMOHUB_METADATA_POSTGRES_URL` 🔒 | Runtime connection URL. The runtime role must not own the schema. | Yes | — | — |
+| `MARIMOHUB_METADATA_POSTGRES_ALLOW_INSECURE_TRANSPORT` | Allows metadata PostgreSQL URLs, including the administrative URL, to reach a non-loopback host without `sslmode=verify-full` or `verify-ca`. Disabled by default. | — | `false` | — |
+| `MARIMOHUB_METADATA_NAMESPACE` | Deployment namespace, from 1 to 128 UTF-8 bytes. | Yes | — | — |
+| `MARIMOHUB_METADATA_POSTGRES_POOL_MAX` | Maximum connections per replica. Multiply by replica count for the deployment connection budget. | — | `10` | — |
+| `MARIMOHUB_METADATA_POSTGRES_CONNECT_TIMEOUT_MS` | Maximum connection acquisition time in milliseconds. | — | `5000` | — |
+| `MARIMOHUB_METADATA_POSTGRES_STATEMENT_TIMEOUT_MS` | Maximum statement time in milliseconds. | — | `10000` | — |
+| `MARIMOHUB_METADATA_POSTGRES_LOCK_TIMEOUT_MS` | Maximum lock wait in milliseconds. Must not exceed the statement timeout. | — | `2000` | — |
 
 ## Compute
 

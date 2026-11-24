@@ -84,11 +84,13 @@ export function createLogicalStorage(
 			}
 		}
 		const inputs = [
+			// Full raw pages: stale bucket copies of metadata are skipped here, so a small caller
+			// limit would cost one LIST per stale object. The merge reads pages lazily.
 			entries(rawArtifacts, 'artifact', {
 				prefix,
 				delimiter,
 				startAfter: after,
-				limit: options.limit,
+				limit: 1000,
 			}),
 		];
 		if (!artifactsOnly)

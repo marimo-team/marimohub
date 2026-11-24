@@ -306,3 +306,24 @@ it('compares phase timestamps as instants rather than strings', async () => {
 		started_at: '2026-11-18T00:00:00.100Z',
 	});
 });
+
+it('reads a session whose stored startup phase is unknown', async () => {
+	const { bucket, session: s, writer, reader, progress } = await fixture();
+	const key = paths.session(s.project_id, s.session_id);
+	await bucket.put(
+		key,
+		JSON.stringify({
+			...s,
+			startup: { ...progress, phase: 'warming', observed: ['allocating', 'warming'] },
+		}),
+	);
+	expect((await reader.getSession(s.project_id, s.session_id)).startup?.phase).toBe('warming');
+	expect((await reader.getStartupStatus(s.project_id, s.session_id)).startup).toBeNull();
+	await bucket.put(
+		key,
+		JSON.stringify({ ...s, startup: { ...progress, observed: ['allocating', 'warming'] } }),
+	);
+	expect((await reader.getStartupStatus(s.project_id, s.session_id)).startup).toEqual(progress);
+	await writer.markFailed(s.project_id, s.session_id, { code: 'BOOT_FAILED', message: 'Failed' });
+	expect((await reader.getSession(s.project_id, s.session_id)).status).toBe('failed');
+});

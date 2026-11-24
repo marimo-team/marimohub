@@ -17,7 +17,6 @@ import {
 	ROLES,
 	SESSION_MODES,
 	SESSION_STATUSES,
-	SANDBOX_STARTUP_PHASES,
 	STARTUP_DETAIL_MAX_LENGTH,
 	SOURCE_TYPES,
 } from './constants';
@@ -975,13 +974,17 @@ export const SessionStopAttemptSchema = z.object({
 });
 export type SessionStopAttempt = z.infer<typeof SessionStopAttemptSchema>;
 
+// Stored phases stay open strings: a record written by a newer replica during a rolling deploy
+// must still parse here. Readers normalize to SANDBOX_STARTUP_PHASES.
+const StoredStartupPhaseSchema = z.string().min(1).max(64);
+
 export const SessionStartupSchema = z.object({
 	sandbox_id: SandboxIdSchema,
-	phase: z.enum(SANDBOX_STARTUP_PHASES),
+	phase: StoredStartupPhaseSchema,
 	detail: z.string().max(STARTUP_DETAIL_MAX_LENGTH).optional(),
 	attempt: z.number().int().positive(),
 	started_at: utcTimestamp(),
-	observed: z.array(z.enum(SANDBOX_STARTUP_PHASES)).max(SANDBOX_STARTUP_PHASES.length),
+	observed: z.array(StoredStartupPhaseSchema).max(32),
 });
 
 const SessionIntegrationsSchema = z
@@ -1323,6 +1326,7 @@ export const ProjectRunIndexSchema = z.object({
 	job_id: JobIdSchema,
 	run_id: RunIdSchema,
 });
+export type ProjectRunIndex = z.infer<typeof ProjectRunIndexSchema>;
 
 export const JobRunSchema = z.looseObject({
 	tags: RunTagsSchema.optional(),

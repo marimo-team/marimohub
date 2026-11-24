@@ -539,6 +539,23 @@ describe('Job routes', () => {
 		expect(await services.jobRuns.listActive()).toEqual([]);
 	});
 
+	it('deleting a job removes its runs from project history', async () => {
+		const job = await createJob();
+		const other = await createJob({ name: 'other' });
+		await expectOk(await request('POST', `${base()}/${job.id}/runs`), 201);
+		const kept = await expectOk<any>(await request('POST', `${base()}/${other.id}/runs`), 201);
+		await expectOk(
+			await request('DELETE', `${base()}/${job.id}`, undefined, {
+				'if-match': job.updated_at,
+			}),
+		);
+		const page = await services.jobRuns.listProjectRunsPage(pid, 10);
+		expect(page.items.map((run) => run.run_id)).toEqual([kept.run_id]);
+		expect((await bucket.list({ prefix: paths.project(pid).runIndexPrefix })).objects).toHaveLength(
+			1,
+		);
+	});
+
 	it('finishes deletion after repeated finish-audit failures', async () => {
 		const job = await createJob();
 		const queued = await expectOk<any>(await request('POST', `${base()}/${job.id}/runs`), 201);

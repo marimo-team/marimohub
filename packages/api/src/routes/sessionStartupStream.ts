@@ -1,4 +1,5 @@
 import type { SandboxStartupSnapshot } from '@marimo-hub/core/ports/sandbox';
+import type { ErrorCode } from '../shared';
 import type { SessionCreateResult } from './sessionStart';
 
 const HEARTBEAT_MS = 15_000;
@@ -101,7 +102,7 @@ export function sessionStartupStream(
 							finish('error', {
 								success: false,
 								error: {
-									code: 'STREAM_EXPIRED',
+									code: 'STREAM_EXPIRED' satisfies ErrorCode,
 									message: 'Startup observation expired. Reload to check the session.',
 									status: 408,
 								},

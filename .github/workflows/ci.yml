@@ -82,7 +82,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17.12
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
@@ -200,14 +200,15 @@ jobs:
 
   # Preserve the required check name and propagate suite failures.
   test:
-    needs: [test-suites, runtime-integrations]
+    needs: [test-suites, runtime-integrations, metadata-postgres]
     if: ${{ !cancelled() }}
     runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     steps:
-      - run: test "$SUITES" = success && test "$RUNTIME" = success
+      - run: test "$SUITES" = success && test "$RUNTIME" = success && test "$METADATA" = success
         env:
           SUITES: ${{ needs.test-suites.result }}
           RUNTIME: ${{ needs.runtime-integrations.result }}
+          METADATA: ${{ needs.metadata-postgres.result }}
 
   verify:
     runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
@@ -245,6 +246,7 @@ jobs:
       - name: Test release shell helpers
         run: vp run test:release-scripts
       - name: Check default Worker bundle excludes SQL metadata
+        timeout-minutes: 5
         run: |
           vp dlx wrangler@4.150.0 deploy --dry-run --config examples/cloudflare-worker/wrangler.jsonc --outdir /tmp/hub-worker --metafile /tmp/hub-worker-meta.json
           node scripts/check-worker-metadata.mjs /tmp/hub-worker-meta.json

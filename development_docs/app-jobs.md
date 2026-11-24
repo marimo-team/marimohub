@@ -34,6 +34,9 @@ Project-list items cannot necessarily be fetched through `get_run`.
 A run from another notebook returns 404. Another user's run in the app notebook returns 403.
 Use the fields returned by `list_project_runs` to display shared runs.
 
+Visitors are limited to 3 queued or running runs per job; see
+[Queue admission and capacity](../docs/jobs.md#queue-admission-and-capacity).
+
 ## Project runs
 
 `jobs.list_project_runs(tag_key="app", tag_value="demo", limit=20)` reads across notebooks
@@ -72,10 +75,14 @@ Calls are synchronous, with a 30-second timeout per HTTP request.
 The helper refreshes credentials before each operation and does not retry failed calls.
 Every call checks live access and app admission. Triggers also check the execution policy.
 
-Credentials expire after five minutes.
-Refresh ends after one hour or at the original identity expiry, whichever occurs first.
-Reopen the app after refresh expires.
+An access credential expires after five minutes. While the visit is active, the helper
+refreshes it for up to one hour, or until the original identity expires, whichever comes
+first. Refresh keeps that deadline. Reopen the app after it passes.
+The credential is encrypted with AES-256-GCM, so notebook code cannot read the visitor's
+identity from it. It authenticates only `/api/app-jobs/v1` on the hub it was issued for.
 
-Ending the last admitted visit revokes credentials without cancelling accepted runs.
+Leaving the last admitted visit revokes credentials without cancelling accepted runs.
+Without an explicit leave, such as after a tab crash, revocation waits for the 240-second
+visit lease to lapse.
 A fresh visit can recover the same visitor's active runs.
 Access revocation and changes to sharing policy take effect on subsequent calls.

@@ -177,18 +177,78 @@ describe('project run history', () => {
 		).toBeUndefined();
 	});
 
-	it('does not expose a deleted run after a delayed publisher and fails closed on corrupt attribution', async () => {
+	it('does not expose a deleted run after a delayed publisher and skips bad entries', async () => {
+		const kept = await enqueue({ app: 'calibration' });
 		const run = await enqueue({ app: 'calibration' });
-		const source = paths
-			.project(job.project_id)
-			.notebook(job.notebook_id)
-			.job(job.id)
-			.run(run.run_id).record;
+		const corrupt = await enqueue({ app: 'calibration' });
+		const mismatched = await enqueue({ app: 'calibration' });
+		const project = paths.project(job.project_id);
+		const source = project.notebook(job.notebook_id).job(job.id).run(run.run_id).record;
 		await env.bucket.delete(source);
 		await env.jobRuns.publishProjectRun(run);
-		expect((await listing()).items).toEqual([]);
+		expect((await listing()).items.map((item) => item.run_id)).not.toContain(run.run_id);
 		await env.bucket.put(source, JSON.stringify({ ...run, run_id: createRunId() }));
-		await expect(listing()).rejects.toThrow('attribution');
+		await env.bucket.put(project.runIndex(corrupt.run_id), '{not json');
+		await env.bucket.put(
+			project.runIndex(mismatched.run_id),
+			JSON.stringify({ notebook_id: job.notebook_id, job_id: job.id, run_id: kept.run_id }),
+		);
+		const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const page = await listing();
+		expect(page.items.map((item) => item.run_id)).toEqual([kept.run_id]);
+		const skipped = errors.mock.calls
+			.map(([line]) => JSON.parse(String(line)) as { event: string; object: string })
+			.filter((line) => line.event === 'stored_object_skipped')
+			.map((line) => line.object)
+			.sort();
+		expect(skipped).toEqual(
+			[source, project.runIndex(corrupt.run_id), project.runIndex(mismatched.run_id)].sort(),
+		);
+		errors.mockRestore();
+	});
+
+	it('moves project locators with the notebook', async () => {
+		const run = await enqueue({ app: 'calibration' });
+		const destination = await env.projects.createProject({ name: 'q', description: '' }, ACTOR);
+		await env.jobRuns.copyForMove(job.project_id, destination.id, job.notebook_id);
+		await env.jobRuns.finishMove(job.project_id, job.notebook_id);
+		expect((await env.jobRuns.listProjectRunsPage(job.project_id, 10)).items).toEqual([]);
+		const moved = await env.jobRuns.listProjectRunsPage(destination.id, 10, undefined, {
+			key: 'app',
+			value: 'calibration',
+		});
+		expect(moved.items).toEqual([{ ...run, project_id: destination.id }]);
+	});
+
+	it('skips corrupt and misattributed run records during the locator migration', async () => {
+		const corrupt = await enqueue();
+		const misattributed = await enqueue();
+		const valid = await enqueue();
+		const project = paths.project(job.project_id);
+		const runs = project.notebook(job.notebook_id).job(job.id);
+		await env.bucket.put(runs.run(corrupt.run_id).record, '{truncated');
+		await env.bucket.put(
+			runs.run(misattributed.run_id).record,
+			JSON.stringify({ ...misattributed, run_id: createRunId() }),
+		);
+		await env.bucket.delete(
+			[corrupt, misattributed, valid].map((run) => project.runIndex(run.run_id)),
+		);
+		const migration = backgroundMigrations(
+			env.bucket,
+			env.projects,
+			env.sessions,
+			env.jobRuns,
+		).find((entry) => entry.id === 'project-run-index-v1')!;
+		const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+		let batch = await migration.runBatch({});
+		for (let i = 0; i < 10 && !batch.done; i++)
+			batch = await migration.runBatch({ cursor: batch.cursor });
+		errors.mockRestore();
+		expect(batch.done).toBe(true);
+		expect(
+			(await env.jobRuns.listProjectRunsPage(job.project_id, 10)).items.map((run) => run.run_id),
+		).toEqual([valid.run_id]);
 	});
 });
 

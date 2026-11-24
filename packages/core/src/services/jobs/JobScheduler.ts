@@ -624,6 +624,8 @@ export class JobScheduler {
 	private async finalizeLocked(finished: JobRun): Promise<void> {
 		const marker = await this.deps.runs.getMarker(finished);
 		if (!marker) return;
+		// A locator write that fails must retry on the next tick before any alert is sent.
+		await this.deps.runs.publishProjectRun(finished);
 		await this.afterRun(finished, marker.continuation_run_id);
 		await this.deps.runs.deleteMarker(finished);
 	}

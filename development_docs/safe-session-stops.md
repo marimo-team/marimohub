@@ -42,23 +42,31 @@ and reports retained or pending outcomes explicitly.
 ## Proxy save intent
 
 After a successful runtime save, the proxy persists a new `Session.save_dirty` generation
-before it admits capture work. The response waits for this persistence attempt, but
-does not wait for artifact capture. Persistence failures leave the runtime response
-unchanged and emit `session_save_intent_failed`.
+before it admits capture work. This covers kernel saves and marimo host API saves
+(`/api/marimo/v1/notebooks/{id}/save`) sent through the proxy. The response waits for the
+persistence attempt, not for artifact capture. Without a background-work host, the proxy
+schedules no capture and the lifecycle sweep captures instead.
+Persistence failures leave the runtime response unchanged and emit `session_save_intent_failed`.
+
+A hub host protocol save (`/api/host/v1`) persists the generation and captures before it
+responds. A capture that is not durable returns a conflict; the intent stays for the sweep.
 
 The local queue admits at most 64 sessions. Each burst makes at most four capture
-attempts, with 100, 200, and 400 ms delays after consecutive failures.
+attempts, with 100, 200, and 400 ms delays after consecutive failures. A capture that
+lost editor ownership is not retried.
 Overflow, scheduling failure, and process exit leave recorded intent in the session.
 
 Any replica's lifecycle sweep can discover that intent, even with periodic snapshots
 disabled. The sweep processes at most eight sessions concurrently, oldest attempt first.
 Without an attempt, it uses the save time or session start time.
-It retries captures after one minute, or the configured snapshot interval if shorter.
-The retry delay uses the persisted `last_capture_attempt_at`.
+A retry waits at least one minute after the persisted `last_capture_attempt_at`, or the
+configured snapshot interval if shorter. With the default 60-second sweep interval, the
+retry runs at most about two minutes after the failed attempt.
 
 Capture still requires editor ownership and the notebook publication fence.
 A successful capture clears only the dirty generation it observed.
-A newer save remains pending. Periodic capture also reconciles edits without save hints.
+A newer save remains pending. Remote sources need no capture, so the sweep clears their
+observed generation. Periodic capture also reconciles edits without save hints.
 
 ## Publication and runtime recovery
 
@@ -99,7 +107,7 @@ Monitor `sessions.save.acknowledged`, `sessions.save.hint_failed`,
 `capture_deferred` counts saves that exceed local queue capacity.
 `hint_failed` counts persistence, scheduling, and thrown capture failures.
 The corresponding `session_save_{intent,schedule,capture}_failed` logs identify the session and cause. The durable-capture
-metrics count stop captures, periodic snapshots, and host saves.
+metrics count proxy save captures, host protocol saves, periodic snapshots, and stop captures.
 `sessions.stop.retained` and `sessions.stop.forced` count outcomes; the
 `sessions.stop.pending_age_ms`, `sessions.stop.retained_age_ms`, and matching `_count`
 gauges identify stalled work. Telemetry failures do not change save outcomes.

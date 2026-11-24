@@ -27,6 +27,7 @@ import {
 	StoredObjectError,
 } from '../../schema';
 import type {
+	ProjectRunIndex,
 	JobDefinition,
 	JobOccurrence,
 	JobParameters,
@@ -43,7 +44,12 @@ import {
 	releaseSingletonClaim,
 	withCasRetry,
 } from '../catalog/cas';
-import { deleteByPrefix, iterateBucketPages, listAllKeys } from '../catalog/storage';
+import {
+	deleteByPrefix,
+	iterateBucketPages,
+	listAllKeys,
+	listAllPrefixes,
+} from '../catalog/storage';
 import { occurrenceKeyToInstant } from './cron';
 import { isTerminalRunStatus, nextRunStatus } from './runState';
 import type { RunEvent } from './runState';
@@ -139,6 +145,10 @@ export class JobRunService {
 						: bytes,
 			},
 		);
+		const locators = await this.listProjectRunIndexs(destination, nid);
+		await mapWithConcurrency(locators, BUCKET_SCAN_CONCURRENCY, (locator) =>
+			this.putLocator(destination, locator),
+		);
 	}
 
 	/**
@@ -162,6 +172,39 @@ export class JobRunService {
 			if (!holder || !isOperationHolderLive(holder)) idle.push(key);
 		}
 		if (idle.length > 0) await this.bucket.delete(idle);
+		await this.deleteProjectLocators(source, nid);
+	}
+
+	/** Must run before the per-job run index it derives from is deleted. */
+	async deleteProjectLocators(pid: ProjectId, nid: NotebookId, jid?: JobId): Promise<void> {
+		const locators = await this.listProjectRunIndexs(pid, nid, jid);
+		if (locators.length > 0)
+			await this.bucket.delete(
+				locators.map((locator) => paths.project(pid).runIndex(locator.run_id)),
+			);
+	}
+
+	/** Project locators share their file names with per-job history entries, so no record is read. */
+	private async listProjectRunIndexs(
+		pid: ProjectId,
+		nid: NotebookId,
+		jid?: JobId,
+	): Promise<ProjectRunIndex[]> {
+		const notebook = paths.project(pid).notebook(nid);
+		const jobIds = jid
+			? [jid]
+			: (await listAllPrefixes(this.bucket, notebook.jobsPrefix))
+					.map((prefix) => prefix.slice(notebook.jobsPrefix.length).replace(/\/$/, ''))
+					.filter((id) => JobId.is(id));
+		const locators: ProjectRunIndex[] = [];
+		for (const job_id of jobIds) {
+			const prefix = notebook.job(job_id).runIndexPrefix;
+			for (const key of await listAllKeys(this.bucket, prefix)) {
+				const run_id = this.runIdFromIndex(prefix, key);
+				if (run_id) locators.push({ notebook_id: nid, job_id, run_id });
+			}
+		}
+		return locators;
 	}
 
 	constructor(
@@ -342,20 +385,42 @@ export class JobRunService {
 		signal?.throwIfAborted();
 		const object = await this.bucket.get(key);
 		if (!object) return;
-		const run = await readStoredJobRun(object, key);
-		if (this.runPaths(run).record !== key)
-			throw new Error('Run attribution does not match its storage key');
+		let run: JobRun;
+		try {
+			run = await readStoredJobRun(object, key);
+		} catch (error) {
+			if (!(error instanceof StoredObjectError)) throw error;
+			// A deterministic failure would otherwise wedge the one-time migration on this batch.
+			this.skipStoredObject('job.run.index.migrate', key, error);
+			return;
+		}
+		if (this.runPaths(run).record !== key) {
+			this.skipStoredObject(
+				'job.run.index.migrate',
+				key,
+				new Error('Run attribution does not match its storage key'),
+			);
+			return;
+		}
 		signal?.throwIfAborted();
 		await this.publishProjectRun(run);
 	}
 
 	async publishProjectRun(run: JobRun): Promise<void> {
-		const locator = ProjectRunIndexSchema.parse(run);
+		await this.putLocator(run.project_id, ProjectRunIndexSchema.parse(run));
+	}
+
+	private async putLocator(pid: ProjectId, locator: ProjectRunIndex): Promise<void> {
 		await putIfAbsent(
 			this.bucket,
-			paths.project(run.project_id).runIndex(run.run_id),
+			paths.project(pid).runIndex(locator.run_id),
 			JSON.stringify(locator),
 		);
+	}
+
+	private skipStoredObject(operation: string, key: string, error: unknown): null {
+		logOperationalError('stored_object_skipped', { operation, object: key }, error);
+		return null;
 	}
 
 	async listProjectRunsPage(
@@ -372,9 +437,21 @@ export class JobRunService {
 			async (key, rid) => {
 				const object = await this.bucket.get(key);
 				if (!object) return null;
-				const ref = await readStored(ProjectRunIndexSchema, object, key);
-				if (ref.run_id !== rid) throw new Error('Invalid project run locator');
-				return this.readHistoryRun({ ...ref, project_id: pid });
+				// One bad locator must not fail the page for every reader of the project.
+				let ref: ProjectRunIndex;
+				try {
+					ref = await readStored(ProjectRunIndexSchema, object, key);
+				} catch (error) {
+					if (!(error instanceof StoredObjectError)) throw error;
+					return this.skipStoredObject('job.run.list', key, error);
+				}
+				if (ref.run_id !== rid)
+					return this.skipStoredObject(
+						'job.run.list',
+						key,
+						new Error('Invalid project run locator'),
+					);
+				return this.readHistoryRun({ ...ref, project_id: pid }, { skipMismatch: true });
 			},
 		);
 		return {
@@ -410,6 +487,7 @@ export class JobRunService {
 
 	private async readHistoryRun(
 		ref: Pick<JobRun, 'project_id' | 'notebook_id' | 'job_id' | 'run_id'>,
+		{ skipMismatch = false }: { skipMismatch?: boolean } = {},
 	): Promise<JobRun | null> {
 		const key = this.runPaths(ref).record;
 		const object = await this.bucket.get(key);
@@ -418,20 +496,18 @@ export class JobRunService {
 		try {
 			run = await readStoredJobRun(object, key);
 		} catch (error) {
-			logOperationalError(
-				'stored_object_skipped',
-				{ operation: 'job.run.list', object: key },
-				error,
-			);
-			return null;
+			return this.skipStoredObject('job.run.list', key, error);
 		}
 		if (
 			run.project_id !== ref.project_id ||
 			run.notebook_id !== ref.notebook_id ||
 			run.job_id !== ref.job_id ||
 			run.run_id !== ref.run_id
-		)
-			throw new Error('Run attribution does not match its history locator');
+		) {
+			const error = new Error('Run attribution does not match its history locator');
+			if (!skipMismatch) throw error;
+			return this.skipStoredObject('job.run.list', key, error);
+		}
 		return run;
 	}
 
@@ -669,8 +745,11 @@ export class JobRunService {
 		}
 	}
 
-	async listActiveSnapshot(): Promise<ActiveRunSnapshot> {
-		const keys = await listAllKeys(this.bucket, paths.jobRunMarkersPrefix);
+	async listActiveSnapshot(projectId?: ProjectId): Promise<ActiveRunSnapshot> {
+		const keys = await listAllKeys(
+			this.bucket,
+			projectId ? paths.jobRunMarkersForProject(projectId) : paths.jobRunMarkersPrefix,
+		);
 		let complete = true;
 		const active = await mapWithConcurrency(keys, BUCKET_SCAN_CONCURRENCY, async (key) => {
 			const markerObj = await this.bucket.get(key);
@@ -705,8 +784,8 @@ export class JobRunService {
 		return { entries: active.filter((entry) => entry !== undefined), complete };
 	}
 
-	async listActive(): Promise<ActiveRun[]> {
-		return (await this.listActiveSnapshot()).entries;
+	async listActive(projectId?: ProjectId): Promise<ActiveRun[]> {
+		return (await this.listActiveSnapshot(projectId)).entries;
 	}
 
 	/** Sandbox ids held by active runs — the reconciler's second accounting source. */

@@ -1,4 +1,9 @@
-import { jobCapabilities, toSharedJobRunSummary } from '@marimo-hub/core/jobs';
+import {
+	isTerminalRunStatus,
+	jobCapabilities,
+	MAX_ACTIVE_CONSUMER_RUNS_PER_JOB,
+	toSharedJobRunSummary,
+} from '@marimo-hub/core/jobs';
 import type { JobCapabilities } from '@marimo-hub/core/jobs';
 import {
 	BadRequestError,
@@ -178,14 +183,23 @@ export async function triggerJobRun(
 			throw new NotFoundError(`Job ${job.id} not found`);
 		signal?.throwIfAborted();
 		const current = await deps.services.jobs.getJob(project.id, notebook.id, job.id);
-		await authorizeJobTrigger(deps, target, current);
+		const { editor } = await authorizeJobTrigger(deps, target, current);
 		const enqueue = async () => {
 			const config = requireJobs(deps);
 			const queueLimit = config.maxQueuedRunsPerJob ?? DEFAULT_MAX_QUEUED_RUNS_PER_JOB;
-			const queued = (await deps.services.jobRuns.listActive()).filter(
-				({ marker, run }) => marker.job_id === job.id && run?.status === 'queued',
+			const active = (await deps.services.jobRuns.listActive(project.id)).flatMap(
+				({ marker, run }) => (marker.job_id === job.id && run ? [run] : []),
 			);
-			if (queued.length >= queueLimit) {
+			if (
+				!editor &&
+				active.filter((run) => run.triggered_by === user.id && !isTerminalRunStatus(run.status))
+					.length >= MAX_ACTIVE_CONSUMER_RUNS_PER_JOB
+			) {
+				throw new ResourceExhaustedError(
+					`You already have ${MAX_ACTIVE_CONSUMER_RUNS_PER_JOB} runs of this job in progress; wait for one to finish.`,
+				);
+			}
+			if (active.filter((run) => run.status === 'queued').length >= queueLimit) {
 				throw new ResourceExhaustedError(
 					`Too many queued runs for this job (${queueLimit}); wait for the queue to drain.`,
 				);
@@ -264,8 +278,10 @@ export async function authorizeJobTrigger(
 	target: AuthorizedNotebook,
 	job: JobDefinition,
 ) {
-	if (!(await getJobCapabilities(deps, target, job)).canTrigger)
+	const capabilities = await getJobCapabilities(deps, target, job);
+	if (!capabilities.canTrigger)
 		throw new ForbiddenError('This job does not permit execution by this caller');
+	return capabilities;
 }
 
 export function projectJobRun(run: JobRun, capabilities: JobCapabilities) {

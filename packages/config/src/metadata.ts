@@ -10,10 +10,12 @@ import {
 	assertBucketMetadataBackend,
 	readMetadataBackendMarker,
 } from '@marimo-hub/core/storage/backend-marker';
+import { UnavailableError } from '@marimo-hub/core/errors';
 import { createLogicalStorage } from '@marimo-hub/core/storage/logical-bucket';
+import { classifyMetadataKey } from '@marimo-hub/core/storage/metadata-keys';
 import { ConfigError } from './errors';
 import type { Env } from './env';
-import { parseEnumOr, requiredVar } from './env';
+import { parseBool, parseEnumOr, requiredVar } from './env';
 
 export interface MetadataRuntime extends MetadataStore {
 	sessions: IndexedSessionRecords;
@@ -35,6 +37,53 @@ export type MetadataFactory = (
 export interface ResolvedHubStorage extends HubStorage {
 	ready(): Promise<void>;
 	close(): Promise<void>;
+}
+
+const INSECURE_TRANSPORT_VAR = 'MARIMOHUB_METADATA_POSTGRES_ALLOW_INSECURE_TRANSPORT';
+
+function isLocalPostgresHost(host: string): boolean {
+	return (
+		host === '' ||
+		host.startsWith('/') ||
+		host === 'localhost' ||
+		host === '[::1]' ||
+		/^127(?:\.\d{1,3}){3}$/.test(host)
+	);
+}
+
+/**
+ * Reads the PostgreSQL URL in `variable`. A remote host must verify the server certificate
+ * unless MARIMOHUB_METADATA_POSTGRES_ALLOW_INSECURE_TRANSPORT=true.
+ */
+export function metadataPostgresUrl(env: Env, variable: string, required: true): string;
+export function metadataPostgresUrl(env: Env, variable: string): string | undefined;
+export function metadataPostgresUrl(
+	env: Env,
+	variable: string,
+	required = false,
+): string | undefined {
+	const value = required ? requiredVar(env, variable, {}) : env[variable];
+	if (!value) return undefined;
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		throw new ConfigError(`${variable} must be a postgres:// URL`, { variable });
+	}
+	if (url.protocol === 'socket:') return value;
+	const host = url.searchParams.get('host') ?? decodeURIComponent(url.hostname);
+	const sslmode = url.searchParams.get('sslmode');
+	if (
+		isLocalPostgresHost(host) ||
+		sslmode === 'verify-full' ||
+		sslmode === 'verify-ca' ||
+		parseBool(env, INSECURE_TRANSPORT_VAR)
+	)
+		return value;
+	throw new ConfigError(
+		`${variable} connects to a remote host without certificate verification. Add sslmode=verify-full (or verify-ca), or set ${INSECURE_TRANSPORT_VAR}=true.`,
+		{ variable },
+	);
 }
 
 export function makeHubStorage(
@@ -75,7 +124,7 @@ export function makeHubStorage(
 		return value;
 	};
 	const settings: MetadataPostgresSettings = {
-		url: requiredVar(env, 'MARIMOHUB_METADATA_POSTGRES_URL', {}),
+		url: metadataPostgresUrl(env, 'MARIMOHUB_METADATA_POSTGRES_URL', true),
 		namespace,
 		poolMax: number('MARIMOHUB_METADATA_POSTGRES_POOL_MAX', 10),
 		connectTimeoutMs: number('MARIMOHUB_METADATA_POSTGRES_CONNECT_TIMEOUT_MS', 5000),
@@ -94,18 +143,22 @@ export function makeHubStorage(
 	let closed = false;
 	let closing: Promise<void> | undefined;
 	const requireTarget = () => {
-		if (!target || closed) throw new Error('Metadata storage is not ready');
+		if (!target || closed) throw new UnavailableError('Metadata storage is not ready');
 		return target;
 	};
+	const requireMetadataKey = (key: string) => {
+		if (classifyMetadataKey(key) !== 'metadata')
+			throw new Error('Metadata operation requires a metadata key');
+	};
 	const lazy = (which: 'logicalBucket' | 'artifacts'): Bucket => ({
-		get: ((key, options) => requireTarget()[which].get(key, options)) as Bucket['get'],
-		head: (key) => requireTarget()[which].head(key),
-		put: (key, value, options) => requireTarget()[which].put(key, value, options),
-		delete: (keys) => requireTarget()[which].delete(keys),
-		list: (options) => requireTarget()[which].list(options),
+		get: (async (key, options) => requireTarget()[which].get(key, options)) as Bucket['get'],
+		head: async (key) => requireTarget()[which].head(key),
+		put: async (key, value, options) => requireTarget()[which].put(key, value, options),
+		delete: async (keys) => requireTarget()[which].delete(keys),
+		list: async (options) => requireTarget()[which].list(options),
 		...(raw.putStream
 			? {
-					putStream: ((key, chunks, size, options) =>
+					putStream: (async (key, chunks, size, options) =>
 						requireTarget()[which].putStream!(key, chunks, size, options)) as NonNullable<
 						Bucket['putStream']
 					>,
@@ -115,12 +168,12 @@ export function makeHubStorage(
 			? {
 					multipart: {
 						isolatedSessions: raw.multipart.isolatedSessions,
-						create: (key, options) => requireTarget()[which].multipart!.create(key, options),
-						putPart: (key, uploadId, part, bytes) =>
+						create: async (key, options) => requireTarget()[which].multipart!.create(key, options),
+						putPart: async (key, uploadId, part, bytes) =>
 							requireTarget()[which].multipart!.putPart(key, uploadId, part, bytes),
-						complete: (key, uploadId, parts) =>
+						complete: async (key, uploadId, parts) =>
 							requireTarget()[which].multipart!.complete(key, uploadId, parts),
-						abort: (key, uploadId) => requireTarget()[which].multipart!.abort(key, uploadId),
+						abort: async (key, uploadId) => requireTarget()[which].multipart!.abort(key, uploadId),
 					} satisfies NonNullable<Bucket['multipart']>,
 				}
 			: {}),
@@ -129,23 +182,36 @@ export function makeHubStorage(
 	return {
 		logicalBucket,
 		artifacts: lazy('artifacts'),
+		// Services handed the direct store must never place artifacts in SQL.
 		metadata: {
-			get: ((key, options) => requireTarget().metadata.get(key, options)) as MetadataStore['get'],
-			head: (key) => requireTarget().metadata.head(key),
-			put: (key, value, options) => requireTarget().metadata.put(key, value, options),
-			delete: (keys) => requireTarget().metadata.delete(keys),
-			list: (options) => requireTarget().metadata.list(options),
+			get: (async (key, options) => {
+				requireMetadataKey(key);
+				return requireTarget().metadata.get(key, options);
+			}) as MetadataStore['get'],
+			head: async (key) => {
+				requireMetadataKey(key);
+				return requireTarget().metadata.head(key);
+			},
+			put: async (key, value, options) => {
+				requireMetadataKey(key);
+				return requireTarget().metadata.put(key, value, options);
+			},
+			delete: async (keys) => {
+				for (const key of typeof keys === 'string' ? [keys] : keys) requireMetadataKey(key);
+				return requireTarget().metadata.delete(keys);
+			},
+			list: async (options) => requireTarget().metadata.list(options),
 		},
 		sessions: {
-			list: (query) => {
+			list: async (query) => {
 				requireTarget();
 				return runtime!.sessions.list(query);
 			},
 		},
 		transactions: {
-			run: (scopes, work) => {
+			run: async (scopes, work) => {
 				requireTarget();
-				if (!runtime!.transactions) throw new Error('Metadata transactions unavailable');
+				if (!runtime!.transactions) throw new UnavailableError('Metadata transactions unavailable');
 				return runtime!.transactions.run(scopes, work);
 			},
 		},

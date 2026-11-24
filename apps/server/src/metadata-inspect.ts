@@ -1,4 +1,5 @@
 import { loadAdapterLibraries, makeStorage } from '@marimo-hub/config';
+import { metadataPostgresUrl } from '@marimo-hub/config/metadata';
 import {
 	inspectMetadataDeployment,
 	auditMetadataDeployment,
@@ -23,7 +24,7 @@ do {
 	cursor = page.cursor;
 } while (cursor);
 const namespace = process.env.MARIMOHUB_METADATA_NAMESPACE;
-const url = process.env.MARIMOHUB_METADATA_ADMIN_POSTGRES_URL;
+const url = metadataPostgresUrl(process.env, 'MARIMOHUB_METADATA_ADMIN_POSTGRES_URL');
 const sql = url && namespace ? await inspectMetadataDeployment(url, namespace) : undefined;
 if (process.argv.includes('--audit')) await auditMetadataDeployment(url, bucket);
 console.log(

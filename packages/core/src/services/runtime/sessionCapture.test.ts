@@ -197,7 +197,7 @@ describe('capture preparation', () => {
 		});
 		const commit = vi.spyOn(f.notebooks, 'commitSession');
 		const result = await f.coordinator.capture(f.session, f.instance);
-		expect(result.critical.status).toBe('failed');
+		expect(result.critical).toMatchObject({ status: 'failed', retryable: false });
 		expect(f.prepare).not.toHaveBeenCalled();
 		expect(commit).not.toHaveBeenCalled();
 		expect(await f.notebooks.getNotebookContent(f.project.id, f.notebook.id)).toBe('# original');
@@ -1078,8 +1078,8 @@ it.each(['wrong-attempt', 'wrong-lease', 'expired'] as const)(
 					stopLease: lease,
 					assertOwnership: () => f.sessions.assertCaptureOwnership(claimed, lease),
 				})
-			).critical.status,
-		).toBe('failed');
+			).critical,
+		).toMatchObject({ status: 'failed', retryable: true });
 		expect(f.prepare).not.toHaveBeenCalled();
 		expect(commit).not.toHaveBeenCalled();
 		expect(f.metrics.histogram).toHaveBeenCalledWith(

@@ -234,6 +234,12 @@ export async function callRuntime(
 		if (request.path === '/save' && reply.status < 400) {
 			if (!(await deps.services.sessions.ownsEditorClaim(session)))
 				throw HostProblemError.conflict('The session no longer owns the notebook editor');
+			// Record intent first so the lifecycle sweep retries a capture that fails or never finishes.
+			// The capture must see this generation to clear it.
+			const dirty = await deps.services.sessions.acknowledgeRuntimeSave(
+				project.id,
+				session.session_id,
+			);
 			const captured = await new SessionCaptureCoordinator({
 				compute: deps.compute,
 				bucket: deps.bucket,
@@ -242,7 +248,7 @@ export async function callRuntime(
 				persistWorkspace: deps.sandbox.persistWorkspace,
 				workdir: deps.sandbox.workdir,
 				metrics: deps.metrics,
-			}).capture(session, sandbox, { includeWorkspace: false });
+			}).capture(dirty, sandbox, { includeWorkspace: false });
 			if (captured.critical.status === 'not_required')
 				throw HostProblemError.unsupportedOperation(
 					'This notebook source cannot be saved by the host',

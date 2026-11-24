@@ -67,6 +67,26 @@ describe('JobRunService', () => {
 		expect((await runs.listActive()).map((a) => a.run?.run_id)).toEqual([run.run_id]);
 	});
 
+	it('lists active runs of one project without listing other projects', async () => {
+		const run = await enqueue();
+		const other = await env.projects.createProject({ name: 'o', description: '' }, ACTOR);
+		const otherNotebook = await env.notebooks.createNotebook(
+			other.id,
+			{ title: 'nb', description: '', code: 'import marimo' },
+			ACTOR,
+		);
+		const otherJob = await env.jobs.createJob(other.id, otherNotebook.id, { name: 'o' }, ACTOR);
+		const otherRun = await enqueue({ job: otherJob });
+		const list = vi.spyOn(env.bucket, 'list');
+		expect((await runs.listActive(pid)).map((a) => a.run?.run_id)).toEqual([run.run_id]);
+		expect(
+			list.mock.calls.every(([options]) => options?.prefix === paths.jobRunMarkersForProject(pid)),
+		).toBe(true);
+		const all = (await runs.listActive()).map((a) => a.run?.run_id);
+		expect(all).toHaveLength(2);
+		expect(all).toEqual(expect.arrayContaining([run.run_id, otherRun.run_id]));
+	});
+
 	it('converges on the existing record when enqueued twice with the same id', async () => {
 		const runId = createRunId();
 		const first = await enqueue({ runId });

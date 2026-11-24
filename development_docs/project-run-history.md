@@ -53,8 +53,10 @@ Results can contain fewer entries, including none.
 Continue with `next_cursor` until it is null, even when `items` is empty.
 Unfiltered job lists retain their existing cursor format and page behavior.
 
-Runs sort by descending run ID.
-The ULID timestamp gives newest-first order, and the remaining ID breaks timestamp ties.
+Runs sort by descending run ID; the random part of the ULID breaks timestamp ties.
+A retry's ID is minted with the attempt it retries, so the retry sorts at that attempt's
+enqueue time. An active retry can therefore appear after newer runs. To find every active
+run, scan until `next_cursor` is null.
 New submissions do not shift an existing page boundary.
 
 Filtered cursors bind to the resource and resolved query, including the resolved user ID for `triggered_by_me`.
@@ -78,15 +80,28 @@ Missing records do not remove the continuation cursor.
 Enqueue stores the recovery marker and run before creating the project locator.
 Locator creation is idempotent and preserves accepted tags.
 If indexing fails, the accepted run remains valid but can be absent from project history.
-Finalization repairs the locator before removing the marker. Failed repairs retain the marker for retry.
+Finalization repairs the locator before it audits the run, sends alerts, or removes the marker.
+A failed repair retains the marker, so the next scheduler tick retries it before any alert is sent.
 
 The `project-run-index-v1` migration scans at most 500 project objects per batch.
 `MigrationService` checkpoints progress and retries failed batches. `JobRunService` writes the index.
+The migration skips a run record that does not parse or whose IDs do not match its key, and logs
+`stored_object_skipped`. Storage errors still fail the batch for retry.
 Backfill neither infers tags nor rewrites runs.
+
+A project listing skips a corrupt locator, a locator whose run ID does not match its key, and a run
+record whose IDs do not match its locator. Each skip logs `stored_object_skipped`.
+
+Locators share their file name with the per-job history entry, so moves and deletions derive
+them from that index without reading run records. A move writes destination locators after
+copying the job history and deletes the source locators when it finishes. Job deletion and
+the notebook purge delete the locators before they remove the per-job index, so a failed
+attempt retries with the same keys.
 
 Retention removes the project locator with the run. Bounded pruning retries locator cleanup
 when a previous attempt removed the run but failed to remove its indexes.
-Job and notebook deletion currently leave project locators behind; these produce sparse
-history pages and consume storage until the project is deleted. A project-level garbage
-collector is needed to remove these locators and delayed publications.
+A delayed publication that lands after deletion leaves a stale locator until the project is deleted.
 A delayed locator cannot expose a missing run.
+
+Manual-run admission counts queued runs from the project's active markers at
+`_system/job-runs/{pid}/`, not from every marker in the deployment.

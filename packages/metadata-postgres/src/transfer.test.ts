@@ -5,7 +5,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { METADATA_BACKEND_KEY } from '@marimo-hub/core/storage/metadata-keys';
-import { readMetadataBackendMarker } from '@marimo-hub/core/storage/backend-marker';
+import {
+	assertBucketMetadataBackend,
+	readMetadataBackendMarker,
+} from '@marimo-hub/core/storage/backend-marker';
 import { withTransferLease } from './transferLease';
 import { MetadataTransfer } from './transfer';
 import { createMetadataPool } from './pool';
@@ -177,8 +180,8 @@ describe.skipIf(!url)('offline metadata transfer', () => {
 		['invalid', key, '{broken'],
 	])('blocks %s records without advancing the checkpoint', async (_, path, value) => {
 		const { bucket, namespace, transfer } = fixture();
-		await bucket.put(path, value);
 		await transfer.begin();
+		await bucket.put(path, value);
 		const lease = await transfer.claim();
 		await expect(transfer.step(lease)).rejects.toThrow();
 		expect(
@@ -326,6 +329,79 @@ describe.skipIf(!url)('offline metadata transfer', () => {
 			backend: 'postgres',
 			state: 'frozen',
 		});
+	});
+	it('audits the source before freezing the marker', async () => {
+		const { bucket, namespace, transfer } = fixture();
+		await bucket.put(key, 'not json');
+		await expect(transfer.begin()).rejects.toThrow('Invalid metadata record');
+		expect(await readMetadataBackendMarker(bucket)).toBeNull();
+		expect(
+			(await pool.query('SELECT 1 FROM hub_metadata.deployments WHERE namespace=$1', [namespace]))
+				.rowCount,
+		).toBe(0);
+	});
+	it('aborts a forward transfer blocked after the freeze and lets bucket hosts start', async () => {
+		const { bucket, namespace, id, transfer } = fixture();
+		await bucket.put(key, '{}');
+		await transfer.begin();
+		const lease = await transfer.claim();
+		await bucket.put('_system/source-control-account-cleanup.json', 'not json');
+		await expect(transfer.step(lease)).rejects.toThrow('Invalid metadata record');
+		await expect(assertBucketMetadataBackend(bucket)).rejects.toThrow('frozen');
+		await expect(transfer.abort()).rejects.toThrow('leased');
+		await pool.query(
+			"UPDATE hub_metadata.transfers SET lease_until=clock_timestamp()-interval '1 second' WHERE namespace=$1 AND id=$2",
+			[namespace, id],
+		);
+		await transfer.abort();
+		await transfer.abort();
+		await assertBucketMetadataBackend(bucket);
+		expect(await readMetadataBackendMarker(bucket)).toMatchObject({
+			backend: 'bucket',
+			state: 'active',
+			epoch: 1,
+			transfer_id: null,
+		});
+		for (const table of ['transfers', 'records', 'deployments'])
+			expect(
+				(await pool.query(`SELECT 1 FROM hub_metadata.${table} WHERE namespace=$1`, [namespace]))
+					.rowCount,
+			).toBe(0);
+		await bucket.delete('_system/source-control-account-cleanup.json');
+		await transfer.begin();
+		expect((await transfer.status())!.state).toBe('copying');
+	});
+	it('aborts a reverse transfer and reopens the PostgreSQL deployment', async () => {
+		const { bucket, namespace, transfer } = fixture();
+		await bucket.put(key, '{}');
+		await transfer.begin();
+		let lease = await transfer.claim();
+		while (lease.state !== 'ready') lease = await transfer.step(lease);
+		await transfer.activate();
+		const marker = (await readMetadataBackendMarker(bucket))!;
+		const store = new PostgresMetadataStore({
+			url: url!,
+			namespace,
+			epoch: 2,
+			artifactStoreId: marker.artifact_store_id,
+		});
+		try {
+			await store.ready();
+			const reverse = new MetadataTransfer(pool, bucket, {
+				namespace,
+				id: randomUUID(),
+				direction: 'sql_to_bucket',
+				writersStopped: true,
+			});
+			await reverse.begin();
+			await expect(store.put(key, '{}')).rejects.toMatchObject({ kind: 'unavailable' });
+			await reverse.abort();
+			expect(await readMetadataBackendMarker(bucket)).toEqual({ ...marker, transfer_id: null });
+			await store.put(key, '{"after":"abort"}');
+			expect(await reverse.status()).toBeNull();
+		} finally {
+			await store.close();
+		}
 	});
 	it('rejects a replayed checkpoint and resumes from committed progress', async () => {
 		const { bucket, transfer } = fixture();

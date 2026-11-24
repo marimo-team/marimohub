@@ -876,6 +876,26 @@ describe('JobScheduler', () => {
 		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).toBeNull();
 	});
 
+	it('publishes the project locator before alerting so a failed write does not repeat alerts', async () => {
+		const deliver = vi.fn(async () => 'delivered' as const);
+		const job = await createJob({ schedule: undefined, notifications: { on: ['success'] } });
+		const run = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
+		await env.bucket.delete(paths.project(pid).runIndex(run.run_id));
+		vi.spyOn(env.jobRuns, 'publishProjectRun').mockRejectedValueOnce(new Error('offline'));
+		const s = scheduler(fakeRunner(env), { projectAlerts: { deliver, test: vi.fn() } });
+
+		await s.tick();
+		await settle(s);
+		expect(deliver).not.toHaveBeenCalled();
+		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).not.toBeNull();
+
+		await s.tick();
+		await settle(s);
+		expect(deliver).toHaveBeenCalledTimes(1);
+		expect(await env.bucket.head(paths.jobRunMarker(pid, run.run_id))).toBeNull();
+		expect(await env.bucket.head(paths.project(pid).runIndex(run.run_id))).not.toBeNull();
+	});
+
 	it('does not fire jobs of soft-deleted notebooks or disabled jobs', async () => {
 		await createJob({ enabled: false });
 		const disabledOnly = await scheduler(fakeRunner(env)).tick();

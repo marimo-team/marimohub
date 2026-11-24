@@ -593,6 +593,8 @@ export class NotebookMoveService {
 				throw new ConflictError('The move has been published. Retry it to finish cleanup.');
 			const pools = new AppPoolStore(this.bucket);
 			for (const notebookId of [nid, ...move.runtimes]) {
+				// Locators derive from the copied run index, so they must go before the prefix.
+				await this.owners.jobRuns.deleteProjectLocators(destination, notebookId);
 				await deleteByPrefix(
 					this.bucket,
 					`${paths.project(destination).notebook(notebookId).base}/`,
