@@ -67,13 +67,12 @@ export async function probeKernelLiveness(
 	const retryDelayMs = opts.retryDelayMs ?? 250;
 	const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
 
-	let refused = false;
+	let sawDeadAttempt = false;
 	for (let attempt = 1; attempt <= attempts; attempt++) {
 		const result = await probeOnce(url, timeoutMs, fetchImpl);
 		if (result === 'alive') return 'alive';
-		if (result === 'dead') refused = true;
+		if (result === 'dead') sawDeadAttempt = true;
 		if (attempt < attempts) await sleep(retryDelayMs);
 	}
-	// A refusal or gateway 5xx is definitive; a timeout only says the kernel is slow.
-	return refused ? 'dead' : 'unresponsive';
+	return sawDeadAttempt ? 'dead' : 'unresponsive';
 }
