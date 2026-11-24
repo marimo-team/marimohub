@@ -1,3 +1,4 @@
+import { createRunCredential, hashRunCredential, parseRunCredential } from './runCredential';
 import { readRetentionCursor, writeRetentionCursor } from '../catalog/retentionCursor';
 import type { RetentionCursor } from '../catalog/retentionCursor';
 import { encodeTime } from 'ulidx';
@@ -9,7 +10,13 @@ import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { forEachConcurrentUntilFailure } from '../../async';
 import { Millis, sleep } from '../../duration';
-import { NotFoundError, UnavailableError } from '../../errors';
+import {
+	BadRequestError,
+	ConflictError,
+	ForbiddenError,
+	NotFoundError,
+	UnavailableError,
+} from '../../errors';
 import { createRunId, JobId, NotebookId, RunId } from '../../ids';
 import type { ProjectId, UserId, VersionId } from '../../ids';
 import { logOperationalError } from '../../operationalLog';
@@ -20,6 +27,9 @@ import {
 	JobOccurrenceSchema,
 	JobRunMarkerSchema,
 	JobRunSchema,
+	RunMetadataSchema,
+	RunMetadataPatchSchema,
+	RunStopBodySchema,
 	ProjectRunIndexSchema,
 	parseStoredJobRun,
 	readStored,
@@ -61,6 +71,7 @@ export interface EnqueueRunInput {
 	scheduledFor?: string;
 	parameters?: JobParameters;
 	tags?: RunTags;
+	metadata?: JobRun['metadata'];
 	sourceVersionId?: VersionId;
 	timeoutSeconds: number;
 	attempt?: number;
@@ -306,6 +317,8 @@ export class JobRunService {
 			status: 'queued',
 			trigger: input.trigger,
 			tags: input.tags,
+			metadata: input.metadata,
+			initial_metadata: input.metadata,
 			...(input.triggeredBy ? { triggered_by: input.triggeredBy } : {}),
 			...(input.scheduledFor ? { scheduled_for: input.scheduledFor } : {}),
 			...(input.sourceVersionId ? { source_version_id: input.sourceVersionId } : {}),
@@ -674,17 +687,41 @@ export class JobRunService {
 		event: RunEvent,
 		patch: (run: JobRun) => Partial<JobRun> = () => ({}),
 	): Promise<{ run: JobRun; transitioned: boolean }> {
+		const outcome = await this.updateRun(ref, (current) => {
+			const next = nextRunStatus(current.status, event);
+			if (next === null) return null;
+			const status = current.stop_request && isTerminalRunStatus(next) ? 'cancelled' : next;
+			const update = patch(current);
+			if (Object.hasOwn(update, 'tags')) throw new Error('Run tags are immutable');
+			if (Object.hasOwn(update, 'metadata') || Object.hasOwn(update, 'initial_metadata'))
+				throw new Error('Use the metadata update operation');
+			return {
+				...current,
+				...update,
+				status,
+				...(status === 'cancelled' && current.stop_request && event !== 'cancel'
+					? { cancelled_by: current.stop_request.requested_by }
+					: {}),
+			};
+		});
+		if (outcome.transitioned) {
+			this.metrics.increment('jobs.runs.transition', 1, { event, status: outcome.run.status });
+		}
+		return outcome;
+	}
+
+	private async updateRun(
+		ref: Pick<JobRun, 'project_id' | 'notebook_id' | 'job_id' | 'run_id'>,
+		update: (current: JobRun) => JobRun | null,
+	) {
 		const key = this.runPaths(ref).record;
-		const outcome = await mutateObjectWithOutcome(
+		const result = await mutateObjectWithOutcome(
 			this.bucket,
 			key,
 			(raw) => parseStoredJobRun(raw, key),
 			(current) => {
-				const status = nextRunStatus(current.status, event);
-				if (status === null) return null;
-				const update = patch(current);
-				if (Object.hasOwn(update, 'tags')) throw new Error('Run tags are immutable');
-				return JobRunSchema.parse({ ...current, ...update, status });
+				const value = update(current);
+				return value ? JobRunSchema.parse(value) : null;
 			},
 			{
 				notFound: () => new NotFoundError(`Run ${ref.run_id} not found`),
@@ -692,10 +729,108 @@ export class JobRunService {
 				onExhausted: () => this.metrics.increment('jobs.runs.cas.exhausted'),
 			},
 		);
-		if (outcome.written) {
-			this.metrics.increment('jobs.runs.transition', 1, { event, status: outcome.value.status });
-		}
-		return { run: outcome.value, transitioned: outcome.written };
+		return { run: result.value, transitioned: result.written };
+	}
+
+	async patchMetadata(ref: JobRun, patch: unknown): Promise<JobRun> {
+		const parsed = RunMetadataPatchSchema.safeParse(patch);
+		if (!parsed.success) throw new BadRequestError('Invalid metadata patch');
+		const { run } = await this.updateRun(ref, (current) => {
+			const now = Date.now();
+			if (
+				isTerminalRunStatus(current.status) ||
+				(current.deadline_at && Date.parse(current.deadline_at) <= now) ||
+				(current.stop_request && Date.parse(current.stop_request.deadline_at) <= now)
+			)
+				throw new ConflictError('Run no longer accepts metadata');
+			const metadata = { ...current.metadata, ...parsed.data };
+			for (const key of Object.keys(metadata)) {
+				if (metadata[key] === null) delete metadata[key];
+			}
+			const bounded = RunMetadataSchema.safeParse(metadata);
+			if (!bounded.success) throw new BadRequestError('Metadata exceeds its bounds');
+			return { ...current, metadata: bounded.data };
+		});
+		return run;
+	}
+
+	async requestStop(ref: JobRun, by: UserId, graceSeconds?: number) {
+		if (!RunStopBodySchema.safeParse({ grace_seconds: graceSeconds }).success)
+			throw new BadRequestError('Grace must be an integer from 1 to 300 seconds');
+		if (graceSeconds === undefined) return this.cancel(ref, by);
+		return this.updateRun(ref, (current) => {
+			if (isTerminalRunStatus(current.status) || current.stop_request) return null;
+			const now = Date.now();
+			if (current.status !== 'running')
+				return {
+					...current,
+					status: 'cancelled',
+					cancelled_by: by,
+					finished_at: new Date(now).toISOString(),
+				};
+
+			const deadline = Math.min(
+				now + graceSeconds * 1000,
+				current.deadline_at ? Date.parse(current.deadline_at) : Infinity,
+			);
+			return {
+				...current,
+				stop_request: {
+					requested_by: by,
+					requested_at: new Date(now).toISOString(),
+					deadline_at: new Date(deadline).toISOString(),
+				},
+			};
+		});
+	}
+
+	async acknowledgeStop(ref: JobRun): Promise<JobRun> {
+		const { run } = await this.updateRun(ref, (current) => {
+			if (isTerminalRunStatus(current.status)) return null;
+			if (!current.stop_request) throw new ConflictError('No stop was requested');
+			const now = Date.now();
+			const finishedAt = new Date(now).toISOString();
+			const stopRequest = { ...current.stop_request };
+			if (now < Date.parse(stopRequest.deadline_at)) stopRequest.acknowledged_at = finishedAt;
+			return {
+				...current,
+				status: 'cancelled',
+				cancelled_by: stopRequest.requested_by,
+				finished_at: finishedAt,
+				stop_request: stopRequest,
+			};
+		});
+		return run;
+	}
+
+	async issueExecutionCredential(ref: JobRun): Promise<string> {
+		const token = createRunCredential(ref);
+		const hash = await hashRunCredential(token);
+		await this.updateRun(ref, (current) => {
+			if (current.status !== 'provisioning' || current.execution_credential_hash)
+				throw new ConflictError('Run credential already issued or execution ended');
+			return { ...current, execution_credential_hash: hash };
+		});
+		return token;
+	}
+
+	async authenticateExecution(token: string): Promise<JobRun> {
+		const claims = parseRunCredential(token);
+		if (!claims) throw new ForbiddenError('Invalid run credential');
+		const run = await this.getRun(
+			claims.project_id,
+			claims.notebook_id,
+			claims.job_id,
+			claims.run_id,
+		);
+		if (
+			run.attempt !== claims.attempt ||
+			run.execution_credential_hash !== (await hashRunCredential(token)) ||
+			!run.deadline_at ||
+			Date.parse(run.deadline_at) <= Date.now()
+		)
+			throw new ForbiddenError('Invalid or expired run credential');
+		return run;
 	}
 
 	async cancel(

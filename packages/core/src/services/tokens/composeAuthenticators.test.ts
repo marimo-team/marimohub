@@ -40,15 +40,16 @@ describe('composeAuthenticators', () => {
 		sso = { authenticate: ssoAuthenticate };
 	});
 
-	it('confines app credentials to their dedicated interface', async () => {
-		const external = { authenticate: makeSsoMock() };
-		const auth = composeAuthenticators(tokens, sso, { external });
-		expect(
-			await auth.authenticate(req({ authorization: 'Bearer mhub_app_credential' })),
-		).toBeNull();
-		expect(external.authenticate).not.toHaveBeenCalled();
-		expect(ssoAuthenticate).not.toHaveBeenCalled();
-	});
+	it.each(['mhub_app_credential', 'mhub_run_credential'])(
+		'confines %s to its dedicated interface',
+		async (credential) => {
+			const external = { authenticate: makeSsoMock() };
+			const auth = composeAuthenticators(tokens, sso, { external });
+			expect(await auth.authenticate(req({ authorization: `Bearer ${credential}` }))).toBeNull();
+			expect(external.authenticate).not.toHaveBeenCalled();
+			expect(ssoAuthenticate).not.toHaveBeenCalled();
+		},
+	);
 
 	it('resolves a valid PAT without consulting SSO', async () => {
 		const { token, record } = await tokens.create({ name: 'ci' }, OWNER);

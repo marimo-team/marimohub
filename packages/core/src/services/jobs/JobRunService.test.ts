@@ -52,6 +52,189 @@ describe('JobRunService', () => {
 		return finished;
 	}
 
+	async function runningRun() {
+		const run = await enqueue({ metadata: { seed: 'original', remove: true } });
+		await runs.transition(run, 'provision', () => ({
+			sandbox_id: SB,
+			deadline_at: new Date(Date.now() + 600_000).toISOString(),
+		}));
+		return (await runs.transition(run, 'start')).run;
+	}
+
+	it('merges competing metadata patches and preserves acknowledged updates through completion', async () => {
+		const run = await runningRun();
+		await Promise.all([
+			runs.patchMetadata(run, { rows: 12 }),
+			runs.patchMetadata(run, { report: 's3://bucket/result', remove: null }),
+		]);
+		const finished = (await runs.transition(run, 'succeed')).run;
+		expect(finished.metadata).toEqual({ seed: 'original', rows: 12, report: 's3://bucket/result' });
+		expect(finished.initial_metadata).toEqual({ seed: 'original', remove: true });
+		await expect(runs.patchMetadata(run, { rows: 13 })).rejects.toThrow('no longer accepts');
+	});
+
+	it('never loses an acknowledged metadata patch racing stop acknowledgement', async () => {
+		const run = await runningRun();
+		await runs.requestStop(run, ACTOR, 30);
+		const [patch] = await Promise.allSettled([
+			runs.patchMetadata(run, { report: 'durable' }),
+			runs.acknowledgeStop(run),
+		]);
+		const stored = await runs.getRun(pid, nid, job.id, run.run_id);
+		expect(stored.status).toBe('cancelled');
+		if (patch.status === 'fulfilled') expect(stored.metadata?.report).toBe('durable');
+		else expect(patch.reason.message).toContain('no longer accepts');
+	});
+
+	it('rejects a flush after grace expires without claiming an acknowledgement', async () => {
+		const run = await runningRun();
+		await runs.requestStop(run, ACTOR, 1);
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 1001);
+		await expect(runs.patchMetadata(run, { saved: true })).rejects.toThrow('no longer accepts');
+		const stopped = await runs.acknowledgeStop(run);
+		expect(stopped.status).toBe('cancelled');
+		expect(stopped.stop_request?.acknowledged_at).toBeUndefined();
+		expect(stopped.metadata?.saved).toBeUndefined();
+	});
+
+	it('does not publish a failed metadata flush and allows a later retry', async () => {
+		const run = await runningRun();
+		const key = paths.project(pid).notebook(nid).job(job.id).run(run.run_id).record;
+		const put = env.bucket.put.bind(env.bucket);
+		const failed = vi.spyOn(env.bucket, 'put').mockImplementation(async (path, ...args) => {
+			if (path === key) throw new Error('storage unavailable');
+			return put(path, ...args);
+		});
+		await expect(runs.patchMetadata(run, { saved: true })).rejects.toThrow('storage unavailable');
+		failed.mockRestore();
+		expect((await runs.getRun(pid, nid, job.id, run.run_id)).metadata).toEqual(run.metadata);
+		expect((await runs.patchMetadata(run, { saved: true })).metadata?.saved).toBe(true);
+	});
+
+	it('bounds the merged byte size and leaves the previous map intact on rejection', async () => {
+		const run = await runningRun();
+		const first = await runs.patchMetadata(run, { a: 'x'.repeat(2048), b: 'x'.repeat(2048) });
+		await expect(
+			runs.patchMetadata(run, { c: 'x'.repeat(2048), d: 'x'.repeat(2048) }),
+		).rejects.toThrow('bounds');
+		expect((await runs.getRun(pid, nid, job.id, run.run_id)).metadata).toEqual(first.metadata);
+	});
+
+	it.each(['succeed', 'fail', 'timeout', 'cancel'] as const)(
+		'rejects metadata after terminal event %s',
+		async (event) => {
+			const run = await runningRun();
+			await runs.transition(run, event);
+			await expect(runs.patchMetadata(run, { saved: true })).rejects.toThrow('no longer accepts');
+			expect((await runs.getRun(pid, nid, job.id, run.run_id)).metadata).toEqual(run.metadata);
+		},
+	);
+
+	it.each([0, -1, 1.5, Number.NaN, Infinity, 301])(
+		'rejects invalid grace %s without mutating a run',
+		async (grace) => {
+			const run = await runningRun();
+			await expect(runs.requestStop(run, ACTOR, grace)).rejects.toThrow('Grace');
+			expect(await runs.getRun(pid, nid, job.id, run.run_id)).toEqual(run);
+		},
+	);
+
+	it('bounds metadata types, counts and total UTF-8 bytes', async () => {
+		const run = await runningRun();
+		for (const patch of [
+			{ nested: {} },
+			{ value: Number.NaN },
+			{ value: 'x'.repeat(2049) },
+			Object.fromEntries(Array.from({ length: 33 }, (_, n) => [`key${n}`, 1])),
+			Object.fromEntries(Array.from({ length: 6 }, (_, n) => [`key${n}`, '界'.repeat(600)])),
+		]) {
+			await expect(runs.patchMetadata(run, patch)).rejects.toThrow();
+		}
+		await runs.patchMetadata(
+			run,
+			Object.fromEntries(Array.from({ length: 30 }, (_, n) => [`key${n}`, 1])),
+		);
+		await expect(runs.patchMetadata(run, { extra: true })).rejects.toThrow('bounds');
+	});
+
+	it('retains the first stop deadline, flushes metadata, and acknowledges without claiming a save', async () => {
+		const run = await runningRun();
+		const first = await runs.requestStop(run, ACTOR, 30);
+		expect(first.run.status).toBe('running');
+		expect(first.run.finished_at).toBeUndefined();
+		expect((await runs.requestStop(run, uid('editor'), 300)).run.stop_request).toEqual(
+			first.run.stop_request,
+		);
+		await runs.patchMetadata(run, { saved: true, report: 'https://app.test/result' });
+		const stopped = await runs.acknowledgeStop(run);
+		expect(stopped).toMatchObject({
+			status: 'cancelled',
+			metadata: { saved: true },
+			stop_request: { acknowledged_at: expect.any(String) },
+		});
+		expect(await runs.acknowledgeStop(run)).toEqual(stopped);
+		await expect(runs.patchMetadata(run, { saved: false })).rejects.toThrow();
+	});
+
+	it('resolves concurrent completion and stop by the first committed CAS', async () => {
+		const run = await runningRun();
+		const [stop] = await Promise.all([
+			runs.requestStop(run, ACTOR, 30),
+			runs.transition(run, 'succeed', () => ({ finished_at: new Date().toISOString() })),
+		]);
+		const stored = await runs.getRun(pid, nid, job.id, run.run_id);
+		expect(stored.status).toBe(stop.transitioned ? 'cancelled' : 'succeeded');
+		expect(Boolean(stored.stop_request)).toBe(stop.transitioned);
+	});
+
+	it.each(['succeed', 'fail', 'timeout'] as const)(
+		'lets a committed stop beat %s',
+		async (event) => {
+			const run = await runningRun();
+			await runs.requestStop(run, ACTOR, 30);
+			expect((await runs.transition(run, event)).run.status).toBe('cancelled');
+		},
+	);
+
+	it('leaves completed runs unchanged and immediately cancels queued or provisioning runs', async () => {
+		const run = await runningRun();
+		await runs.transition(run, 'succeed');
+		expect((await runs.requestStop(run, ACTOR, 30)).run.status).toBe('succeeded');
+		const queued = await enqueue();
+		expect((await runs.requestStop(queued, ACTOR, 30)).run.status).toBe('cancelled');
+		const provisioning = await enqueue();
+		await runs.transition(provisioning, 'provision');
+		expect((await runs.requestStop(provisioning, ACTOR, 30)).run.status).toBe('cancelled');
+	});
+
+	it('caps grace by the execution deadline and supports immediate escalation', async () => {
+		const run = await runningRun();
+		vi.spyOn(Date, 'now').mockReturnValue(Date.parse(run.deadline_at!) - 5000);
+		expect((await runs.requestStop(run, ACTOR, 300)).run.stop_request?.deadline_at).toBe(
+			run.deadline_at,
+		);
+		expect((await runs.requestStop(run, uid('editor'))).run).toMatchObject({
+			status: 'cancelled',
+			cancelled_by: uid('editor'),
+		});
+		await expect(runs.requestStop(run, ACTOR, 301)).rejects.toThrow();
+	});
+
+	it('authenticates only the exact execution credential until its deadline', async () => {
+		const run = await enqueue();
+		const provisioned = (
+			await runs.transition(run, 'provision', () => ({
+				deadline_at: new Date(Date.now() + 60_000).toISOString(),
+			}))
+		).run;
+		const token = await runs.issueExecutionCredential(provisioned);
+		expect((await runs.authenticateExecution(token)).run_id).toBe(run.run_id);
+		await expect(runs.authenticateExecution(`${token}a`)).rejects.toThrow();
+		await expect(runs.issueExecutionCredential(provisioned)).rejects.toThrow();
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_001);
+		await expect(runs.authenticateExecution(token)).rejects.toThrow('expired');
+	});
+
 	it('writes a queued record and an active-run marker', async () => {
 		const run = await enqueue({ parameters: { name: 'Alice' } });
 		expect(run).toMatchObject({

@@ -4553,10 +4553,10 @@ components:
             - private
             - shared
           description: Defaults to private (triggerer and editors). Shared exposes run
-            identity, status, triggerer, timestamps, tags and completed
-            parameters to other authorized app users and viewers. Active inputs
-            and diagnostics remain private. Disabling sharing restricts future
-            reads; viewed data cannot be recalled.
+            identity, status, triggerer, timestamps, tags, metadata and
+            completed parameters to other authorized app users and viewers.
+            Active inputs and diagnostics remain private. Disabling sharing
+            restricts future reads; viewed data cannot be recalled.
         enabled:
           type: boolean
         schedule:
@@ -4678,10 +4678,10 @@ components:
             - private
             - shared
           description: Defaults to private (triggerer and editors). Shared exposes run
-            identity, status, triggerer, timestamps, tags and completed
-            parameters to other authorized app users and viewers. Active inputs
-            and diagnostics remain private. Disabling sharing restricts future
-            reads; viewed data cannot be recalled.
+            identity, status, triggerer, timestamps, tags, metadata and
+            completed parameters to other authorized app users and viewers.
+            Active inputs and diagnostics remain private. Disabling sharing
+            restricts future reads; viewed data cannot be recalled.
         enabled:
           type: boolean
           default: true
@@ -4725,10 +4725,10 @@ components:
             - private
             - shared
           description: Defaults to private (triggerer and editors). Shared exposes run
-            identity, status, triggerer, timestamps, tags and completed
-            parameters to other authorized app users and viewers. Active inputs
-            and diagnostics remain private. Disabling sharing restricts future
-            reads; viewed data cannot be recalled.
+            identity, status, triggerer, timestamps, tags, metadata and
+            completed parameters to other authorized app users and viewers.
+            Active inputs and diagnostics remain private. Disabling sharing
+            restricts future reads; viewed data cannot be recalled.
         enabled:
           type: boolean
         schedule:
@@ -4810,6 +4810,33 @@ components:
     JobRun:
       type: object
       properties:
+        metadata:
+          type: object
+          additionalProperties:
+            anyOf:
+              - type: string
+                maxLength: 2048
+              - type: number
+              - type: boolean
+          maxProperties: 32
+        stop_request:
+          type: object
+          properties:
+            requested_at:
+              type: string
+              format: date-time
+            deadline_at:
+              type: string
+              format: date-time
+            requested_by:
+              type: string
+            acknowledged_at:
+              type: string
+              format: date-time
+          required:
+            - requested_at
+            - deadline_at
+            - requested_by
         tags:
           type: object
           additionalProperties:
@@ -4940,6 +4967,15 @@ components:
     JobRunTriggerBody:
       type: object
       properties:
+        metadata:
+          type: object
+          additionalProperties:
+            anyOf:
+              - type: string
+                maxLength: 2048
+              - type: number
+              - type: boolean
+          maxProperties: 32
         tags:
           type: object
           additionalProperties:
@@ -23411,8 +23447,8 @@ paths:
       tags:
         - Jobs
       summary: Cancel a run
-      description: Marks the run cancelled and destroys its sandbox when one exists.
-        Runs are history and are never deleted individually.
+      description: Stops a run. Optional grace_seconds requests cooperative stopping
+        for up to 300 seconds. Cancellation does not imply results were saved.
       parameters:
         - schema:
             type: string
@@ -23442,9 +23478,21 @@ paths:
           required: true
           name: rid
           in: path
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                grace_seconds:
+                  type: integer
+                  minimum: 1
+                  maximum: 300
+              additionalProperties: false
       responses:
         '200':
-          description: Run cancelled (or already terminal)
+          description: Stop requested, cancelled, or already terminal
           content:
             application/json:
               schema:

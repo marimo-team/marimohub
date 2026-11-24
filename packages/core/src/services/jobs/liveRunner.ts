@@ -255,13 +255,18 @@ def main():
     if "--" in arguments:
         index = arguments.index("--")
         arguments, passthrough = arguments[:index], arguments[index:]
-    asset_url = None
-    if len(arguments) == 5 and arguments[3] == "--asset-url":
-        asset_url, arguments = arguments[4], arguments[:3]
+    options = {}
+    while len(arguments) >= 5 and arguments[-2] in ("--asset-url", "--launcher"):
+        options[arguments[-2]] = arguments[-1]
+        arguments = arguments[:-2]
     if len(arguments) != 3 or arguments[1] != "-o":
-        print("usage: runner <notebook> -o <output.html> [--asset-url <url>] [-- notebook arguments]",
-              file=sys.stderr)
+        print("usage: runner <notebook> -o <output.html> [--asset-url <url>] [--launcher <path>]"
+              " [-- notebook arguments]", file=sys.stderr)
         return 2
+    asset_url = options.get("--asset-url")
+    # The hub's launcher installs its job client into this environment, then runs marimo.
+    marimo = [sys.executable, options["--launcher"]] if "--launcher" in options else [
+        sys.executable, "-m", "marimo"]
     notebook, output = Path(arguments[0]).resolve(), Path(arguments[2]).resolve()
     process = None
     unavailable = None
@@ -282,7 +287,7 @@ def main():
             with (Path(directory) / "server.log").open("w+b") as log:
                 # The same process group lets the caller's timeout stop the server with the runner.
                 process = subprocess.Popen([
-                    sys.executable, "-m", "marimo", "edit", str(notebook), "--headless", "--no-sandbox",
+                    *marimo, "edit", str(notebook), "--headless", "--no-sandbox",
                     "--skip-update-check", "--no-skew-protection", "--host", "127.0.0.1",
                     "--port", str(port), "--token-password-file", str(token_path),
                     "--config", "runtime.auto_instantiate=false",
@@ -314,8 +319,7 @@ def main():
     print("marimohub: this run cannot be followed (" + unavailable + "); exporting without a live view",
           file=sys.stderr, flush=True)
     sys.stdout.flush()
-    os.execv(sys.executable, [sys.executable, "-m", "marimo", "export", "html", str(notebook),
-                              "-o", str(output), *passthrough])
+    os.execv(sys.executable, [*marimo, "export", "html", str(notebook), "-o", str(output), *passthrough])
 
 
 if __name__ == "__main__":

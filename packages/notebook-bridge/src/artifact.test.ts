@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { unzipSync, strFromU8 } from 'fflate';
-import { ARTIFACT_ID, WHEEL_BASE64 } from './runtime.generated';
+import { ARTIFACT_ID, LAUNCHER, WHEEL_BASE64, WHEEL_NAME } from './runtime.generated';
 
 function marimoImports(source: string): string[] {
 	return JSON.parse(
@@ -61,6 +61,24 @@ describe('runtime artifact', () => {
 			}),
 		).not.toThrow();
 	}, 30_000);
+	it.runIf(process.env.MARIMOHUB_UV_INTEGRATION === '1')(
+		'installs and upgrades the execution client before export in an isolated Python environment',
+		() => {
+			const output = execFileSync('python3', ['-B', 'python/check_job_install.py'], {
+				cwd: new URL('../', import.meta.url),
+				input: JSON.stringify({
+					launcher: LAUNCHER,
+					wheel: WHEEL_BASE64,
+					name: WHEEL_NAME,
+					identity: ARTIFACT_ID,
+				}),
+				encoding: 'utf8',
+				timeout: 30_000,
+			});
+			expect(output.trim().split('\n')).toEqual(['export with Run', 'export with Run']);
+		},
+		30_000,
+	);
 	it('imports the jobs SDK from the packaged marimohub namespace', () => {
 		expect(() =>
 			execFileSync(

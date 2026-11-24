@@ -121,6 +121,24 @@ describe('app job failure boundaries', () => {
 		expect(await f.services.jobRuns.listActive()).toEqual([]);
 	});
 
+	it('rejects a previously authorized triggerer after membership is revoked', async () => {
+		const f = await fixture();
+		const run = await f.services.jobRuns.enqueue({
+			job: f.job,
+			triggeredBy: f.user,
+			trigger: 'manual',
+			timeoutSeconds: 60,
+		});
+		await f.services.projects.removeMember(f.project.id, f.user, ACTOR);
+		expect(
+			(await f.call('stop', { job_id: f.job.id, run_id: run.run_id, input: { grace_seconds: 30 } }))
+				.status,
+		).toBe(403);
+		expect(
+			await f.services.jobRuns.getRun(f.project.id, f.notebook.id, f.job.id, run.run_id),
+		).toEqual(run);
+	});
+
 	it('rechecks execution policy, and submission tags cannot grant access', async () => {
 		const f = await fixture();
 		await f.services.jobs.updateJob(

@@ -427,6 +427,31 @@ describe.skipIf(!python)('live job runner against real marimo', { timeout: 120_0
 		expect(result.files).toEqual([]);
 	});
 
+	it('starts marimo through a launcher, for the live run and for the fallback', async () => {
+		// Stands in for the hub's launcher: it records its arguments, then runs marimo. The guard
+		// matters because the kernel process re-imports the main module.
+		await writeFile(
+			join(root, 'launcher.py'),
+			[
+				'import runpy, sys',
+				'if __name__ == "__main__":',
+				'    open("launched.txt", "a").write(" ".join(sys.argv[1:3]) + "\\n")',
+				'    sys.argv[0] = "marimo"',
+				'    runpy.run_module("marimo", run_name="__main__")',
+			].join('\n'),
+		);
+		const launcher = ['--launcher', join(root, 'launcher.py')];
+
+		const live = await run(NOTEBOOK, [...launcher, '--', '--value', '6']);
+		const fallback = await run('print("just a script")\n', launcher);
+
+		expect(live.code).toBe(0);
+		expect(live.stdout).toBe('value: 6\n');
+		expect(fallback.stderr).toContain('this run cannot be followed');
+		const launched = (await readFile(join(root, 'launched.txt'), 'utf8')).trim().split('\n');
+		expect(launched.map((line) => line.split(' ')[0])).toEqual(['edit', 'edit', 'export']);
+	});
+
 	it('falls back to the plain export for a script that is not a notebook', async () => {
 		const result = await run('print("just a script")\n');
 

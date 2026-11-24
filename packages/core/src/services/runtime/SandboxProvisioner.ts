@@ -485,6 +485,8 @@ function provisionFailure(step: string, err: unknown): UnavailableError {
 }
 
 function notebookBridgeFailure(options: ProvisionOptions, error: unknown): void {
+	if (options.launchMode === 'job')
+		throw provisionFailure('preparing the job execution client', error);
 	// Capture is required for safe publication and stop; the UI extension is optional.
 	if (options.runtimeCapture)
 		throw error instanceof RuntimeCaptureSetupError
@@ -1244,8 +1246,9 @@ export class SandboxProvisioner {
 		launchStrategy: MarimoLaunchStrategyName,
 		writeFiles = sandbox.writeFiles.bind(sandbox),
 	): Promise<string | undefined> {
-		if (options.launchMode === 'job' || launchStrategy === 'uv-sandbox') return;
-		if (!options.bridgeParentOrigin && !options.runtimeCapture) return;
+		if (launchStrategy === 'uv-sandbox') return;
+		if (!options.bridgeParentOrigin && !options.runtimeCapture && options.launchMode !== 'job')
+			return;
 		const payload = options.notebookBridge;
 		if (!payload) {
 			if (options.runtimeCapture)
@@ -1271,6 +1274,8 @@ export class SandboxProvisioner {
 				sandboxId: options.sandboxId,
 				launcher: payload.launcher,
 			});
+			if (options.launchMode === 'job' && !launcher)
+				throw new Error('The sandbox cannot resolve the job execution client');
 			if (options.runtimeCapture && !launcher)
 				throw new RuntimeCaptureSetupError(
 					`the sandbox cannot resolve the bridge launcher ${payload.launcher}`,
@@ -1288,16 +1293,17 @@ export class SandboxProvisioner {
 		startup: MarimoStartup,
 		launcher: string,
 	): Promise<void> {
-		if (!options.bridgeParentOrigin && !options.runtimeCapture) return;
+		if (!options.bridgeParentOrigin && !options.runtimeCapture && options.launchMode !== 'job')
+			return;
 		try {
 			const budget = startup.deadline.timeoutMs === 0 ? 10_000 : remainingStartupMs(startup);
 			if (budget <= 0) throw new Error('Bridge configuration deadline exceeded');
 			await withDeadline(
 				sandbox.setEnvVars({
-					...(options.bridgeParentOrigin
+					...(options.bridgeParentOrigin && options.launchMode !== 'job'
 						? { MARIMOHUB_BRIDGE_PARENT_ORIGIN: options.bridgeParentOrigin }
 						: {}),
-					...(options.runtimeCapture
+					...(options.runtimeCapture && options.launchMode !== 'job'
 						? {
 								MARIMOHUB_LIFECYCLE_DIR:
 									sandbox.resolveProcessPath?.(
@@ -1320,11 +1326,15 @@ export class SandboxProvisioner {
 					timeoutError: () => new Error('Bridge configuration timed out'),
 				},
 			);
-			const start = startup.plan.start.replace(
-				/(?:python -m )?marimo --quiet /,
-				`python ${shellQuote(launcher)} --quiet `,
-			);
-			if (options.runtimeCapture && start === startup.plan.start)
+			// A job runner starts marimo itself, so it takes the launcher as its last option.
+			const start =
+				options.launchMode === 'job' && options.jobRunner !== undefined
+					? `${startup.plan.start} --launcher ${shellQuote(launcher)}`
+					: startup.plan.start.replace(
+							/(?:python -m )?marimo (?=--quiet |export html )/,
+							`python ${shellQuote(launcher)} `,
+						);
+			if ((options.runtimeCapture || options.launchMode === 'job') && start === startup.plan.start)
 				throw new RuntimeCaptureSetupError(
 					'the sandbox start command does not launch marimo, so the bridge launcher cannot wrap it',
 				);

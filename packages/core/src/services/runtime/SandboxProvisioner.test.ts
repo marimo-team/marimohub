@@ -1589,22 +1589,53 @@ describe('SandboxProvisioner', () => {
 			expect(calls.startProcess[0].cmd).toContain('python -m marimo --quiet edit');
 			expect(calls.startProcess[0].cmd).not.toContain('marimo-bridge.py');
 		});
-		it('does not activate an installed extension for jobs', async () => {
-			const { instance, calls } = makeFakeSandbox();
-			const prepared = await new SandboxProvisioner(fakeComputeFrom(instance)).prepare({
-				...options,
-				launchMode: 'job',
-				runtimeCapture: true,
-			});
-			expect(prepared.launch.start).toContain('uv run --no-sync marimo export html ');
-			expect(prepared.launch.start).not.toContain('marimo-bridge.py');
-			expect(calls.writeFiles.flat().some((file) => file.path.endsWith('marimo-bridge.py'))).toBe(
-				false,
-			);
-			expect(calls.setEnvVars).not.toContainEqual(
-				expect.objectContaining({ MARIMOHUB_BRIDGE_PARENT_ORIGIN: expect.any(String) }),
-			);
-		});
+		it.each(['upload', 'configuration', 'launcher'] as const)(
+			'refuses job export after client %s failure and reclaims compute',
+			async (failure) => {
+				const { instance, calls } = makeFakeSandbox();
+				const error = new Error('private-provider-detail');
+				if (failure === 'launcher') instance.resolveProcessPath = () => '';
+				if (failure === 'upload') vi.spyOn(instance, 'writeFiles').mockRejectedValue(error);
+				if (failure === 'configuration') {
+					const original = instance.setEnvVars.bind(instance);
+					vi.spyOn(instance, 'setEnvVars').mockImplementation((vars) =>
+						vars.MARIMOHUB_BRIDGE_INSTALL_TIMEOUT_MS ? Promise.reject(error) : original(vars),
+					);
+				}
+				const result = new SandboxProvisioner(fakeComputeFrom(instance)).prepare({
+					...options,
+					launchMode: 'job',
+				});
+				await expect(result).rejects.toBeInstanceOf(UnavailableError);
+				await expect(result).rejects.not.toThrow('private-provider-detail');
+				expect(calls.startProcess).toHaveLength(0);
+				expect(calls.destroy).toBe(1);
+			},
+		);
+		it.each(['uv-sync-edit', 'uv-script-pins'] as const)(
+			'installs the job client without activating interactive extensions for %s',
+			async (launchStrategy) => {
+				const { instance, calls } = makeFakeSandbox();
+				const prepared = await new SandboxProvisioner(fakeComputeFrom(instance)).prepare({
+					...options,
+					launchMode: 'job',
+					launchStrategy,
+					runtimeCapture: true,
+				});
+				expect(prepared.launch.start).toContain(
+					`uv run --no-sync python '/tmp/marimohub-bridge/${sandboxId}/marimo-bridge.py' export html `,
+				);
+				expect(calls.writeFiles.flat().some((file) => file.path.endsWith('marimo-bridge.py'))).toBe(
+					true,
+				);
+				expect(calls.setEnvVars).not.toContainEqual(
+					expect.objectContaining({ MARIMOHUB_LIFECYCLE_DIR: expect.any(String) }),
+				);
+				expect(calls.setEnvVars).not.toContainEqual(
+					expect.objectContaining({ MARIMOHUB_BRIDGE_PARENT_ORIGIN: expect.any(String) }),
+				);
+			},
+		);
 		it('installs capture coordination without a UI bridge origin', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({

@@ -149,6 +149,14 @@ class LauncherTests(unittest.TestCase):
         with patch.object(launcher, 'install', side_effect=RuntimeError('sensitive detail')):
             self.assert_cli_fallback()
 
+    def test_export_does_not_start_after_install_failure(self):
+        with patch.object(sys, 'argv', ['launcher.py', 'export', 'html', 'app.py']), patch.object(launcher, 'install', side_effect=RuntimeError('sensitive detail')), contextlib.redirect_stderr(io.StringIO()) as output:
+            with self.assertRaises(SystemExit) as error:
+                launcher.main()
+        self.assertEqual(error.exception.code, 1)
+        self.cli.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue()), {'event': 'notebook_bridge_unavailable', 'reason': 'install_failed'})
+
     def test_lock_contention_expires_without_installing(self):
         with (Path(sys.prefix) / '.marimohub-notebook-bridge.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

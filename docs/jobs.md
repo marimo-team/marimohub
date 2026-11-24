@@ -38,7 +38,7 @@ Existing `notebook.write` credentials retain editor execution without a separate
 Signed-in consumers still need current source access and the job's execution opt-in.
 
 Shared summaries include run/source identity, status, triggerer, timestamps, tags,
-and completed parameters. Active parameters, diagnostics, and rendered output stay
+metadata, and completed parameters. Active parameters, diagnostics, and rendered output stay
 restricted to the triggerer and editors. Raw logs remain editor-only.
 
 Every request checks current project and notebook access. Disabling sharing restricts
@@ -205,7 +205,7 @@ every 10 seconds.
 | `succeeded`    | Every cell ran; the rendered output is available.                                      |
 | `failed`       | A cell raised, the export could not run, or the sandbox could not be prepared.         |
 | `timed_out`    | The run exceeded its timeout and was reclaimed.                                        |
-| `cancelled`    | Cancelled by an editor; its sandbox was destroyed.                                     |
+| `cancelled`    | Stopped by its triggerer or an editor. Sandbox cleanup can still be pending.           |
 | `skipped`      | A scheduled fire declined because the previous run was still active (`forbid` policy). |
 
 When a cell raises, marimo still writes the rendered HTML, so a `failed` run
@@ -279,7 +279,8 @@ for the intended notebooks before using this configuration in production.
 | Follow a running run              | Own runs                          | Yes                          |
 | Create, configure, or delete jobs | No                                | Yes                          |
 | Trigger a run                     | With `consumer_execution` enabled | Yes                          |
-| Cancel a run or read raw logs     | No                                | Yes                          |
+| Stop a run                        | Own runs, with current access     | Yes                          |
+| Read raw logs                     | No                                | Yes                          |
 
 All access requires current project and notebook authorization.
 Raw logs can contain environment values and tracebacks.
@@ -334,6 +335,69 @@ The HTML embeds a credential for the caller and the run. Show it in a frame with
 `sandbox="allow-scripts"`, and request a new view before `expires_at`. Any other
 run answers 409 with code `RUN_NOT_FOLLOWABLE`. So does a live run in its first
 seconds; retry while it is running.
+
+## Run metadata
+
+Triggers accept optional `metadata`, separate from immutable tags and execution parameters.
+It is a flat map of strings, finite numbers, and booleans with these limits:
+
+- 32 entries and 8,192 UTF-8 bytes per serialized map or patch.
+- Keys match `[a-zA-Z][a-zA-Z0-9_.-]{0,63}`.
+- String values contain at most 2,048 characters.
+
+Metadata follows the job's history policy, including shared history. Keep credentials and private diagnostics out of it.
+External result references grant no access to their destination.
+
+Set `MARIMOHUB_APP_BASE_URL` to a hub URL reachable from the sandbox to enable execution updates.
+The platform installs the bundled client in the job’s Python environment before export.
+It supplies a credential limited to the current run and attempt.
+The credential remains valid until the execution deadline. Client installation failure stops the job before export.
+
+```python
+from marimohub.jobs import Run
+
+run = Run()
+run.patch_metadata({"rows": 120, "report": "s3://reports/result.json"})
+run.patch_metadata({"obsolete_field": None})
+```
+
+Patches merge keys. `None` deletes a key. Concurrent updates preserve independent keys. The last committed patch wins for each shared key.
+The server checks the merged map against the same limits.
+Finish updates before the notebook exits: terminal runs and expired deadlines reject writes.
+Retries inherit the original initial metadata and parameters, without computed results from the previous attempt.
+
+## Cooperative stop
+
+Triggerers with current source access can stop their own runs. Editors can stop any run. Shared history grants no stop rights.
+Call `jobs.stop(job_id, run_id, grace_seconds=30)`, or send `grace_seconds` to the REST cancel operation.
+Grace accepts integers from 1 through 300, capped by the execution deadline.
+Without grace, cancellation is immediate. Queued and provisioning runs always cancel immediately.
+
+During grace, the run stays active and exposes `stop_request`. Application code can save partial results before it acknowledges the stop:
+
+```python
+from marimohub.jobs import Run
+
+run = Run()
+for batch in batches:
+    process(batch)
+    if run.get_run().get("stop_request"):
+        reference = save_partial_results()  # Application-defined external write.
+        run.patch_metadata({"report": reference, "saved": True})
+        run.acknowledge_stop()
+        break
+```
+
+Only the application can promise “Stop and keep results” and report save success. Cancellation or acknowledgement does not prove a successful save.
+A failed or expired flush must not produce a success message.
+
+- Repeated requests retain the first deadline. An immediate cancellation can end grace early.
+- If completion commits first, its result remains unchanged. Otherwise, completion, failure, or timeout resolves to cancellation without retry.
+- Acknowledgement preserves committed metadata and rejects later updates. Repeated acknowledgements return the terminal result.
+
+The runner polls once per second and reclaims the sandbox after acknowledgement or deadline expiry.
+After a restart, maintenance resumes cleanup on its next tick and retries failed destruction.
+The execution timeout remains the bound during a hub outage.
 
 ## Configuration
 

@@ -7380,6 +7380,53 @@ components:
     JobRun:
       type: object
       properties:
+        metadata:
+          type: object
+          propertyNames:
+            type: string
+            pattern: ^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$
+          additionalProperties:
+            anyOf:
+              - type: string
+                maxLength: 2048
+              - type: number
+              - type: boolean
+          maxProperties: 32
+        initial_metadata:
+          type: object
+          propertyNames:
+            type: string
+            pattern: ^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$
+          additionalProperties:
+            anyOf:
+              - type: string
+                maxLength: 2048
+              - type: number
+              - type: boolean
+          maxProperties: 32
+        stop_request:
+          type: object
+          properties:
+            requested_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            deadline_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            requested_by:
+              type: string
+            acknowledged_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+          required:
+            - requested_at
+            - deadline_at
+            - requested_by
+        execution_credential_hash:
+          type: string
         tags:
           type: object
           propertyNames:

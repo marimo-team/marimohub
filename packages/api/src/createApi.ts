@@ -1,3 +1,4 @@
+import { createJobExecutionApp } from './jobs/jobExecution';
 import { createAppJobsApp } from './jobs/appJobs';
 import { APP_JOBS_PATH } from './jobs/appJobsEndpoint';
 import { createRunFollowApp, RUN_FOLLOW_PATH } from './jobs/follow';
@@ -507,6 +508,7 @@ export function createApi(rawDeps: ApiDeps) {
 	// The follow view of a live run calls this from an opaque-origin frame with a
 	// run-scoped token, so it also mounts outside the cookie-auth and CSRF guards.
 	app.route(RUN_FOLLOW_PATH, createRunFollowApp(deps));
+	app.route('/api/job-execution/v1', createJobExecutionApp(deps));
 
 	// Managed-AI proxy. Notebook kernels call it server-to-server with a minted
 	// session token (no app cookie), so it mounts OUTSIDE the `/api/v1/*` cookie-auth

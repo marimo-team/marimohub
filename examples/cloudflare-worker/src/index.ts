@@ -387,6 +387,8 @@ async function runScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
 			jobs: deps.services.jobs,
 			runs: deps.services.jobRuns,
 			runner: new JobRunner({
+				appBaseUrl: deps.sandbox.appBaseUrl,
+				notebookBridge: deps.sandbox.notebookBridge,
 				bucket,
 				compute,
 				notebooks: deps.services.notebooks,
