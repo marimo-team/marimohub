@@ -23,12 +23,14 @@ so the feature can be turned back on without loss.
 
 ## App-consumer execution and history
 
-Editors configure two independent job settings through the create or update API:
+Editors configure two independent settings in **New job** or **Edit job**, or through the API:
 
-| Setting              | Default   | Effect                                                                                                     |
-| -------------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
-| `consumer_execution` | `false`   | Lets authorized consumers trigger runs when enabled.                                                       |
-| `consumer_history`   | `private` | Limits history to the triggerer and editors. `shared` also lets other authorized consumers read summaries. |
+| Setting                                                    | Default | Effect                                                                                                                                              |
+| ---------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Allow app users to run this job** (`consumer_execution`) | Off     | Lets authorized app users start runs.                                                                                                               |
+| **Run history** (`consumer_history`)                       | Private | Limits history to the person who started the run and editors. Shared also exposes summaries and completed parameters to other authorized app users. |
+
+Disabling app execution does not change history sharing.
 
 Scoped credentials need `job.trigger` plus source access (`app.read` or `project.read`) to invoke an opted-in job.
 The `run` token preset includes `job.trigger`; the `read` preset does not.

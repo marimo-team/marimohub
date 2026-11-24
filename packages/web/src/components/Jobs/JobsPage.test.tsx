@@ -457,6 +457,8 @@ describe('JobsPage', () => {
 			expect(create?.body).toEqual({
 				name: 'Weekly report',
 				enabled: true,
+				consumer_execution: false,
+				consumer_history: 'private',
 				schedule: { cron: '0 9 * * mon', timezone: 'UTC' },
 				parameters: { region: 'eu', limit: '10' },
 				concurrency_policy: 'forbid',

@@ -43,7 +43,7 @@ function makeFetch(
 function renderDialog(job?: Job) {
 	const onClose = vi.fn();
 	const onSaved = vi.fn();
-	renderWithClient(
+	const rendered = renderWithClient(
 		<JobFormDialog
 			isOpen
 			onClose={onClose}
@@ -53,7 +53,7 @@ function renderDialog(job?: Job) {
 			onSaved={onSaved}
 		/>,
 	);
-	return { onClose, onSaved };
+	return { ...rendered, onClose, onSaved };
 }
 
 function job(overrides: Partial<Job> = {}): Job {
@@ -114,6 +114,83 @@ describe('job parameters', () => {
 });
 
 describe('JobFormDialog', () => {
+	it.each([
+		{ consumer_execution: false, consumer_history: 'private' as const },
+		{ consumer_execution: true, consumer_history: 'private' as const },
+		{ consumer_execution: false, consumer_history: 'shared' as const },
+		{ consumer_execution: true, consumer_history: 'shared' as const },
+	])('creates and reopens app settings: %j', async (settings) => {
+		const calls = makeFetch();
+		const user = setupUser();
+		const { unmount } = renderDialog();
+		const dialog = await screen.findByRole('dialog');
+		const execution = within(dialog).getByRole('switch', {
+			name: 'Allow app users to run this job',
+		});
+		const history = within(dialog).getByRole('radiogroup', { name: 'Run history' });
+		expect(execution).not.toBeChecked();
+		expect(within(history).getByRole('radio', { name: /^Private/ })).toBeChecked();
+		await user.type(within(dialog).getByLabelText('Name'), 'Report');
+		if (settings.consumer_execution) await user.click(execution);
+		if (settings.consumer_history === 'shared') {
+			await user.click(within(history).getByRole('radio', { name: /^Shared/ }));
+		}
+		await user.click(within(dialog).getByRole('button', { name: 'Create job' }));
+		await waitFor(() =>
+			expect(calls.find((call) => call.method === 'POST')?.body).toMatchObject(settings),
+		);
+		const saved = job(calls.find((call) => call.method === 'POST')?.body as Partial<Job>);
+		unmount();
+
+		renderDialog(saved);
+		const reopened = await screen.findByRole('dialog');
+		expect(
+			within(reopened).getByRole('switch', { name: 'Allow app users to run this job' }),
+		).toHaveProperty('checked', settings.consumer_execution);
+		expect(
+			within(reopened).getByRole('radio', {
+				name: settings.consumer_history === 'shared' ? /^Shared/ : /^Private/,
+			}),
+		).toBeChecked();
+		await user.type(within(reopened).getByLabelText('Name'), ' renamed');
+		await user.click(within(reopened).getByRole('button', { name: 'Save' }));
+		await waitFor(() =>
+			expect(calls.find((call) => call.method === 'PATCH')?.body).toMatchObject({
+				...settings,
+				name: 'Report renamed',
+			}),
+		);
+	});
+
+	it('keeps history independent when execution is disabled using the keyboard', async () => {
+		const calls = makeFetch();
+		const user = setupUser();
+		renderDialog(job({ consumer_execution: true, consumer_history: 'shared' }));
+		const dialog = await screen.findByRole('dialog');
+		const execution = within(dialog).getByRole('switch', {
+			name: 'Allow app users to run this job',
+		});
+		execution.focus();
+		await user.keyboard(' ');
+		expect(execution).not.toBeChecked();
+		const shared = within(dialog).getByRole('radio', { name: /^Shared/ });
+		expect(shared).toBeChecked();
+		expect(shared).toBeEnabled();
+		await user.tab();
+		expect(shared).toHaveFocus();
+		await user.keyboard('{ArrowUp}');
+		expect(within(dialog).getByRole('radio', { name: /^Private/ })).toBeChecked();
+		await user.keyboard('{ArrowDown}');
+		expect(shared).toBeChecked();
+		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+		await waitFor(() =>
+			expect(calls.find((call) => call.method === 'PATCH')?.body).toMatchObject({
+				consumer_execution: false,
+				consumer_history: 'shared',
+			}),
+		);
+	});
+
 	it('uses the wider job-form layout', async () => {
 		makeFetch();
 		renderDialog();
@@ -268,6 +345,8 @@ describe('JobFormDialog', () => {
 		expect(patch?.body).toEqual({
 			name: 'Existing',
 			enabled: false,
+			consumer_execution: false,
+			consumer_history: 'private',
 			schedule: { cron: '15 7 * * *', timezone: 'Asia/Tokyo' },
 			parameters: { region: 'ap' },
 			retry: { max_retries: 2, backoff_seconds: 120 },
