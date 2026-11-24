@@ -19,27 +19,35 @@ import { ProjectId, SessionId } from '../../ids';
 import { fromBase64Url, toBase64Url } from '../../internal/base64url';
 import { hmacSha256, timingSafeEqual } from '../../internal/hmac';
 
-/** Mint a routing token for a session: `<projectId>.<sessionId>.<base64url(hmac)>`. */
+import type { SessionAudience } from './sessionState';
+
+/**
+ * Mint a routing token for a session:
+ * - authenticated: `<projectId>.<sessionId>.<base64url(hmac)>`
+ * - public:        `<projectId>.<sessionId>.pub.<base64url(hmac)>`
+ */
 export async function signProxyToken(
 	projectId: ProjectId,
 	sessionId: SessionId,
 	secret: string,
+	audience: SessionAudience = 'authenticated',
 ): Promise<string> {
 	// Project and session ids never contain `.` (Crockford base32 bodies), so the
 	// dot-delimited payload round-trips unambiguously.
-	const payload = `${projectId}.${sessionId}`;
+	const payload =
+		audience === 'public' ? `${projectId}.${sessionId}.pub` : `${projectId}.${sessionId}`;
 	const sig = await hmacSha256(secret, payload);
 	return `${payload}.${toBase64Url(sig)}`;
 }
 
 /**
- * Verify a routing token and return the project + session id it encodes, or `null`
- * if the token is malformed or its signature does not match.
+ * Verify a routing token and return the project, session id, and audience it encodes,
+ * or `null` if the token is malformed or its signature does not match.
  */
 export async function verifyProxyToken(
 	token: string,
 	secret: string,
-): Promise<{ projectId: ProjectId; sessionId: SessionId } | null> {
+): Promise<{ projectId: ProjectId; sessionId: SessionId; audience: SessionAudience } | null> {
 	const lastDot = token.lastIndexOf('.');
 	if (lastDot <= 0) return null;
 	const payload = token.slice(0, lastDot);
@@ -55,8 +63,9 @@ export async function verifyProxyToken(
 	// Signature matched, but the encoded ids must still be well-formed — validate at
 	// the boundary rather than branding unchecked slices with a cast.
 	const parts = payload.split('.');
-	if (parts.length !== 2) return null;
+	if (parts.length !== 2 && !(parts.length === 3 && parts[2] === 'pub')) return null;
 	const [projectId, sessionId] = parts;
 	if (!ProjectId.is(projectId) || !SessionId.is(sessionId)) return null;
-	return { projectId, sessionId };
+	const audience: SessionAudience = parts.length === 3 ? 'public' : 'authenticated';
+	return { projectId, sessionId, audience };
 }

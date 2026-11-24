@@ -337,6 +337,16 @@ export const paths = {
 	appPool: (projectId: ProjectId, notebookId: NotebookId) =>
 		`_system/app-pools/${projectId}/${notebookId}.json`,
 	appPoolsForProject: (projectId: ProjectId) => `_system/app-pools/${projectId}/`,
+	publicAppPoolsPrefix: '_system/public-app-pools/',
+	publicAppPool: (
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		variant: 'default' | 'integrations' = 'default',
+	) =>
+		variant === 'integrations'
+			? `_system/public-app-pools/${projectId}/${notebookId}.integrations.json`
+			: `_system/public-app-pools/${projectId}/${notebookId}.json`,
+	publicAppPoolsForProject: (projectId: ProjectId) => `_system/public-app-pools/${projectId}/`,
 	appClaimsForProject: (projectId: ProjectId) => `_system/apps/${projectId}/`,
 	editorClaim: (projectId: ProjectId, notebookId: NotebookId) =>
 		`_system/editors/${projectId}/${notebookId}.json`,

@@ -131,6 +131,11 @@ adapter task caches. Service-backed integration tests can use the focused
 
 ## Workflow
 
+- **Open Code Review** (`.github/workflows/open-code-review.yml`) posts advisory LLM
+  review comments on ready-for-review PRs. Its per-path rules in
+  `.opencodereview/rule.json` restate the architecture rules above; update them when
+  those rules change. Run it locally with `ocr review --from main`.
+
 - **Documentation targets the latest code**, including unreleased features. Describe
   current behavior and configuration. Do not add historical upgrade walkthroughs,
   old-version workarounds, or compatibility matrices to the guides.
@@ -206,7 +211,8 @@ These CAS-managed records also have one writer each:
 - `SessionService` owns each editor claim at
   `_system/editors/{pid}/{nid}.json`.
 - `WarmPoolStore` owns each deployment warm-pool record at `_system/warm-pools/{backend}.json`, including creation reservations, claims, and pending reclamation.
-- `AppPoolStore` owns each app pool at `_system/app-pools/{pid}/{nid}.json`,
+- `AppPoolStore` owns each app pool at `_system/app-pools/{pid}/{nid}.json` and each
+  isolated public app pool at `_system/public-app-pools/{pid}/{nid}[.integrations].json`,
   including reservations, account assignments, visit leases, and retained deletion tombstones.
 - `SessionService.claimApp`/`releaseApp` owns each legacy app claim at
   `_system/apps/{pid}/{nid}.json`.

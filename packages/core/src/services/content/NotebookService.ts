@@ -1447,7 +1447,12 @@ export class NotebookService {
 			: null;
 
 		await new WorkingBranchStore(this.bucket).retire(projectId, notebookId);
-		await new AppPoolStore(this.bucket, this.metrics).retireForDeletion(projectId, notebookId);
+		for (const namespace of ['authenticated', 'public', 'public-integrations'] as const) {
+			await new AppPoolStore(this.bucket, this.metrics, namespace).retireForDeletion(
+				projectId,
+				notebookId,
+			);
+		}
 		await this.thumbnails.retire(projectId, notebookId);
 
 		// Deleted notebook IDs never recur, so their claims cannot self-heal on admission.
@@ -1779,7 +1784,12 @@ export class NotebookService {
 			);
 		}
 		await new WorkingBranchStore(this.bucket).retire(projectId, notebookId);
-		await new AppPoolStore(this.bucket, this.metrics).retireForDeletion(projectId, notebookId);
+		for (const namespace of ['authenticated', 'public', 'public-integrations'] as const) {
+			await new AppPoolStore(this.bucket, this.metrics, namespace).retireForDeletion(
+				projectId,
+				notebookId,
+			);
+		}
 
 		await this.deepLinks.releaseNotebook(projectId, notebookId);
 		const markerKeys = await listAllKeys(this.bucket, paths.jobRunMarkersForProject(projectId));

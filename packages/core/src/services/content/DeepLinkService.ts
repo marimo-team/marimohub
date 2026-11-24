@@ -2,8 +2,8 @@ import { ulid } from 'ulidx';
 import type { Bucket } from '../../ports/bucket';
 import type { Metrics } from '../../ports/metrics';
 import { noopMetrics } from '../../ports/metrics';
-import { DeepLinkRecordSchema, DeepLinkSlugSchema } from '../../deepLinks';
-import type { DeepLink, DeepLinkTarget } from '../../deepLinks';
+import { DeepLinkRecordSchema, DeepLinkSlugSchema, isPublicDeepLink } from '../../deepLinks';
+import type { DeepLink, DeepLinkAccess, DeepLinkTarget } from '../../deepLinks';
 import { ConflictError, NotFoundError, ValidationError } from '../../errors';
 import { NotebookId } from '../../ids';
 import type { ProjectId, UserId } from '../../ids';
@@ -41,6 +41,8 @@ export class DeepLinkService {
 					paths.deepLink(slug),
 					JSON.stringify({
 						...current.record,
+						// Cross-project moves always demote public links so destination managers must re-consent.
+						access: { mode: 'inherit' },
 						target: { ...current.record.target, project_id: destination },
 					}),
 					{ onlyIfEtagMatches: current.etag },
@@ -105,6 +107,122 @@ export class DeepLinkService {
 		} finally {
 			this.metrics.histogram?.('deep_links.resolve_latency_ms', Date.now() - started);
 		}
+	}
+
+	async resolvePublic(
+		slug: string,
+	): Promise<DeepLink & { access: DeepLinkAccess & { mode: 'public' } }> {
+		const link = await this.resolve(slug);
+		if (!isPublicDeepLink(link)) throw new NotFoundError('App link not found');
+		return link;
+	}
+
+	async setAccess(
+		slug: string,
+		target: DeepLinkTarget,
+		registrationId: string,
+		input: { mode: 'inherit' } | { mode: 'public'; allow_project_integrations?: boolean },
+		actor: UserId,
+	): Promise<{ link: DeepLink; changed: boolean; wasPublic: boolean }> {
+		const canonical = this.slug(slug);
+		return withCasRetry(this.bucket, async (cas) => {
+			const current = await this.read(canonical);
+			if (!current || 'released' in current.record || !sameTarget(current.record.target, target)) {
+				throw new NotFoundError('App link not found');
+			}
+			if (current.record.registration_id !== registrationId) {
+				throw new ConflictError('App link registration has changed; refresh and try again');
+			}
+			const wasPublic = current.record.access.mode === 'public';
+			if (input.mode === 'inherit') {
+				if (!wasPublic) return { link: current.record, changed: false, wasPublic: false };
+				const next: DeepLink = {
+					...current.record,
+					access: { mode: 'inherit' },
+				};
+				await cas.put(paths.deepLink(canonical), JSON.stringify(next), {
+					onlyIfEtagMatches: current.etag,
+				});
+				return { link: next, changed: true, wasPublic: true };
+			}
+			const wantIntegrations = input.allow_project_integrations === true;
+			const hasIntegrations = current.record.access.allow_project_integrations === true;
+			if (wasPublic && hasIntegrations === wantIntegrations) {
+				return { link: current.record, changed: false, wasPublic: true };
+			}
+			const nextAccess: DeepLinkAccess = {
+				mode: 'public',
+				grant_id: ulid(),
+				enabled_by: actor,
+				enabled_at: new Date().toISOString(),
+				...(wantIntegrations ? { allow_project_integrations: true } : {}),
+			};
+			const next: DeepLink = {
+				...current.record,
+				access: nextAccess,
+			};
+			await cas.put(paths.deepLink(canonical), JSON.stringify(next), {
+				onlyIfEtagMatches: current.etag,
+			});
+			return { link: next, changed: true, wasPublic };
+		});
+	}
+
+	async downgradeNotebookPublicLinks(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+	): Promise<number> {
+		const target: DeepLinkTarget = { kind: 'app', project_id: projectId, notebook_id: notebookId };
+		const links = await this.list(target);
+		let downgraded = 0;
+		await mapWithConcurrency(links, BUCKET_SCAN_CONCURRENCY, async (link) => {
+			if (link.access.mode !== 'public') return;
+			await withCasRetry(this.bucket, async (cas) => {
+				const current = await this.read(link.slug);
+				if (
+					!current ||
+					'released' in current.record ||
+					current.record.registration_id !== link.registration_id ||
+					!sameTarget(current.record.target, target) ||
+					current.record.access.mode !== 'public'
+				) {
+					return;
+				}
+				const next: DeepLink = { ...current.record, access: { mode: 'inherit' } };
+				await cas.put(paths.deepLink(link.slug), JSON.stringify(next), {
+					onlyIfEtagMatches: current.etag,
+				});
+				downgraded++;
+			});
+		});
+		return downgraded;
+	}
+
+	async downgradeProjectPublicLinks(projectId: ProjectId): Promise<NotebookId[]> {
+		const prefix = `${paths.project(projectId).meta.replace(/project\.json$/, '')}notebooks/`;
+		const notebooks = await listAllPrefixes(this.bucket, prefix);
+		const affected: NotebookId[] = [];
+		await mapWithConcurrency(notebooks, BUCKET_SCAN_CONCURRENCY, async (key) => {
+			const id = key.slice(prefix.length).replace(/\/$/, '');
+			if (!NotebookId.is(id)) return;
+			const count = await this.downgradeNotebookPublicLinks(projectId, id);
+			if (count > 0) affected.push(id);
+		});
+		return affected;
+	}
+
+	async hasPublicLinks(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		variant: 'any' | 'default' | 'integrations' = 'any',
+	): Promise<boolean> {
+		const links = await this.list({ kind: 'app', project_id: projectId, notebook_id: notebookId });
+		return links.some((link) => {
+			if (!isPublicDeepLink(link)) return false;
+			if (variant === 'any') return true;
+			const hasIntegrations = link.access.allow_project_integrations === true;
+			return variant === 'integrations' ? hasIntegrations : !hasIntegrations;
+		});
 	}
 
 	async register(slug: string, target: DeepLinkTarget, actor: UserId): Promise<DeepLink> {

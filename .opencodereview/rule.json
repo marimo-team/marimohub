@@ -1,0 +1,36 @@
+{
+	"exclude": [
+		"pnpm-lock.yaml",
+		"packages/api/openapi.yaml",
+		"internal/schemas/*.yml",
+		"apps/cli/generated/**",
+		"**/dist/**"
+	],
+	"rules": [
+		{
+			"path": "packages/core/**",
+			"rule": "packages/core holds the domain model, services, and port interfaces. Flag any import of a vendor SDK or anything that performs I/O, and any import of a @marimo-hub adapter package (storage-*, compute-*, auth-*, credentials-*, secrets-*, notify-*, object-browser-*, database-browser-*, source-control-*, search-*, embeddings-*, duckdb-wasm-runtime, postgres-runtime, notebook-bridge). From @marimo-hub/host-protocol only the ./bridge and ./retry-store subpaths are allowed. Bucket records listed under 'Key invariant' in AGENTS.md have a single owning service: flag writes to them from any other code. All writes to _system/catalog.json must go through CatalogService.mutateSnapshot. CAS writes must use ETag conditional puts with retry, never blind overwrites.",
+			"merge_system_rule": true
+		},
+		{
+			"path": "packages/api/**",
+			"rule": "packages/api must not import any @marimo-hub adapter package; only packages/config wires adapters. JSON routes respond with { success: true, data } or { success: false, error: { code, message } }; the raw-content exceptions are listed in AGENTS.md. Changes to zod route schemas require regenerating packages/api/openapi.yaml (pnpm schemas:generate), and the spec must not break existing clients.",
+			"merge_system_rule": true
+		},
+		{
+			"path": "packages/{storage,compute,auth,credentials,secrets,notify,object-browser,database-browser,source-control,search,embeddings}-*/**",
+			"rule": "This is an adapter. It must import focused core subpaths such as @marimo-hub/core/errors or @marimo-hub/core/ports/bucket, never the root, ports, testing, or search barrels, including for type-only imports. Storage adapters must run bucketContract from @marimo-hub/core/testing/contract.",
+			"merge_system_rule": true
+		},
+		{
+			"path": "packages/web/**",
+			"rule": "React 19 SPA styled with Tailwind v4 utilities; flag new plain CSS. Reuse primitives in src/components/ui and helpers in src/lib/utils.ts instead of duplicating them.",
+			"merge_system_rule": true
+		},
+		{
+			"path": "**/*.{ts,tsx}",
+			"rule": "Flag explicit `any` and casts that bypass inference. Comments should explain why, not restate the code.",
+			"merge_system_rule": true
+		}
+	]
+}

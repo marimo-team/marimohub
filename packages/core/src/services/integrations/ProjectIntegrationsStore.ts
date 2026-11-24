@@ -2641,7 +2641,7 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		const scope = projectScope(projectId);
 		const [project, org] = await Promise.all([
 			this.store.listHeads(scope),
-			this.store.listHeads(ORG_SCOPE),
+			context.scope === 'project-only' ? Promise.resolve([]) : this.store.listHeads(ORG_SCOPE),
 		]);
 		// Shadowing keys off existence, not `enabled`: a disabled same-name project
 		// instance still suppresses the org one (that is the opt-out), and it keeps

@@ -1833,7 +1833,8 @@ describe('NotebookService', () => {
 				expect(await bucket.get(paths.editorClaim(projectId, notebook.id))).toBeNull();
 				expect(await deepLinks.list(target)).toEqual([]);
 				expect(await catalog.getCurrentSnapshot()).toEqual(committed);
-				expect(fence).toHaveBeenCalledTimes(2);
+				// 1 failed attempt on the first pool namespace + 3 namespaces retired on retry.
+				expect(fence).toHaveBeenCalledTimes(4);
 			} finally {
 				fence.mockRestore();
 			}

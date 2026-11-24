@@ -26,6 +26,8 @@ export interface ExposureContext {
 	kernelAuthToken?: string;
 	/** The app's public base URL, which may include a path prefix. */
 	appBaseUrl: string;
+	/** Distinguishes public app proxy tokens (`.pub.`) from authenticated ones. */
+	audience?: 'authenticated' | 'public';
 }
 
 export interface ExposurePreparation {

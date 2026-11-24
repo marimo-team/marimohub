@@ -3,6 +3,7 @@ import { cachedRead } from '../../async';
 import { sleep } from '../../duration';
 import { jitteredBackoff } from '../../backoff';
 import { NotebookId, ProjectId } from '../../ids';
+import type { SessionId } from '../../ids';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { readForInspection } from './inspection';
@@ -17,6 +18,30 @@ import { withCasRetry } from '../catalog/cas';
 import type { KnownObject } from '../catalog/cas';
 import { AppPoolSchema, emptyAppPool } from './AppPoolRouter';
 import type { AppPool } from './AppPoolRouter';
+import type { AppPoolNamespace } from './sessionState';
+
+export const PUBLIC_APP_POOL_NAMESPACES: readonly AppPoolNamespace[] = [
+	'public',
+	'public-integrations',
+];
+
+export const ALL_APP_POOL_NAMESPACES: readonly AppPoolNamespace[] = [
+	'authenticated',
+	...PUBLIC_APP_POOL_NAMESPACES,
+];
+
+function appPoolKey(
+	namespace: AppPoolNamespace,
+	projectId: ProjectId,
+	notebookId: NotebookId,
+): string {
+	if (namespace === 'authenticated') return paths.appPool(projectId, notebookId);
+	return paths.publicAppPool(
+		projectId,
+		notebookId,
+		namespace === 'public-integrations' ? 'integrations' : 'default',
+	);
+}
 
 function isIsoTimestamp(value: number | undefined): boolean {
 	if (value === undefined) return true;
@@ -54,9 +79,13 @@ const batchFlushes = weakMemo<Bucket, BoundedLruMap<string, number>>(
 );
 
 export class AppPoolStore {
+	private key(pid: ProjectId, nid: NotebookId): string {
+		return appPoolKey(this.namespace, pid, nid);
+	}
+
 	async freezeForMove(pid: ProjectId, nid: NotebookId): Promise<void> {
 		await withCasRetry(this.bucket, async (cas) => {
-			const key = paths.appPool(pid, nid);
+			const key = this.key(pid, nid);
 			const object = await this.bucket.get(key);
 			const pool = object ? await readStored(AppPoolSchema, object, key) : emptyAppPool();
 			if (pool.members.length > 0)
@@ -75,7 +104,7 @@ export class AppPoolStore {
 	 */
 	async cancelNotebookMove(source: ProjectId, nid: NotebookId): Promise<void> {
 		await withCasRetry(this.bucket, async (cas) => {
-			const key = paths.appPool(source, nid);
+			const key = this.key(source, nid);
 			const object = await this.bucket.get(key);
 			if (!object) return;
 			const { deleted_at: _frozen, ...pool } = await readStored(AppPoolSchema, object, key);
@@ -90,7 +119,7 @@ export class AppPoolStore {
 	): Promise<void> {
 		for (const pid of [source, destination]) {
 			await withCasRetry(this.bucket, async (cas) => {
-				const key = paths.appPool(pid, nid);
+				const key = this.key(pid, nid);
 				const object = await this.bucket.get(key);
 				if (!object) return;
 				const pool = await readStored(AppPoolSchema, object, key);
@@ -105,6 +134,7 @@ export class AppPoolStore {
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
+		readonly namespace: AppPoolNamespace = 'authenticated',
 	) {}
 
 	async read(projectId: ProjectId, notebookId: NotebookId): Promise<AppPool | null> {
@@ -115,7 +145,7 @@ export class AppPoolStore {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 	): Promise<KnownObject<AppPool> | null> {
-		const key = paths.appPool(projectId, notebookId);
+		const key = this.key(projectId, notebookId);
 		const object = await this.bucket.get(key);
 		return object
 			? { value: await readStored(AppPoolSchema, object, key), etag: object.etag }
@@ -123,17 +153,22 @@ export class AppPoolStore {
 	}
 
 	async inspectAll() {
-		const objects = await listAllObjects(this.bucket, paths.appPoolsPrefix);
+		const prefix =
+			this.namespace === 'authenticated' ? paths.appPoolsPrefix : paths.publicAppPoolsPrefix;
+		const objects = await listAllObjects(this.bucket, prefix);
 		let incomplete = false;
 		const entries = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (object) => {
-			const [projectId, notebook] = object.key.slice(paths.appPoolsPrefix.length).split('/');
-			const notebookId = notebook?.replace(/\.json$/, '');
+			const [projectId, notebook] = object.key.slice(prefix.length).split('/');
+			const notebookId = notebook?.replace(/(?:\.integrations)?\.json$/, '');
 			if (
 				!ProjectId.is(projectId) ||
 				!NotebookId.is(notebookId) ||
-				object.key !== paths.appPool(projectId, notebookId)
+				(this.namespace === 'authenticated' && object.key !== paths.appPool(projectId, notebookId))
 			) {
 				incomplete = true;
+				return null;
+			}
+			if (this.namespace !== 'authenticated' && object.key !== this.key(projectId, notebookId)) {
 				return null;
 			}
 			const pool = await readForInspection(
@@ -152,7 +187,7 @@ export class AppPoolStore {
 	reader() {
 		const reads = new Map<string, Promise<AppPool | null>>();
 		return (projectId: ProjectId, notebookId: NotebookId) => {
-			const key = paths.appPool(projectId, notebookId);
+			const key = this.key(projectId, notebookId);
 			return cachedRead(reads, key, () => this.read(projectId, notebookId));
 		};
 	}
@@ -166,7 +201,7 @@ export class AppPoolStore {
 		serialize = false,
 	): Promise<T> {
 		const pending = batches(this.bucket);
-		const key = `${paths.appPool(projectId, notebookId)}:${intervalMs}`;
+		const key = `${this.key(projectId, notebookId)}:${intervalMs}`;
 		const flushes = batchFlushes(this.bucket);
 		const result = Promise.withResolvers<T>();
 		const entry: PendingUpdate = {
@@ -237,7 +272,7 @@ export class AppPoolStore {
 		known?: KnownObject<AppPool> | null,
 		presence?: { intervalMs: number; deadline: number },
 	): Promise<T> {
-		const key = paths.appPool(projectId, notebookId);
+		const key = this.key(projectId, notebookId);
 		let initial = known;
 		return withCasRetry(
 			this.bucket,
@@ -289,6 +324,17 @@ export class AppPoolStore {
 				onExhausted: () => this.metrics.increment('app_pool.cas.exhausted'),
 			},
 		);
+	}
+
+	async invalidateAll(projectId: ProjectId, notebookId: NotebookId): Promise<SessionId[]> {
+		const existing = await this.read(projectId, notebookId);
+		if (!existing) return [];
+		return this.mutate(projectId, notebookId, (pool) => {
+			const sessionIds = pool.members.map((member) => member.session_id);
+			for (const member of pool.members) member.state = 'retiring';
+			pool.assignments = [];
+			return { pool, value: sessionIds };
+		});
 	}
 
 	async retireForDeletion(projectId: ProjectId, notebookId: NotebookId): Promise<void> {

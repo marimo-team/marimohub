@@ -389,4 +389,68 @@ describe('DeepLinkService', () => {
 			expect(await (await bucket.get(paths.deepLink('sales')))!.text()).toBe(body);
 		},
 	);
+
+	it('toggles public access via CAS, rotates grant_id, and demotes on move or downgrade', async () => {
+		const link = await register(first, 'team/sales');
+		await expect(services.deepLinks.resolvePublic('team/sales')).rejects.toThrow();
+		expect(await services.deepLinks.hasPublicLinks(first.project_id, first.notebook_id)).toBe(
+			false,
+		);
+
+		const enabled = await services.deepLinks.setAccess(
+			'team/sales',
+			first,
+			link.registration_id,
+			{ mode: 'public', allow_project_integrations: true },
+			ACTOR,
+		);
+		expect(enabled.changed).toBe(true);
+		expect(enabled.wasPublic).toBe(false);
+		expect(enabled.link.access.mode).toBe('public');
+		expect(enabled.link.access.allow_project_integrations).toBe(true);
+		const firstGrant = enabled.link.access.grant_id;
+		expect(firstGrant).toBeTruthy();
+		expect(
+			await services.deepLinks.hasPublicLinks(first.project_id, first.notebook_id, 'integrations'),
+		).toBe(true);
+		expect(
+			await services.deepLinks.hasPublicLinks(first.project_id, first.notebook_id, 'default'),
+		).toBe(false);
+		expect((await services.deepLinks.resolvePublic('team/sales')).access.grant_id).toBe(firstGrant);
+
+		// Disabling restores byte-compatible { mode: 'inherit' }.
+		const disabled = await services.deepLinks.setAccess(
+			'team/sales',
+			first,
+			link.registration_id,
+			{ mode: 'inherit' },
+			ACTOR,
+		);
+		expect(disabled.changed).toBe(true);
+		expect(disabled.wasPublic).toBe(true);
+		expect(disabled.link.access).toEqual({ mode: 'inherit' });
+
+		// Re-enabling rotates grant_id so old visit tokens cannot be revived.
+		const reenabled = await services.deepLinks.setAccess(
+			'team/sales',
+			first,
+			link.registration_id,
+			{ mode: 'public' },
+			ACTOR,
+		);
+		expect(reenabled.link.access.grant_id).not.toBe(firstGrant);
+
+		// Cross-project move always demotes public links back to inherit.
+		const destProject = await services.projects.createProject(
+			{ name: 'Destination', description: '' },
+			ACTOR,
+		);
+		await services.deepLinks.moveNotebook(first.project_id, destProject.id, first.notebook_id);
+		const movedRaw = JSON.parse(await (await bucket.get(paths.deepLink('team/sales')))!.text()) as {
+			access: { mode: string };
+			target: { project_id: string };
+		};
+		expect(movedRaw.target.project_id).toBe(destProject.id);
+		expect(movedRaw.access).toEqual({ mode: 'inherit' });
+	});
 });

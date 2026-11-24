@@ -43,6 +43,7 @@ import projectAlertsApp from './routes/projectAlerts';
 import integrationsApp from './routes/integrations';
 import jobsApp from './routes/jobs';
 import deepLinksApp from './routes/deepLinks';
+import publicAppsApp from './routes/publicApps';
 import appsApp from './routes/apps';
 import sessionsApp from './routes/sessions';
 import systemApp from './routes/system';
@@ -512,6 +513,44 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route('/api/sync/git/v1', gitSyncApp);
 
 	app.route('/api/cli/v1', cliTokenApp);
+
+	// Dedicated unauthenticated router for opt-in public app links (`/app/<slug>`).
+	// Mounted outside `/api/v1/*` so hub authN stays untouched; still enforces CSRF on POSTs.
+	const PUBLIC_API_PREFIX = '/api/public/v1';
+	app.use(`${PUBLIC_API_PREFIX}/*`, bodyLimit({ maxSize: 16 * 1024 }));
+	app.use(`${PUBLIC_API_PREFIX}/*`, async (c, next) => {
+		c.header('Cache-Control', 'no-store');
+		c.header('X-Robots-Tag', 'noindex, nofollow');
+		const method = c.req.method;
+		if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+			const origin = c.req.header('origin');
+			const allowlisted = origin ? (deps.policy.allowedOrigins?.includes(origin) ?? false) : false;
+			const reject = () => fail(c, 'FORBIDDEN', 'Cross-origin request rejected', 403);
+			const secFetchSite = c.req.header('sec-fetch-site');
+			if ((secFetchSite === 'cross-site' || secFetchSite === 'same-site') && !allowlisted) {
+				return reject();
+			}
+			if (origin) {
+				let sourceOrigin: string | null = null;
+				try {
+					sourceOrigin = new URL(origin).origin;
+				} catch {
+					sourceOrigin = null;
+				}
+				let destinationOrigin: string | null = null;
+				try {
+					destinationOrigin = new URL(resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl)).origin;
+				} catch {
+					destinationOrigin = null;
+				}
+				if (sourceOrigin === null || (sourceOrigin !== destinationOrigin && !allowlisted)) {
+					return reject();
+				}
+			}
+		}
+		await next();
+	});
+	app.route(PUBLIC_API_PREFIX, publicAppsApp);
 
 	// CSRF defense-in-depth. The session cookie is already SameSite=Lax (so a
 	// browser won't attach it to a cross-site POST/PUT/DELETE), and there is no

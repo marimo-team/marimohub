@@ -106,6 +106,7 @@ import { loadAdapterLibraries } from './library';
 import type { LoadedAdapterLibraries } from './library';
 import { parseSessionIdleTimeouts, DEFAULT_SESSION_MAX_LIFETIME_S } from './sessionDefaults';
 import { parseAppPoolPolicy } from './appPool';
+import { parsePublicAppsConfig } from './publicApps';
 import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
 import { parseWarmPoolConfig } from './warmPool';
@@ -919,6 +920,10 @@ export function createFromEnv(
 		...sourceControlConfig,
 		...sourceControlAccounts,
 		...makeIntegrations(env, bucket, metrics, dataPreview, dataQuery),
+		publicApps: parsePublicAppsConfig(env, {
+			authBackend: authBackend(env),
+			exposureMode: exposure.mode,
+		}),
 		backgroundWork: options?.backgroundWork,
 		// Deployment metadata surfaced read-only via GET /api/v1/version (UI footer).
 		// MARIMOHUB_VERSION / MARIMOHUB_IMAGE are baked into the image at build time

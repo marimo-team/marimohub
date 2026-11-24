@@ -51,6 +51,17 @@ export type Services = ReturnType<typeof createServices>;
  * and exchanges them via `target`. Projects may override the deployment default.
  * One target per deployment for now — promote to a keyed map when a second is real.
  */
+export interface PublicAppsConfig {
+	signingSecret: string;
+	allowProjectIntegrations: boolean;
+	maxConcurrentSessions: number;
+	poolPolicy: AppPoolPolicy;
+	idleTimeoutMs: Millis;
+	/** Non-extendable `authorization_expires_at` ceiling for public app sandboxes. */
+	maxLifetimeMs: Millis;
+	visitTokenTtlSeconds: number;
+}
+
 export interface WifConfig {
 	defaultEnabled: boolean;
 	issuer: WorkloadIdentityIssuer;
@@ -555,6 +566,8 @@ export interface ApiDeps {
 	 * policy-derived fields still filled.
 	 */
 	configSummary?: ConfigSummary;
+	/** Opt-in public app links (`MARIMOHUB_PUBLIC_APP_LINKS=on`). Absent disables public access. */
+	publicApps?: PublicAppsConfig;
 	/** Optional project integration service; absence disables its routes and injection. */
 	integrations?: ProjectIntegrationsService;
 	/**

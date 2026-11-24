@@ -1524,12 +1524,14 @@ export function useNotebookQuery(
 	// `staleTime: 0` re-reads on mount instead, for a short-lived one that must
 	// not trust the shared cache.
 	options: {
+		enabled?: boolean;
 		refetchIntervalMs?: number | ((notebook: NotebookDetail | undefined) => number | undefined);
 		staleTime?: number;
 	} = {},
 ) {
 	const { refetchIntervalMs } = options;
 	return useQuery({
+		enabled: options.enabled ?? true,
 		queryKey: notebookKeys.detail(projectId, notebookId),
 		queryFn: () =>
 			apiData(

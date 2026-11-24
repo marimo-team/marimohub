@@ -2076,6 +2076,89 @@ paths:
       responses:
         '204':
           description: Stored.
+  /_system/public-app-pools/{pid}/{nid}.json:
+    summary: Isolated public app sandbox reservations, visit assignments, and visit
+      leases.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: AppPoolStore
+    get:
+      operationId: read_system_public_app_pools_json
+      summary: Read PublicAppPool
+      tags:
+        - session
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicAppPool'
+    put:
+      operationId: write_system_public_app_pools_json
+      summary: Write PublicAppPool
+      tags:
+        - session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublicAppPool'
+      responses:
+        '204':
+          description: Stored.
+  /_system/public-app-pools/{pid}/{nid}.integrations.json:
+    summary: Isolated public app pool for links opted into project-scoped integrations.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: AppPoolStore
+    get:
+      operationId: read_system_public_app_pools_integrations_json
+      summary: Read PublicAppIntegrationsPool
+      tags:
+        - session
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicAppIntegrationsPool'
+    put:
+      operationId: write_system_public_app_pools_integrations_json
+      summary: Write PublicAppIntegrationsPool
+      tags:
+        - session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublicAppIntegrationsPool'
+      responses:
+        '204':
+          description: Stored.
   /_system/apps/{pid}/{nid}.json:
     summary: Per-notebook app-sandbox singleton claim.
     parameters:
@@ -4770,7 +4853,21 @@ components:
               properties:
                 mode:
                   type: string
-                  const: inherit
+                  enum:
+                    - inherit
+                    - public
+                grant_id:
+                  type: string
+                  format: ulid
+                  pattern: ^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$
+                enabled_by:
+                  type: string
+                enabled_at:
+                  type: string
+                  format: date-time
+                  pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                allow_project_integrations:
+                  type: boolean
               required:
                 - mode
               additionalProperties: false
@@ -7919,6 +8016,13 @@ components:
           enum:
             - edit
             - app
+        audience:
+          type: string
+          enum:
+            - authenticated
+            - public
+        allow_project_integrations:
+          type: boolean
         source_version_id:
           type: string
         working_branch_version_id:
@@ -8168,6 +8272,182 @@ components:
       required:
         - pools
     AppPool:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        deleted_at:
+          type: number
+        last_presence_write_at:
+          type: number
+        latest_version_id:
+          type: string
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              session_id:
+                type: string
+              sandbox_id:
+                type: string
+              user_id:
+                type: string
+              source_version_id:
+                type: string
+              state:
+                type: string
+                enum:
+                  - starting
+                  - ready
+                  - draining
+                  - retiring
+              created_at:
+                type: number
+              operation_token:
+                type: string
+              operation_expires_at:
+                type: number
+              idle_since:
+                type: number
+              legacy:
+                type: boolean
+              replaces_session_id:
+                type: string
+            required:
+              - session_id
+              - sandbox_id
+              - user_id
+              - state
+              - created_at
+              - operation_token
+              - operation_expires_at
+        assignments:
+          type: array
+          items:
+            type: object
+            properties:
+              visit_id:
+                type: string
+              user_id:
+                type: string
+              session_id:
+                type: string
+              generation:
+                type: string
+              visits:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    visit_id:
+                      type: string
+                    expires_at:
+                      type: number
+                  required:
+                    - visit_id
+                    - expires_at
+              grace_until:
+                type: number
+            required:
+              - user_id
+              - session_id
+              - generation
+              - visits
+      required:
+        - schema_version
+        - members
+        - assignments
+    PublicAppPool:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        deleted_at:
+          type: number
+        last_presence_write_at:
+          type: number
+        latest_version_id:
+          type: string
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              session_id:
+                type: string
+              sandbox_id:
+                type: string
+              user_id:
+                type: string
+              source_version_id:
+                type: string
+              state:
+                type: string
+                enum:
+                  - starting
+                  - ready
+                  - draining
+                  - retiring
+              created_at:
+                type: number
+              operation_token:
+                type: string
+              operation_expires_at:
+                type: number
+              idle_since:
+                type: number
+              legacy:
+                type: boolean
+              replaces_session_id:
+                type: string
+            required:
+              - session_id
+              - sandbox_id
+              - user_id
+              - state
+              - created_at
+              - operation_token
+              - operation_expires_at
+        assignments:
+          type: array
+          items:
+            type: object
+            properties:
+              visit_id:
+                type: string
+              user_id:
+                type: string
+              session_id:
+                type: string
+              generation:
+                type: string
+              visits:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    visit_id:
+                      type: string
+                    expires_at:
+                      type: number
+                  required:
+                    - visit_id
+                    - expires_at
+              grace_until:
+                type: number
+            required:
+              - user_id
+              - session_id
+              - generation
+              - visits
+      required:
+        - schema_version
+        - members
+        - assignments
+    PublicAppIntegrationsPool:
       type: object
       properties:
         schema_version:
@@ -8821,6 +9101,7 @@ components:
                       - notebook.write
                       - notebook.manage
                       - deep-link.manage
+                      - deep-link.publish
                       - preview.manage
                       - integration.read
                       - integration.use

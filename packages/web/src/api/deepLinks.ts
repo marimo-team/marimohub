@@ -85,6 +85,29 @@ export function useRegisterDeepLink(pid: string, nid: string) {
 	});
 }
 
+export function useUpdateDeepLinkAccess(pid: string, nid: string) {
+	const client = useQueryClient();
+	return useMutation({
+		meta: { suppressErrorToast: true },
+		mutationFn: ({
+			slug,
+			registration_id,
+			access,
+		}: {
+			slug: string;
+			registration_id: string;
+			access: { mode: 'inherit' } | { mode: 'public'; allow_project_integrations?: boolean };
+		}) =>
+			apiData(
+				apiClient.PATCH('/api/v1/projects/{pid}/notebooks/{nid}/deep-links/{slug}', {
+					params: { path: { pid, nid, slug } },
+					body: { registration_id, access },
+				}),
+			),
+		onSuccess: () => client.invalidateQueries({ queryKey: ['deep-links'] }),
+	});
+}
+
 export function useReleaseDeepLink(pid: string, nid: string) {
 	const client = useQueryClient();
 	return useMutation({

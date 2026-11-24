@@ -15,6 +15,7 @@ const WIRING_SOURCES = [
 	fileURLToPath(new URL('./marimoAssets.ts', import.meta.url)),
 	fileURLToPath(new URL('./theme.ts', import.meta.url)),
 	fileURLToPath(new URL('./appPool.ts', import.meta.url)),
+	fileURLToPath(new URL('./publicApps.ts', import.meta.url)),
 	fileURLToPath(new URL('./warmPool.ts', import.meta.url)),
 	fileURLToPath(new URL('./sessionDefaults.ts', import.meta.url)),
 	fileURLToPath(new URL('./index.ts', import.meta.url)),

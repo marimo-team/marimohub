@@ -2,7 +2,7 @@ import { buildNotebookEntry } from './notebookMeta';
 import { jobIndexEntry } from '../jobs/JobsService';
 import { SYSTEM_ACTOR, UserId as UserIdValue } from '../../ids';
 import { ResumableUploads } from './ResumableUploads';
-import { AppPoolStore } from '../runtime/AppPoolStore';
+import { ALL_APP_POOL_NAMESPACES, AppPoolStore } from '../runtime/AppPoolStore';
 import { EventService } from '../catalog/EventService';
 import { nextIsoTimestamp } from '../../utcDate';
 import type { Bucket } from '../../ports/bucket';
@@ -372,7 +372,9 @@ export class NotebookMoveService {
 			source_record: context.source,
 		}));
 		return this.runLeased(key, executor, async (save) => {
-			const pools = new AppPoolStore(this.bucket);
+			const poolStores = ALL_APP_POOL_NAMESPACES.map(
+				(namespace) => new AppPoolStore(this.bucket, undefined, namespace),
+			);
 			const uploads = new ResumableUploads(
 				this.bucket,
 				`${paths.project(source).notebook(nid).base}/uploads/`,
@@ -415,11 +417,13 @@ export class NotebookMoveService {
 					const ids = new Set([nid, ...runtimes]);
 					for (const id of ids) {
 						await this.owners.jobs.assertReadyForMove(source, id);
-						if (
-							(await pools.read(source, id))?.members.length ||
-							(await pools.read(destination, id))?.members.length
-						)
-							throw new ConflictError('Wait for app pool cleanup before moving');
+						for (const pools of poolStores) {
+							if (
+								(await pools.read(source, id))?.members.length ||
+								(await pools.read(destination, id))?.members.length
+							)
+								throw new ConflictError('Wait for app pool cleanup before moving');
+						}
 					}
 					await this.owners.sessions.assertReadyForMove(source, ids);
 					await this.assertNoActiveRuns(source, ids);
@@ -475,8 +479,10 @@ export class NotebookMoveService {
 			try {
 				if (move.phase === 'copying') {
 					for (const notebookId of [nid, ...move.runtimes]) {
-						await pools.freezeForMove(source, notebookId);
-						await pools.freezeForMove(destination, notebookId);
+						for (const pools of poolStores) {
+							await pools.freezeForMove(source, notebookId);
+							await pools.freezeForMove(destination, notebookId);
+						}
 					}
 					// Copies carry the fence too, so the destination stays unreadable until published.
 					await this.owners.notebooks.copyForMove(
@@ -513,7 +519,8 @@ export class NotebookMoveService {
 					await this.unfence(destination, move.id, notebookId);
 				await this.owners.deepLinks.moveNotebook(source, destination, nid);
 				for (const notebookId of [nid, ...move.runtimes]) {
-					await pools.finishNotebookMove(source, destination, notebookId);
+					for (const pools of poolStores)
+						await pools.finishNotebookMove(source, destination, notebookId);
 					await this.owners.sessions.finishNotebookMove(source, notebookId);
 					await this.owners.jobRuns.finishMove(source, notebookId);
 				}
@@ -591,13 +598,15 @@ export class NotebookMoveService {
 			const { source, destination, notebook_id: nid } = move;
 			if (move.phase === 'published' || (await this.isPublished(move)))
 				throw new ConflictError('The move has been published. Retry it to finish cleanup.');
-			const pools = new AppPoolStore(this.bucket);
+			const poolStores = ALL_APP_POOL_NAMESPACES.map(
+				(namespace) => new AppPoolStore(this.bucket, undefined, namespace),
+			);
 			for (const notebookId of [nid, ...move.runtimes]) {
 				await deleteByPrefix(
 					this.bucket,
 					`${paths.project(destination).notebook(notebookId).base}/`,
 				);
-				await pools.cancelNotebookMove(source, notebookId);
+				for (const pools of poolStores) await pools.cancelNotebookMove(source, notebookId);
 				await this.bucket.delete([paths.versionPruneCutoff(destination, notebookId)]);
 			}
 			await this.owners.previews.finishMove(destination, nid);

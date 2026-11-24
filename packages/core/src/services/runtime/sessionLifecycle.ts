@@ -17,7 +17,13 @@ import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { SessionCaptureCoordinator } from './SessionCaptureCoordinator';
 import { isLivePersistingEditor, SessionRetirer } from './SessionRetirer';
-import { isTerminal, sessionMode, sessionModePolicy, sessionPersistsEdits } from './sessionState';
+import {
+	isTerminal,
+	sessionAppPoolNamespace,
+	sessionMode,
+	sessionModePolicy,
+	sessionPersistsEdits,
+} from './sessionState';
 import { isPastAuthorizationDeadline } from './SessionService';
 import type { SessionService } from './SessionService';
 import { localKernelBasePath } from './sandboxExposure';
@@ -133,7 +139,15 @@ export class SessionLifecycleService {
 		} catch {}
 
 		await this.sessions.reconcileSessionIndexes(sessions);
-		const readPool = new AppPoolStore(this.bucket).reader();
+		const poolReaders = {
+			authenticated: new AppPoolStore(this.bucket, undefined, 'authenticated').reader(),
+			public: new AppPoolStore(this.bucket, undefined, 'public').reader(),
+			'public-integrations': new AppPoolStore(
+				this.bucket,
+				undefined,
+				'public-integrations',
+			).reader(),
+		};
 		// Candidates: `running` sessions, plus any terminal record still holding a
 		// sandbox_id that has not been confirmed destroyed. The `expired` ones are
 		// the stale-heartbeat reaper's leak (record flipped, sandbox never touched);
@@ -188,7 +202,10 @@ export class SessionLifecycleService {
 							? reconnectSessionSandbox(this.compute, s, this.cfg.metrics, 'poll')
 							: undefined;
 
-				const pool = sessionMode(s) === 'app' ? await readPool(s.project_id, s.notebook_id) : null;
+				const pool =
+					sessionMode(s) === 'app'
+						? await poolReaders[sessionAppPoolNamespace(s)](s.project_id, s.notebook_id)
+						: null;
 				if (pool) expireAppPresence(pool, now);
 				const poolMember = pool?.members.find((member) => member.session_id === s.session_id);
 				const hasAppUsers = pool !== null && appOccupancy(pool, s.session_id) > 0;

@@ -7,8 +7,10 @@ import type { Context, MiddlewareHandler, TypedResponse } from 'hono';
 import { all } from 'better-all';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
+	AppPoolStore,
 	deferOrAwait,
 	previewAvailable,
+	PUBLIC_APP_POOL_NAMESPACES,
 	ASSIGNABLE_ROLES,
 	AuthorizationService,
 	BUCKET_SCAN_CONCURRENCY,
@@ -33,6 +35,7 @@ import {
 	SESSION_MODES,
 	SESSION_STATUSES,
 	PreviewSessionOriginSchema,
+	sessionAudience,
 	sessionResourceNotebookId,
 	SessionId,
 	sessionPersistsEdits,
@@ -661,6 +664,56 @@ export async function retireLiveApps(
 			});
 		}
 	});
+}
+
+/**
+ * Invalidate public app pool assignments and destroy live public sandboxes for a
+ * notebook (or whole project) without disrupting authenticated member sessions.
+ */
+export async function retirePublicApps(
+	deps: ApiDeps,
+	pid: ProjectId,
+	nid?: NotebookId,
+	namespaces = PUBLIC_APP_POOL_NAMESPACES,
+): Promise<void> {
+	const notebookIds: NotebookId[] = [];
+	if (nid) {
+		notebookIds.push(nid);
+	} else {
+		const active = await deps.services.sessions.listActiveByProject(pid).catch(() => []);
+		for (const s of active) {
+			if (sessionAudience(s) === 'public' && !notebookIds.includes(s.notebook_id)) {
+				notebookIds.push(s.notebook_id);
+			}
+		}
+	}
+	await mapWithConcurrency(notebookIds, BUCKET_SCAN_CONCURRENCY, async (notebookId) => {
+		for (const namespace of namespaces) {
+			await new AppPoolStore(deps.bucket, deps.metrics, namespace)
+				.invalidateAll(pid, notebookId)
+				.catch((err) => {
+					logEvent({
+						level: 'error',
+						event: 'public_app_pool_invalidate_failed',
+						project_id: pid,
+						notebook_id: notebookId,
+						namespace,
+						error: describeError(err),
+					});
+				});
+		}
+	});
+	const matchIntegrations =
+		namespaces.length === 1 ? namespaces[0] === 'public-integrations' : undefined;
+	await retireLiveApps(
+		deps,
+		pid,
+		(s) =>
+			sessionAudience(s) === 'public' &&
+			(!nid || s.notebook_id === nid) &&
+			(matchIntegrations === undefined ||
+				Boolean(s.allow_project_integrations) === matchIntegrations),
+	);
 }
 
 /**
@@ -1731,6 +1784,12 @@ export const CapabilitiesResponseSchema = z
 		project_groups: z.object({ available: z.boolean() }),
 		federation: z.object({ available: z.boolean(), default_enabled: z.boolean() }),
 		integrations: z.object({ available: z.boolean() }),
+		public_app_links: z
+			.object({
+				available: z.boolean(),
+				allow_project_integrations: z.boolean(),
+			})
+			.optional(),
 		source_control: z.object({
 			github_account_management: z.boolean().optional(),
 			github_publish_actor: z.enum(['app', 'user']).optional(),

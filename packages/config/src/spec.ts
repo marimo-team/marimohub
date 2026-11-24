@@ -1793,6 +1793,72 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'Maximum unexpired starting reservations and ready sandboxes for one notebook’s current version. Draining versions and expired reservations awaiting cleanup do not count. Project and starter-user caps still apply to physical sandboxes.',
 					},
 					{
+						id: 'MARIMOHUB_PUBLIC_APP_LINKS',
+						name: 'Public app links',
+						description:
+							'Allow project managers to opt individual `/app/<slug>` links into unauthenticated public access (`off` | `on`). Public apps run in dedicated isolated pools.',
+						default: 'off',
+					},
+					{
+						id: 'MARIMOHUB_PUBLIC_APPS_ALLOW_INTEGRATIONS',
+						name: 'Public app project integrations opt-in',
+						description:
+							'Allow project managers to opt individual public app links into injecting that project’s own integrations (`off` | `on`). WIF, org integrations, AI proxy, and MCP remain disabled.',
+						default: 'off',
+					},
+					{
+						id: 'MARIMOHUB_PUBLIC_APPS_SECRET',
+						name: 'Public app visit token secret',
+						description:
+							'Secret (>= 32 chars) used to encrypt opaque public app visit tokens. Falls back to `MARIMOHUB_AUTH_SESSION_SECRET` when unset.',
+						secret: true,
+					},
+					{
+						id: 'MARIMOHUB_PUBLIC_APPS_MAX_CONCURRENT_SESSIONS',
+						name: 'Max concurrent public app sandboxes',
+						description:
+							'Deployment-wide cap on live public app sandboxes (must be >= 1; unlimited is refused).',
+						default: '10',
+					},
+					{
+						id: 'MARIMOHUB_PUBLIC_APPS_MAX_SESSIONS_PER_VERSION',
+						name: 'Max public app sessions per version',
+						description: 'Maximum concurrent public sandboxes per notebook version (must be >= 1).',
+						default: '2',
+					},
+					{
+						id: 'MARIMOHUB_PUBLIC_APPS_MAX_VISITS_PER_SESSION',
+						name: 'Max public visits per sandbox',
+						description:
+							'Maximum concurrent public browser visits per public sandbox (must be >= 1).',
+						default: '25',
+					},
+					{
+						id: 'MARIMOHUB_PUBLIC_APPS_IDLE_TIMEOUT_SECONDS',
+						name: 'Public app idle timeout (seconds)',
+						description: 'Idle timeout for empty public app sandboxes.',
+						default: '300',
+					},
+					{
+						id: 'MARIMOHUB_PUBLIC_APPS_MAX_LIFETIME_SECONDS',
+						name: 'Public app max lifetime (seconds)',
+						description: 'Non-extendable hard lifetime ceiling for public app sandboxes.',
+						default: '3600',
+					},
+					{
+						id: 'MARIMOHUB_PUBLIC_APPS_VISIT_TOKEN_TTL_SECONDS',
+						name: 'Public app visit token TTL (seconds)',
+						description: 'Sliding TTL for encrypted public app visit tokens and proxy cookies.',
+						default: '600',
+					},
+					{
+						id: 'MARIMOHUB_PUBLIC_APPS_EDGE_BYPASS_ACK',
+						name: 'Acknowledge edge auth bypass for public apps',
+						description:
+							'Required (`true`) when enabling public app links with `proxy-header` or `cloudflare-access` in `subdomain` exposure mode.',
+						default: 'false',
+					},
+					{
 						id: 'MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS',
 						name: 'Session max lifetime (seconds)',
 						description:

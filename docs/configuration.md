@@ -501,6 +501,16 @@ Server-wide settings; no backend selector.
 | `MARIMOHUB_MAX_APPS_PER_PROJECT` | Concurrent app (`mode: app`) sessions per project (`0` = unlimited). Counts physical sandboxes, including replicas and draining versions. | — | `5` | — |
 | `MARIMOHUB_APP_MAX_VISITS_PER_SESSION` | Browser sessions (managed page visits) per sandbox. Each tab consumes a slot, including tabs from the same account. Unset means unlimited. | — | — | — |
 | `MARIMOHUB_APP_MAX_SESSIONS_PER_VERSION` | Maximum unexpired starting reservations and ready sandboxes for one notebook’s current version. Draining versions and expired reservations awaiting cleanup do not count. Project and starter-user caps still apply to physical sandboxes. | — | — | — |
+| `MARIMOHUB_PUBLIC_APP_LINKS` | Allow project managers to opt individual `/app/<slug>` links into unauthenticated public access (`off` \| `on`). Public apps run in dedicated isolated pools. | — | `off` | — |
+| `MARIMOHUB_PUBLIC_APPS_ALLOW_INTEGRATIONS` | Allow project managers to opt individual public app links into injecting that project’s own integrations (`off` \| `on`). WIF, org integrations, AI proxy, and MCP remain disabled. | — | `off` | — |
+| `MARIMOHUB_PUBLIC_APPS_SECRET` 🔒 | Secret (>= 32 chars) used to encrypt opaque public app visit tokens. Falls back to `MARIMOHUB_AUTH_SESSION_SECRET` when unset. | — | — | — |
+| `MARIMOHUB_PUBLIC_APPS_MAX_CONCURRENT_SESSIONS` | Deployment-wide cap on live public app sandboxes (must be >= 1; unlimited is refused). | — | `10` | — |
+| `MARIMOHUB_PUBLIC_APPS_MAX_SESSIONS_PER_VERSION` | Maximum concurrent public sandboxes per notebook version (must be >= 1). | — | `2` | — |
+| `MARIMOHUB_PUBLIC_APPS_MAX_VISITS_PER_SESSION` | Maximum concurrent public browser visits per public sandbox (must be >= 1). | — | `25` | — |
+| `MARIMOHUB_PUBLIC_APPS_IDLE_TIMEOUT_SECONDS` | Idle timeout for empty public app sandboxes. | — | `300` | — |
+| `MARIMOHUB_PUBLIC_APPS_MAX_LIFETIME_SECONDS` | Non-extendable hard lifetime ceiling for public app sandboxes. | — | `3600` | — |
+| `MARIMOHUB_PUBLIC_APPS_VISIT_TOKEN_TTL_SECONDS` | Sliding TTL for encrypted public app visit tokens and proxy cookies. | — | `600` | — |
+| `MARIMOHUB_PUBLIC_APPS_EDGE_BYPASS_ACK` | Required (`true`) when enabling public app links with `proxy-header` or `cloudflare-access` in `subdomain` exposure mode. | — | `false` | — |
 | `MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS` | marimohub-owned hard session lifetime: the lifecycle sweep gracefully saves + tears the session down at this deadline (extending while editors are still connected). Provider-side caps (CoreWeave/E2B) default to 2x this as an orphan backstop. | — | `14400` | — |
 | `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` | Reap a session when its heartbeat is stale for this period and it has no active connections. Apps inherit this value unless MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS is set. Modal uses 1.5x the effective timeout as a provider fallback. | — | `1800` | — |
 | `MARIMOHUB_SESSION_APP_IDLE_TIMEOUT_SECONDS` | Time an app sandbox remains empty after its last visit assignment expires, including reconnect grace, subject to connection protection. Falls back to MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS (1800 seconds by default). Credential and provider lifetime limits still apply. | — | — | — |

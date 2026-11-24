@@ -51,6 +51,7 @@ export const PROJECT_ACTIONS = [
 	/** Notebook administration (delete, restore, source rewiring). */
 	'notebook.manage',
 	'deep-link.manage',
+	'deep-link.publish',
 	'preview.manage',
 	/** Read integration configuration and browse through it. */
 	'integration.read',
@@ -145,6 +146,7 @@ export const ACTION_RULES: {
 	'notebook.write': project('editor', 'forbidden'),
 	'notebook.manage': project('manager', 'forbidden'),
 	'deep-link.manage': project('manager', 'forbidden'),
+	'deep-link.publish': project('manager', 'forbidden'),
 	'preview.manage': project('manager', 'forbidden'),
 	'integration.read': project('viewer', 'forbidden'),
 	'integration.use': project('editor', 'forbidden'),

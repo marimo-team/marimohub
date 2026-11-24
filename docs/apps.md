@@ -147,6 +147,49 @@ apps or change notebook permissions. Deleting the notebook or project also
 releases its names.
 Links follow a notebook that [moves to another project](./organizing-projects.md#move-a-notebook-to-another-project).
 
+## Public app links
+
+Deployments with authentication enabled can allow project managers to make
+individual app links publicly accessible without sign-in.
+
+1. Set `MARIMOHUB_PUBLIC_APP_LINKS=on` (default `off`).
+2. Optionally set `MARIMOHUB_PUBLIC_APPS_ALLOW_INTEGRATIONS=on` (default `off`)
+   to allow managers to opt individual public links into **project-scoped**
+   integrations (such as read-only database connections or custom environment
+   variables).
+3. Open **Share notebook → App links**, create a link, and select **Make public**
+   from an interactive browser session.
+
+Key isolation guarantees:
+
+- **Dedicated public pools.** Public visits never share a sandbox with
+  authenticated app pools. By default, public apps run credential-free (no
+  integrations, no WIF, no AI proxy, no MCP). When a manager explicitly enables
+  project-scoped integrations on a link, that link uses a separate public pool
+  from credential-free links and still omits org-wide integrations, WIF, AI
+  proxy, and MCP.
+- **Security labels and moves fail closed.** Notebooks or projects with security
+  labels cannot be made public. Applying a security label or moving a notebook
+  to another project automatically downgrades its public links back to private
+  and retires active public sandboxes.
+- **Revocation and removal.** Making a link private or removing it immediately
+  invalidates the public grant and terminates running public sandboxes.
+  Disabling public access works even if `MARIMOHUB_PUBLIC_APP_LINKS` is turned
+  back off.
+- **Exposure and auth backends.** Built-in OIDC/OAuth works with both
+  `subdomain` (recommended) and `proxy` exposure modes. `proxy-header` and
+  `cloudflare-access` require `subdomain` exposure,
+  `MARIMOHUB_PUBLIC_APPS_EDGE_BYPASS_ACK=true`, and a dedicated
+  `MARIMOHUB_PUBLIC_APPS_SECRET`.
+- **Bounded capacity.** Public sandboxes use separate deployment caps
+  (`MARIMOHUB_PUBLIC_APPS_MAX_SESSIONS`,
+  `MARIMOHUB_PUBLIC_APPS_MAX_SESSIONS_PER_VERSION`,
+  `MARIMOHUB_PUBLIC_APPS_MAX_VISITS_PER_SESSION`,
+  `MARIMOHUB_PUBLIC_APPS_MAX_SESSION_LIFETIME_SECONDS`,
+  `MARIMOHUB_PUBLIC_APPS_IDLE_TIMEOUT_SECONDS`,
+  `MARIMOHUB_PUBLIC_APPS_RESOLVE_RPM`, and
+  `MARIMOHUB_PUBLIC_APPS_VISIT_RPM`).
+
 ## Link between apps
 
 A link inside a notebook can open another app in the outer Hub page.

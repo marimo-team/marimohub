@@ -10,7 +10,7 @@ const systemRecords = [
 	/^_system\/(catalog|host-retry-cleanup|preview-work|preview-cleanup-cursor|source-control-account-cleanup|snapshot-expiry-cursor|job-prune-cursor|notebook-gc-cursor|notebook-purge-cursor|project-purge-cursor)\.json$/,
 	MAINTENANCE_LOCK_KEY_PATTERN,
 	/^_system\/(migrations|notebook-moves|deep-links|snapshots|warm-pools|identities|tokens|cli-authorizations|cli-device-user-codes|oauth-clients|oauth-authorizations|oauth-rate-limits|host-retries|idempotency|sandbox-diagnostics|preview-projects|preview-receipts)\/[^/]+\.json$/,
-	/^_system\/(sessions|version-prune-cutoffs|apps|app-pools|editors|job-runs|preview-automations|preview-active-projects|source-control-accounts)\/[^/]+\/[^/]+\.json$/,
+	/^_system\/(sessions|version-prune-cutoffs|apps|app-pools|public-app-pools|editors|job-runs|preview-automations|preview-active-projects|source-control-accounts)\/[^/]+\/[^/]+\.json$/,
 	/^_system\/session-index\/users\/[^/]+\.json$/,
 	/^_system\/reconcile\/orphans\/[^/]+\.json$/,
 	/^_system\/(proposal-payloads|job-operations|job-deletions|previews)\/[^/]+\/[^/]+\/[^/]+\.json$/,

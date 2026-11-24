@@ -327,6 +327,8 @@ export interface SessionRenderContext {
 	resolveFederatedCredentials?: FederatedCredentialResolver;
 	workload: WorkloadRef;
 	principal: { userId: UserId; email: string };
+	/** Defaults to `'all'` (project + org). Public apps use `'project-only'` so org integrations stay excluded. */
+	scope?: 'all' | 'project-only';
 }
 
 export interface IntegrationVersionPin {

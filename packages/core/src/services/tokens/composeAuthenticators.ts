@@ -4,6 +4,7 @@ import { isPersonalAccessToken } from './TokenService';
 import type { TokenService } from './TokenService';
 import { SERVICE_ACCOUNT_PREFIX, SERVICE_ACCOUNT_USER_PREFIX } from './ServiceAccountCredentials';
 import type { ServiceAccountCredentials } from './ServiceAccountCredentials';
+import { PUBLIC_VISIT_USER_PREFIX, SYSTEM_USER_PREFIX } from '../runtime/sessionState';
 
 interface BearerAuthenticators {
 	external?: Authenticator;
@@ -32,8 +33,16 @@ export function composeAuthenticators(
 			} else {
 				principal = await external?.authenticate(request);
 			}
-			// SSO, external tokens, and PATs cannot claim a configured machine's identity.
-			return principal?.id.startsWith(SERVICE_ACCOUNT_USER_PREFIX) ? null : (principal ?? null);
+			// SSO, external tokens, and PATs cannot claim a configured machine's or synthetic actor's identity.
+			if (
+				!principal ||
+				principal.id.startsWith(SERVICE_ACCOUNT_USER_PREFIX) ||
+				principal.id.startsWith(SYSTEM_USER_PREFIX) ||
+				principal.id.startsWith(PUBLIC_VISIT_USER_PREFIX)
+			) {
+				return null;
+			}
+			return principal;
 		},
 		...(logoutUrl ? { logoutUrl } : {}),
 	};

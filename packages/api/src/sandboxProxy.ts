@@ -6,7 +6,12 @@ import { deploymentState, withRequestMemo } from './requestMemo';
 import type { MiddlewareHandler } from 'hono';
 import {
 	AppPoolService,
+	isPastAuthorizationDeadline,
+	isPublicDeepLink,
 	LazyMap,
+	openPublicAppVisitToken,
+	publicAppVisitActor,
+	sessionAudience,
 	sessionMode,
 	sessionResourceNotebookId,
 	NotFoundError,
@@ -18,10 +23,11 @@ import {
 	sessionPersistsEdits,
 	verifyProxyToken,
 } from '@marimo-hub/core';
-import type { AuthenticatedPrincipal, ProjectId } from '@marimo-hub/core';
+import type { AppPoolNamespace, AuthenticatedPrincipal, ProjectId } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
 import { SANDBOX_PROXY_PREFIXES } from './proxyRoutes';
+import { PUBLIC_VISIT_COOKIE_NAME } from './routes/publicApps';
 import {
 	assertSessionPreviewActive,
 	authorizationService,
@@ -114,6 +120,136 @@ function trimTrailingSlash(s: string): string {
  * `ACTIVE_SUSPENSION_MAX_AGE_MS` maximum age). Session and subject-context
  * deadlines apply even on cache hits.
  */
+function readCookie(header: string | null, name: string): string | undefined {
+	if (!header) return undefined;
+	for (const part of header.split(';')) {
+		const idx = part.indexOf('=');
+		if (idx <= 0) continue;
+		if (part.slice(0, idx).trim() === name) return part.slice(idx + 1).trim();
+	}
+	return undefined;
+}
+
+async function authorizePublicProxyRequest(
+	deps: ApiDeps,
+	request: Request,
+	url: URL,
+	projectId: ProjectId,
+	sessionId: SessionId,
+	surfaceMatch: RegExpExecArray | null,
+): Promise<ProxyDecision> {
+	if (surfaceMatch) {
+		return rejectProxy(403, 'FORBIDDEN', 'Not authorized to use this session surface');
+	}
+	const config = deps.publicApps;
+	if (!config) {
+		return rejectProxy(404, 'NOT_FOUND', 'Session not found');
+	}
+	const cookie = readCookie(request.headers.get('cookie'), PUBLIC_VISIT_COOKIE_NAME);
+	if (!cookie) {
+		return rejectProxy(401, 'UNAUTHORIZED', 'Authentication required');
+	}
+	const claims = await openPublicAppVisitToken(cookie, config.signingSecret);
+	if (!claims || claims.pid !== projectId || claims.sid !== sessionId) {
+		return rejectProxy(403, 'FORBIDDEN', 'Invalid public app visit');
+	}
+
+	let link;
+	try {
+		link = await deps.services.deepLinks.resolvePublic(claims.slug);
+	} catch {
+		return rejectProxy(404, 'NOT_FOUND', 'Session not found');
+	}
+	if (
+		!isPublicDeepLink(link) ||
+		link.registration_id !== claims.reg ||
+		link.access.grant_id !== claims.grant ||
+		link.target.project_id !== projectId ||
+		link.target.notebook_id !== claims.nid
+	) {
+		return rejectProxy(404, 'NOT_FOUND', 'Session not found');
+	}
+
+	let session;
+	try {
+		session = await deps.services.sessions.getSession(projectId, sessionId);
+	} catch {
+		return rejectProxy(404, 'NOT_FOUND', 'Session not found');
+	}
+	if (
+		sessionAudience(session) !== 'public' ||
+		sessionMode(session) !== 'app' ||
+		session.notebook_id !== claims.nid
+	) {
+		return rejectProxy(404, 'NOT_FOUND', 'Session not found');
+	}
+	if (session.status !== 'running') {
+		return rejectProxy(410, 'GONE', 'Session is no longer running');
+	}
+	const sessionDeadline = session.authorization_expires_at
+		? Date.parse(session.authorization_expires_at)
+		: undefined;
+	if (isPastAuthorizationDeadline(session, Date.now())) {
+		return rejectProxy(410, 'GONE', 'Session authorization has expired');
+	}
+	if (!session.sandbox_origin_url) {
+		return rejectProxy(503, 'SERVICE_UNAVAILABLE', 'Session is not reachable via the proxy');
+	}
+
+	const [project, notebookLabels] = await Promise.all([
+		deps.services.projects.getProject(projectId, { consistency: 'validated' }).catch(() => null),
+		deps.services.notebooks
+			.getSecurityLabels(projectId, claims.nid, { consistency: 'validated' })
+			.catch((err) => (err instanceof NotFoundError ? ('not-found' as const) : ('error' as const))),
+	]);
+	if (!project || project.status === 'deleted' || project.security_labels !== undefined) {
+		return rejectProxy(404, 'NOT_FOUND', 'Session not found');
+	}
+	if (notebookLabels === 'not-found') {
+		return rejectProxy(404, 'NOT_FOUND', 'Session not found');
+	}
+	if (notebookLabels === 'error') {
+		return rejectProxy(503, 'SERVICE_UNAVAILABLE', 'Session authorization could not be verified');
+	}
+	if (notebookLabels !== null) {
+		return rejectProxy(404, 'NOT_FOUND', 'Session not found');
+	}
+
+	const allowIntegrations =
+		config.allowProjectIntegrations && link.access.allow_project_integrations === true;
+	if (Boolean(session.allow_project_integrations) !== allowIntegrations) {
+		return rejectProxy(404, 'NOT_FOUND', 'Session not found');
+	}
+	const namespace: AppPoolNamespace = allowIntegrations ? 'public-integrations' : 'public';
+	try {
+		const allowed = await new AppPoolService(
+			deps.bucket,
+			deps.services.sessions,
+			config.poolPolicy,
+			deps.metrics,
+			undefined,
+			namespace,
+		).canAccess(projectId, claims.nid, publicAppVisitActor(claims.vid), sessionId, false);
+		if (!allowed) {
+			return rejectProxy(410, 'GONE', 'The app assignment expired. Open the app again.');
+		}
+	} catch {
+		return rejectProxy(503, 'SERVICE_UNAVAILABLE', 'Session authorization could not be verified');
+	}
+
+	const tokenDeadline = claims.exp * 1000;
+	const authorizationDeadline =
+		sessionDeadline !== undefined ? Math.min(sessionDeadline, tokenDeadline) : tokenDeadline;
+	return {
+		kind: 'forward',
+		targetUrl: `${trimTrailingSlash(session.sandbox_origin_url)}${url.pathname}${url.search}`,
+		sessionId,
+		projectId: session.project_id,
+		...(session.kernel_auth_token ? { kernelAuthToken: session.kernel_auth_token } : {}),
+		authorizationDeadline,
+	};
+}
+
 export async function authorizeProxyRequest(
 	request: Request,
 	rawDeps: ApiDeps,
@@ -138,7 +274,10 @@ export async function authorizeProxyRequest(
 	if (!verified) {
 		return rejectProxy(403, 'FORBIDDEN', 'Invalid sandbox token');
 	}
-	const { projectId, sessionId } = verified;
+	const { projectId, sessionId, audience } = verified;
+	if (audience === 'public') {
+		return authorizePublicProxyRequest(deps, request, url, projectId, sessionId, surfaceMatch);
+	}
 
 	const user = await deps.authenticator.authenticate(request);
 	if (!user) {

@@ -37,7 +37,8 @@ import type {
 } from './AppPoolRouter';
 import { isPastAuthorizationDeadline } from './SessionService';
 import type { SessionService } from './SessionService';
-import { isTerminal, sessionMode } from './sessionState';
+import { isTerminal, sessionAppPoolNamespace, sessionMode } from './sessionState';
+import type { AppPoolNamespace } from './sessionState';
 
 interface AppPoolRequest {
 	projectId: ProjectId;
@@ -51,6 +52,7 @@ interface AppPoolRequest {
 export class AppPoolService {
 	readonly store: AppPoolStore;
 	readonly policy: AppPoolPolicy;
+	readonly namespace: AppPoolNamespace;
 
 	constructor(
 		private bucket: Bucket,
@@ -58,8 +60,10 @@ export class AppPoolService {
 		policy: AppPoolPolicy = DEFAULT_APP_POOL_POLICY,
 		private metrics: Metrics = noopMetrics,
 		private now: () => number = Date.now,
+		namespace: AppPoolNamespace = 'authenticated',
 	) {
-		this.store = new AppPoolStore(bucket, metrics);
+		this.namespace = namespace;
+		this.store = new AppPoolStore(bucket, metrics, namespace);
 		this.policy = policy;
 	}
 
@@ -439,13 +443,15 @@ export class AppPoolService {
 		);
 		return {
 			members,
-			canAccess: (userId: UserId, sessionId: SessionId, legacy = false) =>
-				pool
+			canAccess: (userId: UserId, sessionId: SessionId, legacy = false) => {
+				const allowLegacy = this.namespace === 'authenticated' && legacy;
+				return pool
 					? pool.deleted_at === undefined &&
-						(legacyMembers.has(sessionId) ||
-							assignments.get(userId)?.has(sessionId) === true ||
-							(legacy && !members.has(sessionId)))
-					: legacy,
+							((this.namespace === 'authenticated' && legacyMembers.has(sessionId)) ||
+								assignments.get(userId)?.has(sessionId) === true ||
+								(allowLegacy && !members.has(sessionId)))
+					: allowLegacy;
+			},
 		};
 	}
 
@@ -477,7 +483,8 @@ export class AppPoolService {
 				!!session &&
 				session.project_id === projectId &&
 				session.notebook_id === notebookId &&
-				sessionMode(session) === 'app',
+				sessionMode(session) === 'app' &&
+				sessionAppPoolNamespace(session) === this.namespace,
 		);
 		return { known, sessions, absent };
 	}

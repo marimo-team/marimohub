@@ -98,6 +98,91 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/public/v1/apps/{slug}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Resolve metadata for a public app link */
+		get: operations['public-apps.resolve'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/public/v1/visits': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Start or attach to a public app visit */
+		post: operations['public-apps.startVisit'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/public/v1/visits/current': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Poll status of a public app visit */
+		get: operations['public-apps.currentVisit'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/public/v1/visits/heartbeat': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Renew a public app visit lease and token */
+		post: operations['public-apps.heartbeatVisit'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/public/v1/visits/leave': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Release a public app visit slot */
+		post: operations['public-apps.leaveVisit'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/me': {
 		parameters: {
 			query?: never;
@@ -1241,12 +1326,16 @@ export interface paths {
 		post?: never;
 		/**
 		 * Release an app slug for immediate reuse
-		 * @description Releases the slug only when the notebook and registration ID match. The slug is immediately available for reuse. Old shared URLs can then open another notebook. App sessions and notebook permissions stay unchanged.
+		 * @description Releases the slug only when the notebook and registration ID match. The slug is immediately available for reuse. Old shared URLs can then open another notebook. Authenticated app sessions and notebook permissions stay unchanged; public app sessions are retired when no public link remains.
 		 */
 		delete: operations['deep-links.release'];
 		options?: never;
 		head?: never;
-		patch?: never;
+		/**
+		 * Enable or disable public access for an app link
+		 * @description Enabling public access requires a browser session, the `deep-link.publish` permission, and a committed notebook without security labels. Disabling immediately invalidates the public pool and stops live public sandboxes.
+		 */
+		patch: operations['deep-links.updateAccess'];
 		trace?: never;
 	};
 	'/api/v1/projects/{pid}/notebooks/{nid}/deep-links': {
@@ -2993,6 +3082,21 @@ export interface components {
 				request_id?: string;
 			};
 		};
+		PublicAppInfo: {
+			slug: string;
+			title: string;
+			heartbeat_interval_seconds: number;
+			startup_timeout_seconds: number;
+		};
+		PublicAppVisit: {
+			slug: string;
+			/** @enum {string} */
+			status: 'starting' | 'running' | 'ended';
+			sandbox_url: string | null;
+			visit_token: string;
+			heartbeat_interval_seconds: number;
+			startup_timeout_seconds: number;
+		};
 		Me: {
 			groups: string[];
 			id: string;
@@ -3033,6 +3137,10 @@ export interface components {
 			};
 			integrations: {
 				available: boolean;
+			};
+			public_app_links?: {
+				available: boolean;
+				allow_project_integrations: boolean;
 			};
 			source_control: {
 				github_account_management?: boolean;
@@ -3752,6 +3860,7 @@ export interface components {
 					| 'notebook.write'
 					| 'notebook.manage'
 					| 'deep-link.manage'
+					| 'deep-link.publish'
 					| 'preview.manage'
 					| 'integration.read'
 					| 'integration.use'
@@ -3947,6 +4056,7 @@ export interface components {
 								| 'notebook.write'
 								| 'notebook.manage'
 								| 'deep-link.manage'
+								| 'deep-link.publish'
 								| 'preview.manage'
 								| 'integration.read'
 								| 'integration.use'
@@ -3983,6 +4093,7 @@ export interface components {
 				| 'notebook.write'
 				| 'notebook.manage'
 				| 'deep-link.manage'
+				| 'deep-link.publish'
 				| 'preview.manage'
 				| 'integration.read'
 				| 'integration.use'
@@ -4358,7 +4469,13 @@ export interface components {
 			};
 			access: {
 				/** @enum {string} */
-				mode: 'inherit';
+				mode: 'inherit' | 'public';
+				/** Format: ulid */
+				grant_id?: string;
+				enabled_by?: string;
+				/** Format: date-time */
+				enabled_at?: string;
+				allow_project_integrations?: boolean;
 			};
 			created_by: string;
 			/** Format: date-time */
@@ -5460,6 +5577,7 @@ export interface components {
 							| 'notebook.write'
 							| 'notebook.manage'
 							| 'deep-link.manage'
+							| 'deep-link.publish'
 							| 'preview.manage'
 							| 'integration.read'
 							| 'integration.use'
@@ -5676,6 +5794,7 @@ export interface operations {
 									| 'notebook.write'
 									| 'notebook.manage'
 									| 'deep-link.manage'
+									| 'deep-link.publish'
 									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
@@ -5964,6 +6083,312 @@ export interface operations {
 				};
 				content: {
 					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'public-apps.resolve': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				slug: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Public app metadata */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['PublicAppInfo'];
+					};
+				};
+			};
+			/** @description App link unavailable */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: false;
+						error: {
+							/** @enum {string} */
+							code:
+								| 'NOT_FOUND'
+								| 'BAD_REQUEST'
+								| 'RESOURCE_EXHAUSTED'
+								| 'SERVICE_UNAVAILABLE'
+								| 'START_FAILED';
+							message: string;
+						};
+					};
+				};
+			};
+			/** @description Rate limited */
+			429: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: false;
+						error: {
+							/** @enum {string} */
+							code:
+								| 'NOT_FOUND'
+								| 'BAD_REQUEST'
+								| 'RESOURCE_EXHAUSTED'
+								| 'SERVICE_UNAVAILABLE'
+								| 'START_FAILED';
+							message: string;
+						};
+					};
+				};
+			};
+		};
+	};
+	'public-apps.startVisit': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					slug: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Active or starting public app visit */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['PublicAppVisit'];
+					};
+				};
+			};
+			/** @description App link unavailable */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: false;
+						error: {
+							/** @enum {string} */
+							code:
+								| 'NOT_FOUND'
+								| 'BAD_REQUEST'
+								| 'RESOURCE_EXHAUSTED'
+								| 'SERVICE_UNAVAILABLE'
+								| 'START_FAILED';
+							message: string;
+						};
+					};
+				};
+			};
+			/** @description Capacity or rate limit reached */
+			429: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: false;
+						error: {
+							/** @enum {string} */
+							code:
+								| 'NOT_FOUND'
+								| 'BAD_REQUEST'
+								| 'RESOURCE_EXHAUSTED'
+								| 'SERVICE_UNAVAILABLE'
+								| 'START_FAILED';
+							message: string;
+						};
+					};
+				};
+			};
+			/** @description App unavailable */
+			503: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: false;
+						error: {
+							/** @enum {string} */
+							code:
+								| 'NOT_FOUND'
+								| 'BAD_REQUEST'
+								| 'RESOURCE_EXHAUSTED'
+								| 'SERVICE_UNAVAILABLE'
+								| 'START_FAILED';
+							message: string;
+						};
+					};
+				};
+			};
+		};
+	};
+	'public-apps.currentVisit': {
+		parameters: {
+			query?: {
+				wait?: number | null;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Current visit state */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['PublicAppVisit'];
+					};
+				};
+			};
+			/** @description Visit invalid or revoked */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: false;
+						error: {
+							/** @enum {string} */
+							code:
+								| 'NOT_FOUND'
+								| 'BAD_REQUEST'
+								| 'RESOURCE_EXHAUSTED'
+								| 'SERVICE_UNAVAILABLE'
+								| 'START_FAILED';
+							message: string;
+						};
+					};
+				};
+			};
+		};
+	};
+	'public-apps.heartbeatVisit': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Renewed visit token */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['PublicAppVisit'];
+					};
+				};
+			};
+			/** @description Visit invalid or revoked */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: false;
+						error: {
+							/** @enum {string} */
+							code:
+								| 'NOT_FOUND'
+								| 'BAD_REQUEST'
+								| 'RESOURCE_EXHAUSTED'
+								| 'SERVICE_UNAVAILABLE'
+								| 'START_FAILED';
+							message: string;
+						};
+					};
+				};
+			};
+		};
+	};
+	'public-apps.leaveVisit': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Visit released */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: null;
+					};
+				};
+			};
+			/** @description Visit invalid */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: false;
+						error: {
+							/** @enum {string} */
+							code:
+								| 'NOT_FOUND'
+								| 'BAD_REQUEST'
+								| 'RESOURCE_EXHAUSTED'
+								| 'SERVICE_UNAVAILABLE'
+								| 'START_FAILED';
+							message: string;
+						};
+					};
 				};
 			};
 		};
@@ -14291,7 +14716,13 @@ export interface operations {
 							};
 							access: {
 								/** @enum {string} */
-								mode: 'inherit';
+								mode: 'inherit' | 'public';
+								/** Format: ulid */
+								grant_id?: string;
+								enabled_by?: string;
+								/** Format: date-time */
+								enabled_at?: string;
+								allow_project_integrations?: boolean;
 							};
 							created_by: string;
 							/** Format: date-time */
@@ -14402,6 +14833,120 @@ export interface operations {
 						/** @enum {boolean} */
 						success: true;
 						data: null;
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'deep-links.updateAccess': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				slug: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** Format: ulid */
+					registration_id: string;
+					access: {
+						/** @enum {string} */
+						mode: 'inherit' | 'public';
+						allow_project_integrations?: boolean;
+					};
+				};
+			};
+		};
+		responses: {
+			/** @description Updated app link */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['DeepLink'];
 					};
 				};
 			};
@@ -25454,6 +25999,7 @@ export interface operations {
 									| 'notebook.write'
 									| 'notebook.manage'
 									| 'deep-link.manage'
+									| 'deep-link.publish'
 									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
@@ -25603,6 +26149,7 @@ export interface operations {
 									| 'notebook.write'
 									| 'notebook.manage'
 									| 'deep-link.manage'
+									| 'deep-link.publish'
 									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
@@ -25970,6 +26517,7 @@ export interface operations {
 									| 'notebook.write'
 									| 'notebook.manage'
 									| 'deep-link.manage'
+									| 'deep-link.publish'
 									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
@@ -26007,6 +26555,7 @@ export interface operations {
 									| 'notebook.write'
 									| 'notebook.manage'
 									| 'deep-link.manage'
+									| 'deep-link.publish'
 									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
@@ -26296,6 +26845,7 @@ export interface operations {
 													| 'notebook.write'
 													| 'notebook.manage'
 													| 'deep-link.manage'
+													| 'deep-link.publish'
 													| 'preview.manage'
 													| 'integration.read'
 													| 'integration.use'
@@ -26441,6 +26991,7 @@ export interface operations {
 									| 'notebook.write'
 									| 'notebook.manage'
 									| 'deep-link.manage'
+									| 'deep-link.publish'
 									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
@@ -26677,6 +27228,7 @@ export interface operations {
 									| 'notebook.write'
 									| 'notebook.manage'
 									| 'deep-link.manage'
+									| 'deep-link.publish'
 									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'

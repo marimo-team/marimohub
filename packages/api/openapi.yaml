@@ -116,6 +116,62 @@ components:
       required:
         - success
         - error
+    PublicAppInfo:
+      type: object
+      properties:
+        slug:
+          type: string
+          minLength: 1
+          maxLength: 63
+          pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?![\s\S])
+        title:
+          type: string
+        heartbeat_interval_seconds:
+          type: number
+          exclusiveMinimum: 0
+        startup_timeout_seconds:
+          type: number
+          exclusiveMinimum: 0
+      required:
+        - slug
+        - title
+        - heartbeat_interval_seconds
+        - startup_timeout_seconds
+      additionalProperties: false
+    PublicAppVisit:
+      type: object
+      properties:
+        slug:
+          type: string
+          minLength: 1
+          maxLength: 63
+          pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?![\s\S])
+        status:
+          type: string
+          enum:
+            - starting
+            - running
+            - ended
+        sandbox_url:
+          type:
+            - string
+            - 'null'
+        visit_token:
+          type: string
+        heartbeat_interval_seconds:
+          type: number
+          exclusiveMinimum: 0
+        startup_timeout_seconds:
+          type: number
+          exclusiveMinimum: 0
+      required:
+        - slug
+        - status
+        - sandbox_url
+        - visit_token
+        - heartbeat_interval_seconds
+        - startup_timeout_seconds
+      additionalProperties: false
     Me:
       type: object
       properties:
@@ -222,6 +278,16 @@ components:
               type: boolean
           required:
             - available
+        public_app_links:
+          type: object
+          properties:
+            available:
+              type: boolean
+            allow_project_integrations:
+              type: boolean
+          required:
+            - available
+            - allow_project_integrations
         source_control:
           type: object
           properties:
@@ -1980,6 +2046,7 @@ components:
                   - notebook.write
                   - notebook.manage
                   - deep-link.manage
+                  - deep-link.publish
                   - preview.manage
                   - integration.read
                   - integration.use
@@ -2444,6 +2511,7 @@ components:
                           - notebook.write
                           - notebook.manage
                           - deep-link.manage
+                          - deep-link.publish
                           - preview.manage
                           - integration.read
                           - integration.use
@@ -2499,6 +2567,7 @@ components:
             - notebook.write
             - notebook.manage
             - deep-link.manage
+            - deep-link.publish
             - preview.manage
             - integration.read
             - integration.use
@@ -3317,6 +3386,17 @@ components:
               type: string
               enum:
                 - inherit
+                - public
+            grant_id:
+              type: string
+              format: ulid
+            enabled_by:
+              type: string
+            enabled_at:
+              type: string
+              format: date-time
+            allow_project_integrations:
+              type: boolean
           required:
             - mode
           additionalProperties: false
@@ -5904,6 +5984,7 @@ components:
                       - notebook.write
                       - notebook.manage
                       - deep-link.manage
+                      - deep-link.publish
                       - preview.manage
                       - integration.read
                       - integration.use
@@ -6247,6 +6328,7 @@ paths:
                               - notebook.write
                               - notebook.manage
                               - deep-link.manage
+                              - deep-link.publish
                               - preview.manage
                               - integration.read
                               - integration.use
@@ -6594,6 +6676,400 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/public/v1/apps/{slug}:
+    get:
+      operationId: public-apps.resolve
+      tags:
+        - Public apps
+      summary: Resolve metadata for a public app link
+      security: &a5 []
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 63
+            pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?![\s\S])
+          required: true
+          name: slug
+          in: path
+      responses:
+        '200':
+          description: Public app metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/PublicAppInfo'
+                required:
+                  - success
+                  - data
+        '404':
+          description: App link unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - false
+                  error:
+                    type: object
+                    properties:
+                      code:
+                        type: string
+                        enum:
+                          - NOT_FOUND
+                          - BAD_REQUEST
+                          - RESOURCE_EXHAUSTED
+                          - SERVICE_UNAVAILABLE
+                          - START_FAILED
+                      message:
+                        type: string
+                    required:
+                      - code
+                      - message
+                required:
+                  - success
+                  - error
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - false
+                  error:
+                    type: object
+                    properties:
+                      code:
+                        type: string
+                        enum:
+                          - NOT_FOUND
+                          - BAD_REQUEST
+                          - RESOURCE_EXHAUSTED
+                          - SERVICE_UNAVAILABLE
+                          - START_FAILED
+                      message:
+                        type: string
+                    required:
+                      - code
+                      - message
+                required:
+                  - success
+                  - error
+  /api/public/v1/visits:
+    post:
+      operationId: public-apps.startVisit
+      tags:
+        - Public apps
+      summary: Start or attach to a public app visit
+      security: *a5
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                slug:
+                  type: string
+                  minLength: 1
+                  maxLength: 63
+                  pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?![\s\S])
+              required:
+                - slug
+              additionalProperties: false
+      responses:
+        '200':
+          description: Active or starting public app visit
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/PublicAppVisit'
+                required:
+                  - success
+                  - data
+        '404':
+          description: App link unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - false
+                  error:
+                    type: object
+                    properties:
+                      code:
+                        type: string
+                        enum:
+                          - NOT_FOUND
+                          - BAD_REQUEST
+                          - RESOURCE_EXHAUSTED
+                          - SERVICE_UNAVAILABLE
+                          - START_FAILED
+                      message:
+                        type: string
+                    required:
+                      - code
+                      - message
+                required:
+                  - success
+                  - error
+        '429':
+          description: Capacity or rate limit reached
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - false
+                  error:
+                    type: object
+                    properties:
+                      code:
+                        type: string
+                        enum:
+                          - NOT_FOUND
+                          - BAD_REQUEST
+                          - RESOURCE_EXHAUSTED
+                          - SERVICE_UNAVAILABLE
+                          - START_FAILED
+                      message:
+                        type: string
+                    required:
+                      - code
+                      - message
+                required:
+                  - success
+                  - error
+        '503':
+          description: App unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - false
+                  error:
+                    type: object
+                    properties:
+                      code:
+                        type: string
+                        enum:
+                          - NOT_FOUND
+                          - BAD_REQUEST
+                          - RESOURCE_EXHAUSTED
+                          - SERVICE_UNAVAILABLE
+                          - START_FAILED
+                      message:
+                        type: string
+                    required:
+                      - code
+                      - message
+                required:
+                  - success
+                  - error
+  /api/public/v1/visits/current:
+    get:
+      operationId: public-apps.currentVisit
+      tags:
+        - Public apps
+      summary: Poll status of a public app visit
+      security: *a5
+      parameters:
+        - schema:
+            type:
+              - integer
+              - 'null'
+            minimum: 0
+            maximum: 20
+          required: false
+          name: wait
+          in: query
+      responses:
+        '200':
+          description: Current visit state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/PublicAppVisit'
+                required:
+                  - success
+                  - data
+        '404':
+          description: Visit invalid or revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - false
+                  error:
+                    type: object
+                    properties:
+                      code:
+                        type: string
+                        enum:
+                          - NOT_FOUND
+                          - BAD_REQUEST
+                          - RESOURCE_EXHAUSTED
+                          - SERVICE_UNAVAILABLE
+                          - START_FAILED
+                      message:
+                        type: string
+                    required:
+                      - code
+                      - message
+                required:
+                  - success
+                  - error
+  /api/public/v1/visits/heartbeat:
+    post:
+      operationId: public-apps.heartbeatVisit
+      tags:
+        - Public apps
+      summary: Renew a public app visit lease and token
+      security: *a5
+      responses:
+        '200':
+          description: Renewed visit token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/PublicAppVisit'
+                required:
+                  - success
+                  - data
+        '404':
+          description: Visit invalid or revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - false
+                  error:
+                    type: object
+                    properties:
+                      code:
+                        type: string
+                        enum:
+                          - NOT_FOUND
+                          - BAD_REQUEST
+                          - RESOURCE_EXHAUSTED
+                          - SERVICE_UNAVAILABLE
+                          - START_FAILED
+                      message:
+                        type: string
+                    required:
+                      - code
+                      - message
+                required:
+                  - success
+                  - error
+  /api/public/v1/visits/leave:
+    post:
+      operationId: public-apps.leaveVisit
+      tags:
+        - Public apps
+      summary: Release a public app visit slot
+      security: *a5
+      responses:
+        '200':
+          description: Visit released
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: 'null'
+                required:
+                  - success
+                  - data
+        '404':
+          description: Visit invalid
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - false
+                  error:
+                    type: object
+                    properties:
+                      code:
+                        type: string
+                        enum:
+                          - NOT_FOUND
+                          - BAD_REQUEST
+                          - RESOURCE_EXHAUSTED
+                          - SERVICE_UNAVAILABLE
+                          - START_FAILED
+                      message:
+                        type: string
+                    required:
+                      - code
+                      - message
+                required:
+                  - success
+                  - error
   /api/v1/me:
     get:
       operationId: me
@@ -7624,7 +8100,7 @@ paths:
         super-admin standing — no project role grants label authority — and the
         deployment must have resource security configured. Labels only add
         restrictions on top of role checks.
-      security: &a5
+      security: &a6
         - cookieAuth: []
       parameters:
         - schema:
@@ -7736,7 +8212,7 @@ paths:
       tags:
         - Projects
       summary: Remove project security labels
-      security: *a5
+      security: *a6
       parameters:
         - schema:
             type: string
@@ -9559,7 +10035,7 @@ paths:
       description: Super-admin and session authentication required. Saving is best
         effort and only applies when the session still owns its edits. Active
         sessions must be stopped first.
-      security: *a5
+      security: *a6
       parameters:
         - schema:
             type: string
@@ -9676,7 +10152,7 @@ paths:
       description: Read-only runtime snapshot, cached for 30 seconds per service
         instance. Super-admin and session authentication required. Recorded
         state is not a live compute health check.
-      security: *a5
+      security: *a6
       responses:
         '200':
           description: Runtime snapshot
@@ -9747,7 +10223,7 @@ paths:
       description: 'Every user who has signed in at least once, name-sorted. Currently
         a single page (`next_cursor` is always null). Super-admin only, and
         session-only: a PAT — even a super admin’s — is rejected with 403.'
-      security: *a5
+      security: *a6
       responses:
         '200':
           description: The user directory, name-sorted
@@ -9820,7 +10296,7 @@ paths:
       description: Blocks the user at authentication time, including personal access
         tokens. Super-admin only and session-only. A super admin cannot suspend
         their own account.
-      security: *a5
+      security: *a6
       parameters:
         - schema:
             type: string
@@ -9905,7 +10381,7 @@ paths:
       summary: Reactivate a suspended user
       description: Restores authentication for a known user. Super-admin only and
         session-only.
-      security: *a5
+      security: *a6
       parameters:
         - schema:
             type: string
@@ -9995,7 +10471,7 @@ paths:
         CPU limits, files.pythonhosted.org throughput, uv phase timings, and CPU
         throttling counters. The sandbox is always destroyed. Runtime failures
         are returned as a partial report. Super-admin only and session-only.
-      security: *a5
+      security: *a6
       requestBody:
         required: false
         description: Optional; omit to use the deployment defaults.
@@ -10094,7 +10570,7 @@ paths:
         auth, …) as resolved from the serving replica's environment at boot;
         secret values are never included, only whether they are set. Super-admin
         only, session-only.
-      security: *a5
+      security: *a6
       responses:
         '200':
           description: The deployment configuration, secrets redacted
@@ -10162,7 +10638,7 @@ paths:
       tags:
         - Admin
       summary: Inspect automatic migrations
-      security: *a5
+      security: *a6
       responses:
         '200':
           description: Saved migration progress
@@ -10230,7 +10706,7 @@ paths:
       tags:
         - Admin
       summary: Request a bounded migration attempt
-      security: *a5
+      security: *a6
       description: Registers one best-effort attempt with the host. Dependencies,
         leases and retry backoff remain in effect. Automatic continuation
         requires the host scheduler. Registration is not durable delivery.
@@ -10347,7 +10823,7 @@ paths:
       tags:
         - Admin
       summary: Describe policy analyzer inputs
-      security: *a5
+      security: *a6
       responses:
         '200':
           description: Policy analyzer metadata
@@ -10416,7 +10892,7 @@ paths:
       tags:
         - Admin
       summary: Evaluate a policy test suite
-      security: *a5
+      security: *a6
       requestBody:
         required: true
         content:
@@ -13817,7 +14293,7 @@ paths:
       description: Sets an override enforced IN ADDITION to the project labels, so it
         can only add restrictions. Requires super-admin standing — no project
         role grants label authority.
-      security: *a5
+      security: *a6
       parameters:
         - schema:
             type: string
@@ -13935,7 +14411,7 @@ paths:
       tags:
         - Notebooks
       summary: Remove a notebook security-label override
-      security: *a5
+      security: *a6
       parameters:
         - schema:
             type: string
@@ -15468,6 +15944,17 @@ paths:
                             type: string
                             enum:
                               - inherit
+                              - public
+                          grant_id:
+                            type: string
+                            format: ulid
+                          enabled_by:
+                            type: string
+                          enabled_at:
+                            type: string
+                            format: date-time
+                          allow_project_integrations:
+                            type: boolean
                         required:
                           - mode
                         additionalProperties: false
@@ -15552,6 +16039,139 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/deep-links/{slug}:
+    patch:
+      operationId: deep-links.updateAccess
+      tags:
+        - App links
+      summary: Enable or disable public access for an app link
+      description: Enabling public access requires a browser session, the
+        `deep-link.publish` permission, and a committed notebook without
+        security labels. Disabling immediately invalidates the public pool and
+        stops live public sandboxes.
+      security: *a6
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 63
+            pattern: ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?![\s\S])
+          required: true
+          name: slug
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                registration_id:
+                  type: string
+                  format: ulid
+                access:
+                  type: object
+                  properties:
+                    mode:
+                      type: string
+                      enum:
+                        - inherit
+                        - public
+                    allow_project_integrations:
+                      type: boolean
+                  required:
+                    - mode
+                  additionalProperties: false
+              required:
+                - registration_id
+                - access
+              additionalProperties: false
+      responses:
+        '200':
+          description: Updated app link
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/DeepLink'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       operationId: deep-links.release
       tags:
@@ -15559,8 +16179,9 @@ paths:
       summary: Release an app slug for immediate reuse
       description: Releases the slug only when the notebook and registration ID match.
         The slug is immediately available for reuse. Old shared URLs can then
-        open another notebook. App sessions and notebook permissions stay
-        unchanged.
+        open another notebook. Authenticated app sessions and notebook
+        permissions stay unchanged; public app sessions are retired when no
+        public link remains.
       parameters:
         - schema:
             type: string
@@ -16014,7 +16635,7 @@ paths:
   /api/v1/projects/{pid}/conversations:
     get:
       operationId: conversations.list
-      tags: &a6
+      tags: &a7
         - Conversations
       summary: List your conversations in a project
       parameters:
@@ -16135,7 +16756,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     post:
       operationId: conversations.create
-      tags: *a6
+      tags: *a7
       summary: Start a private conversation
       parameters:
         - schema:
@@ -16502,7 +17123,7 @@ paths:
   /api/v1/projects/{pid}/conversations/{cid}:
     get:
       operationId: conversations.get
-      tags: *a6
+      tags: *a7
       summary: Read a conversation
       parameters:
         - schema:
@@ -16864,7 +17485,7 @@ paths:
     patch:
       operationId: conversations.update
       x-cli-hidden: true
-      tags: *a6
+      tags: *a7
       summary: Choose the notebook shown beside a conversation
       parameters:
         - schema:
@@ -17242,7 +17863,7 @@ paths:
     delete:
       operationId: conversations.delete
       x-cli-destructive: true
-      tags: *a6
+      tags: *a7
       summary: Delete a conversation
       parameters:
         - schema:
@@ -17309,7 +17930,7 @@ paths:
   /api/v1/projects/{pid}/conversations/{cid}/messages:
     post:
       operationId: conversations.send
-      tags: *a6
+      tags: *a7
       summary: Send a message and wait for the reply
       description: Runs one assistant turn and returns the saved conversation.
         Mutating tools that need consent are skipped on this endpoint; use the
@@ -17688,7 +18309,7 @@ paths:
   /api/v1/projects/{pid}/conversations/{cid}/resume:
     post:
       operationId: conversations.resume
-      tags: *a6
+      tags: *a7
       summary: Continue an interrupted task and wait for the reply
       parameters:
         - schema:
@@ -18061,7 +18682,7 @@ paths:
     post:
       operationId: conversations.stream
       x-cli-hidden: true
-      tags: *a6
+      tags: *a7
       summary: Send a message and stream the reply
       description: Runs one turn and streams the assistant reply as an AI SDK UI
         message stream (server-sent events). The turn keeps running if the
@@ -18171,7 +18792,7 @@ paths:
     get:
       operationId: conversations.reconnect
       x-cli-hidden: true
-      tags: *a6
+      tags: *a7
       summary: Re-attach to the running reply
       description: Replays the chunks streamed so far for the turn running on this
         instance and follows it live. Responds 204 when no turn runs here; the
@@ -18220,7 +18841,7 @@ paths:
   /api/v1/projects/{pid}/conversations/{cid}/stop:
     post:
       operationId: conversations.stop
-      tags: *a6
+      tags: *a7
       summary: Stop the running reply
       description: Stops the turn running for this conversation on any instance.
         Completed tool results stay saved and the task can be continued. Returns
@@ -18282,7 +18903,7 @@ paths:
   /api/v1/projects/{pid}/conversations/{cid}/continuation/dismiss:
     post:
       operationId: conversations.dismiss
-      tags: *a6
+      tags: *a7
       summary: Discard the saved task without continuing it
       parameters:
         - schema:
@@ -18645,7 +19266,7 @@ paths:
     post:
       operationId: conversations.permissions.decide
       x-cli-hidden: true
-      tags: *a6
+      tags: *a7
       summary: Answer a tool consent request
       parameters:
         - schema:
@@ -18735,7 +19356,7 @@ paths:
   /api/v1/projects/{pid}/chat-permissions:
     get:
       operationId: chat-permissions.list
-      tags: *a6
+      tags: *a7
       summary: List remembered tool permissions
       parameters:
         - schema:
@@ -18819,7 +19440,7 @@ paths:
   /api/v1/projects/{pid}/chat-permissions/{grant_id}:
     delete:
       operationId: chat-permissions.revoke
-      tags: *a6
+      tags: *a7
       summary: Forget a remembered tool permission
       parameters:
         - schema:
@@ -20388,7 +21009,7 @@ paths:
   /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/working-branch/saves:
     post:
       operationId: notebooks.working-branch.saves.create
-      tags: &a7
+      tags: &a8
         - Working branches
       summary: Commit source changes to the working branch
       description: Requires working-branch.write and access to the session. Reuse
@@ -20521,7 +21142,7 @@ paths:
   /api/v1/projects/{pid}/notebooks/{nid}/working-branch:
     get:
       operationId: notebooks.working-branch.get
-      tags: *a7
+      tags: *a8
       summary: Inspect the working branch and latest save
       parameters:
         - schema:
@@ -20620,7 +21241,7 @@ paths:
   /api/v1/projects/{pid}/notebooks/{nid}/working-branch/saves/{save_id}:
     get:
       operationId: notebooks.working-branch.saves.get
-      tags: *a7
+      tags: *a8
       summary: Inspect a captured save operation
       description: Only the save author or a project manager can read the receipt.
       parameters:
@@ -20726,7 +21347,7 @@ paths:
   /api/v1/projects/{pid}/notebooks/{nid}/working-branch/saves/{save_id}/recovery:
     get:
       operationId: notebooks.working-branch.saves.recovery
-      tags: *a7
+      tags: *a8
       summary: Download captured source changes for recovery
       description: Returns a ZIP containing a manifest of modifications/deletions and
         captured file bytes. Only the save author or a project manager can
@@ -20828,7 +21449,7 @@ paths:
   /api/v1/projects/{pid}/notebooks/{nid}/working-branch/saves/{save_id}/retry:
     post:
       operationId: notebooks.working-branch.saves.retry
-      tags: *a7
+      tags: *a8
       summary: Resume an existing save operation
       description: The save author can resume any stage. Any editor can resume a save
         whose commit is already on GitHub (`remote_committed` or `hub_synced`).
@@ -20937,7 +21558,7 @@ paths:
   /api/v1/projects/{pid}/notebooks/{nid}/working-branch/change-request:
     post:
       operationId: notebooks.working-branch.change-request.open
-      tags: *a7
+      tags: *a8
       summary: Open the working branch pull request
       description: Opens or returns the one pull request associated with this working
         branch. Does not capture or commit unsaved session edits. The
@@ -28402,7 +29023,7 @@ paths:
         scripts, the CLI): send it as `Authorization: Bearer mhub_pat_…`. The
         plaintext token is returned once, in this response, and never again.
         Requires session (SSO) auth — a token cannot mint tokens.'
-      security: *a5
+      security: *a6
       requestBody:
         required: true
         content:
@@ -28505,7 +29126,7 @@ paths:
         - Auth
       summary: List the caller's personal access tokens
       description: Metadata only — the secret is never retrievable after creation.
-      security: *a5
+      security: *a6
       responses:
         '200':
           description: Tokens, newest first
@@ -28578,7 +29199,7 @@ paths:
       description: Mint a v2 personal access token with an immutable action and
         project grant. Selected projects must be visible to the caller when the
         token is created.
-      security: *a5
+      security: *a6
       requestBody:
         required: true
         content:
@@ -28625,6 +29246,7 @@ paths:
                               - notebook.write
                               - notebook.manage
                               - deep-link.manage
+                              - deep-link.publish
                               - preview.manage
                               - integration.read
                               - integration.use
@@ -28752,7 +29374,7 @@ paths:
         days. Requires session authentication and
         MARIMOHUB_MCP_MANUAL_TOKENS=on. The plaintext token is returned only
         once.
-      security: *a5
+      security: *a6
       requestBody:
         required: true
         content:
@@ -28799,6 +29421,7 @@ paths:
                               - notebook.write
                               - notebook.manage
                               - deep-link.manage
+                              - deep-link.publish
                               - preview.manage
                               - integration.read
                               - integration.use
@@ -28925,7 +29548,7 @@ paths:
       description: Deletes the token; API requests using it fail within the
         verification-cache TTL (~30 seconds) on other replicas, immediately on
         this one.
-      security: *a5
+      security: *a6
       parameters:
         - schema:
             type: string
@@ -29000,7 +29623,7 @@ paths:
       summary: Approve a CLI login
       description: Creates a one-time code that is bound to the CLI PKCE challenge.
         Requires a browser session. Exchange creates the personal access token.
-      security: *a5
+      security: *a6
       requestBody:
         required: true
         content:
@@ -29138,7 +29761,7 @@ paths:
       tags:
         - Auth
       summary: Approve a scoped CLI login
-      security: *a5
+      security: *a6
       requestBody:
         required: true
         content:
@@ -29199,6 +29822,7 @@ paths:
                               - notebook.write
                               - notebook.manage
                               - deep-link.manage
+                              - deep-link.publish
                               - preview.manage
                               - integration.read
                               - integration.use
@@ -29258,6 +29882,7 @@ paths:
                               - notebook.write
                               - notebook.manage
                               - deep-link.manage
+                              - deep-link.publish
                               - preview.manage
                               - integration.read
                               - integration.use
@@ -29404,7 +30029,7 @@ paths:
       summary: Approve a CLI device login
       description: Approves a short-lived device code for the signed-in user. Requires
         a browser session. Personal access tokens cannot approve device logins.
-      security: *a5
+      security: *a6
       requestBody:
         required: true
         content:
@@ -29525,7 +30150,7 @@ paths:
       tags:
         - Auth
       summary: Preview a CLI device login
-      security: *a5
+      security: *a6
       parameters:
         - schema:
             type: string
@@ -29594,6 +30219,7 @@ paths:
                                         - notebook.write
                                         - notebook.manage
                                         - deep-link.manage
+                                        - deep-link.publish
                                         - preview.manage
                                         - integration.read
                                         - integration.use
@@ -29712,7 +30338,7 @@ paths:
       tags:
         - Auth
       summary: Approve a scoped CLI device login
-      security: *a5
+      security: *a6
       requestBody:
         required: true
         content:
@@ -29762,6 +30388,7 @@ paths:
                               - notebook.write
                               - notebook.manage
                               - deep-link.manage
+                              - deep-link.publish
                               - preview.manage
                               - integration.read
                               - integration.use
@@ -29898,7 +30525,7 @@ paths:
       x-cli-hidden: true
       tags:
         - Auth
-      security: *a5
+      security: *a6
       parameters:
         - schema:
             type: string
@@ -29986,7 +30613,7 @@ paths:
       x-cli-hidden: true
       tags:
         - Auth
-      security: *a5
+      security: *a6
       parameters:
         - schema:
             type: string
@@ -30029,6 +30656,7 @@ paths:
                               - notebook.write
                               - notebook.manage
                               - deep-link.manage
+                              - deep-link.publish
                               - preview.manage
                               - integration.read
                               - integration.use
@@ -30144,7 +30772,7 @@ paths:
       x-cli-hidden: true
       tags:
         - Auth
-      security: *a5
+      security: *a6
       parameters:
         - schema:
             type: string
@@ -30214,9 +30842,9 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/me/github:
     get:
-      tags: &a8
+      tags: &a9
         - Auth
-      security: *a5
+      security: *a6
       x-cli-hidden: true
       operationId: auth.github.status
       responses:
@@ -30270,8 +30898,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     delete:
-      tags: *a8
-      security: *a5
+      tags: *a9
+      security: *a6
       x-cli-hidden: true
       operationId: auth.github.disconnect
       responses:
@@ -30316,8 +30944,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/me/github/connect:
     post:
-      tags: *a8
-      security: *a5
+      tags: *a9
+      security: *a6
       x-cli-hidden: true
       operationId: auth.github.connect
       responses:
@@ -30376,8 +31004,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/me/github/callback:
     get:
-      tags: *a8
-      security: *a5
+      tags: *a9
+      security: *a6
       x-cli-hidden: true
       operationId: auth.github.callback
       parameters:

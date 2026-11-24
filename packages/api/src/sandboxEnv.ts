@@ -184,6 +184,8 @@ export interface IntegrationRenderOptions {
 	workload: WorkloadRef;
 	principal: { userId: UserId; email: string };
 	restricted: boolean;
+	/** Defaults to `'all'`. Public apps use `'project-only'` so org integrations and WIF stay excluded. */
+	scope?: 'all' | 'project-only';
 	/** Shares the exchange with {@link resolveFederatedVars}; built per call when absent. */
 	federatedCredentials?: FederatedCredentials;
 	onRendered?: (render: SessionRender) => void;
@@ -203,13 +205,16 @@ export async function resolveIntegrationRender(
 	if (!(deps.integrations && !options.restricted)) return;
 	try {
 		const resolveFederatedCredentials =
-			options.federatedCredentials ??
-			(options.project
-				? federatedCredentialsFor(deps, options.project, options.workload)
-				: undefined);
+			options.scope === 'project-only'
+				? undefined
+				: (options.federatedCredentials ??
+					(options.project
+						? federatedCredentialsFor(deps, options.project, options.workload)
+						: undefined));
 		const render = await deps.integrations.resolveForSession(options.projectId, {
 			workload: options.workload,
 			principal: options.principal,
+			...(options.scope ? { scope: options.scope } : {}),
 			...(resolveFederatedCredentials ? { resolveFederatedCredentials } : {}),
 		});
 		if (render) options.onRendered?.(render);

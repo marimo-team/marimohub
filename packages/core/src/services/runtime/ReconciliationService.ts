@@ -20,7 +20,8 @@ import { isTerminalRunStatus } from '../jobs/runState';
 import { RECLAIM_PROVISION_GRACE_MS, SessionRetirer } from './SessionRetirer';
 import { AppPoolStore } from './AppPoolStore';
 import { SandboxDiagnosticLease } from './SandboxDiagnosticLease';
-import { isTerminal } from './sessionState';
+import { isTerminal, sessionAppPoolNamespace } from './sessionState';
+import type { AppPoolNamespace } from './sessionState';
 import { listAllKeys } from '../catalog/storage';
 import type { SessionService } from './SessionService';
 
@@ -284,7 +285,15 @@ export class ReconciliationService {
 		// an orphan.
 		const active = await this.compute.listActive();
 		const sessions = await this.sessions.listSessions();
-		const readPool = new AppPoolStore(this.bucket).reader();
+		const readPools: Record<AppPoolNamespace, ReturnType<AppPoolStore['reader']>> = {
+			authenticated: new AppPoolStore(this.bucket, undefined, 'authenticated').reader(),
+			public: new AppPoolStore(this.bucket, undefined, 'public').reader(),
+			'public-integrations': new AppPoolStore(
+				this.bucket,
+				undefined,
+				'public-integrations',
+			).reader(),
+		};
 		const diagnosticSandboxIds = await this.diagnosticLeases.activeSandboxIds(now);
 
 		const activeIds = new Set<string>(active.map((s) => s.id));
@@ -373,7 +382,10 @@ export class ReconciliationService {
 						continue;
 					}
 					if (session.app_pool && session.status === 'starting') {
-						const pool = await readPool(session.project_id, session.notebook_id);
+						const pool = await readPools[sessionAppPoolNamespace(session)](
+							session.project_id,
+							session.notebook_id,
+						);
 						if (
 							pool?.members.some(
 								(member) =>

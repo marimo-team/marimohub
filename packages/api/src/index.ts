@@ -9,6 +9,7 @@ export type {
 	HonoEnv,
 	JobsConfig,
 	McpConfig,
+	PublicAppsConfig,
 	SandboxConfig,
 	SandboxUserHomeResolver,
 	Services,

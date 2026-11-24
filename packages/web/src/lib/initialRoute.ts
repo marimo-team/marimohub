@@ -6,6 +6,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { matchRoutes } from 'react-router-dom';
 import { userQueryOptions } from '@/api/hooks';
 import { prefetchAppLink } from '@/api/deepLinks';
+import { prefetchPublicApp } from '@/api/publicApps';
 import {
 	prefetchProjectSource,
 	prefetchAppEntry,
@@ -36,7 +37,9 @@ export async function preloadInitialRoute(client: QueryClient): Promise<InitialR
 	}
 	const link = matchRoutes([{ path: '/app/*' }], path)?.[0];
 	if (link) {
-		void prefetchAppLink(client, link.params['*'] ?? '');
+		const slug = link.params['*'] ?? '';
+		void prefetchAppLink(client, slug);
+		void prefetchPublicApp(client, slug);
 		return {};
 	}
 	if (/^\/(cli|oauth)\//.test(path) || /^\/projects\/[^/]+\/notebooks\//.test(path)) return {};

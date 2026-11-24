@@ -325,15 +325,25 @@ export type { SandboxWorkspaceLayout } from './runtime/workspaceLayout';
 export { ProxyExposure, SubdomainExposure } from './runtime/sandboxExposure';
 export {
 	ACTIVE_STATUSES,
+	type AppPoolNamespace,
+	isPublicAppUserId,
 	isTerminal,
 	MODE_POLICY,
 	nextStatus,
 	PRESENT_STATUSES,
+	PUBLIC_APP_USER_PREFIX,
+	PUBLIC_VISIT_USER_PREFIX,
+	publicAppSessionOwner,
+	publicAppVisitActor,
+	sessionAppPoolNamespace,
+	type SessionAudience,
+	sessionAudience,
 	type SessionEvent,
 	sessionMode,
 	type SessionModePolicy,
 	sessionModePolicy,
 	sessionPersistsEdits,
+	SYSTEM_USER_PREFIX,
 	TERMINAL_STATUSES,
 } from './runtime/sessionState';
 export {
@@ -370,6 +380,12 @@ export type {
 	SessionScopedAction,
 } from './authorization/actions';
 export { signProxyToken, verifyProxyToken } from './runtime/proxyToken';
+export {
+	openPublicAppVisitToken,
+	PublicAppVisitTokenClaimsSchema,
+	sealPublicAppVisitToken,
+} from './runtime/publicAppVisitToken';
+export type { PublicAppVisitTokenClaims } from './runtime/publicAppVisitToken';
 export { createKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from './runtime/kernelAuth';
 export {
 	buildSandboxContext,
@@ -876,7 +892,11 @@ export {
 export { THUMBNAIL_MAX_BYTES, validateThumbnailPng } from './content/thumbnailPng';
 
 export { AppPoolService } from './runtime/AppPoolService';
-export { AppPoolStore } from './runtime/AppPoolStore';
+export {
+	ALL_APP_POOL_NAMESPACES,
+	AppPoolStore,
+	PUBLIC_APP_POOL_NAMESPACES,
+} from './runtime/AppPoolStore';
 export {
 	routeApp,
 	routeAppRetirement,

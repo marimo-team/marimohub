@@ -73,7 +73,12 @@ export class ProxyExposure implements SandboxExposure {
 	constructor(readonly signingSecret: string) {}
 
 	private async pathFor(ctx: ExposureContext): Promise<string> {
-		const token = await signProxyToken(ctx.projectId, ctx.sessionId, this.signingSecret);
+		const token = await signProxyToken(
+			ctx.projectId,
+			ctx.sessionId,
+			this.signingSecret,
+			ctx.audience ?? 'authenticated',
+		);
 		return `/proxy/${token}`;
 	}
 

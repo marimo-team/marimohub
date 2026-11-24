@@ -4,12 +4,14 @@ import { createHash } from 'node:crypto';
 export const SHELL_PREFETCH_SCRIPT = `(() => {
 const base = new URL(document.baseURI);
 const path = location.pathname.startsWith(base.pathname) ? location.pathname.slice(base.pathname.length) : '';
-const urls = ['me', 'capabilities', 'theme'];
 const parts = path.split('/');
+const isAppLink = parts[0] === 'app' && parts.slice(1).join('/').length > 0;
+const urls = isAppLink ? ['api/v1/me', 'api/v1/theme'] : ['api/v1/me', 'api/v1/capabilities', 'api/v1/theme'];
+if (isAppLink) urls.push('api/public/v1/apps/' + parts.slice(1).join('/'));
 const id = /^[a-zA-Z0-9_-]+$/;
-if ((!path || path === 'index.html') && !location.search) urls.push('projects?status=active&limit=1');
+if ((!path || path === 'index.html') && !location.search) urls.push('api/v1/projects?status=active&limit=1');
 if (parts[0] === 'projects' && id.test(parts[1] || '')) {
-  const project = 'projects/' + parts[1];
+  const project = 'api/v1/projects/' + parts[1];
   urls.push(project);
   if (parts[2] === 'notebooks' && id.test(parts[3] || '') && parts.length === 4) urls.push(project + '/notebooks/' + parts[3] + '/app');
   else if (parts.length === 2 || (parts.length === 3 && parts[2] === '')) {
@@ -25,7 +27,7 @@ if (parts[0] === 'projects' && id.test(parts[1] || '')) {
 const responses = Object.create(null);
 window.__MARIMOHUB_PREFETCH__ = {createdAt: Date.now(), responses};
 for (const path of urls) {
-  const url = new URL('api/v1/' + path, base);
+  const url = new URL(path, base);
   url.searchParams.sort();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);

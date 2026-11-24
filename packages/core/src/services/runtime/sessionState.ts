@@ -1,6 +1,38 @@
 import type { SessionMode, SessionStatus } from '../../constants';
 import { createStateMachine } from '../../fsm';
+import { UserId } from '../../ids';
+import type { NotebookId } from '../../ids';
 import type { Session } from '../../schema';
+
+export type SessionAudience = 'authenticated' | 'public';
+export type AppPoolNamespace = 'authenticated' | 'public' | 'public-integrations';
+
+export const SYSTEM_USER_PREFIX = 'system:';
+export const PUBLIC_APP_USER_PREFIX = 'system:public-app:';
+export const PUBLIC_VISIT_USER_PREFIX = 'public:';
+
+export function publicAppSessionOwner(notebookId: NotebookId): UserId {
+	return UserId.parse(`${PUBLIC_APP_USER_PREFIX}${notebookId}`);
+}
+
+export function publicAppVisitActor(visitId: string): UserId {
+	return UserId.parse(`${PUBLIC_VISIT_USER_PREFIX}${visitId}`);
+}
+
+export function isPublicAppUserId(userId: string): boolean {
+	return userId.startsWith(PUBLIC_APP_USER_PREFIX);
+}
+
+export function sessionAudience(session: Pick<Session, 'audience'>): SessionAudience {
+	return session.audience ?? 'authenticated';
+}
+
+export function sessionAppPoolNamespace(
+	session: Pick<Session, 'audience' | 'allow_project_integrations'>,
+): AppPoolNamespace {
+	if (sessionAudience(session) !== 'public') return 'authenticated';
+	return session.allow_project_integrations ? 'public-integrations' : 'public';
+}
 
 // Session lifecycle as a `createStateMachine` config, shared by every writer (API
 // routes, reaper, reconciliation). With CAS writes in SessionService, a terminal

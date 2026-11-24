@@ -17,10 +17,11 @@ import {
 	NotFoundError,
 	ProjectId,
 	SessionRetirer,
+	sessionAudience,
 	sessionSandbox,
 	sessionMode,
 } from '@marimo-hub/core';
-import type { Bucket, Metrics } from '@marimo-hub/core';
+import type { AppPoolNamespace, Bucket, Metrics } from '@marimo-hub/core';
 import type { ApiDeps } from './context';
 import { previewAppPoolPolicy } from './previewPolicy';
 
@@ -32,7 +33,7 @@ const inertPools = weakMemo((_bucket: Bucket) => ({
 export async function sweepAppPools(
 	deps: Pick<
 		ApiDeps,
-		'bucket' | 'services' | 'compute' | 'policy' | 'metrics' | 'backgroundWork'
+		'bucket' | 'services' | 'compute' | 'policy' | 'metrics' | 'backgroundWork' | 'publicApps'
 	> & {
 		sandbox: Pick<ApiDeps['sandbox'], 'persistWorkspace' | 'workdir' | 'sessionLifetime'>;
 	},
@@ -237,4 +238,142 @@ export async function sweepAppPools(
 	} while (cursor);
 	if (complete) inert.etags = next;
 	if (complete) deps.metrics?.gauge('app_pool.visits', visits);
+
+	await sweepPublicAppPools(deps, readSessions, sweepSessions, retirer);
+}
+
+async function sweepPublicAppPools(
+	deps: Pick<
+		ApiDeps,
+		'bucket' | 'services' | 'compute' | 'policy' | 'metrics' | 'backgroundWork' | 'publicApps'
+	> & {
+		sandbox: Pick<ApiDeps['sandbox'], 'persistWorkspace' | 'workdir' | 'sessionLifetime'>;
+	},
+	readSessions: (
+		pid: ProjectId,
+	) => ReturnType<ApiDeps['services']['sessions']['listActiveByProject']>,
+	sweepSessions: ApiDeps['services']['sessions'],
+	retirer: SessionRetirer,
+): Promise<void> {
+	const { sessions, deepLinks, projects, notebooks } = deps.services;
+	const publicPolicy = deps.publicApps?.poolPolicy ?? DEFAULT_APP_POOL_POLICY;
+	let cursor: string | undefined;
+	do {
+		const page = await deps.bucket.list({ prefix: paths.publicAppPoolsPrefix, cursor });
+		await mapWithConcurrency(page.objects, 8, async (object) => {
+			const match = /^_system\/public-app-pools\/([^/]+)\/([^/.]+)(\.integrations)?\.json$/.exec(
+				object.key,
+			);
+			if (!match || !ProjectId.is(match[1]) || !NotebookId.is(match[2])) return;
+			const pid = match[1];
+			const nid = match[2];
+			const isIntegrations = match[3] === '.integrations';
+			const namespace: AppPoolNamespace = isIntegrations ? 'public-integrations' : 'public';
+			try {
+				const store = new AppPoolStore(deps.bucket, deps.metrics, namespace);
+				const snapshot = await store.read(pid, nid);
+				if (!snapshot) return;
+				if (
+					snapshot.members.length === 0 &&
+					snapshot.assignments.length === 0 &&
+					!(await readSessions(pid)).some(
+						(session) =>
+							session.notebook_id === nid &&
+							sessionAudience(session) === 'public' &&
+							Boolean(session.allow_project_integrations) === isIntegrations,
+					)
+				) {
+					return;
+				}
+				// Straggler check: if the gate is off, labels were added, or no live public link
+				// remains for this variant, invalidate all members so reconcile destroys them.
+				const linkVariant = isIntegrations ? 'integrations' : 'default';
+				const stillPublic =
+					Boolean(deps.publicApps) &&
+					(!isIntegrations || deps.publicApps!.allowProjectIntegrations) &&
+					(await deepLinks.hasPublicLinks(pid, nid, linkVariant).catch(() => false));
+				let unlabeled = false;
+				if (stillPublic) {
+					const [project, meta] = await Promise.all([
+						projects.getProject(pid, { consistency: 'validated' }).catch(() => null),
+						notebooks.getNotebookMeta(pid, nid).catch(() => null),
+					]);
+					unlabeled =
+						!!project &&
+						project.status !== 'deleted' &&
+						project.security_labels === undefined &&
+						!!meta &&
+						meta.status !== 'deleted' &&
+						!meta.preview &&
+						meta.security_labels === undefined;
+				}
+				if (!stillPublic || !unlabeled) {
+					await store.invalidateAll(pid, nid);
+				}
+				const pool = new AppPoolService(
+					deps.bucket,
+					sweepSessions,
+					publicPolicy,
+					deps.metrics,
+					undefined,
+					namespace,
+				);
+				await pool.reconcile(pid, nid, {
+					probe: async (member) => {
+						const session = await sessions.getSession(pid, member.session_id).catch((error) => {
+							if (error instanceof NotFoundError) return null;
+							throw error;
+						});
+						if (!session) return 0;
+						if (
+							session.authorization_expires_at &&
+							Date.parse(session.authorization_expires_at) <= Date.now()
+						) {
+							return 0;
+						}
+						const connections = await kernelActiveConnections(
+							sessionSandbox(deps.compute, session, deps.metrics, 'app_pool'),
+							localKernelBasePath(session),
+						).catch((error: unknown) => {
+							if (error instanceof NotFoundError) return null;
+							throw error;
+						});
+						const idleTimeout = pool.policy.idleMs;
+						return connections === null &&
+							Date.now() - Date.parse(session.last_heartbeat) > idleTimeout
+							? 0
+							: connections;
+					},
+					retire: async (member, session) => {
+						if (!session) {
+							const options = { owner: { projectId: pid, userId: member.user_id } };
+							try {
+								if (deps.compute.destroyExisting)
+									await deps.compute.destroyExisting(member.sandbox_id, options);
+								else if (deps.compute.connectExisting)
+									await deps.compute.connectExisting(member.sandbox_id, options).destroy();
+								else return false;
+							} catch (error) {
+								if (!(error instanceof NotFoundError)) throw error;
+							}
+							return true;
+						}
+						if (session.sandbox_reclaimed_at) return true;
+						const result = await sessions.beginTerminating(pid, session.session_id);
+						if (!result.transitioned && result.session.status === 'terminating') return false;
+						if (result.session.sandbox_reclaimed_at) return true;
+						await retirer.retire(result.session, { captureBeforeDestroy: false });
+						return !!(await sessions.getSession(pid, session.session_id)).sandbox_reclaimed_at;
+					},
+				});
+			} catch (error) {
+				logOperationalError(
+					'public_app_pool_sweep_failed',
+					{ operation: 'public_app_pool.sweep', project_id: pid, notebook_id: nid, namespace },
+					error,
+				);
+			}
+		});
+		cursor = page.truncated ? page.cursor : undefined;
+	} while (cursor);
 }

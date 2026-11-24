@@ -15,7 +15,21 @@ describe('proxy routing token', () => {
 		expect(await verifyProxyToken(token, SECRET)).toEqual({
 			projectId: PROJECT,
 			sessionId: SESSION,
+			audience: 'authenticated',
 		});
+	});
+
+	it('round-trips a public audience token with an explicit .pub. segment', async () => {
+		const token = await signProxyToken(PROJECT, SESSION, SECRET, 'public');
+		expect(token.startsWith(`${PROJECT}.${SESSION}.pub.`)).toBe(true);
+		expect(await verifyProxyToken(token, SECRET)).toEqual({
+			projectId: PROJECT,
+			sessionId: SESSION,
+			audience: 'public',
+		});
+		// Authenticated signature cannot be repurposed as public or vice versa.
+		const sig = token.slice(token.lastIndexOf('.') + 1);
+		expect(await verifyProxyToken(`${PROJECT}.${SESSION}.${sig}`, SECRET)).toBeNull();
 	});
 
 	it('is deterministic for the same ids + secret', async () => {

@@ -1052,20 +1052,27 @@ export class ProjectService {
 	private async retireAppPoolsForDeletion(projectId: ProjectId): Promise<void> {
 		const notebooksPrefix = `projects/${projectId}/notebooks/`;
 		const poolPrefix = paths.appPoolsForProject(projectId);
-		const [notebooks, pools] = await Promise.all([
+		const [notebooks, pools, publicPools] = await Promise.all([
 			listAllPrefixes(this.bucket, notebooksPrefix),
 			listAllKeys(this.bucket, poolPrefix),
+			listAllKeys(this.bucket, paths.publicAppPoolsForProject(projectId)),
 		]);
+		const publicPrefix = paths.publicAppPoolsForProject(projectId);
 		const notebookIds = new Set(
 			[
 				...notebooks.map((key) => key.slice(notebooksPrefix.length, -1)),
 				...pools.map((key) => key.slice(poolPrefix.length).replace(/\.json$/, '')),
+				...publicPools.map((key) =>
+					key.slice(publicPrefix.length).replace(/(?:\.integrations)?\.json$/, ''),
+				),
 			].filter(NotebookId.is),
 		);
-		const store = new AppPoolStore(this.bucket, this.metrics);
-		await mapWithConcurrency([...notebookIds], BUCKET_SCAN_CONCURRENCY, (notebookId) =>
-			store.retireForDeletion(projectId, notebookId),
+		const stores = (['authenticated', 'public', 'public-integrations'] as const).map(
+			(namespace) => new AppPoolStore(this.bucket, this.metrics, namespace),
 		);
+		await mapWithConcurrency([...notebookIds], BUCKET_SCAN_CONCURRENCY, async (notebookId) => {
+			for (const store of stores) await store.retireForDeletion(projectId, notebookId);
+		});
 	}
 
 	/**

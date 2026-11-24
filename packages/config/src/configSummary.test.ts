@@ -146,6 +146,8 @@ describe('buildConfigSummary', () => {
 			'MARIMOHUB_SECRETS_KUBERNETES_CACHE_TTL_SECONDS',
 			// Egress-policy toggle, not private key material.
 			'MARIMOHUB_NOTIFY_ALLOW_PRIVATE',
+			// Visit token TTL in seconds, not key material.
+			'MARIMOHUB_PUBLIC_APPS_VISIT_TOKEN_TTL_SECONDS',
 		]);
 		const suspicious = /SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE|CONNECTION_STRING/;
 		const unflagged = CONFIG_SPEC.flatMap((g) => g.backends)

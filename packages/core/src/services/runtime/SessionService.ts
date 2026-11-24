@@ -67,12 +67,15 @@ import {
 	nextStatus,
 	PRESENT_STATUSES,
 	MODE_POLICY,
+	sessionAppPoolNamespace,
+	sessionAudience,
 	sessionMode,
 	sessionModePolicy,
 	sessionPersistsEdits,
 } from './sessionState';
+import type { SessionAudience } from './sessionState';
 import { listAllObjects } from '../catalog/storage';
-import { AppPoolStore } from './AppPoolStore';
+import { ALL_APP_POOL_NAMESPACES, AppPoolStore } from './AppPoolStore';
 import { pullSourceRootPath, sandboxWorkspaceLayout } from './workspaceLayout';
 
 export interface SessionStartupStatus {
@@ -113,6 +116,8 @@ export interface CreateSessionInput {
 	restricted_viewer_credentials?: boolean;
 	/** `edit` (default) or `app` (a shared pool member; see SessionSchema). */
 	mode?: SessionMode;
+	audience?: SessionAudience;
+	allow_project_integrations?: boolean;
 	/** Immutable notebook version used to start this session. */
 	source_version_id?: VersionId;
 	editor_sandbox_sharing?: EditorSandboxSharing;
@@ -221,11 +226,21 @@ function needsSessionIndexEntry(session: Session | null): boolean {
 }
 
 function countsTowardCap(session: Session, scope: CapScope): boolean {
+	if (scope === 'project' && sessionAudience(session) === 'public') return false;
 	return (
 		sessionModePolicy(session).capScope === scope &&
 		((ACTIVE_STATUSES as readonly Session['status'][]).includes(session.status) ||
 			(!!session.stop && hasUnreclaimedSandbox(session)) ||
 			(scope === 'project' && hasUnreclaimedSandbox(session)))
+	);
+}
+
+function countsTowardPublicCap(session: Session): boolean {
+	return (
+		sessionAudience(session) === 'public' &&
+		((ACTIVE_STATUSES as readonly Session['status'][]).includes(session.status) ||
+			(!!session.stop && hasUnreclaimedSandbox(session)) ||
+			hasUnreclaimedSandbox(session))
 	);
 }
 
@@ -470,6 +485,8 @@ export class SessionService {
 				: {}),
 			...(input.app_pool ? { app_pool: true as const } : {}),
 			...(input.mode && input.mode !== 'edit' ? { mode: input.mode } : {}),
+			...(input.audience === 'public' ? { audience: 'public' as const } : {}),
+			...(input.allow_project_integrations ? { allow_project_integrations: true } : {}),
 			...(input.source_version_id ? { source_version_id: input.source_version_id } : {}),
 			...(input.editor_sandbox_sharing
 				? { editor_sandbox_sharing: input.editor_sandbox_sharing }
@@ -1590,7 +1607,11 @@ export class SessionService {
 		notebookId: NotebookId,
 	): Promise<ReadonlySet<VersionId>> {
 		const sessions = await this.listActiveByProject(projectId);
-		const pool = await new AppPoolStore(this.bucket).read(projectId, notebookId);
+		const pools = await Promise.all(
+			ALL_APP_POOL_NAMESPACES.map((ns) =>
+				new AppPoolStore(this.bucket, undefined, ns).read(projectId, notebookId),
+			),
+		);
 		return new Set([
 			...sessions
 				.filter((session) => session.notebook_id === notebookId)
@@ -1601,9 +1622,12 @@ export class SessionService {
 				.filter((session) => session.notebook_id === notebookId && session.source_version_id)
 				.map((session) => session.source_version_id as VersionId),
 			// Reservations protect source before a session exists; retiring members protect it until reclamation.
-			...(pool?.members.flatMap((member) =>
-				member.source_version_id ? [member.source_version_id] : [],
-			) ?? []),
+			...pools.flatMap(
+				(pool) =>
+					pool?.members.flatMap((member) =>
+						member.source_version_id ? [member.source_version_id] : [],
+					) ?? [],
+			),
 		]);
 	}
 
@@ -2012,6 +2036,12 @@ export class SessionService {
 	async listActiveAppsForProject(projectId: ProjectId): Promise<Session[]> {
 		const sessions = await this.scanProject(projectId, (session) => session);
 		return sessions.filter((session) => countsTowardCap(session, 'project')).sort(byCapOrder);
+	}
+
+	/** Live or unreclaimed public app sessions across the deployment, in start order. */
+	async listActivePublicApps(): Promise<Session[]> {
+		const sessions = await this.scanSessions((session) => session);
+		return sessions.filter(countsTowardPublicCap).sort(byCapOrder);
 	}
 
 	/**
@@ -2717,7 +2747,15 @@ export class SessionService {
 
 	async expireStale(): Promise<number> {
 		const now = Date.now();
-		const readPool = new AppPoolStore(this.bucket).reader();
+		const poolReaders = {
+			authenticated: new AppPoolStore(this.bucket, undefined, 'authenticated').reader(),
+			public: new AppPoolStore(this.bucket, undefined, 'public').reader(),
+			'public-integrations': new AppPoolStore(
+				this.bucket,
+				undefined,
+				'public-integrations',
+			).reader(),
+		};
 
 		// Scan + expire in bounded-parallel: reads and the per-session conditional
 		// PUTs are independent (each keyed by its own ETag), so the reaper pass no
@@ -2728,7 +2766,10 @@ export class SessionService {
 			if (isTerminal(session.status)) return { expired: 0, live: 0 };
 			// Pool reconciliation owns idle and startup expiry for managed apps.
 			if (sessionMode(session) === 'app' && session.status !== 'terminating') {
-				const pool = await readPool(session.project_id, session.notebook_id);
+				const pool = await poolReaders[sessionAppPoolNamespace(session)](
+					session.project_id,
+					session.notebook_id,
+				);
 				if (pool?.members.some((member) => member.session_id === session.session_id))
 					return { expired: 0, live: 1 };
 			}

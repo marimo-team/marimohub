@@ -8,4 +8,4 @@ export {
 	startNotebookSession,
 	toSessionResponse,
 } from './sessions';
-export type { SessionCreateBody, SessionCreateResult } from './sessions';
+export type { PublicSessionAccess, SessionCreateBody, SessionCreateResult } from './sessions';

@@ -43,6 +43,7 @@ import {
 	jsonBody,
 	jsonContent,
 	loadVisibleProject,
+	retirePublicApps,
 	ProjectIdParam,
 	ProjectMemberResponseSchema,
 	ProjectResponseSchema,
@@ -569,6 +570,10 @@ async function mutateSecurityLabels(
 		user.id,
 		ifMatchToken(c) ?? project.updated_at,
 	);
+	if (labels !== undefined) {
+		await deps.services.deepLinks.downgradeProjectPublicLinks(pid);
+		await retirePublicApps(deps, pid);
+	}
 	c.header('ETag', etagFor(updated.updated_at));
 	return c.json({ success: true, data: projectResponse(updated, user, deps) }, 200);
 }

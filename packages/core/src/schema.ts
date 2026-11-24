@@ -1053,6 +1053,10 @@ export const SessionSchema = z.looseObject({
 	 * for the session's life.
 	 */
 	mode: z.enum(SESSION_MODES).optional(),
+	/** Absent = `authenticated`; `public` sessions live in dedicated public app pools. */
+	audience: z.enum(['authenticated', 'public']).optional(),
+	/** Only set on `audience: 'public'` sessions opted into project-scoped integrations. */
+	allow_project_integrations: z.boolean().optional(),
 	/**
 	 * The immutable notebook version used to start the session. App sessions compare
 	 * it with the current head for staleness; edit sessions use it as save provenance.

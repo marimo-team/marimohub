@@ -1,0 +1,46 @@
+name: Open Code Review
+
+# Advisory LLM review (https://github.com/alibaba/open-code-review): posts inline
+# comments and a sticky summary on ready-for-review PRs. Project rules live in
+# .opencodereview/rule.json. The job skips itself until the ANTHROPIC_API_KEY
+# secret is set; set the OCR_LLM_MODEL variable to override the model.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: open-code-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Fork PRs get no secrets under pull_request, so they are skipped rather
+    # than switched to pull_request_target.
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    env:
+      OCR_CONFIGURED: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    steps:
+      - name: Skip without an API key
+        if: env.OCR_CONFIGURED != 'true'
+        run: echo "::notice::Open Code Review is not configured; set the ANTHROPIC_API_KEY secret to enable it."
+
+      # The action installs the CLI from npm at run time, so ocr_version must be
+      # pinned alongside the action SHA for reproducible reviews.
+      - uses: alibaba/open-code-review@445ad9dea3057346986197385858a1a281253cc9 # v1.13.13
+        if: env.OCR_CONFIGURED == 'true'
+        with:
+          ocr_version: '1.13.13'
+          llm_url: https://api.anthropic.com
+          llm_auth_token: ${{ secrets.ANTHROPIC_API_KEY }}
+          llm_model: ${{ vars.OCR_LLM_MODEL || 'claude-opus-5-5' }}
+          llm_use_anthropic: 'true'
+          # Later pushes review only commits after the last fully reviewed head.
+          checkpoint_range: 'true'
+          route_categories: style,documentation

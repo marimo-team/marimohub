@@ -5,6 +5,7 @@ import type { SessionLinkTemplate } from '@marimo-hub/core/session-links';
 import { createRoute, z } from '@hono/zod-openapi';
 import { all, allSettled } from 'better-all';
 import type {
+	AppPoolNamespace,
 	KnownObject,
 	Millis,
 	ProvisionResult,
@@ -37,6 +38,9 @@ import {
 	previewAvailable,
 	AppPoolService,
 	AppAssignmentExpiredError,
+	isPublicDeepLink,
+	publicAppSessionOwner,
+	publicAppVisitActor,
 	sessionResourceNotebookId,
 	sessionResourcePath,
 	PREVIEW_IDLE_MS,
@@ -114,7 +118,7 @@ import {
 	scheduleNotification,
 	scheduleProjectAlert,
 } from '../notifications';
-import type { ApiDeps, ResolvedApiDeps, SandboxConfig } from '../context';
+import type { ApiDeps, PublicAppsConfig, ResolvedApiDeps, SandboxConfig } from '../context';
 import {
 	composeSessionEnv,
 	federatedCredentialsFor,
@@ -1453,6 +1457,15 @@ export type SessionCreateResult = z.infer<typeof SessionCreateResponseSchema>;
 
 const EDITOR_STOP_WAIT_MS = 10_000;
 
+export interface PublicSessionAccess {
+	slug: string;
+	registrationId: string;
+	grantId: string;
+	visitId: string;
+	allowProjectIntegrations: boolean;
+	config: PublicAppsConfig;
+}
+
 export async function startNotebookSession(input: {
 	onProgress?: (progress: SandboxStartupSnapshot) => void;
 	onAuthorized?: () => void;
@@ -1462,6 +1475,7 @@ export async function startNotebookSession(input: {
 	nid: NotebookId;
 	body: SessionCreateBody | undefined;
 	preview?: { id: PreviewId; notebook_id: NotebookId };
+	publicAccess?: PublicSessionAccess;
 	request: {
 		requestId?: string;
 		method: string;
@@ -1562,9 +1576,16 @@ async function startNotebookSessionOnce(
 	recordAuthReuse: () => void,
 ): Promise<SessionCreateResult> {
 	input.request.signal?.throwIfAborted();
-	const { deps, user, pid, nid, body, request } = input;
+	const { deps, user, pid, nid, body, request, publicAccess } = input;
 	const { sessions, projects, notebooks } = deps.services;
-	const mode: SessionMode = body?.mode ?? 'edit';
+	const mode: SessionMode = publicAccess ? 'app' : (body?.mode ?? 'edit');
+	const publicPoolNamespace: AppPoolNamespace = publicAccess
+		? publicAccess.allowProjectIntegrations
+			? 'public-integrations'
+			: 'public'
+		: 'authenticated';
+	const sessionOwnerId: UserId = publicAccess ? publicAppSessionOwner(nid) : user.id;
+	const poolActorId: UserId = publicAccess ? publicAppVisitActor(publicAccess.visitId) : user.id;
 	const onProgress = mode === 'edit' ? input.onProgress : undefined;
 	if ((body?.app_visit_id || body?.replace_app_session_id) && mode !== 'app')
 		throw new BadRequestError('App visit and replacement options are only valid for app sessions');
@@ -1580,7 +1601,18 @@ async function startNotebookSessionOnce(
 	if (project.status === 'deleted') {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
-	let authorization = await authorizeSessionStart(project, user, mode, deps);
+	if (publicAccess && project.security_labels !== undefined) {
+		throw new NotFoundError('App link not found');
+	}
+	let authorization = publicAccess
+		? {
+				role: 'app-user' as const,
+				ephemeral: false,
+				profileOverrideEligible: false,
+				restrictedViewerCredentials: true,
+				subjectContextExpiresAt: undefined as string | undefined,
+			}
+		: await authorizeSessionStart(project, user, mode, deps);
 	const appUser = authorization.role === 'app-user';
 	if (
 		appUser &&
@@ -1596,7 +1628,8 @@ async function startNotebookSessionOnce(
 	const notebook = await notebookRead;
 	if (
 		notebook.meta.preview &&
-		(input.preview?.id !== notebook.meta.preview.preview_id ||
+		(publicAccess ||
+			input.preview?.id !== notebook.meta.preview.preview_id ||
 			input.preview?.notebook_id !== notebook.meta.preview.notebook_id)
 	)
 		throw new NotFoundError('Notebook not found');
@@ -1604,7 +1637,11 @@ async function startNotebookSessionOnce(
 	if (notebook.meta.status === 'deleted') {
 		throw new NotFoundError(`Notebook ${nid} not found`);
 	}
-	if (notebook.meta.security_labels !== undefined) {
+	if (publicAccess) {
+		if (notebook.meta.security_labels !== undefined) {
+			throw new NotFoundError('App link not found');
+		}
+	} else if (notebook.meta.security_labels !== undefined) {
 		authorization = await authorizeSessionStart(
 			project,
 			user,
@@ -1624,10 +1661,15 @@ async function startNotebookSessionOnce(
 		throw new NotFoundError('Preview not found');
 	input.onAuthorized?.();
 	// Sessions must end before their credentials, security context, or preview expires.
-	const authorizationExpiresAt = earliestDeadline(
-		entitlementAuthorizationDeadline(user),
-		earliestDeadline(authorization.subjectContextExpiresAt, previewRecord?.expires_at ?? undefined),
-	);
+	const authorizationExpiresAt = publicAccess
+		? new Date(Date.now() + publicAccess.config.maxLifetimeMs).toISOString()
+		: earliestDeadline(
+				entitlementAuthorizationDeadline(user),
+				earliestDeadline(
+					authorization.subjectContextExpiresAt,
+					previewRecord?.expires_at ?? undefined,
+				),
+			);
 	const existingEditorClaim = mode === 'edit' ? await sessions.getEditorClaim(pid, nid) : undefined;
 	const sharing = isPreview
 		? 'exclusive'
@@ -1653,7 +1695,15 @@ async function startNotebookSessionOnce(
 		: notebook.source.current_version_id;
 	const unsyncedSource = !workspacePolicy.persistSessionEdits && !syncedVersionId;
 	const grants = (session: SessionAdmissionRecord) =>
-		sessionGrantsFor(project, user, session, deps, notebook.meta.security_labels ?? null);
+		publicAccess
+			? Promise.resolve({
+					role: 'app-user' as const,
+					appReadOnly: true,
+					attach: true,
+					stop: false,
+					surface: false,
+				})
+			: sessionGrantsFor(project, user, session, deps, notebook.meta.security_labels ?? null);
 	const surfaceGrantRead = grants({
 		mode,
 		ephemeral,
@@ -1799,8 +1849,14 @@ async function startNotebookSessionOnce(
 	const appPool = new AppPoolService(
 		deps.bucket,
 		sessions,
-		isPreview ? previewAppPoolPolicy(deps.policy.appPool) : deps.policy.appPool,
+		publicAccess
+			? publicAccess.config.poolPolicy
+			: isPreview
+				? previewAppPoolPolicy(deps.policy.appPool)
+				: deps.policy.appPool,
 		deps.metrics,
+		undefined,
+		publicPoolNamespace,
 	);
 	if (mode === 'app' && !sourceVersionId)
 		throw new ConflictError('The app has no committed version');
@@ -1816,17 +1872,18 @@ async function startNotebookSessionOnce(
 	const admissionInput = {
 		projectId: pid,
 		notebookId: nid,
-		userId: user.id,
+		userId: poolActorId,
 		versionId: sourceVersionId!,
 		// The startup timeout bounds only the kernel-port wait, not cold boot, image pull,
 		// or workspace restore, and nothing renews this reservation while a start runs.
 		startupMs: Math.max((sandbox.startupTimeoutMs ?? 0) + 30_000, 900_000),
 		readSession: true,
 	};
+	const visitIdForAdmit = publicAccess ? publicAccess.visitId : body?.app_visit_id;
 	const admitApp = () =>
 		body?.replace_app_session_id
 			? appPool.replace({ ...admissionInput, replacesSessionId: body.replace_app_session_id })
-			: appPool.admit({ ...admissionInput, visitId: body?.app_visit_id });
+			: appPool.admit({ ...admissionInput, visitId: visitIdForAdmit });
 	const pace = deps.sleep;
 	const admitWithRetry = async () => {
 		for (let attempt = 0; ; attempt++) {
@@ -1843,7 +1900,7 @@ async function startNotebookSessionOnce(
 	};
 	const admission = mode === 'app' ? await admitWithRetry() : undefined;
 	const appAssignment = admission?.assignment
-		? { visit_id: body?.app_visit_id ?? 'api', generation: admission.assignment.generation }
+		? { visit_id: visitIdForAdmit ?? 'api', generation: admission.assignment.generation }
 		: undefined;
 	const reusableApp = async () => {
 		if (admission?.kind !== 'reuse') return;
@@ -1893,8 +1950,8 @@ async function startNotebookSessionOnce(
 			(mode === 'edit' &&
 				(reusable.restricted_viewer_credentials === true) !== restrictedViewerCredentials);
 		// Reuse does not grant control: a failed probe must not let a viewer
-		// tear down another caller's app.
-		const mayRetire = reusableGrants.stop;
+		// tear down another caller's app. Public app starts may replace dead public kernels.
+		const mayRetire = reusableGrants.stop || Boolean(publicAccess);
 		// Only a `running` reconnect can hit a dead kernel; a `starting` reuse has no
 		// kernel yet. Probe what the browser would hit (origin in proxy mode, else url).
 		const kernelUrl =
@@ -2011,6 +2068,7 @@ async function startNotebookSessionOnce(
 		!replacingAfterTakeover;
 	const deferBootForAdmission =
 		atomicEditorAdmission ||
+		Boolean(publicAccess) ||
 		capsFor(deps, mode, pid, user.id).some(
 			({ max, preflight }) => !preflight && max !== undefined && max > 0,
 		);
@@ -2136,9 +2194,12 @@ async function startNotebookSessionOnce(
 				projectId: pid,
 				project,
 				workload: sessionWorkload,
-				principal: { userId: user.id, email: user.email },
-				restricted: restrictedViewerCredentials,
-				federatedCredentials,
+				principal: { userId: sessionOwnerId, email: publicAccess ? '' : user.email },
+				restricted: publicAccess
+					? !publicAccess.allowProjectIntegrations
+					: restrictedViewerCredentials,
+				scope: publicAccess ? 'project-only' : 'all',
+				federatedCredentials: publicAccess ? undefined : federatedCredentials,
 				onRendered: (render) => {
 					observer.tag('integrations_rendered_count', render.attachments.length);
 					if (render.warnings.length > 0) {
@@ -2212,7 +2273,7 @@ async function startNotebookSessionOnce(
 			onSandboxDestroyed: recordSandboxCleanup,
 			sandboxId,
 			projectId: pid,
-			userId: user.id,
+			userId: sessionOwnerId,
 			notebookId: nid,
 			hostname,
 			notebook: { projectId: pid, notebookId: nid, title: notebook.meta.title },
@@ -2233,9 +2294,11 @@ async function startNotebookSessionOnce(
 			image,
 			resources: requestedComputeProfile.resources,
 			userHome,
-			sessionIdleTimeoutMs: isPreview
-				? (previewIdleTimeout(sandbox.sessionLifetime?.idleTimeoutMsByMode[mode]) as Millis)
-				: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
+			sessionIdleTimeoutMs: publicAccess
+				? publicAccess.config.idleTimeoutMs
+				: isPreview
+					? (previewIdleTimeout(sandbox.sessionLifetime?.idleTimeoutMsByMode[mode]) as Millis)
+					: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
 			sessionEnv: envResolution!.sessionEnv,
 			gitIdentity: envResolution!.gitIdentity,
 			entryNotebook: workspacePolicy.entryNotebook,
@@ -2318,10 +2381,18 @@ async function startNotebookSessionOnce(
 				await deps.services.previews.reserveAdmission(reaped, nid, sessionId, PREVIEW_MAX_SESSIONS);
 			})
 			.step('capacity', async () => {
-				await enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id);
+				if (publicAccess) {
+					const activePublic = await sessions.listActivePublicApps();
+					if (activePublic.length >= publicAccess.config.maxConcurrentSessions) {
+						throw new ResourceExhaustedError('Public app capacity reached');
+					}
+				} else {
+					await enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id);
+				}
 				envResolution = startEnvResolution();
 			})
 			.step('warm_sandbox', async () => {
+				if (publicAccess) return;
 				warmClaim = await deps.warmPool?.reserve({
 					profile: requestedComputeProfile.name,
 					resources: requestedComputeProfile.resources,
@@ -2361,7 +2432,7 @@ async function startNotebookSessionOnce(
 							notebook_id: nid,
 							origin,
 							project_id: pid,
-							user_id: user.id,
+							user_id: sessionOwnerId,
 							sandbox_id: sandboxId,
 							kernel_auth_token: kernelAuthToken,
 							compute_profile: appliedComputeProfile.name,
@@ -2369,8 +2440,20 @@ async function startNotebookSessionOnce(
 							compute_from_snapshot: restoreFilesystemSnapshot !== undefined,
 							ephemeral,
 							restricted_viewer_credentials: restrictedViewerCredentials,
-							idle_timeout_ms: isPreview ? PREVIEW_IDLE_MS : undefined,
+							idle_timeout_ms: publicAccess
+								? publicAccess.config.idleTimeoutMs
+								: isPreview
+									? PREVIEW_IDLE_MS
+									: undefined,
 							mode,
+							...(publicAccess
+								? {
+										audience: 'public' as const,
+										...(publicAccess.allowProjectIntegrations
+											? { allow_project_integrations: true }
+											: {}),
+									}
+								: {}),
 							source_version_id: sourceVersionId,
 							editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
 							authorization_expires_at: earliestDeadline(
@@ -2438,8 +2521,18 @@ async function startNotebookSessionOnce(
 						cap: () =>
 							atomicEditorAdmission
 								? Promise.resolve()
-								: timed('cap_recheck', () =>
-										assertCapAfterCreate(
+								: timed('cap_recheck', async () => {
+										if (publicAccess) {
+											const activePublic = await sessions.listActivePublicApps();
+											assertAdmissionRank(
+												activePublic,
+												sessionId,
+												publicAccess.config.maxConcurrentSessions,
+												'Public app capacity reached',
+											);
+											return;
+										}
+										await assertCapAfterCreate(
 											deps,
 											mode,
 											pid,
@@ -2447,8 +2540,8 @@ async function startNotebookSessionOnce(
 											sessionId,
 											temporaryToRetire?.session_id,
 											(source) => observer.tag('cap_source', source),
-										),
-									),
+										);
+									}),
 						preview: () =>
 							timed('preview_admission_commit', async () => {
 								if (previewRecord)
@@ -2519,6 +2612,7 @@ async function startNotebookSessionOnce(
 							sandboxId,
 							kernelAuthToken,
 							appBaseUrl,
+							audience: publicAccess ? ('public' as const) : ('authenticated' as const),
 						};
 						const replaceWarmSandbox = async (reason: string) => {
 							const expired = warmClaim!;
@@ -2698,6 +2792,27 @@ async function startNotebookSessionOnce(
 				if (!rechecks.project || rechecks.project.status === 'deleted') {
 					throw new NotFoundError(`Project ${pid} not found`);
 				}
+				if (publicAccess) {
+					if (
+						rechecks.project.security_labels !== undefined ||
+						rechecks.notebook.security_labels !== undefined
+					) {
+						throw new NotFoundError('App link not found');
+					}
+					const liveLink = await deps.services.deepLinks.resolvePublic(publicAccess.slug);
+					if (
+						!isPublicDeepLink(liveLink) ||
+						liveLink.registration_id !== publicAccess.registrationId ||
+						liveLink.access.grant_id !== publicAccess.grantId ||
+						Boolean(liveLink.access.allow_project_integrations) !==
+							publicAccess.allowProjectIntegrations ||
+						liveLink.target.project_id !== pid ||
+						liveLink.target.notebook_id !== nid
+					) {
+						throw new NotFoundError('App link not found');
+					}
+					return;
+				}
 				const currentAuthorization = await authorizeSessionStart(
 					rechecks.project,
 					user,
@@ -2795,7 +2910,7 @@ async function startNotebookSessionOnce(
 			const failed = await sessions
 				.markFailedWithOutcome(pid, session.session_id, safeError, finalProgress)
 				.catch(() => null);
-			if (MODE_POLICY[mode].sharedApp && failed?.transitioned) {
+			if (MODE_POLICY[mode].sharedApp && !publicAccess && failed?.transitioned) {
 				scheduleProjectAlert(
 					deps,
 					pid,

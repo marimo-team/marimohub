@@ -127,6 +127,10 @@ app.openapi(capabilitiesRoute, (c) => {
 			default_enabled: deps.wif?.defaultEnabled ?? false,
 		},
 		integrations: { available: Boolean(deps.integrations) },
+		public_app_links: {
+			available: Boolean(deps.publicApps),
+			allow_project_integrations: Boolean(deps.publicApps?.allowProjectIntegrations),
+		},
 		source_control: {
 			...(deps.githubAccounts
 				? {

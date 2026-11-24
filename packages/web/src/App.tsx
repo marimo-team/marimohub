@@ -5,7 +5,7 @@ import { SEARCH_ROUTE, PROJECT_SEARCH_ROUTE } from '@/lib/workspaceSearch';
 import { useWorkspaceSearchShortcut } from '@/hooks/useWorkspaceSearchShortcut';
 import { Suspense } from 'react';
 import { lazyRoute } from '@/lib/lazyRoute';
-import { BrowserRouter, Routes, Route, Navigate, matchRoutes } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, matchRoutes, useLocation } from 'react-router-dom';
 import { QueryErrorResetBoundary } from '@tanstack/react-query';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
@@ -20,6 +20,11 @@ import { Toaster } from '@/components/ui/sonner';
 import { ApiRequestError } from '@/api/client';
 import { appBasePath, withBasePath } from '@/lib/basePath';
 import { RetainedEditorRoute } from '@/components/NotebookPage/RetainedEditorRoute';
+
+const PublicAppLinkPage = lazyRoute(async () => {
+	const module = await import('@/components/Apps/PublicAppPage');
+	return { default: module.PublicAppLinkPage };
+});
 
 const GitHubAccountPage = lazyRoute(async () => {
 	const module = await import('@/components/Account/GitHubAccountPage');
@@ -145,6 +150,8 @@ function NotFoundPage() {
 
 function AuthGate({ children }: { children: React.ReactNode }) {
 	const { isPending, error, user, signIn, refetchUser } = useAuth();
+	const location = useLocation();
+	const isAppLinkRoute = Boolean(matchRoutes([{ path: '/app/*' }], location.pathname));
 
 	if (isPending) {
 		return (
@@ -156,10 +163,16 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 	}
 
 	if (!user) {
-		// Not signed in (401 from /api/v1/me) → show the sign-in screen. Any other
-		// failure (network, 5xx, forbidden) shows an error with retry + sign-in.
+		// Not signed in (401 from /api/v1/me) → allow `/app/*` to try public resolution before SignIn.
 		const isUnauthorized = error instanceof ApiRequestError && error.code === 'UNAUTHORIZED';
 		if (!error || isUnauthorized) {
+			if (isAppLinkRoute) {
+				return (
+					<Suspense fallback={<PageFallback />}>
+						<PublicAppLinkPage />
+					</Suspense>
+				);
+			}
 			return <SignIn />;
 		}
 

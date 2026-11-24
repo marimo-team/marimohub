@@ -1,13 +1,34 @@
 import { Suspense } from 'react';
 import { useParams } from 'react-router-dom';
 import { useDeepLinkQuery } from '@/api/deepLinks';
+import { useCapabilitiesQuery } from '@/api/hooks';
+import { usePublicAppQuery } from '@/api/publicApps';
 import { isNotFoundError } from '@/api/request';
 import { Button } from '@/components/ui/Button';
 import { AppEntryPage } from '@/components/Apps/AppEntryPage';
+import { PublicAppPage } from '@/components/Apps/PublicAppPage';
 
 export function AppLinkPage() {
 	const { '*': slug = '' } = useParams<'*'>();
 	const query = useDeepLinkQuery(slug);
+	const notFound = query.isError && isNotFoundError(query.error);
+	// Subscribe to prefetched capabilities without issuing an extra request when unset.
+	const capabilities = useCapabilitiesQuery(false);
+	const publicLinksAvailable = capabilities.data?.public_app_links?.available === true;
+	const waitingForCapabilities =
+		notFound && !capabilities.data && capabilities.fetchStatus === 'fetching';
+	// Signed-in non-members fall back to the public app view when public links are enabled.
+	const publicFallback = usePublicAppQuery(slug, notFound && publicLinksAvailable);
+
+	if (notFound) {
+		if (waitingForCapabilities || (publicLinksAvailable && publicFallback.isPending)) {
+			return <OpeningApp />;
+		}
+		if (publicFallback.data) {
+			return <PublicAppPage app={publicFallback.data} isSignedIn />;
+		}
+	}
+
 	if (query.isError) {
 		return (
 			<div className="flex min-h-dvh flex-col items-center justify-center gap-3 p-6" role="alert">

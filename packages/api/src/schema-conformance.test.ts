@@ -197,6 +197,8 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 			'last_capture_attempt_at',
 			'idle_timeout_ms',
 			'restricted_viewer_credentials',
+			'audience',
+			'allow_project_integrations',
 			'app_pool',
 			'runtime',
 			'sandbox_id',

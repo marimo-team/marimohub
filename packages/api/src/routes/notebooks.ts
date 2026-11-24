@@ -56,6 +56,7 @@ import {
 	ImportNotebookBody,
 	ProjectIdParam,
 	resolvePublicBaseUrl,
+	retirePublicApps,
 	RuntimeResponseSchema,
 	NotebookVersionResponseSchema,
 	SnapshotNotebookEntrySchema,
@@ -1648,6 +1649,10 @@ async function mutateNotebookSecurityLabels(
 		user.id,
 		ifMatchToken(c) ?? existing.meta.updated_at,
 	);
+	if (labels !== undefined) {
+		await deps.services.deepLinks.downgradeNotebookPublicLinks(pid, nid);
+		await retirePublicApps(deps, pid, nid);
+	}
 	c.header('ETag', etagFor(meta.updated_at));
 	return c.json({ success: true, data: toPublicNotebookMeta(meta) }, 200);
 }
