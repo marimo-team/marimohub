@@ -84,5 +84,9 @@ The `project-run-index-v1` migration scans at most 500 project objects per batch
 `MigrationService` checkpoints progress and retries failed batches. `JobRunService` writes the index.
 Backfill neither infers tags nor rewrites runs.
 
-Retention removes the project locator with the run.
+Retention removes the project locator with the run. Bounded pruning retries locator cleanup
+when a previous attempt removed the run but failed to remove its indexes.
+Job and notebook deletion currently leave project locators behind; these produce sparse
+history pages and consume storage until the project is deleted. A project-level garbage
+collector is needed to remove these locators and delayed publications.
 A delayed locator cannot expose a missing run.

@@ -1,5 +1,6 @@
 import { PostgresMetadataStore } from './index';
 import { randomUUID } from 'node:crypto';
+import { createNotebookId, createJobId, createRunId, createProjectId } from '@marimo-hub/core/ids';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
@@ -338,6 +339,13 @@ describe.skipIf(!url)('offline metadata transfer', () => {
 	});
 	it('exports new SQL writes and deletions while retaining artifact bytes', async () => {
 		const { bucket, namespace, transfer } = fixture();
+		const locator = {
+			notebook_id: createNotebookId(),
+			job_id: createJobId(),
+			run_id: createRunId(),
+		};
+		const locatorKey = `projects/${createProjectId()}/run-index/00000000000000000000000000.json`;
+		await bucket.put(locatorKey, JSON.stringify(locator));
 		await bucket.put(key, '{"after":"old"}');
 		await bucket.put('_system/source-control-account-cleanup.json', '{}');
 		const artifact = 'projects/p/notebooks/n/workspace/keep.json';
@@ -356,6 +364,8 @@ describe.skipIf(!url)('offline metadata transfer', () => {
 		});
 		try {
 			await store.ready();
+			expect(await (await store.get(locatorKey))!.json()).toEqual(locator);
+			await bucket.delete(locatorKey);
 			await store.put(key, '{"after":"new"}', { customMetadata: { source: 'sql' } });
 			await store.delete('_system/source-control-account-cleanup.json');
 			await store.put('_system/working-branches/cleanup.json', '{"cursor":"new"}');
@@ -388,6 +398,7 @@ describe.skipIf(!url)('offline metadata transfer', () => {
 			expect(await bucket.get('_system/source-control-account-cleanup.json')).toBeNull();
 			expect(await bucket.get('_system/working-branches/cleanup.json')).not.toBeNull();
 			expect((await bucket.head(artifact))!.etag).toBe(artifactEtag);
+			expect(await (await bucket.get(locatorKey))!.json()).toEqual(locator);
 			expect(await readMetadataBackendMarker(bucket)).toMatchObject({
 				backend: 'bucket',
 				epoch: 3,

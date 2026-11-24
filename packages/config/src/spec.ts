@@ -347,7 +347,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		selector: 'MARIMOHUB_STORAGE_BACKEND',
 		selectorDefault: 's3',
 		description:
-			'Stores all notebooks and state. Durable self-hosted backends are `s3`, `gcs`, `azure`, and single-node `fs`. `library` loads an external Node adapter. `r2` is Workers-only. `memory` is for development and tests.',
+			'Stores notebook artifacts and, by default, metadata. See [Metadata storage](#metadata-storage) for the PostgreSQL option. Durable self-hosted backends are `s3`, `gcs`, `azure`, and single-node `fs`. `library` loads an external Node adapter. `r2` is Workers-only. `memory` is for development and tests.',
 		backends: [
 			{
 				name: 'S3 / S3-compatible',

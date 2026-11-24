@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createServices } from '../services';
-import { SYSTEM_ACTOR, createProposalId, createSessionId, createVersionId } from '../ids';
+import {
+	SYSTEM_ACTOR,
+	createProposalId,
+	createSessionId,
+	createVersionId,
+	createRunId,
+} from '../ids';
 import { workspaceManifest } from '../services/content/workspaceManifest';
 import { proposalSha256 } from '../services/content/proposalUtils';
 import { paths } from '../paths';
@@ -31,6 +37,27 @@ describe('offline metadata validation', () => {
 				await validateMetadataRecord((await bucket.get(object.key))!);
 		}
 		await auditMetadataReferences(bucket);
+	});
+	it('audits project run locators and empty job indexes produced by completed runs', async () => {
+		const { bucket, services, project, notebook } = await fixture();
+		const job = await services.jobs.createJob(
+			project.id,
+			notebook.id,
+			{ name: 'job' },
+			SYSTEM_ACTOR,
+		);
+		const run = await services.jobRuns.enqueue({
+			job,
+			runId: createRunId(),
+			trigger: 'manual',
+			triggeredBy: SYSTEM_ACTOR,
+			timeoutSeconds: 60,
+		});
+		await services.jobRuns.cancel(run, SYSTEM_ACTOR);
+		await auditMetadataReferences(bucket);
+		const locator = paths.project(project.id).runIndex(run.run_id);
+		await bucket.put(locator, '');
+		await expect(auditMetadataReferences(bucket)).rejects.toThrow('Invalid metadata record');
 	});
 	it('blocks missing published artifacts and leaves the source untouched', async () => {
 		const { bucket, project, notebook } = await fixture();

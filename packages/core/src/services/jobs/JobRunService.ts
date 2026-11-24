@@ -911,7 +911,14 @@ export class JobRunService {
 			`run_${encodeTime(Math.max(0, Math.ceil(cutoff)), 10)}${'0'.repeat(16)}`,
 		);
 		if (Number.isFinite(maxRecords))
-			return this.pruneJobBatch(jobPaths, cutoff, cutoffRunId, maxRecords, deadline);
+			return this.pruneJobBatch(
+				job.project_id,
+				jobPaths,
+				cutoff,
+				cutoffRunId,
+				maxRecords,
+				deadline,
+			);
 		let pruned = 0;
 		for await (const run of this.iterateRuns(
 			job.project_id,
@@ -938,6 +945,7 @@ export class JobRunService {
 	}
 
 	private async pruneJobBatch(
+		projectId: ProjectId,
 		jobPaths: JobPaths,
 		cutoff: number,
 		cutoffRunId: RunId,
@@ -961,7 +969,12 @@ export class JobRunService {
 				const key = jobPaths.run(id).record;
 				try {
 					const object = await this.bucket.get(key);
-					if (!object) continue;
+					if (!object) {
+						if (await this.bucket.head(paths.jobRunMarker(projectId, id))) continue;
+						await this.bucket.delete(paths.project(projectId).runIndex(id));
+						await this.bucket.delete(item.key);
+						continue;
+					}
 					const run = await readStoredJobRun(object, key);
 					if (await this.pruneRun(run, cutoff, jobPaths, item.key)) pruned++;
 				} catch (error) {
@@ -1021,7 +1034,9 @@ export class JobRunService {
 			return false;
 		if (await this.bucket.head(paths.jobRunMarker(run.project_id, run.run_id))) return false;
 		await deleteByPrefix(this.bucket, jobPaths.run(run.run_id).base);
-		await this.bucket.delete([indexKey, paths.project(run.project_id).runIndex(run.run_id)]);
+		// Keep the job index until project cleanup succeeds so bounded pruning can retry.
+		await this.bucket.delete(paths.project(run.project_id).runIndex(run.run_id));
+		await this.bucket.delete(indexKey);
 		return true;
 	}
 
@@ -1031,6 +1046,7 @@ export class JobRunService {
 			.notebook(marker.notebook_id)
 			.job(marker.job_id)
 			.runIndex(marker.run_id);
+		await this.bucket.delete(paths.project(marker.project_id).runIndex(marker.run_id));
 		await this.bucket.delete(index);
 		await this.deleteMarker(marker);
 	}

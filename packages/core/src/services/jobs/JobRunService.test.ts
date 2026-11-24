@@ -457,6 +457,36 @@ describe('JobRunService', () => {
 		expect(await env.bucket.head(jobPaths.occurrence('20260902T0600Z'))).not.toBeNull();
 	});
 
+	it('retries locator cleanup after deleting the run payload', async () => {
+		const now = Date.now();
+		const run = await finalizedRun(now - 10_000);
+		const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+		const projectIndex = paths.project(pid).runIndex(run.run_id);
+		const remove = env.bucket.delete.bind(env.bucket);
+		const fault = vi.spyOn(env.bucket, 'delete').mockImplementation((keys) => {
+			if ([keys].flat().includes(projectIndex)) throw new Error('index unavailable');
+			return remove(keys);
+		});
+		await runs.pruneJob(job, 1000, now, 1000, 1);
+		expect(await env.bucket.head(jobPaths.run(run.run_id).record)).toBeNull();
+		expect(await env.bucket.head(jobPaths.runIndex(run.run_id))).not.toBeNull();
+		expect(await env.bucket.head(projectIndex)).not.toBeNull();
+		fault.mockRestore();
+		await new JobRunService(env.bucket).pruneJob(job, 1000, now, 1000, 1);
+		expect(await env.bucket.head(projectIndex)).toBeNull();
+		expect(await env.bucket.head(jobPaths.runIndex(run.run_id))).toBeNull();
+	});
+
+	it('keeps history indexes while a missing run still has an enqueue marker', async () => {
+		const now = Date.now();
+		const run = await enqueue({ runId: runIdAt(now - 10_000) });
+		const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+		await env.bucket.delete(jobPaths.run(run.run_id).record);
+		await runs.pruneJob(job, 1000, now, 1000, 1);
+		expect(await env.bucket.head(jobPaths.runIndex(run.run_id))).not.toBeNull();
+		expect(await env.bucket.head(paths.project(pid).runIndex(run.run_id))).not.toBeNull();
+	});
+
 	it('bounds inspection and resumes past retained runs and fresh occurrence claims', async () => {
 		const now = Date.now();
 		await finalizedRun(now - 10_000, now);
@@ -664,7 +694,7 @@ describe('JobRunService', () => {
 		expect(get).toHaveBeenCalledTimes(10);
 		expect(head).toHaveBeenCalledTimes(10);
 		expect(list).toHaveBeenCalledTimes(12);
-		expect(remove).toHaveBeenCalledTimes(20);
+		expect(remove).toHaveBeenCalledTimes(30);
 		expect(put).not.toHaveBeenCalled();
 		expect(await runs.listRuns(pid, nid, job.id)).toHaveLength(1000);
 	});
@@ -865,6 +895,7 @@ describe('JobRunService', () => {
 			expect(await env.bucket.head(failedIndex)).not.toBeNull();
 			expect(await env.bucket.head(paths.jobRunMarker(pid, stale[1].run_id))).toBeNull();
 			expect(await env.bucket.head(jobPaths.runIndex(stale[1].run_id))).toBeNull();
+			expect(await env.bucket.head(paths.project(pid).runIndex(stale[1].run_id))).toBeNull();
 			expect(
 				error.mock.calls.some(([line]) => String(line).includes('job_run_marker_prune_failed')),
 			).toBe(true);
