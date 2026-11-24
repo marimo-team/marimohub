@@ -137,6 +137,8 @@ export const jobKeys = {
 		[...jobKeys.all, 'run-html', { projectId, notebookId, jobId, runId }] as const,
 	runLogs: (projectId: string, notebookId: string, jobId: string, runId: string) =>
 		[...jobKeys.all, 'run-logs', { projectId, notebookId, jobId, runId }] as const,
+	runFollow: (projectId: string, notebookId: string, jobId: string, runId: string) =>
+		[...jobKeys.all, 'run-follow', { projectId, notebookId, jobId, runId }] as const,
 };
 
 export const previewKeys = {

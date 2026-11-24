@@ -11,10 +11,12 @@ import {
 	ForbiddenError,
 	NotFoundError,
 	RunId,
+	RunNotFollowableError,
 	toPublicJobDefinition,
 	toPublicJobRun,
 } from '@marimo-hub/core';
 import { appendJobRunFinishEvent, isTerminalRunStatus } from '@marimo-hub/core/jobs';
+import { utcTimestamp } from '@marimo-hub/core/string-formats';
 import type { JobRun } from '@marimo-hub/core';
 import type { HonoEnv } from '../context';
 import {
@@ -33,10 +35,12 @@ import {
 	authorizeJobNotebook,
 	listNotebookJobs,
 	loadJobRun,
+	loadReadableRun,
 	createNotebookJob,
 	updateNotebookJob,
 	triggerJobRun,
 } from '../jobs/operations';
+import { runFollowView } from '../jobs/follow';
 import { idempotentCreate } from '../idempotency';
 import { appendAudit, describeError, logEvent } from '../log';
 import { pageSchema, PaginationQuery } from '../pagination';
@@ -264,6 +268,37 @@ const getRunHtml = createRoute({
 		},
 		...commonErrors(),
 		...errorResponses(404),
+	},
+});
+
+const followRun = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/follow',
+	operationId: 'jobs.runs.follow',
+	// A browser view: the response is a page with an embedded credential.
+	'x-cli-hidden': true,
+	tags: ['Jobs'],
+	summary: 'Open a live view of a running run',
+	description:
+		'Returns an HTML page that renders a `live` run while it is `running`, for callers who can read the run output. The page embeds a short-lived credential: show it in a sandboxed frame, never as a document on this origin. Otherwise 409 with code `RUN_NOT_FOLLOWABLE`, also in the first seconds of a live run; retry while it is running.',
+	request: { params: RunIdParam },
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: z
+					.object({
+						html: z.string().openapi({ description: 'The live view document.' }),
+						expires_at: utcTimestamp().openapi({
+							description: 'When the embedded credential expires. Request a new view before then.',
+						}),
+					})
+					.openapi('JobRunFollowView'),
+			}),
+			'Live view',
+		),
+		...commonErrors(),
+		...errorResponses(404, 409),
 	},
 });
 
@@ -532,11 +567,7 @@ app.openapi(cancelRun, async (c) => {
 app.openapi(getRunHtml, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid, jid, rid } = c.req.valid('param');
-	const target = await loadAuthorizedJob(c.get('deps'), c.get('user'), pid, nid, jid);
-	const { job } = target;
-	const run = await loadJobRun(deps, job, rid);
-	if (!(await getJobCapabilities(deps, target, job, run)).canReadHtml)
-		throw new NotFoundError('Run output not found');
+	const { run } = await loadReadableRun(deps, c.get('user'), pid, nid, jid, rid);
 	const html = await deps.services.jobRuns.readHtml(run);
 	if (html === null) return fail(c, 'NO_RUN_OUTPUT', 'This run captured no output', 404);
 	rawOutputHeaders(c, run);
@@ -544,6 +575,16 @@ app.openapi(getRunHtml, async (c) => {
 	// same-origin with the app — the same containment as the version snapshots.
 	c.header('Content-Security-Policy', 'sandbox allow-scripts');
 	return c.html(html, 200);
+});
+
+app.openapi(followRun, async (c) => {
+	const deps = c.get('deps');
+	const { pid, nid, jid, rid } = c.req.valid('param');
+	const { run } = await loadReadableRun(deps, c.get('user'), pid, nid, jid, rid);
+	const view = await runFollowView(deps, c.get('user'), run, c.req.raw);
+	if (!view) throw new RunNotFollowableError();
+	c.header('Cache-Control', 'private, no-store');
+	return c.json({ success: true, data: view }, 200);
 });
 
 // Registered for the OpenAPI document but served by a plain handler: a raw

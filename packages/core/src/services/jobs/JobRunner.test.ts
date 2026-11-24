@@ -320,6 +320,72 @@ describe('JobRunner', () => {
 		expect(sandbox.calls.destroy).toBe(1);
 	});
 
+	it('runs under the live runner and records how to reattach when live runs are enabled', async () => {
+		const sandbox = makeJobSandbox({ exitCode: 1, html: '<html>partial</html>' });
+		Object.defineProperty(sandbox.instance, 'reconnectReference', { value: 'ref-1' });
+		let running: JobRun | undefined;
+		const exec = sandbox.instance.exec.bind(sandbox.instance);
+		sandbox.instance.exec = async (cmd, options) => {
+			if (cmd.includes('__MARIMOHUB_JOB_EXIT__')) {
+				running = await env.jobRuns.getRun(pid, nid, queued.job_id, queued.run_id);
+			}
+			return exec(cmd, options);
+		};
+		const queued = await enqueue({ parameters: { day: 'monday' } });
+
+		const run = await runner(sandbox, {
+			liveRuns: true,
+			sandbox: {
+				bucket: { name: 'b', endpoint: 'https://s3' },
+				workdir: WORKDIR,
+				assetUrl: 'https://hub.example/_marimo/{version}',
+			},
+		}).execute(queued);
+
+		expect(running).toMatchObject({
+			status: 'running',
+			live: { workdir: WORKDIR },
+			reconnect_reference: 'ref-1',
+		});
+		const command = sandbox.jobCommands[0];
+		expect(command).toContain('uv run --no-sync python -c ');
+		expect(command).toContain('marimo_state_dir');
+		expect(command).toContain("-o '__marimo__/job_output.html' --asset-url");
+		expect(command).toContain("--asset-url 'https://hub.example/_marimo/{version}' -- --day");
+		expect(command).not.toContain('marimo export html');
+		expect(run).toMatchObject({
+			status: 'failed',
+			exit_code: 1,
+			live: { workdir: WORKDIR },
+			error: { code: 'NOTEBOOK_FAILED' },
+			output: { html_bytes: 20 },
+		});
+	});
+
+	it('keeps the export when the provider cannot reattach to a sandbox', async () => {
+		const sandbox = makeJobSandbox({ html: '<html/>' });
+		const compute = fakeComputeFrom(sandbox.instance);
+		delete compute.connectExisting;
+
+		const run = await runner(sandbox, { liveRuns: true, compute }).execute(await enqueue());
+
+		expect(run.status).toBe('succeeded');
+		expect(run.live).toBeUndefined();
+		expect(sandbox.jobCommands[0]).toContain('marimo export html');
+	});
+
+	it('leaves a run unmarked when live runs are disabled', async () => {
+		const sandbox = makeJobSandbox({ html: '<html/>' });
+		Object.defineProperty(sandbox.instance, 'reconnectReference', { value: 'ref-1' });
+
+		const run = await runner(sandbox).execute(await enqueue());
+
+		expect(run.status).toBe('succeeded');
+		expect(run.live).toBeUndefined();
+		expect(run.reconnect_reference).toBeUndefined();
+		expect(sandbox.jobCommands[0]).toContain('marimo export html');
+	});
+
 	it('marks a timeout exit as timed_out', async () => {
 		const sandbox = makeJobSandbox({ exitCode: 124, timedOut: true });
 		const run = await runner(sandbox).execute(await enqueue());
@@ -986,7 +1052,7 @@ describe('classifyExport', () => {
 			classifyExport({ result: failed(), exitCode: undefined, hasHtml: false, timeoutSeconds: 60 }),
 		).toEqual({
 			event: 'fail',
-			error: { code: 'RUN_FAILED', message: 'The export command failed (COMMAND_FAILED)' },
+			error: { code: 'RUN_FAILED', message: 'The run command failed (COMMAND_FAILED)' },
 		});
 		expect(
 			classifyExport({ result: ok, exitCode: undefined, hasHtml: true, timeoutSeconds: 60 }).error

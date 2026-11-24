@@ -353,6 +353,8 @@ export interface ProvisionOptions {
 	 * workspace would let notebook code write through to the bucket.
 	 */
 	launchMode?: MarimoLaunchMode;
+	/** Job mode: runner source executed in place of `marimo export html`. */
+	jobRunner?: string;
 	/** How to load the cached workspace into the sandbox. Defaults to mount-or-copy. */
 	workspaceLoadMode?: WorkspaceLoadMode;
 	/**
@@ -1768,6 +1770,7 @@ export class SandboxProvisioner {
 					port: MARIMO_PORT,
 					host: '0.0.0.0',
 					mode: options.launchMode,
+					jobRunner: options.jobRunner,
 					assetUrl: options.assetUrl,
 					baseUrl: options.baseUrl,
 					cookiePartitioned: options.cookiePartitioned && publicUrl?.protocol === 'https:',

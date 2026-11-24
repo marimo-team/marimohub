@@ -349,7 +349,10 @@ See [Changes and removal](./integrations.md#changes-and-removal) for cleanup beh
   ([federated credentials endpoint](workload-identity-federation.md#refreshable-credentials))
   skip the cookie and CSRF chain and authenticate by bearer token alone.
   Notebook sandboxes call the managed AI and federated credentials routes on the
-  app origin.
+  app origin. `/api/run-follow/v1` ([following a job run](jobs.md#follow-a-run-while-it-executes))
+  also authenticates by bearer token alone. Its encrypted token gives one user
+  read access to one run's event stream. The route accepts any origin, because
+  the caller is a sandboxed frame.
 - **Security headers** (anti-clickjacking, nosniff, HSTS, referrer policy) wrap
   the SPA/static responses.
 - **SPA Content Security Policy:** the Node server sends a report-only policy.

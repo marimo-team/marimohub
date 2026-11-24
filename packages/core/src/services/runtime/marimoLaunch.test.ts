@@ -219,6 +219,44 @@ describe('buildMarimoLaunch', () => {
 		expect(start).not.toContain('--no-token');
 	});
 
+	it('job runs a supplied runner in the notebook environment instead of exporting', () => {
+		const plain = buildMarimoLaunch({
+			...BASE,
+			assetUrl: undefined,
+			mode: 'job',
+			jobRunner: "print('run')",
+		});
+		expect(plain.start).toBe(
+			`uv run --no-sync python -c 'print('\\''run'\\'')' 'notebook.py' -o '__marimo__/job_output.html'`,
+		);
+		expect(plain.setup.at(-1)?.name).toBe('job_output_dir');
+
+		const layered = buildMarimoLaunch({
+			...BASE,
+			mode: 'job',
+			jobRunner: 'pass',
+			outputFile: 'out/run.html',
+			runtimePackages: ['duckdb==1.4.0'],
+			loggingDirectory: '/opt/logging',
+			assetUrl: 'https://cdn.example/{version}',
+		});
+		expect(layered.start).toContain("--with 'duckdb==1.4.0'");
+		expect(layered.start).toContain("env PYTHONPATH='/opt/logging'");
+		expect(layered.start).toContain(
+			"python -c 'pass' 'notebook.py' -o 'out/run.html' --asset-url 'https://cdn.example/{version}'",
+		);
+		expect(layered.start).not.toContain('marimo export');
+	});
+
+	it('ignores a job runner outside job mode and under marimo --sandbox', () => {
+		expect(buildMarimoLaunch({ ...BASE, mode: 'edit', jobRunner: 'pass' }).start).toContain(
+			'marimo --quiet edit',
+		);
+		expect(
+			buildMarimoLaunch({ ...BASE, mode: 'job', jobRunner: 'pass' }, 'uv-sandbox').start,
+		).toContain('export html --sandbox');
+	});
+
 	it('job does not establish a session-artifact contract for custom entries', () => {
 		const { setup, start } = buildMarimoLaunch({
 			...BASE,

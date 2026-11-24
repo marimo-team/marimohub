@@ -2213,6 +2213,52 @@ export function useJobRunLogsQuery(
 	});
 }
 
+const RUN_FOLLOW_RETRY_MS = 2000;
+/** Replace the view this long before its credential expires. */
+const RUN_FOLLOW_RENEW_MARGIN_MS = 60_000;
+
+/**
+ * The live view of a run that is executing, or null while its notebook server is not
+ * answering yet. The view embeds a short-lived credential, so it is never reused from cache.
+ */
+export function useJobRunFollowQuery(
+	projectId: string,
+	notebookId: string,
+	jobId: string,
+	runId: string,
+	enabled: boolean,
+) {
+	return useQuery({
+		queryKey: jobKeys.runFollow(projectId, notebookId, jobId, runId),
+		queryFn: async () => {
+			try {
+				return await apiData(
+					apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/follow', {
+						params: { path: { pid: projectId, nid: notebookId, jid: jobId, rid: runId } },
+					}),
+				);
+			} catch (error) {
+				if (isApiErrorCode(error, 'RUN_NOT_FOLLOWABLE')) return null;
+				throw error;
+			}
+		},
+		enabled,
+		gcTime: 0,
+		staleTime: Number.POSITIVE_INFINITY,
+		// A new view remounts the frame, so refetch only when the current one must be replaced.
+		refetchOnWindowFocus: false,
+		refetchOnReconnect: false,
+		refetchInterval: (query) => {
+			const view = query.state.data;
+			if (!view) return RUN_FOLLOW_RETRY_MS;
+			return Math.max(
+				Date.parse(view.expires_at) - Date.now() - RUN_FOLLOW_RENEW_MARGIN_MS,
+				RUN_FOLLOW_RETRY_MS,
+			);
+		},
+	});
+}
+
 // Sessions
 
 export function projectSessionsQueryOptions(projectId: string) {

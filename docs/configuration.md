@@ -553,6 +553,7 @@ Headless notebook runs on a cron schedule or on demand, with a durable run histo
 | `MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS` | Node only: run deadline when a job sets no `timeout_seconds`. The sandbox is destroyed and the run lands `timed_out` past it. | — | `1800` | — |
 | `MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS` | Node only: ceiling on a job’s own `timeout_seconds`; larger values are rejected. | — | `14400` | — |
 | `MARIMOHUB_JOBS_RUN_RETENTION_DAYS` | Node only: run records and captured outputs older than this are pruned by the maintenance cycle. | — | `30` | — |
+| `MARIMOHUB_JOBS_LIVE_RUNS` | Node only: run each job under a marimo server in its sandbox, so that users can follow the run while it executes. Requires `MARIMOHUB_AUTH_SESSION_SECRET`. Accepted values are `on` and `off`. | — | `off` | `on` |
 | `MARIMOHUB_JOBS_CATCHUP_WINDOW_SECONDS` | Node only: how stale a missed occurrence may be and still fire, once. After a longer outage only the latest missed occurrence runs — the gap is never backfilled. | — | `600` | `900` |
 
 ## Source control publishing

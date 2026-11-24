@@ -5,10 +5,14 @@ import type { ErrorResponder, EventKinds } from './protocol';
 
 export type SendEvent = (event: HostEvent) => Promise<void>;
 
-export function eventStream(
+/**
+ * An SSE response fed by `work`, which writes whole frames. It pings every 15 seconds, stops
+ * `work` when the client disconnects, and ends the response when `work` settles; `work`
+ * reports its own failures.
+ */
+export function sseResponse(
 	request: Request,
-	work: (send: SendEvent, signal: AbortSignal) => Promise<void>,
-	toResponse: ErrorResponder,
+	work: (write: (frame: string) => Promise<void>, signal: AbortSignal) => Promise<void>,
 ): Response {
 	const cancelled = new AbortController();
 	const signal = AbortSignal.any([request.signal, cancelled.signal]);
@@ -30,17 +34,8 @@ export function eventStream(
 		}
 	};
 	void ping().catch(() => {});
-	void work(async (event) => write(sse(event)), signal)
-		.catch(async (error: unknown) => {
-			if (!signal.aborted) {
-				await write(
-					sse({
-						event: 'effect/httpapi/stream/failure',
-						data: (await toResponse(error).json()) as Record<string, unknown>,
-					}),
-				).catch(() => {});
-			}
-		})
+	void work(write, signal)
+		.catch(() => {})
 		.finally(() => {
 			signal.removeEventListener('abort', aborted);
 			cancelled.abort();
@@ -71,6 +66,26 @@ export function eventStream(
 			},
 		},
 	);
+}
+
+export function eventStream(
+	request: Request,
+	work: (send: SendEvent, signal: AbortSignal) => Promise<void>,
+	toResponse: ErrorResponder,
+): Response {
+	return sseResponse(request, async (write, signal) => {
+		try {
+			await work(async (event) => write(sse(event)), signal);
+		} catch (error) {
+			if (signal.aborted) return;
+			await write(
+				sse({
+					event: 'effect/httpapi/stream/failure',
+					data: (await toResponse(error).json()) as Record<string, unknown>,
+				}),
+			).catch(() => {});
+		}
+	});
 }
 
 function eventKey(event: HostEvent): string {

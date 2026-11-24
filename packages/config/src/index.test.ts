@@ -1914,6 +1914,20 @@ describe('createFromEnv jobs config', () => {
 		});
 	});
 
+	it('enables live runs only with a secret to sign follow tokens', () => {
+		const live = { ...baseEnv, MARIMOHUB_JOBS_LIVE_RUNS: 'on' };
+
+		expect(
+			createFromEnv({ ...live, MARIMOHUB_AUTH_SESSION_SECRET: 'session-secret' }).jobs?.liveRuns,
+		).toEqual({ signingSecret: 'session-secret' });
+		expect(() => createFromEnv({ ...live, MARIMOHUB_AUTH_SESSION_SECRET: undefined })).toThrow(
+			/MARIMOHUB_JOBS_LIVE_RUNS=on requires MARIMOHUB_AUTH_SESSION_SECRET/,
+		);
+		expect(
+			createFromEnv({ ...baseEnv, MARIMOHUB_JOBS_LIVE_RUNS: 'off' }).jobs?.liveRuns,
+		).toBeUndefined();
+	});
+
 	it.each([
 		['1', 1],
 		[' 100 ', 100],

@@ -236,6 +236,22 @@ export async function loadJobRun(deps: ApiDeps, job: JobDefinition, rid: RunId) 
 	return run;
 }
 
+/** A run whose rendered output the user may read. Anything else is a 404. */
+export async function loadReadableRun(
+	deps: ApiDeps,
+	user: AuthenticatedPrincipal,
+	pid: ProjectId,
+	nid: NotebookId,
+	jid: JobId,
+	rid: RunId,
+) {
+	const target = await loadAuthorizedJob(deps, user, pid, nid, jid);
+	const run = await loadJobRun(deps, target.job, rid);
+	if (!(await getJobCapabilities(deps, target, target.job, run)).canReadHtml)
+		throw new NotFoundError('Run output not found');
+	return { target, run };
+}
+
 export async function getJobCapabilities(
 	deps: ApiDeps,
 	target: AuthorizedNotebook,

@@ -1345,6 +1345,13 @@ export const JobRunSchema = z.looseObject({
 	retry_of: RunIdSchema.optional(),
 	/** Stamped when the run goes `provisioning`; the reconciler reads it. */
 	sandbox_id: SandboxIdSchema.optional(),
+	/** Credential-free locator for reattaching to the sandbox of a `live` run. */
+	reconnect_reference: SandboxReconnectReferenceSchema.optional(),
+	/**
+	 * Set when the run executes under a marimo host, so it can be followed while `running`.
+	 * `workdir` is the sandbox directory that holds the host descriptor.
+	 */
+	live: z.looseObject({ workdir: z.string().min(1) }).optional(),
 	/** The sandbox image and compute the run provisioned with — the same provenance a session carries. */
 	image: z.string().optional(),
 	compute_profile: z.string().optional(),
@@ -1512,7 +1519,10 @@ export type PublicJobRun = Pick<
 	| 'error'
 	| 'output'
 	| 'cancelled_by'
->;
+> & {
+	/** The run executes under a marimo host and can be followed while it is running. */
+	live?: boolean;
+};
 
 export function toPublicJobRun(run: JobRun): PublicJobRun {
 	return {
@@ -1561,6 +1571,7 @@ export function toPublicJobRun(run: JobRun): PublicJobRun {
 				}
 			: {}),
 		...(run.cancelled_by !== undefined ? { cancelled_by: run.cancelled_by } : {}),
+		...(run.live !== undefined ? { live: true } : {}),
 	};
 }
 

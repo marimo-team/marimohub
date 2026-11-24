@@ -44,6 +44,16 @@ function run(overrides: Partial<JobRun> = {}): JobRun {
 	};
 }
 
+const runningRun = (overrides: Partial<JobRun> = {}) =>
+	run({
+		run_id: 'run_live',
+		status: 'running',
+		finished_at: undefined,
+		exit_code: undefined,
+		output: undefined,
+		...overrides,
+	});
+
 interface World {
 	role?: 'viewer' | 'editor';
 	jobs?: Job[];
@@ -61,6 +71,11 @@ interface World {
 	jobsCapabilityMissing?: boolean;
 	/** Reject manual triggers with this envelope. */
 	triggerError?: Response;
+	/**
+	 * Live views a running run returns, in order: null means its server is not answering yet,
+	 * and an Error fails the request.
+	 */
+	follow?: (string | null | Error)[];
 }
 
 function makeFetch(world: World = {}) {
@@ -157,6 +172,13 @@ function makeFetch(world: World = {}) {
 			});
 			runs.unshift(queued);
 			return jsonOk(queued, { status: 201 });
+		}
+		if (method === 'POST' && url.endsWith('/follow')) {
+			const view = world.follow?.shift() ?? null;
+			if (view instanceof Error) return jsonError('SERVICE_UNAVAILABLE', view.message, 503);
+			return view === null
+				? jsonError('RUN_NOT_FOLLOWABLE', 'This run cannot be followed right now', 409)
+				: jsonOk({ html: view, expires_at: new Date(Date.now() + 3_600_000).toISOString() });
 		}
 		if (method === 'POST' && url.endsWith('/cancel')) {
 			const target = runs.find((r) => url.includes(r.run_id));
@@ -542,19 +564,82 @@ describe('JobsPage', () => {
 
 	it('describes an in-progress run instead of loading output', async () => {
 		const world = makeFetch({
-			runs: [
-				run({
-					run_id: 'run_live',
-					status: 'running',
-					finished_at: undefined,
-					exit_code: undefined,
-					output: undefined,
-				}),
-			],
+			runs: [runningRun()],
 		});
 		renderPage('?job=job-1&run=run_live');
 		expect(await screen.findByText(/running in its own sandbox/)).toBeInTheDocument();
 		expect(world.calls.some((c) => c.url.endsWith('/html'))).toBe(false);
+	});
+
+	it('follows a live run in an opaque-origin iframe once its server answers', async () => {
+		const world = makeFetch({
+			follow: [null, '<html><body>live view</body></html>'],
+			runs: [runningRun({ live: true })],
+		});
+		const { container } = renderPage('?job=job-1&run=run_live');
+
+		expect(await screen.findByText(/A live view appears/)).toBeInTheDocument();
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull(), {
+			timeout: 5000,
+		});
+		const iframe = container.querySelector('iframe')!;
+		expect(iframe.getAttribute('srcdoc')).toContain('live view');
+		expect(iframe.getAttribute('sandbox')).toBe('allow-scripts');
+		expect(iframe.getAttribute('title')).toBe('Nightly refresh live run');
+		expect(world.calls.some((c) => c.url.endsWith('/html'))).toBe(false);
+	});
+
+	it('keeps describing the run while the live view fails, then shows it once it loads', async () => {
+		const world = makeFetch({
+			follow: [new Error('sandbox unreachable'), '<html><body>recovered view</body></html>'],
+			runs: [runningRun({ live: true })],
+		});
+		const { container } = renderPage('?job=job-1&run=run_live');
+
+		expect(await screen.findByText(/A live view appears/)).toBeInTheDocument();
+		await waitFor(() => expect(world.calls.some((c) => c.url.endsWith('/follow'))).toBe(true));
+		expect(container.querySelector('iframe')).toBeNull();
+		await waitFor(
+			() =>
+				expect(container.querySelector('iframe')?.getAttribute('srcdoc')).toContain(
+					'recovered view',
+				),
+			{ timeout: 8000 },
+		);
+	}, 12_000);
+
+	it('replaces the live view with the stored output when the run finishes', async () => {
+		const live = runningRun({ live: true });
+		const world = makeFetch({ follow: ['<html><body>live view</body></html>'], runs: [live] });
+		const { container } = renderPage('?job=job-1&run=run_live');
+		await waitFor(() =>
+			expect(container.querySelector('iframe')?.getAttribute('srcdoc')).toContain('live view'),
+		);
+
+		Object.assign(live, {
+			status: 'succeeded',
+			finished_at: '2026-09-02T04:02:30Z',
+			exit_code: 0,
+			output: { html_bytes: 10 },
+		});
+
+		await waitFor(
+			() => expect(container.querySelector('iframe')?.getAttribute('srcdoc')).toContain('rendered'),
+			{ timeout: 9000 },
+		);
+		expect(container.querySelectorAll('iframe')).toHaveLength(1);
+		expect(screen.queryByText(/Following the run/)).toBeNull();
+		expect(world.calls.filter((c) => c.url.endsWith('/follow'))).toHaveLength(1);
+	}, 12_000);
+
+	it('does not request a live view for a running run that is not live', async () => {
+		const world = makeFetch({
+			runs: [runningRun()],
+		});
+		renderPage('?job=job-1&run=run_live');
+
+		expect(await screen.findByText(/output appears when it finishes/)).toBeInTheDocument();
+		expect(world.calls.some((c) => c.url.endsWith('/follow'))).toBe(false);
 	});
 
 	it('does not describe or offer cancellation for an unknown run status', async () => {
