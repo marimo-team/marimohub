@@ -1,4 +1,4 @@
-run-name: "Release ${{ inputs.version }} requested by @${{ github.actor }}"
+run-name: 'Release ${{ inputs.version }} requested by @${{ github.actor }}'
 name: Prepare release PR
 on:
   workflow_dispatch:
