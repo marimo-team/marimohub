@@ -95,7 +95,7 @@ helm upgrade --install marimohub oci://ghcr.io/marimo-team/charts/marimohub \
 
 `pnpm release` updates the IaC package version.
 The Deno example imports the SDK sources from a pinned commit of this repository.
-After a release, move that pin to the release commit when the SDK changed.
+After a release, move that pin (`examples/integration-iac/deno/deno.json`) to the release commit when `packages/iac` changed.
 The [Integration IaC SDK workflow](../.github/workflows/iac.yml) tests the packed package in Node and Deno.
 Publication requires a manual run from a matching release tag.
 

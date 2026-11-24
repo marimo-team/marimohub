@@ -58,11 +58,15 @@ export async function inspectMetadataDeployment(url: string, namespace: string) 
 export async function runMetadataTransfer(
 	url: string,
 	bucket: Bucket,
-	options: TransferOptions & { fresh?: boolean; activate?: boolean },
+	options: TransferOptions & { fresh?: boolean; activate?: boolean; abort?: boolean },
 ) {
 	const pool = createMetadataPool({ url, statementTimeoutMs: 60000, lockTimeoutMs: 10000 });
 	try {
 		const transfer = new MetadataTransfer(pool, bucket, options);
+		if (options.abort) {
+			await transfer.abort();
+			return { id: options.id, state: 'aborted' };
+		}
 		if (options.activate) {
 			await transfer.activate();
 		} else {

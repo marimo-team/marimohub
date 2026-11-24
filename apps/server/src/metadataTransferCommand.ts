@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
 import { loadAdapterLibraries, makeStorage } from '@marimo-hub/config';
+import { metadataPostgresUrl } from '@marimo-hub/config/metadata';
 import { runMetadataTransfer } from '@marimo-hub/config/metadata.node';
 
 const Input = z.strictObject({
@@ -14,21 +15,31 @@ const Input = z.strictObject({
 });
 export async function metadataTransferCommand(activate: boolean): Promise<void> {
 	const { values } = parseArgs({
-		options: { input: { type: 'string' }, 'writers-stopped': { type: 'boolean' } },
+		options: {
+			input: { type: 'string' },
+			'writers-stopped': { type: 'boolean' },
+			abort: { type: 'boolean' },
+		},
 	});
 	if (!values.input || !values['writers-stopped'])
 		throw new Error(
-			'Required: --input <file.json> --writers-stopped. Stop and externally fence all writers first.',
+			'Required: --input <file.json> --writers-stopped [--abort]. Stop and externally fence all writers first.',
 		);
+	const abort = values.abort === true;
+	if (abort && activate) throw new Error('Abort with metadata:transfer, not metadata:activate');
 	const options = Input.parse(JSON.parse(await readFile(values.input, 'utf8')));
-	const url = process.env.MARIMOHUB_METADATA_ADMIN_POSTGRES_URL;
-	if (!url) throw new Error('MARIMOHUB_METADATA_ADMIN_POSTGRES_URL is required');
+	const url = metadataPostgresUrl(process.env, 'MARIMOHUB_METADATA_ADMIN_POSTGRES_URL', true);
 	const libraries = await loadAdapterLibraries(process.env);
 	const bucket = makeStorage(process.env, libraries);
 	try {
 		console.log(
 			JSON.stringify(
-				await runMetadataTransfer(url, bucket, { ...options, writersStopped: true, activate }),
+				await runMetadataTransfer(url, bucket, {
+					...options,
+					writersStopped: true,
+					activate,
+					abort,
+				}),
 			),
 		);
 	} catch (error) {

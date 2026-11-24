@@ -27,9 +27,10 @@ system.
    variables (`MARIMOHUB_*`). When you need behavior the config surface doesn't
    expose — a bespoke storage backend, a custom authorizer, an embedded
    deployment — you import the packages and wire the adapters yourself in code.
-3. **No database.** All durable state — notebook content, metadata, project
+3. **No database by default.** All durable state — notebook content, metadata, project
    membership, audit events — lives in the storage layer. There is no separate
-   database to provision or run schema migrations against. The object store
+   database to provision or run schema migrations against unless the optional
+   PostgreSQL metadata backend ([metadata_storage.md](./metadata_storage.md)) is enabled. The object store
    **is** the database, though: it is the one thing you must back up, and it has
    a real operational story (backup/DR, retention, recovery, rolling-upgrade
    compatibility, observability) — see [`operations.md`](./operations.md). (The
@@ -204,13 +205,11 @@ Failed restores drain pending reads and writes. Cold cleanup cancels prefetch be
 
 For launches that require runtime capture, bridge upload and environment configuration failures abort provisioning before kernel launch. Fresh compute is reclaimed; supplied compute follows the caller's cleanup policy. Optional UI bridge failures still allow the ordinary launch. Jobs and `uv-sandbox` retain their separate launch paths.
 
-Successful proxied kernel saves queue captures without delaying the response.
-Each process coalesces hints for up to 64 sessions and permits four capture attempts per burst.
-Each follow-up uses a separate queue task. Retryable failures use exponential backoff from 100 ms.
-
-After a durable capture, newer dirty state triggers another attempt within the burst limit.
+A successful proxied save records a `save_dirty` generation on the session before the response
+returns, then queues a capture. Hub host protocol saves record the same intent and capture
+before they respond. The lifecycle sweep captures any intent that remains.
 Only a durable receipt clears the dirty generation it covers. Publication fences also apply to periodic capture and stop.
-The periodic scheduler covers remaining dirty state after the burst limit.
+For queue bounds and retry timing, see [Proxy save intent](./safe-session-stops.md#proxy-save-intent).
 
 Periodic saves use bounded sandbox commands to collect artifact sizes and SHA-256 hashes.
 Only changed artifacts require a file read. A successful save caches up to 128 sandbox captures within a 64 MiB budget.

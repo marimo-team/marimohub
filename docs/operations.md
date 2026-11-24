@@ -282,8 +282,10 @@ sandbox without saving.
 
 ## Backups & restore
 
-There is no database. The object store is the **single source of truth** —
-notebooks, version history, and the catalog all live there.
+By default there is no database. The object store is the **single source of truth** —
+notebooks, version history, and the catalog all live there. With the optional
+[PostgreSQL metadata backend](#metadata-storage-backend), back up the database and the
+bucket together; the backend marker in the bucket must match the database.
 
 - **Back up** by backing up the bucket: server-side versioning + lifecycle
   rules, cross-region replication, or scheduled `aws s3 sync` / `gsutil rsync` /
@@ -363,6 +365,24 @@ kubectl run marimohub-catalog-recovery --rm -i --restart=Never \
 ```
 
 The `marimohub-linux-*` binaries do not include the command. From a repository checkout, `pnpm --filter @marimo-hub/server catalog:recover` takes the same arguments.
+
+## Metadata storage backend
+
+By default, metadata lives in the bucket with the artifacts. A Node deployment can keep
+metadata in PostgreSQL 17 or later with `MARIMOHUB_METADATA_BACKEND=postgres`; artifacts
+stay in the bucket. The variables are in the
+[metadata storage reference](./configuration.md#metadata-storage).
+
+- A remote PostgreSQL URL must use `sslmode=verify-full` or `verify-ca`. Startup and the
+  administration commands reject other remote URLs unless
+  `MARIMOHUB_METADATA_POSTGRES_ALLOW_INSECURE_TRANSPORT=true`.
+- Give `MARIMOHUB_METADATA_ADMIN_POSTGRES_URL` to the administration commands only.
+- In the container image the commands are `node dist/metadata-<command>.mjs`.
+- A transfer between backends is offline. Stop every writer first. Back up SQL, the bucket,
+  and the backend marker as one set.
+
+The [metadata storage runbook](https://github.com/marimo-team/marimohub/blob/main/development_docs/metadata_storage.md)
+has the migration, grant, transfer, abort, activation, and restore procedures.
 
 ## Upgrades
 

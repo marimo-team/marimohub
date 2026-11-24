@@ -228,9 +228,11 @@ Automatic idle and lifetime stops back off after failures; see
 [session stop and recovery](./operations.md#session-stop-and-recovery).
 Authorization expiry can require teardown even when the save fails.
 
-If the compute provider confirms that the sandbox is gone, the next lifecycle sweep
-releases the editor claim and capacity. This also applies to retained stops.
-The stop then finishes as `stopped`.
+The lifecycle sweep releases the editor claim and capacity only after it confirms the
+sandbox is gone: through the connection probe when `MARIMOHUB_SESSION_CONNECTION_AWARE`
+is on, or through the runtime status or resume call for a stop with an unknown runtime
+state. A confirmed absence also finishes retained stops as `stopped`. See
+[sandbox absence](https://github.com/marimo-team/marimohub/blob/main/development_docs/safe-session-stops.md#sandbox-absence).
 
 ## Changing the sharing mode
 

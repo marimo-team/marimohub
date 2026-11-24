@@ -416,6 +416,9 @@ app.openapi(deleteJob, async (c) => {
 		notebook_id: nid,
 		job_id: jid,
 	});
+	// After the marker loop, which republishes locators, and before finishDelete removes the
+	// per-job index the locators are derived from.
+	await deps.services.jobRuns.deleteProjectLocators(pid, nid, jid);
 	await deps.services.jobs.finishDelete(pid, nid, jid);
 	return c.json({ success: true }, 200);
 });

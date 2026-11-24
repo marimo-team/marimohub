@@ -122,7 +122,7 @@ export function createAppJobsApp(deps: ApiDeps) {
 			if (run.triggered_by !== user.id) throw new ForbiddenError('Run belongs to another user');
 			return c.json({ success: true, data: toPublicJobRun(run) });
 		}
-		const runs = await deps.services.jobRuns.listActive();
+		const runs = await deps.services.jobRuns.listActive(pid);
 		return c.json({
 			success: true,
 			data: runs.flatMap(({ run }) =>
