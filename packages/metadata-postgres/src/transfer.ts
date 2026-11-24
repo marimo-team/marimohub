@@ -70,6 +70,15 @@ export class MetadataTransfer {
 			client.release(destroy);
 		}
 	}
+	// Waits for in-flight guarded transactions, which hold this key shared until they commit.
+	private async lockDeployment(client: PoolClient) {
+		await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+			this.options.namespace,
+		]);
+	}
+	private async unfreezeMarker(current: { marker: MetadataBackendMarker; etag?: string }) {
+		await this.writeMarker({ ...current.marker, state: 'active', transfer_id: null }, current.etag);
+	}
 	private async marker() {
 		const object = await this.bucket.get(METADATA_BACKEND_KEY);
 		return object
@@ -100,11 +109,13 @@ export class MetadataTransfer {
 				throw new MetadataTransferError('Reverse transfer cannot initialize a fresh deployment');
 			return this.beginReverse();
 		}
+		const source = fresh ? null : await this.marker();
+		const notYetFrozen =
+			!source || (source.marker.backend === 'bucket' && source.marker.state === 'active');
+		if (!fresh && notYetFrozen) await auditMetadataReferences(this.bucket);
 		await this.transaction(async (client) => {
 			await checkSchema(client);
-			await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
-				this.options.namespace,
-			]);
+			await this.lockDeployment(client);
 			const existing = (
 				await client.query('SELECT * FROM hub_metadata.transfers WHERE namespace=$1 AND id=$2', [
 					this.options.namespace,
@@ -336,6 +347,7 @@ export class MetadataTransfer {
 				)
 			)
 				throw new MetadataTransferError('Activation source mismatch');
+			await this.lockDeployment(client);
 			const updated = await client.query(
 				"UPDATE hub_metadata.deployments SET state='active',updated_at=clock_timestamp() WHERE namespace=$1 AND backend_epoch=$2 AND artifact_store_id=$3 AND state IN ('importing','active') RETURNING namespace",
 				[this.options.namespace, row.target_epoch, marker.artifact_store_id],
@@ -353,6 +365,59 @@ export class MetadataTransfer {
 			};
 		});
 		await this.completeActivation(target, 'Activation marker changed');
+	}
+	async abort(): Promise<void> {
+		const reverse = this.options.direction === 'sql_to_bucket';
+		const { namespace, id } = this.options;
+		await this.transaction(async (client) => {
+			const row = (
+				await client.query<TransferLease & { live: boolean }>(
+					'SELECT *,lease_until>clock_timestamp() AS live FROM hub_metadata.transfers WHERE namespace=$1 AND id=$2 FOR UPDATE',
+					[namespace, id],
+				)
+			).rows[0];
+			const current = await this.marker();
+			const marker = current?.marker;
+			if (!row) {
+				// begin() writes the marker before inserting the transfer row.
+				if (marker?.state === 'frozen' && marker.transfer_id === id)
+					await this.unfreezeMarker(current!);
+				return;
+			}
+			if (row.direction !== (this.options.direction ?? 'bucket_to_sql'))
+				throw new MetadataTransferError('Unknown transfer or manifest version');
+			if (row.live) throw new MetadataTransferError('Transfer is leased; stop it before aborting');
+			if (row.state === 'activated')
+				throw new MetadataTransferError('An activated transfer cannot be aborted');
+			if (
+				!marker ||
+				marker.backend !== (reverse ? 'postgres' : 'bucket') ||
+				marker.epoch !== Number(row.source_epoch) ||
+				marker.transfer_id !== (marker.state === 'frozen' ? id : null)
+			)
+				throw new MetadataTransferError('Abort source marker mismatch');
+			await this.lockDeployment(client);
+			if (reverse) {
+				const restored = await client.query(
+					"UPDATE hub_metadata.deployments SET state='active',updated_at=clock_timestamp() WHERE namespace=$1 AND backend_epoch=$2 AND artifact_store_id=$3 AND state IN ('frozen','active')",
+					[namespace, row.source_epoch, marker.artifact_store_id],
+				);
+				if (!restored.rowCount) throw new MetadataTransferError('Abort deployment mismatch');
+			}
+			if (marker.state === 'frozen') await this.unfreezeMarker(current);
+			await client.query(
+				'DELETE FROM hub_metadata.transfer_items WHERE namespace=$1 AND transfer_id=$2',
+				[namespace, id],
+			);
+			await client.query('DELETE FROM hub_metadata.transfers WHERE namespace=$1 AND id=$2', [
+				namespace,
+				id,
+			]);
+			// A forward transfer always imports into a namespace it created.
+			if (!reverse)
+				for (const table of ['records', 'scopes', 'deployments'])
+					await client.query(`DELETE FROM hub_metadata.${table} WHERE namespace=$1`, [namespace]);
+		});
 	}
 	private async completeActivation(
 		activation: ActivationTarget,
@@ -377,8 +442,23 @@ export class MetadataTransfer {
 		);
 	}
 	private async beginReverse(): Promise<void> {
+		const source = await this.marker();
+		if (
+			source?.marker.backend === 'postgres' &&
+			source.marker.state === 'active' &&
+			source.marker.namespace === this.options.namespace
+		) {
+			// Autocommit reads: a long audit must not hold a transaction open.
+			const client = await this.pool.connect();
+			try {
+				await auditMetadataReferences(this.view(client, source.marker.epoch));
+			} finally {
+				client.release();
+			}
+		}
 		await this.transaction(async (client) => {
 			await checkSchema(client);
+			await this.lockDeployment(client);
 			const deployment = (
 				await client.query<{ backend_epoch: string; state: string; artifact_store_id: string }>(
 					'SELECT * FROM hub_metadata.deployments WHERE namespace=$1 FOR UPDATE',
@@ -517,6 +597,7 @@ export class MetadataTransfer {
 				)
 			)
 				throw new MetadataTransferError('Reverse activation source mismatch');
+			await this.lockDeployment(client);
 			const result = await client.query(
 				"UPDATE hub_metadata.deployments SET state='retired',backend_epoch=$2,updated_at=clock_timestamp() WHERE namespace=$1 AND artifact_store_id=$3 AND ((state='frozen' AND backend_epoch=$4) OR (state='retired' AND backend_epoch=$2)) RETURNING namespace",
 				[this.options.namespace, row.target_epoch, marker.artifact_store_id, row.source_epoch],

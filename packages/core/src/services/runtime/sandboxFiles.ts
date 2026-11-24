@@ -698,7 +698,7 @@ export async function readSessionArtifacts(
 				{
 					maxBytes: MAX_ARTIFACT_BYTES,
 					maxTotalBytes: MAX_ARTIFACT_BYTES,
-					// Individual reads each had their own deadline; one exec now reads them all.
+					// One exec reads every artifact, so it gets the sum of the per-file deadlines.
 					timeoutMs:
 						CAPTURE_READ_TIMEOUT_MS * Math.max(1, artifactSizes.filter((size) => !!size).length),
 				},

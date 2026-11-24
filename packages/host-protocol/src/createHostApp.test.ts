@@ -10,13 +10,13 @@ import type {
 	HostPlatform,
 	HostRuntimeHandle,
 } from './platform';
-import { HostProblemError, OPERATIONS, RUNTIME_OPERATIONS } from './protocol';
+import { HostProblemError, OPERATIONS, RUNTIME_OPERATIONS, RUNTIME_ROUTES } from './protocol';
 
 interface Principal {
 	id: string;
 }
 interface Notebook extends HostNotebookContext {
-	stored: { id: string; project_id: string; name: string; updated_at: string };
+	stored: { id: string; project_id: string; name: string; modified_at: string };
 }
 interface Runtime extends HostRuntimeHandle {
 	started: number;
@@ -33,7 +33,7 @@ const DECISION_PREFIX = 'fake:';
 function fakePlatform() {
 	const projects = new Map([['p1', { id: 'p1', name: 'Project' }]]);
 	const notebooks = new Map([
-		['p1/n1', { id: 'p1/n1', project_id: 'p1', name: 'Notebook', updated_at: '2026-01-01' }],
+		['p1/n1', { id: 'p1/n1', project_id: 'p1', name: 'Notebook', modified_at: '2026-01-01' }],
 	]);
 	const writers = new Set(['alice']);
 	const running = new Map<string, Runtime>();
@@ -69,7 +69,7 @@ function fakePlatform() {
 			project_id: stored.project_id,
 			path: null,
 			name: stored.name,
-			updated_at: stored.updated_at,
+			modified_at: stored.modified_at,
 			operations: writers.has(principal.id) ? ['notebook.update', ...RUNTIME_OPERATIONS] : [],
 		};
 	}
@@ -131,7 +131,7 @@ function fakePlatform() {
 						id: `${input.project_id}/n${notebooks.size + 1}`,
 						project_id: input.project_id,
 						name: input.name,
-						updated_at: new Date().toISOString(),
+						modified_at: new Date().toISOString(),
 					};
 					notebooks.set(stored.id, stored);
 					version++;
@@ -260,13 +260,127 @@ async function readUntilReady(response: Response): Promise<HostEvent[]> {
 }
 
 describe('generic host app', () => {
+	it('executes scratch code, interrupts without a body, and replays the acknowledgement', async () => {
+		const { request, callRuntime, reply, ensureRuntime } = fakePlatform();
+		callRuntime.mockResolvedValueOnce(reply(202, { id: 'run', notebook_id: 'local' }));
+		const executed = await request('POST', '/notebooks/p1%2Fn1/runtime/execute', {
+			body: { code: 'print(1)' },
+			key: 'scratch',
+		});
+		expect(executed.status).toBe(202);
+		expect(callRuntime.mock.calls.at(-1)![2]).toMatchObject({
+			path: '/runtime/execute',
+			body: { code: 'print(1)' },
+		});
+		callRuntime.mockResolvedValueOnce(reply(202, { id: 'kernel', notebook_id: 'local' }));
+		const interrupted = await request('POST', '/notebooks/p1%2Fn1/runtime/interrupt', {
+			key: 'interrupt',
+		});
+		expect(interrupted.status).toBe(202);
+		expect(await interrupted.json()).toMatchObject({ id: 'rt-1:kernel', notebook_id: 'p1/n1' });
+		expect(callRuntime.mock.calls.at(-1)![2]).toMatchObject({
+			path: '/runtime/interrupt',
+			body: undefined,
+		});
+		const calls = callRuntime.mock.calls.length;
+		expect(
+			(await request('POST', '/notebooks/p1%2Fn1/runtime/interrupt', { key: 'interrupt' })).status,
+		).toBe(202);
+		expect(callRuntime).toHaveBeenCalledTimes(calls);
+		expect(ensureRuntime).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		['POST', '/runtime/interrupt'],
+		['DELETE', '/runtime/runs/run-1'],
+	] as const)('does not provision for %s %s without a runtime', async (method, path) => {
+		const { request, ensureRuntime, callRuntime } = fakePlatform();
+		const response = await request(method, `/notebooks/p1%2Fn1${path}`, { key: 'stop' });
+		expect(response.status).toBe(409);
+		expect(await response.json()).toMatchObject({ type: 'urn:marimo:problem:no-runtime' });
+		expect(ensureRuntime).not.toHaveBeenCalled();
+		expect(callRuntime).not.toHaveBeenCalled();
+	});
+
+	it.each(['runtime.run', 'runtime.execute', 'notebook.edit'])(
+		'authorizes %s independently',
+		async (allowed) => {
+			const { request, resolveNotebook, ensureRuntime, callRuntime } = fakePlatform();
+			const notebook = await resolveNotebook({ id: 'alice' }, 'p1/n1');
+			resolveNotebook.mockResolvedValue({
+				...notebook,
+				record: { ...notebook.record, operations: [allowed] },
+			});
+			for (const [operation, path, body] of [
+				['runtime.run', '/runtime/runs', { cells: [{ id: 'c1' }] }],
+				['runtime.execute', '/runtime/execute', { code: '1' }],
+				['notebook.edit', '/edits', { changes: [] }],
+			] as const) {
+				const response = await request('POST', `/notebooks/p1%2Fn1${path}`, {
+					key: operation,
+					body,
+				});
+				expect(response.status).toBe(operation === allowed ? 200 : 403);
+			}
+			expect(ensureRuntime).toHaveBeenCalledOnce();
+			expect(callRuntime).toHaveBeenCalledOnce();
+		},
+	);
+
+	it('replays an interruption after replacement and rejects changed requests with its key', async () => {
+		const { request, running, callRuntime, reply } = fakePlatform();
+		await request('PUT', '/notebooks/p1%2Fn1/runtime', { key: 'start', body: {} });
+		callRuntime.mockResolvedValueOnce(reply(202, { id: 'kernel', notebook_id: 'local' }));
+		const response = await request('POST', '/notebooks/p1%2Fn1/runtime/interrupt', { key: 'stop' });
+		const acknowledgement = await response.json();
+		running.clear();
+		await request('PUT', '/notebooks/p1%2Fn1/runtime', { key: 'replacement', body: {} });
+		callRuntime.mockClear();
+		const replay = await request('POST', '/notebooks/p1%2Fn1/runtime/interrupt', { key: 'stop' });
+		expect(replay.status).toBe(202);
+		expect(await replay.json()).toEqual(acknowledgement);
+		expect(
+			(await request('DELETE', '/notebooks/p1%2Fn1/runtime/runs/r1', { key: 'stop' })).status,
+		).toBe(409);
+		expect(
+			(await request('POST', '/notebooks/p1%2Fn1/runtime/interrupt', { key: 'stop', body: {} }))
+				.status,
+		).toBe(409);
+		expect(callRuntime).not.toHaveBeenCalled();
+	});
+
+	it.each(RUNTIME_ROUTES)('reports allowed methods for $operation', async (route) => {
+		const { request, ensureRuntime, callRuntime } = fakePlatform();
+		const path = route.path.replace(':run', 'run-1').replace(':input', 'input-1');
+		const response = await request('GET', `/notebooks/p1%2Fn1${path}`);
+		expect(response.status).toBe(405);
+		expect(response.headers.get('Allow')?.split(', ')).toEqual(
+			route.path === '/runtime' ? ['PUT', 'DELETE'] : [route.method],
+		);
+		expect(ensureRuntime).not.toHaveBeenCalled();
+		expect(callRuntime).not.toHaveBeenCalled();
+	});
+
+	it('rejects unknown members in hub-owned requests', async () => {
+		const { request, ensureRuntime } = fakePlatform();
+		for (const [method, path, body] of [
+			['POST', '/notebooks', { project_id: 'p1', name: 'Test', extra: true }],
+			['PATCH', '/notebooks/p1%2Fn1', { name: 'Test', extra: true }],
+			['PATCH', '/notebooks/p1%2Fn1', {}],
+			['PUT', '/notebooks/p1%2Fn1/runtime', { extra: true }],
+		] as const) {
+			expect((await request(method, path, { body, key: 'invalid' })).status).toBe(400);
+		}
+		expect(ensureRuntime).not.toHaveBeenCalled();
+	});
+
 	it('answers the route table independently of the mount prefix', async () => {
 		const { request } = fakePlatform();
 		const unauthorized = await request('GET', '/events', { as: null });
 		expect(unauthorized.status).toBe(401);
 		expect(unauthorized.headers.get('WWW-Authenticate')).toBe('Bearer realm="fake"');
 		expect(await unauthorized.json()).toMatchObject({
-			type: 'tag:marimo.io,2026:host/unauthorized',
+			type: 'urn:marimo:problem:unauthorized',
 		});
 		expect((await request('HEAD', '/events')).status).toBe(405);
 		expect((await request('GET', '/nope')).status).toBe(404);
@@ -287,12 +401,12 @@ describe('generic host app', () => {
 		});
 		expect(events.at(-1)!.id).toMatch(/^[0-9a-f-]+:1$/);
 		const filtered = await readUntilReady(
-			await request('GET', '/events?types=project', { headers: { 'Last-Event-ID': 'stale' } }),
+			await request('GET', '/events?kinds=project', { headers: { 'Last-Event-ID': 'stale' } }),
 		);
 		expect(filtered.map((event) => event.event)).toEqual(['reset', 'project', 'ready']);
 		const readOnly = await readUntilReady(await request('GET', '/events', { as: 'bob' }));
 		expect(readOnly[2].data.notebook).toMatchObject({ operations: [] });
-		expect((await request('GET', '/events?types=bogus')).status).toBe(400);
+		expect((await request('GET', '/events?kinds=bogus')).status).toBe(400);
 	});
 
 	it('creates and renames notebooks under Idempotency-Key semantics', async () => {
@@ -335,13 +449,16 @@ describe('generic host app', () => {
 	it('does not replay a stored run after the caller loses the operation', async () => {
 		const { request, writers, callRuntime } = fakePlatform();
 		const run = () =>
-			request('POST', '/notebooks/p1%2Fn1/runtime/runs', { body: { cells: ['c1'] }, key: 'run' });
+			request('POST', '/notebooks/p1%2Fn1/runtime/runs', {
+				body: { cells: [{ id: 'c1' }] },
+				key: 'run',
+			});
 		expect((await run()).status).toBe(200);
 		const calls = callRuntime.mock.calls.length;
 		writers.delete('alice');
 		const replay = await run();
 		expect(replay.status).toBe(403);
-		expect(await replay.json()).toMatchObject({ type: 'tag:marimo.io,2026:host/forbidden' });
+		expect(await replay.json()).toMatchObject({ type: 'urn:marimo:problem:forbidden' });
 		expect(callRuntime.mock.calls.length).toBe(calls);
 	});
 
@@ -389,11 +506,11 @@ describe('generic host app', () => {
 		});
 		callRuntime.mockResolvedValueOnce(reply(202, { id: 'run-1', notebook_id: 'local' }));
 		const run = await request('POST', `/notebooks/${id}/runtime/runs`, {
-			body: { cells: ['c1'] },
+			body: { cells: [{ id: 'c1' }] },
 			key: 'run',
 		});
 		expect(await run.json()).toEqual({ id: 'run-1', notebook_id: 'p1/n1' });
-		callRuntime.mockResolvedValueOnce(reply(409, { edit: { document: { notebook_id: 'local' } } }));
+		callRuntime.mockResolvedValueOnce(reply(409, { document: { notebook_id: 'local' } }));
 		const stale = await request('POST', `/notebooks/${id}/edits`, {
 			body: { changes: [] },
 			key: 'edit',
@@ -401,7 +518,7 @@ describe('generic host app', () => {
 		});
 		expect(stale.status).toBe(409);
 		expect(stale.headers.get('Content-Type')).toBe('application/problem+json');
-		expect(await stale.json()).toEqual({ edit: { document: { notebook_id: 'p1/n1' } } });
+		expect(await stale.json()).toEqual({ document: { notebook_id: 'p1/n1' } });
 		expect(callRuntime.mock.calls.at(-1)![2].headers).toMatchObject({ 'If-Match': 'etag' });
 		expect(
 			(await request('POST', `/notebooks/${id}/edits`, { body: {}, key: 'e2', as: 'bob' })).status,
@@ -412,7 +529,7 @@ describe('generic host app', () => {
 		const { request, callRuntime, ensureRuntime, reply } = fakePlatform();
 		const response = await request('DELETE', '/notebooks/p1%2Fn1/runtime/runs/r1', { key: 'stop' });
 		expect(response.status).toBe(409);
-		expect(await response.json()).toMatchObject({ type: 'tag:marimo.io,2026:host/no-runtime' });
+		expect(await response.json()).toMatchObject({ type: 'urn:marimo:problem:no-runtime' });
 		expect(callRuntime).not.toHaveBeenCalled();
 		expect(ensureRuntime).not.toHaveBeenCalled();
 
@@ -458,11 +575,11 @@ describe('generic host app', () => {
 		expect(callRuntime.mock.calls[0][2]).toMatchObject({ method: 'GET', path: '/events' });
 		// Platform-published kinds are served locally; the runtime still reports its runtime records.
 		const filtered = await readUntilReady(
-			await request('GET', '/notebooks/p1%2Fn1/events?types=cell,notebook'),
+			await request('GET', '/notebooks/p1%2Fn1/events?kinds=cell,notebook'),
 		);
 		expect(filtered.map((event) => event.event)).toEqual(['notebook', 'ready']);
 		expect(callRuntime.mock.calls.at(-1)![2]).toMatchObject({
-			path: '/events?types=cell%2Cruntime',
+			path: '/events?kinds=cell%2Cruntime',
 		});
 		expect((await request('GET', '/notebooks/p1%2Fn1/events', { as: 'bob' })).status).toBe(403);
 		callRuntime.mockResolvedValueOnce(reply(401, { type: 'x', detail: 'runtime token expired' }));
@@ -471,9 +588,7 @@ describe('generic host app', () => {
 		expect(rejected.headers.get('WWW-Authenticate')).toBe('Bearer realm="fake"');
 		callRuntime
 			.mockResolvedValueOnce(reply(200, undefined, [{ event: 'ready', data: {} }]))
-			.mockResolvedValueOnce(
-				reply(409, { type: 'x', edit: { document: { notebook_id: 'local' } } }),
-			);
+			.mockResolvedValueOnce(reply(409, { type: 'x', document: { notebook_id: 'local' } }));
 		const failed = await request('GET', '/notebooks/p1%2Fn1/events');
 		const text = await failed.text();
 		expect(text).toContain('event: effect/httpapi/stream/failure');
@@ -497,7 +612,7 @@ describe('generic host app', () => {
 					])
 				: reply(200, undefined, []),
 		);
-		const events = await readUntilReady(await request('GET', '/events?types=runtime'));
+		const events = await readUntilReady(await request('GET', '/events?kinds=runtime'));
 		expect(events.map((event) => event.event)).toEqual(['runtime', 'ready']);
 		expect(events[0].data.runtime).toEqual({
 			id: 'rt-1:kernel',
@@ -508,7 +623,7 @@ describe('generic host app', () => {
 		expect(callRuntime.mock.calls.at(-1)![3]).toBeInstanceOf(AbortSignal);
 		const probes = callRuntime.mock.calls.length;
 		const hidden = await readUntilReady(
-			await request('GET', '/events?types=runtime', { as: 'bob' }),
+			await request('GET', '/events?kinds=runtime', { as: 'bob' }),
 		);
 		expect(hidden.map((event) => event.event)).toEqual(['ready']);
 		expect(callRuntime.mock.calls.length).toBe(probes);
@@ -517,7 +632,7 @@ describe('generic host app', () => {
 	it('discovers runtimes when the catalog is recomputed, not on every tick', async () => {
 		const { request, runtimes } = fakePlatform();
 		await request('PUT', '/notebooks/p1%2Fn1/runtime', { body: {}, key: 'start' });
-		const stream = streamText(await request('GET', '/events?types=runtime'));
+		const stream = streamText(await request('GET', '/events?kinds=runtime'));
 		try {
 			await stream.until('event: ready\n');
 			await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 5));
@@ -552,13 +667,13 @@ describe('generic host app', () => {
 		vi.spyOn(platform, 'catalogVersion').mockRejectedValueOnce(new Error('Catalog unavailable'));
 		const failed = await request('GET', '/notebooks/p1%2Fn1/events');
 		expect(await failed.text()).toContain('event: effect/httpapi/stream/failure');
-		const events = await readUntilReady(await request('GET', '/events?types=attachment'));
+		const events = await readUntilReady(await request('GET', '/events?kinds=attachment'));
 		expect(events.map((event) => event.event)).toEqual(['ready']);
 	});
 
 	it('tells catalog subscribers when a notebook stream client disconnects', async () => {
 		const { request } = fakePlatform();
-		const catalog = streamText(await request('GET', '/events?types=attachment'));
+		const catalog = streamText(await request('GET', '/events?kinds=attachment'));
 		try {
 			await catalog.until('event: ready\n');
 			const notebook = streamText(await request('GET', '/notebooks/p1%2Fn1/events'));

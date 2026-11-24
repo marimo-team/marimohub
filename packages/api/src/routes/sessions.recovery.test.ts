@@ -137,19 +137,22 @@ it('a stale original saga cannot destroy or fail a runtime completed by racing r
 	expect(env.calls.destroy).toBe(0);
 });
 
-it.each(['dead'] as const)('retains the receipt when readiness is %s', async (readiness) => {
-	const env = await fixture();
-	const original = await env.prepare();
-	await expectError(
-		await env.replica({ deps: { kernelProbe: async () => readiness } }).request('POST', env.path),
-		503,
-	);
-	expect(
-		(await env.api.deps.services.sessions.getSession(env.project.id, original.session_id)).status,
-	).toBe('starting');
-	expect(env.create).toHaveBeenCalledTimes(1);
-	expect(env.calls.destroy).toBe(0);
-});
+it.each(['dead', 'unresponsive'] as const)(
+	'retains the receipt when readiness is %s',
+	async (readiness) => {
+		const env = await fixture();
+		const original = await env.prepare();
+		await expectError(
+			await env.replica({ deps: { kernelProbe: async () => readiness } }).request('POST', env.path),
+			503,
+		);
+		expect(
+			(await env.api.deps.services.sessions.getSession(env.project.id, original.session_id)).status,
+		).toBe('starting');
+		expect(env.create).toHaveBeenCalledTimes(1);
+		expect(env.calls.destroy).toBe(0);
+	},
+);
 
 it('does not publish a prepared runtime when stop wins during its readiness probe', async () => {
 	const env = await fixture();
@@ -474,6 +477,33 @@ it.each(['expires_at', 'sandbox_deadline_at'] as const)(
 		expect(env.calls.destroy).toBe(1);
 	},
 );
+
+it('rejects and reclaims when the deadline passes during completion on the launch path', async () => {
+	const env = await fixture();
+	const sessions = env.api.deps.services.sessions;
+	const complete = sessions.completeStartup.bind(sessions);
+	vi.spyOn(sessions, 'completeStartup').mockImplementationOnce(async (pid, sid, id) => {
+		const stored = await sessions.getSession(pid, sid);
+		await env.bucket.put(
+			paths.session(pid, sid),
+			JSON.stringify({
+				...stored,
+				startup_completion: {
+					...stored.startup_completion,
+					expires_at: new Date(Date.now() - 1000).toISOString(),
+				},
+			}),
+		);
+		return complete(pid, sid, id);
+	});
+	await expectError(await env.api.request('POST', env.path), 409);
+	const [session] = await sessions.listSessions();
+	expect(session).toMatchObject({ status: 'failed', sandbox_reclaimed_at: expect.any(String) });
+	expect(env.calls.destroy).toBe(1);
+	expect((await sessions.getEditorClaim(env.project.id, env.notebook.id))?.session_id).not.toBe(
+		session.session_id,
+	);
+});
 
 it('rechecks notebook security labels before publishing a prepared runtime', async () => {
 	const security = localResourceSecurity(

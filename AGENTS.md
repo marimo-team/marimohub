@@ -49,8 +49,8 @@ repository root's own `test:root:vitest` task reuses the same `vitestTaskCache`.
   Anything that _reaches_ something — a store, a cluster, an IdP — is a port.
 - **Adapters** (`packages/storage-*`, `packages/compute-*`, `packages/auth-*`,
   `packages/object-browser-*`, `packages/notify-*`, `packages/source-control-*`,
-  `packages/search-bucket`, `packages/embeddings-http`, and the credential,
-  secret, and DuckDB runtime packages) implement the ports.
+  `packages/search-bucket`, `packages/embeddings-http`, `packages/metadata-*`, and the
+  credential, secret, and DuckDB runtime packages) implement the ports.
   `packages/api` wires the services to Hono/OpenAPI routes via
   `@hono/zod-openapi`.
 - **`packages/config`** is the ONLY package that imports concrete adapters: it
@@ -82,7 +82,7 @@ is enforced mechanically: a
 `no-restricted-imports` override in `vite.config.ts` (files `packages/core/**`,
 `packages/api/**`) bans `@marimo-hub/{storage,compute,auth,credentials,secrets}-*`
 imports, `@marimo-hub/{notify,object-browser,database-browser,source-control,search,embeddings}-*`
-imports, `@marimo-hub/{duckdb-wasm-runtime,postgres-runtime}`, and
+imports, `@marimo-hub/{duckdb-wasm-runtime,postgres-runtime}`, `@marimo-hub/metadata-*`, and
 `@marimo-hub/notebook-bridge` (including its subpaths). A colocated `package-dependencies.test.ts` in
 each of `core` and `api` fails if one of these packages appears in its
 `package.json`.
@@ -124,6 +124,8 @@ adapter task caches. Service-backed integration tests can use the focused
   schemas; drift tests fail the build when they are stale. Regenerate with
   `pnpm schemas:generate`. CI diffs each spec against `main` with oasdiff and
   fails on breaking changes. See `internal/schemas/README.md`.
+  `/api/app-jobs/v1`, called by the in-sandbox `marimohub.jobs` client, is outside
+  `openapi.yaml`; `packages/api/src/jobs/appJobs*.test.ts` pins its contract.
 - **Frontend** (`packages/web`) is a React 19 SPA using Tailwind v4
   (`@tailwindcss/vite`) with shadcn-style UI (`class-variance-authority`,
   `clsx`, `tailwind-merge`, `lucide-react`, `sonner`) plus
@@ -168,7 +170,7 @@ These CAS-managed records also have one writer each:
 - `ProjectService` owns the retention cursor at `_system/project-purge-cursor.json`.
 - `NotebookService` owns the retention cursor at `_system/notebook-purge-cursor.json`.
 - `NotebookService` owns each local notebook `source.json` publication head, immutable version payloads, and capture sidecars. Every accepted capture, including unchanged content, advances that head with ETag CAS. Editor handover and artifact GC use the same publication fence.
-- `SessionService` owns session stop attempts, bounded receipts, save-dirty generations, and durable-capture acknowledgements in each session record.
+- `SessionService` owns session stop attempts, bounded receipts, save-dirty generations, durable-capture acknowledgements, and the startup progress and startup-completion receipt fields in each session record.
 - `NotebookService` owns the notebook artifact rotation cursor at
   `_system/notebook-gc-cursor.json`, written by CAS in `sweepNotebookArtifacts`.
 - `MaintenanceService` owns the snapshot-expiry cursor at `_system/snapshot-expiry-cursor.json`,
@@ -283,7 +285,11 @@ These CAS-managed records also have one writer each:
   terminal side effects finish). `JobRunService` also owns the per-job operation claim at
   `_system/job-operations/{pid}/{nid}/{jid}.json` and deletion fence at
   `_system/job-deletions/{pid}/{nid}/{jid}.json`. Run outputs under `runs/{rid}/`
-  are write-once.
+  are write-once. `JobRunService` also owns the create-once project run locators at
+  `projects/{pid}/run-index/{reverse_ulid}.json`; run records stay authoritative
+  ([`development_docs/project-run-history.md`](./development_docs/project-run-history.md)).
+- `MetadataTransfer` (`packages/metadata-postgres/src/transfer.ts`) owns the backend marker at
+  `_system/metadata-backend.json` by ETag CAS; hosts only read it at startup.
 
 Each integration store also owns its immutable `versions/{n}.json` history and
 its `integrations/_names/{name}.json` uniqueness claim. Version writes use
@@ -301,8 +307,3 @@ See [`development_docs/bucket_spec.md`](./development_docs/bucket_spec.md).
 ## Outstanding work
 
 See [`plans/`](./plans) for planned changes and their status.
-
-`JobRunService` also owns immutable project run locators at
-`projects/{pid}/run-index/{reverse_ulid}.json`. These are rebuildable pointers;
-run records and live source authorization remain authoritative. See
-[`development_docs/project-run-history.md`](./development_docs/project-run-history.md).

@@ -14,7 +14,11 @@ import {
 	createVersionId,
 	UserId,
 } from '../../ids';
-import { UnavailableError, SessionPersistenceRequiredError } from '../../errors';
+import {
+	RuntimeCaptureSetupError,
+	SessionPersistenceRequiredError,
+	UnavailableError,
+} from '../../errors';
 import { paths } from '../../paths';
 import { readFileFailure } from '../../ports/sandbox';
 import { expectFileResult } from '../../testing/resultAssertions';
@@ -1456,10 +1460,17 @@ describe('SandboxProvisioner', () => {
 					notebookBridge: failure === 'payload' ? undefined : payload,
 					onSandboxDestroyed: destroyed,
 				});
-				await expect(result).rejects.toBeInstanceOf(UnavailableError);
+				await expect(result).rejects.toBeInstanceOf(
+					failure === 'upload' || failure === 'configuration'
+						? UnavailableError
+						: RuntimeCaptureSetupError,
+				);
 				await expect(result).rejects.not.toThrow('private-provider-detail');
 				if (failure === 'upload' || failure === 'configuration')
 					await expect(result).rejects.toMatchObject({ cause: error });
+				if (failure === 'payload')
+					await expect(result).rejects.toThrow('notebook bridge payload is not configured');
+				if (failure === 'launcher') await expect(result).rejects.toThrow('bridge launcher');
 				expect(calls.startProcess).toHaveLength(0);
 				expect(calls.destroy).toBe(1);
 				expect(destroyed).toHaveBeenCalledOnce();
@@ -1495,7 +1506,7 @@ describe('SandboxProvisioner', () => {
 						...options,
 						runtimeCapture: true,
 					}),
-				).rejects.toBeInstanceOf(UnavailableError);
+				).rejects.toThrow(RuntimeCaptureSetupError);
 				expect(calls.startProcess).toHaveLength(0);
 				expect(calls.destroy).toBe(1);
 			} finally {
@@ -5366,6 +5377,42 @@ it.each([false, true])(
 		});
 	},
 );
+
+it('a failing workspace batch is not reported as a capture failure', async () => {
+	const { instance, calls } = makeFakeSandbox();
+	Object.assign(instance, { supportsLaunchSetupOutput: true });
+	instance.ready = async () => {};
+	const writeFiles = instance.writeFiles.bind(instance);
+	instance.writeFiles = async (files) => {
+		if (files.some(({ path }) => path === '/tmp/integration'))
+			throw new Error('workspace write failed');
+		await writeFiles(files);
+	};
+	instance.launchProcess = async (command, launch) => ({
+		success: true,
+		process: await instance.startProcess(command, launch),
+		setupOutput: { stdout: '', stderr: '' },
+		timings: { setup: 0, start: 0, waitport: 0 },
+	});
+	const result = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+		sandboxId: createSandboxId(),
+		projectId: createProjectId(),
+		notebookId: createNotebookId(),
+		hostname: 'localhost',
+		bucket: bucketConfig,
+		kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
+		sessionEnv: { files: [{ path: '/tmp/integration', content: 'config' }] },
+		notebookBridge: { launcher: 'bridge.py', files: [{ name: 'bridge.py', content: 'bridge' }] },
+		bridgeParentOrigin: 'https://hub.test',
+		runtimeCapture: true,
+	});
+	await expect(result).rejects.toMatchObject({ cause: { message: 'workspace write failed' } });
+	expect(calls.writeFiles.flat().some(({ path }) => path.includes('/marimohub-bridge/'))).toBe(
+		false,
+	);
+	expect(calls.startProcess).toHaveLength(0);
+	expect(calls.destroy).toBe(1);
+});
 
 describe('combined preparation failure cleanup', () => {
 	it.each(['readiness', 'credentials', 'files', 'exposure'] as const)(

@@ -2606,6 +2606,39 @@ paths:
       responses:
         '204':
           description: Stored.
+  /_system/metadata-backend.json:
+    summary: Selects the metadata backend (bucket or PostgreSQL) and its epoch.
+      Always stored in the artifact bucket; hosts refuse to start while it is
+      frozen.
+    parameters: []
+    x-mutability: cas
+    x-owner: MetadataTransfer
+    get:
+      operationId: read_system_metadata_backend_json
+      summary: Read MetadataBackendMarker
+      tags:
+        - ops
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetadataBackendMarker'
+    put:
+      operationId: write_system_metadata_backend_json
+      summary: Write MetadataBackendMarker
+      tags:
+        - ops
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MetadataBackendMarker'
+      responses:
+        '204':
+          description: Stored.
   /_system/migrations/{id}.json:
     summary: Background migration lease, resumable cursor, or permanent completion
       receipt.
@@ -7689,10 +7722,8 @@ components:
                   type: string
                 phase:
                   type: string
-                  enum:
-                    - allocating
-                    - workspace
-                    - starting
+                  minLength: 1
+                  maxLength: 64
                 detail:
                   type: string
                   maxLength: 240
@@ -7705,14 +7736,12 @@ components:
                   format: date-time
                   pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
                 observed:
-                  maxItems: 3
+                  maxItems: 32
                   type: array
                   items:
                     type: string
-                    enum:
-                      - allocating
-                      - workspace
-                      - starting
+                    minLength: 1
+                    maxLength: 64
               required:
                 - sandbox_id
                 - phase
@@ -7731,10 +7760,8 @@ components:
               type: string
             phase:
               type: string
-              enum:
-                - allocating
-                - workspace
-                - starting
+              minLength: 1
+              maxLength: 64
             detail:
               type: string
               maxLength: 240
@@ -7747,14 +7774,12 @@ components:
               format: date-time
               pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
             observed:
-              maxItems: 3
+              maxItems: 32
               type: array
               items:
                 type: string
-                enum:
-                  - allocating
-                  - workspace
-                  - starting
+                minLength: 1
+                maxLength: 64
           required:
             - sandbox_id
             - phase
@@ -9097,6 +9122,49 @@ components:
         - event
         - actor
       additionalProperties: {}
+    MetadataBackendMarker:
+      type: object
+      properties:
+        version:
+          type: number
+          const: 1
+        artifact_store_id:
+          type: string
+          format: uuid
+          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+        backend:
+          type: string
+          enum:
+            - bucket
+            - postgres
+        epoch:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        state:
+          type: string
+          enum:
+            - active
+            - frozen
+        namespace:
+          anyOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        transfer_id:
+          anyOf:
+            - type: string
+              format: uuid
+              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+            - type: 'null'
+      required:
+        - version
+        - artifact_store_id
+        - backend
+        - epoch
+        - state
+        - namespace
+        - transfer_id
     MigrationState:
       oneOf:
         - type: object

@@ -128,70 +128,6 @@ const AI_CHAT_PERMISSION_TIMEOUT_SECONDS: ConfigVar = {
 
 export const CONFIG_SPEC: ConfigGroup[] = [
 	{
-		name: 'Metadata storage',
-		selector: 'MARIMOHUB_METADATA_BACKEND',
-		selectorDefault: 'bucket',
-		description:
-			'Metadata storage is separate from artifact storage. PostgreSQL requires a Node host and an activated deployment.',
-		backends: [
-			{ name: 'Bucket', selectorValue: 'bucket', vars: [] },
-			{
-				name: 'PostgreSQL',
-				selectorValue: 'postgres',
-				vars: [
-					{
-						id: 'MARIMOHUB_METADATA_ADMIN_POSTGRES_URL',
-						name: 'Administrative PostgreSQL URL',
-						description:
-							'Schema-owner connection for explicit metadata administration commands. Do not give this credential to runtime replicas.',
-						secret: true,
-						optIn: true,
-					},
-					{
-						id: 'MARIMOHUB_METADATA_POSTGRES_URL',
-						name: 'PostgreSQL URL',
-						description: 'Runtime connection URL. The runtime role must not own the schema.',
-						required: true,
-						secret: true,
-					},
-					{
-						id: 'MARIMOHUB_METADATA_NAMESPACE',
-						name: 'Namespace',
-						description: 'Deployment namespace, from 1 to 128 UTF-8 bytes.',
-						required: true,
-					},
-					{
-						id: 'MARIMOHUB_METADATA_POSTGRES_POOL_MAX',
-						name: 'Pool size',
-						description:
-							'Maximum connections per replica. Multiply by replica count for the deployment connection budget.',
-						default: '10',
-					},
-					{
-						id: 'MARIMOHUB_METADATA_POSTGRES_CONNECT_TIMEOUT_MS',
-						name: 'Connect timeout',
-						description: 'Maximum connection acquisition time in milliseconds.',
-						default: '5000',
-					},
-					{
-						id: 'MARIMOHUB_METADATA_POSTGRES_STATEMENT_TIMEOUT_MS',
-						name: 'Statement timeout',
-						description: 'Maximum statement time in milliseconds.',
-						default: '10000',
-					},
-					{
-						id: 'MARIMOHUB_METADATA_POSTGRES_LOCK_TIMEOUT_MS',
-						name: 'Lock timeout',
-						description:
-							'Maximum lock wait in milliseconds. Must not exceed the statement timeout.',
-						default: '2000',
-					},
-				],
-			},
-		],
-	},
-
-	{
 		name: 'Theme',
 		description:
 			'Deployment branding and session links for the hub UI. Session link templates stay on the server. Other values are public. See the [theming guide](./theming.md) for examples and asset hosting.',
@@ -347,7 +283,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		selector: 'MARIMOHUB_STORAGE_BACKEND',
 		selectorDefault: 's3',
 		description:
-			'Stores all notebooks and state. Durable self-hosted backends are `s3`, `gcs`, `azure`, and single-node `fs`. `library` loads an external Node adapter. `r2` is Workers-only. `memory` is for development and tests.',
+			'Stores notebook artifacts and, by default, metadata. See [Metadata storage](#metadata-storage) for the PostgreSQL option. Durable self-hosted backends are `s3`, `gcs`, `azure`, and single-node `fs`. `library` loads an external Node adapter. `r2` is Workers-only. `memory` is for development and tests.',
 		backends: [
 			{
 				name: 'S3 / S3-compatible',
@@ -526,6 +462,77 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				description:
 					'Requires a Cloudflare R2 binding; wired by hand in `examples/cloudflare-worker`, not via env credentials.',
 				vars: [],
+			},
+		],
+	},
+	{
+		name: 'Metadata storage',
+		selector: 'MARIMOHUB_METADATA_BACKEND',
+		selectorDefault: 'bucket',
+		description:
+			'Metadata storage is separate from artifact storage. PostgreSQL requires a Node host and an activated deployment.',
+		backends: [
+			{ name: 'Bucket', selectorValue: 'bucket', vars: [] },
+			{
+				name: 'PostgreSQL',
+				selectorValue: 'postgres',
+				vars: [
+					{
+						id: 'MARIMOHUB_METADATA_ADMIN_POSTGRES_URL',
+						name: 'Administrative PostgreSQL URL',
+						description:
+							'Schema-owner connection read only by the `metadata:*` administration commands. Do not set it on runtime replicas.',
+						secret: true,
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_METADATA_POSTGRES_URL',
+						name: 'PostgreSQL URL',
+						description: 'Runtime connection URL. The runtime role must not own the schema.',
+						required: true,
+						secret: true,
+					},
+					{
+						id: 'MARIMOHUB_METADATA_POSTGRES_ALLOW_INSECURE_TRANSPORT',
+						name: 'Metadata PostgreSQL insecure transport',
+						description:
+							'Allows metadata PostgreSQL URLs, including the administrative URL, to reach a non-loopback host without `sslmode=verify-full` or `verify-ca`. Disabled by default.',
+						default: 'false',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_METADATA_NAMESPACE',
+						name: 'Namespace',
+						description: 'Deployment namespace, from 1 to 128 UTF-8 bytes.',
+						required: true,
+					},
+					{
+						id: 'MARIMOHUB_METADATA_POSTGRES_POOL_MAX',
+						name: 'Pool size',
+						description:
+							'Maximum connections per replica. Multiply by replica count for the deployment connection budget.',
+						default: '10',
+					},
+					{
+						id: 'MARIMOHUB_METADATA_POSTGRES_CONNECT_TIMEOUT_MS',
+						name: 'Connect timeout',
+						description: 'Maximum connection acquisition time in milliseconds.',
+						default: '5000',
+					},
+					{
+						id: 'MARIMOHUB_METADATA_POSTGRES_STATEMENT_TIMEOUT_MS',
+						name: 'Statement timeout',
+						description: 'Maximum statement time in milliseconds.',
+						default: '10000',
+					},
+					{
+						id: 'MARIMOHUB_METADATA_POSTGRES_LOCK_TIMEOUT_MS',
+						name: 'Lock timeout',
+						description:
+							'Maximum lock wait in milliseconds. Must not exceed the statement timeout.',
+						default: '2000',
+					},
+				],
 			},
 		],
 	},

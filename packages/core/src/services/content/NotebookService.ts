@@ -109,6 +109,7 @@ import { NotebookWorkspaceService } from './NotebookWorkspaceService';
 import { DeepLinkService } from './DeepLinkService';
 import { SessionService } from '../runtime/SessionService';
 import { AppPoolStore } from '../runtime/AppPoolStore';
+import { JobRunService } from '../jobs/JobRunService';
 import { nextIsoTimestamp } from '../../utcDate';
 import { decodeUtf8PreservingBom } from '../../text';
 
@@ -1934,6 +1935,7 @@ export class NotebookService {
 		const cursor = await readRetentionCursor(this.bucket, cursorKey);
 		let after = cursor.after;
 		let purged = 0;
+		const jobRuns = new JobRunService(this.bucket, this.metrics);
 		for (const { projectId, notebookId, key } of retentionBatch(
 			stale.map((item) => ({ ...item, key: `${item.projectId}/${item.notebookId}` })),
 			cursor.after,
@@ -1942,6 +1944,7 @@ export class NotebookService {
 			if (Date.now() >= deadline) break;
 			try {
 				const fs = await this.getFsSnapshot(projectId, notebookId);
+				await jobRuns.deleteProjectLocators(projectId, notebookId);
 				await this.hardDeleteNotebook(projectId, notebookId);
 				if (fs) orphanedSnapshots.push(fs);
 				// Commit each deletion so a later failure cannot replay the whole backlog.

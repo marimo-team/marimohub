@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createJobId, createNotebookId, createProjectId, createRunId } from '../../ids';
 import { JobRunSchema, RUN_STATUSES } from '../../schema';
 import { ACTOR, uid } from '../../testing/fixtures';
-import { jobCapabilities, toSharedJobRunSummary } from './access';
+import { jobCapabilities, MAX_ACTIVE_CONSUMER_RUNS_PER_JOB, toSharedJobRunSummary } from './access';
 
 const OTHER = uid('other');
 
@@ -20,6 +20,7 @@ describe('job capabilities', () => {
 						run: { triggered_by: OTHER },
 					});
 					expect(access).toEqual({
+						editor: false,
 						canTrigger: execution && triggerAllowed,
 						history: history === 'shared' ? 'summary' : 'none',
 						canReadHtml: false,
@@ -39,7 +40,13 @@ describe('job capabilities', () => {
 				triggerAllowed: true,
 				run: { triggered_by: ACTOR },
 			}),
-		).toEqual({ canTrigger: false, history: 'full', canReadHtml: true, canReadLogs: false });
+		).toEqual({
+			editor: false,
+			canTrigger: false,
+			history: 'full',
+			canReadHtml: true,
+			canReadLogs: false,
+		});
 	});
 
 	it('preserves editor access independently of consumer policy and trigger grants', () => {
@@ -51,7 +58,13 @@ describe('job capabilities', () => {
 				triggerAllowed: false,
 				run: { triggered_by: OTHER },
 			}),
-		).toEqual({ canTrigger: true, history: 'full', canReadHtml: true, canReadLogs: true });
+		).toEqual({
+			editor: true,
+			canTrigger: true,
+			history: 'full',
+			canReadHtml: true,
+			canReadLogs: true,
+		});
 	});
 
 	it('does not treat scheduled runs as consumer-owned', () => {
@@ -64,6 +77,12 @@ describe('job capabilities', () => {
 				run: {},
 			}).history,
 		).toBe('none');
+	});
+});
+
+describe('consumer run cap', () => {
+	it('is a small fixed bound that lets a consumer keep a few runs in flight', () => {
+		expect(MAX_ACTIVE_CONSUMER_RUNS_PER_JOB).toBe(3);
 	});
 });
 

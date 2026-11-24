@@ -434,7 +434,8 @@ const HOP_BY_HOP = new Set([
 /**
  * Notebook code can read request headers. HTTP and WebSocket proxies strip hub
  * credentials, including Access assertions, service tokens, and cookies.
- * Only the session's kernel token reaches the notebook.
+ * Only the session's kernel token reaches the notebook, plus, for app sessions, the
+ * endpoint-bound app-jobs credential that `/api/app-jobs/v1` alone accepts.
  */
 export const CREDENTIAL_HEADERS = new Set([
 	'cookie',
@@ -615,7 +616,7 @@ export async function observeRuntimeSave(
 			level: phase === 'intent' ? 'error' : 'warn',
 			event: `session_save_${phase}_failed`,
 			session_id: sessionId,
-			error: String(error),
+			error: errorMetadataChain(error),
 		});
 	};
 	try {

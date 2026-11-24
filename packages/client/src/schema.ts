@@ -3014,6 +3014,7 @@ export interface components {
 					| 'SERVICE_UNAVAILABLE'
 					| 'SESSION_PERSISTENCE_REQUIRED'
 					| 'PYTHON_ENV_SETUP_FAILED'
+					| 'RUNTIME_CAPTURE_SETUP_FAILED'
 					| 'RESOURCE_EXHAUSTED'
 					| 'SURFACE_NOT_ENABLED'
 					| 'SURFACE_UNAVAILABLE'
@@ -3027,6 +3028,7 @@ export interface components {
 					| 'PAYLOAD_TOO_LARGE'
 					| 'NO_HTML_SNAPSHOT'
 					| 'NO_RUN_OUTPUT'
+					| 'STREAM_EXPIRED'
 					| 'INTERNAL_ERROR';
 				message: string;
 				/** @description Field-level validation failures. */
@@ -4933,7 +4935,7 @@ export interface components {
 			/** @description Allow authorized consumers to trigger this job. Scoped credentials also need job.trigger and source access. Defaults to false. */
 			consumer_execution?: boolean;
 			/**
-			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to current source readers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
+			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
 			 * @enum {string}
 			 */
 			consumer_history?: 'private' | 'shared';
@@ -4991,7 +4993,7 @@ export interface components {
 			/** @description Allow authorized consumers to trigger this job. Scoped credentials also need job.trigger and source access. Defaults to false. */
 			consumer_execution?: boolean;
 			/**
-			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to current source readers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
+			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
 			 * @enum {string}
 			 */
 			consumer_history?: 'private' | 'shared';
@@ -5017,7 +5019,7 @@ export interface components {
 			/** @description Allow authorized consumers to trigger this job. Scoped credentials also need job.trigger and source access. Defaults to false. */
 			consumer_execution?: boolean;
 			/**
-			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to current source readers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
+			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
 			 * @enum {string}
 			 */
 			consumer_history?: 'private' | 'shared';

@@ -87,8 +87,9 @@ export async function validateMetadataRecord(record: BucketObjectBody): Promise<
 		return;
 	}
 	if (
-		/\/(job-index|run-index|deep-links)\/[^/]+\.json$/.test(record.key) &&
-		!record.key.startsWith('_system/')
+		/^projects\/[^/]+\/notebooks\/[^/]+\/(?:job-index|deep-links|jobs\/[^/]+\/run-index)\/[^/]+\.json$/.test(
+			record.key,
+		)
 	) {
 		if (bytes.length > 0)
 			throw new MetadataTransferError(`Invalid empty index marker: ${record.key}`);

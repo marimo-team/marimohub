@@ -85,6 +85,9 @@ If you combine proxy mode with app access, trust every notebook author in the de
 HTTP and WebSocket proxies remove hub credentials before they forward requests to kernels or secondary editor surfaces.
 The filter includes cookies, Authorization, Cloudflare Access headers, the IAP assertion, and configured `MARIMOHUB_AUTH_PROXY_HEADER` names.
 Library deployments must supply custom identity headers through `sandbox.credentialHeaders`.
+One header is added rather than removed: when jobs are on, app sessions carry an encrypted
+[app-jobs credential](https://github.com/marimo-team/marimohub/blob/main/development_docs/app-jobs.md)
+that authenticates only `/api/app-jobs/v1` and does not expose the visitor's identity.
 
 ## Native kernel authentication
 

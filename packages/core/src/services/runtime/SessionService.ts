@@ -16,12 +16,13 @@ import type { Bucket, BucketObject, BucketObjectBody } from '../../ports/bucket'
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { BUCKET_SCAN_CONCURRENCY, MARIMO_PORT, SANDBOX_STARTUP_PHASES } from '../../constants';
-import type { EditorSandboxSharing, SessionMode } from '../../constants';
+import type { EditorSandboxSharing, SandboxStartupPhase, SessionMode } from '../../constants';
 import { KeyedSerialQueue, mapWithConcurrency } from '../../concurrency';
 import { Millis, sleep } from '../../duration';
 import { EtagRecordCache } from '../../etagRecordCache';
 import {
 	ConflictError,
+	StartupCompletionExpiredError,
 	EditSessionChangedError,
 	NotFoundError,
 	PreconditionFailedError,
@@ -76,12 +77,30 @@ import { listAllObjects } from '../catalog/storage';
 import { AppPoolStore } from './AppPoolStore';
 import { pullSourceRootPath, sandboxWorkspaceLayout } from './workspaceLayout';
 
+export type KnownSessionStartup = Omit<NonNullable<Session['startup']>, 'phase' | 'observed'> & {
+	phase: SandboxStartupPhase;
+	observed: SandboxStartupPhase[];
+};
+
 export interface SessionStartupStatus {
 	session_id: SessionId;
 	status: Session['status'];
 	status_changed_at: string | null;
-	startup: Session['startup'] | null;
+	startup: KnownSessionStartup | null;
 	error: Session['error'] | null;
+}
+
+function phaseIndex(phase: string): number {
+	return (SANDBOX_STARTUP_PHASES as readonly string[]).indexOf(phase);
+}
+
+function isKnownPhase(phase: string): phase is SandboxStartupPhase {
+	return phaseIndex(phase) >= 0;
+}
+
+function knownStartup(startup: Session['startup']): KnownSessionStartup | null {
+	if (!startup || !isKnownPhase(startup.phase)) return null;
+	return { ...startup, phase: startup.phase, observed: startup.observed.filter(isKnownPhase) };
 }
 
 function advancesStartup(session: Session, next: Session['startup']): boolean {
@@ -92,7 +111,7 @@ function advancesStartup(session: Session, next: Session['startup']): boolean {
 	return (
 		next.sandbox_id === current.sandbox_id &&
 		Date.parse(next.started_at) >= Date.parse(current.started_at) &&
-		SANDBOX_STARTUP_PHASES.indexOf(next.phase) > SANDBOX_STARTUP_PHASES.indexOf(current.phase)
+		phaseIndex(next.phase) > phaseIndex(current.phase)
 	);
 }
 
@@ -785,7 +804,7 @@ export class SessionService {
 						(at) => at !== undefined && Date.parse(at) <= Date.now(),
 					)
 				)
-					throw new ConflictError('The prepared runtime has expired');
+					throw new StartupCompletionExpiredError();
 				return runningSession(session, receipt);
 			},
 			known?.value.status === 'starting' ? known : undefined,
@@ -915,6 +934,16 @@ export class SessionService {
 			if (!sessionPersistsEdits(session) || session.sandbox_reclaimed_at) return null;
 			return { ...session, save_dirty: dirty };
 		});
+	}
+
+	/** Clears only the save generation the caller observed, so a newer save stays dirty. */
+	async clearSaveDirty(session: Session): Promise<void> {
+		if (!session.save_dirty) return;
+		await this.mutate(session.project_id, session.session_id, (current) =>
+			current.save_dirty?.id === session.save_dirty?.id
+				? { ...current, save_dirty: undefined }
+				: null,
+		);
 	}
 
 	async requestStop(
@@ -1496,7 +1525,7 @@ export class SessionService {
 			session_id: id,
 			status: session.status,
 			status_changed_at: session.status_changed_at ?? null,
-			startup: session.startup ?? null,
+			startup: knownStartup(session.startup),
 			error: session.error ?? null,
 		};
 	}

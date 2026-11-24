@@ -44,6 +44,7 @@ import {
 	jitteredBackoff,
 	BadRequestError,
 	ConflictError,
+	StartupCompletionExpiredError,
 	SessionPersistenceRequiredError,
 	PreconditionFailedError,
 	WarmPoolClaimExpiredError,
@@ -1610,7 +1611,13 @@ async function completeNotebookSessionStart(
 				throw new UnavailableError('The prepared runtime is not ready. Retry shortly.');
 			await validateStartupCompletion(deps, user, session);
 		}
-		const updated = await sessions.completeStartup(pid, sid, receipt.id, prepared);
+		const updated = await sessions
+			.completeStartup(pid, sid, receipt.id, prepared)
+			.catch((error: unknown) => {
+				throw error instanceof StartupCompletionExpiredError
+					? new StartupCompletionRejectedError('expiry')
+					: error;
+			});
 		await validateStartupCompletion(deps, user, updated);
 		return updated;
 	} catch (error) {
@@ -2968,7 +2975,10 @@ async function startNotebookSessionOnce(
 			})
 			.run();
 	} catch (err) {
-		if (completionAttempted) throw err;
+		if (completionAttempted) {
+			observer.tag('provision_error_code', toSessionError(err).code);
+			throw err;
+		}
 		startup.close();
 		const finalProgress = progressStore.finish();
 		await contextPublication;

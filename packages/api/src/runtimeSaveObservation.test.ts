@@ -201,9 +201,14 @@ it.each(['throw', 'reject'] as const)(
 
 it('reports persistence failures without changing the native response', async () => {
 	const env = fixture();
-	env.acknowledge.mockRejectedValue(new Error('bucket unavailable'));
+	const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+	env.acknowledge.mockRejectedValue(new Error('bucket unavailable at https://bucket.test/key'));
 	await env.save();
 	expect(env.metrics.increment).toHaveBeenCalledWith('sessions.save.hint_failed');
+	const line = log.mock.calls
+		.map(([entry]) => String(entry))
+		.find((entry) => entry.includes('session_save_intent_failed'));
+	expect((JSON.parse(line!) as { error: unknown }).error).toEqual({ error_name: 'Error' });
 	expect(env.background.pending()).toBe(0);
 	expect(await env.response.text()).toBe('native acknowledgement');
 });

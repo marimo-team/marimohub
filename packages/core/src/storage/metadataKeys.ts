@@ -13,6 +13,7 @@ const systemRecords = [
 	/^_system\/(sessions|version-prune-cutoffs|apps|app-pools|editors|job-runs|preview-automations|preview-active-projects|source-control-accounts)\/[^/]+\/[^/]+\.json$/,
 	/^_system\/session-index\/users\/[^/]+\.json$/,
 	/^_system\/reconcile\/orphans\/[^/]+\.json$/,
+	/^_system\/dev\/[^/]+\.json$/,
 	/^_system\/(proposal-payloads|job-operations|job-deletions|previews)\/[^/]+\/[^/]+\/[^/]+\.json$/,
 	/^_system\/events\/[^/]+\/(?:_idempotency\/)?[^/]+\.json$/,
 	/^_system\/search\/cursor\.json$/,
@@ -55,6 +56,8 @@ function uploadPlacement(key: string): StoragePlacement | undefined {
 
 export function classifyMetadataKey(key: string): StoragePlacement {
 	if (key === METADATA_BACKEND_KEY) return 'control';
+	// Storage adapters' conditional-write probes go straight to the raw bucket and can outlive a crash.
+	if (/^_system\/\.cas-probe(?:-[^/]+)?$/.test(key)) return 'artifact';
 	if (systemRecords.some((rule) => rule.test(key))) return 'metadata';
 	if (/^_system\/working-branches\/notebooks\/[^/]+\/[^/]+\/saves\/[^/]+\/capture\.json$/.test(key))
 		return 'artifact';

@@ -38,8 +38,10 @@ All paths are relative to `/api/host/v1`.
 | `notebook.edit`     | `POST /notebooks/{id}/edits`                           | Runtime                 |
 | `notebook.save`     | `POST /notebooks/{id}/save`                            | Runtime and hub storage |
 | `runtime.run`       | `POST /notebooks/{id}/runtime/runs`                    | Runtime                 |
-| `runtime.interrupt` | `DELETE /notebooks/{id}/runtime/runs/{run_id}`         | Runtime                 |
-| `runtime.input`     | `POST /notebooks/{id}/runtime/inputs/{input_id}/reply` | Runtime                 |
+| `runtime.cancel`    | `DELETE /notebooks/{id}/runtime/runs/{run_id}`         | Runtime                 |
+| `input.reply`       | `POST /notebooks/{id}/runtime/inputs/{input_id}/reply` | Runtime                 |
+| `runtime.execute`   | `POST /notebooks/{id}/runtime/execute`                 | Runtime                 |
+| `runtime.interrupt` | `POST /notebooks/{id}/runtime/interrupt`               | Runtime                 |
 
 The `host` event lists the implemented operations. Project and notebook records list the
 operations that the caller can use, even before a runtime starts.
@@ -47,15 +49,22 @@ operations that the caller can use, even before a runtime starts.
 The hub owns notebook IDs. Each ID combines the project and notebook IDs with `:`. Treat these
 IDs as opaque.
 
-- Projects have `root: null`. Notebooks have `path: null`.
+- Projects have `root: null`. Notebooks have `path: null` and expose their modification time as `modified_at`.
 - `notebook.create` requires `project_id` and `name`. A `path` returns `400`.
 - `notebook.update` changes `name` and keeps the ID. A `path` returns `501`.
 
-Creation and renaming need no compute. Notebook streams, `runtime.start`, `notebook.edit`,
-`notebook.save`, and `runtime.run` start or reuse an editor sandbox. They require the same
-permissions as editor sessions. `runtime.interrupt` and `runtime.input` act only on existing
-work. Without a running runtime, they return `no-runtime` and start nothing. Readers can use the
-catalog but cannot open notebook streams, even with `types=cell,document`.
+Creation and renaming need no compute. Notebook streams, edits, saves, and execution requests
+start or reuse an editor sandbox. They require editor-session permissions. Readers can use the
+catalog but cannot open notebook streams, even with `kinds=cell,document`.
+
+- `runtime.run` runs notebook cells. Its body is `{ "cells": [{ "id": "c1", "etag": "..." }] }`.
+  Each cell's `etag` is optional.
+- `runtime.execute` runs scratch Python with `{ "code": "..." }`. Assignments stay local to the
+  call, but changes to shared objects persist.
+- `runtime.cancel` targets one run. `runtime.interrupt` interrupts active work and cancels queued
+  runs. Both requests have no body and return `202` acknowledgements. Stream events report completion.
+- Cancellation, interruption, and input replies require an existing runtime. Without one, they
+  return `409 no-runtime` and start nothing.
 
 An operation that starts a sandbox, such as `runtime.start`, waits up to 60 seconds for it to
 become ready. Then it returns `503` and releases the `Idempotency-Key` claim. Retry with the same
@@ -74,7 +83,7 @@ Shared mode reuses the existing editor sandbox. Exclusive mode keeps the current
 ownership, also when the deployment default changes.
 
 If another user owns an exclusive editor, the host returns a `409` problem response of type
-`tag:marimo.io,2026:host/decision-required`. Its decision has three options:
+`urn:marimo:problem:decision-required`. Its decision has three options:
 
 | Option      | Result                                                                        |
 | ----------- | ----------------------------------------------------------------------------- |
@@ -102,7 +111,7 @@ it never start a replacement.
 
 ## Runtime connection
 
-The sandbox image must already support the host protocol. The hub installs no dependencies.
+The sandbox image must support the [pinned host protocol contract](https://github.com/marimo-team/marimo/blob/ce8f85a2635fe1b79302f8b0fd9af1d7e0f85474/protocols/host/spec.md). The hub installs no dependencies.
 
 The host relay is a Python client that the hub runs inside the sandbox. It identifies the marimo
 process and reads that process's private discovery record from its state directory. It checks
@@ -132,9 +141,10 @@ authenticated user across all routes.
   mutations. Only an unknown outcome keeps a claim.
 - Runtime requests bind to a session before dispatch. Retries use that session and never start a
   replacement after a lost reply.
-- A repeated `runtime.run` request refreshes its run record from the runtime for the first four
-  minutes. Later retries return the stored response. Thus the hub never re-dispatches a run after
-  the runtime's own receipt can have expired.
+- Retries of `runtime.run` and `runtime.execute` refresh the run record for the first four minutes.
+  Later retries return the stored response, without dispatch to the runtime.
+- Retries of accepted cancellations and interruptions return the original acknowledgement. They
+  do not interrupt later work, even after runtime replacement.
 
 | Claim                                                                                       | Release                                                                                                                                           |
 | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -149,13 +159,14 @@ Maintenance compacts expired receipts in pages of 100 records and deletes them 2
 It keeps unresolved claims. Maintenance instances share cleanup progress.
 
 Request cancellation stops the wait. It cannot terminate a dispatched sandbox command or undo an
-accepted mutation. To stop a run, use `runtime.interrupt`. If the original session is still
-available, retry a cancelled save with the same key to complete hub storage capture.
+accepted mutation. Use `runtime.cancel` to stop one run, or `runtime.interrupt` to interrupt all work.
+If the original session is available, retry a cancelled save with the same key to finish storage capture.
 
 ## Streams
 
-Both streams accept `types`. Unknown kinds return `400`. Notebook streams also accept `run_id`.
-The hub forwards both filters to the runtime.
+Both streams accept `kinds`. Unknown kinds return `400`. Notebook streams also accept `run_id`.
+The hub forwards both filters to the runtime. Execution results use `output` events.
+A filter that includes `output` also includes `output.removed` events.
 
 - Heartbeat comments arrive every 15 seconds.
 - Reconnection with `Last-Event-ID` sends `reset` and a fresh snapshot. The hub keeps no
@@ -172,7 +183,7 @@ report only the runtime records that this API process already observed. Catalog 
 therefore wait for connections to active runtimes. Clients share one refresh per session, with a
 five-second cache between refreshes. If a connection fails, the catalog omits its runtime records
 but keeps project and notebook records. Catalog requests never start a sandbox. To skip runtime
-discovery, use `types=host,project,notebook`.
+discovery, use `kinds=host,project,notebook`.
 
 The hub tracks one client attachment per downstream connection. Client attachments and catalog
 change correlation are process-local. For complete attachment presence, route all host streams to

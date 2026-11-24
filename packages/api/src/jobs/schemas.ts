@@ -82,7 +82,7 @@ const ConsumerPolicyShape = {
 		.enum(['private', 'shared'])
 		.optional()
 		.describe(
-			'Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to current source readers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.',
+			'Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.',
 		),
 };
 

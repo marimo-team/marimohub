@@ -822,6 +822,24 @@ describe('Session routes (app mode)', () => {
 			expect(fresh.reused).toBe(false);
 			expect(fresh.status).toBe('running');
 		});
+
+		it('keeps a busy app for a caller who may stop it (probe unresponsive)', async () => {
+			const app = await expectOk<any>(await owner('POST', sessionsPath(), { mode: 'app' }));
+			const kernelProbe = vi.fn(async () => 'unresponsive' as const);
+			const editor = createTestApi({
+				bucket,
+				userId: OTHER_EDITOR,
+				compute: makeFakeCompute(),
+				deps: { policy: { defaultRole: 'editor' }, kernelProbe },
+			}).request;
+
+			const attached = await expectOk<any>(await editor('POST', sessionsPath(), { mode: 'app' }));
+			expect(kernelProbe).toHaveBeenCalled();
+			expect(attached.session_id).toBe(app.session_id);
+			expect(attached.reused).toBe(true);
+			const still = await expectOk<any>(await owner('GET', sessionsPath(`/${app.session_id}`)));
+			expect(still.status).toBe('running');
+		});
 	});
 
 	it('records an audit event for the app start; an attach records nothing', async () => {

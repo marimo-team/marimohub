@@ -49,6 +49,28 @@ To reuse completed inputs, submit their parameters to the current job.
 The new run records the current caller and source version. It continues after the
 initiating visit closes. Applications own progress displays; external links grant no external access.
 
+## Triggering jobs from an app
+
+App code can run opted-in jobs as the signed-in visitor with the `marimohub.jobs` helper.
+It needs no API token. It works in published apps with proxy exposure and browser SSO or
+development sign-in.
+
+```python
+from marimohub.jobs import Jobs
+
+jobs = Jobs()
+job_id = "job-7h2k9qm4xz7rp3w8"
+run = jobs.trigger(job_id, parameters={"value": "42"}, tags={"app": "demo"})
+active = jobs.list_active_runs(job_id)
+page = jobs.list_project_runs(tag_key="app", tag_value="demo", limit=20)
+```
+
+Create `Jobs()` inside each visitor's session. The job must have `consumer_execution` on.
+[Jobs from app code](https://github.com/marimo-team/marimohub/blob/main/development_docs/app-jobs.md)
+lists the methods and the credential rules.
+[`examples/app-jobs/`](https://github.com/marimo-team/marimohub/tree/main/examples/app-jobs) is a
+complete app.
+
 ## Create a schedule
 
 1. Open **Jobs & schedules** from the notebook’s actions menu.
@@ -205,9 +227,15 @@ Admission counts all queued runs for the job, including schedules and retries.
 Scheduled fires and automatic retries can exceed the threshold. There is no
 project-wide queue limit. Lowering the threshold preserves accepted runs.
 
-Concurrent manual submissions share a distributed job claim. At the threshold,
+Manual submissions to one job are serialized under a distributed job claim.
+A submission that waits more than about 5 seconds returns HTTP 503 `SERVICE_UNAVAILABLE`;
+retry it with the same `Idempotency-Key`. At the threshold,
 new submissions return HTTP 429 with `RESOURCE_EXHAUSTED`. An accepted request's
 `Idempotency-Key` still replays its original run.
+
+A caller without write access to the notebook can have at most 3 queued or running runs
+per job. The next submission returns HTTP 429 `RESOURCE_EXHAUSTED` until one of them
+finishes. This limit is fixed, so one app user cannot fill a job's queue.
 
 Separate deployment and project caps bound provisioning and running runs;
 accepted excess stays queued. Dispatch selects eligible runs oldest first and
@@ -234,8 +262,8 @@ include provisioning, and exclude queue waiting.
 
 This configuration accepts 100 submissions to an empty job before a scheduler
 tick and lets one project use all execution capacity. For multiple projects,
-choose a lower project cap to leave capacity for others. Defaults remain
-5 concurrent runs, 2 per project, and a manual admission threshold of 20 per job.
+choose a lower project cap to leave capacity for others. See
+[Configuration](./configuration.md#jobs) for the defaults.
 
 Production capacity is unmeasured: automated tests use test doubles, and no staged
 compute load test was run. Size compute quotas, CPU, memory, and storage throughput
@@ -261,7 +289,9 @@ Raw logs can contain environment values and tracebacks.
 > credentials injected — exactly what an app session carries — regardless of
 > who triggers it or when the schedule fires. The credentials are attributed to
 > the manual triggerer, or to the job's author for scheduled runs. Treat a job
-> definition as you would a shared app.
+> definition as you would a shared app. Treat run `parameters` from consumers as
+> untrusted input: a consumer can send them through the REST API and skip the app's
+> controls. Validate every parameter the notebook reads.
 
 ## Notifications
 
@@ -307,31 +337,15 @@ seconds; retry while it is running.
 
 ## Configuration
 
-| Variable                                         | Default | Meaning                                                               |
-| ------------------------------------------------ | ------- | --------------------------------------------------------------------- |
-| `MARIMOHUB_JOBS`                                 | `off`   | Turns the feature on (`on`) or off (`off`).                           |
-| `MARIMOHUB_JOBS_TICK_SECONDS`                    | `60`    | Node only: scheduler interval on the maintenance replica.             |
-| `MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS`             | `5`     | Node only: deployment-wide cap on runs holding a sandbox.             |
-| `MARIMOHUB_JOBS_MAX_CONCURRENT_RUNS_PER_PROJECT` | `2`     | Node only: per-project share of the cap.                              |
-| `MARIMOHUB_JOBS_MAX_QUEUED_RUNS_PER_JOB`         | `20`    | Node only: per-job queued-run limit for new manual submissions.       |
-| `MARIMOHUB_JOBS_MAX_PER_NOTEBOOK`                | `5`     | Node only: job definitions per notebook (`0` = unlimited).            |
-| `MARIMOHUB_JOBS_DEFAULT_TIMEOUT_SECONDS`         | `1800`  | Node only: run deadline when the job sets none.                       |
-| `MARIMOHUB_JOBS_MAX_TIMEOUT_SECONDS`             | `14400` | Node only: ceiling on a job's `timeout_seconds`.                      |
-| `MARIMOHUB_JOBS_RUN_RETENTION_DAYS`              | `30`    | Node only: how long run records and outputs are kept.                 |
-| `MARIMOHUB_JOBS_CATCHUP_WINDOW_SECONDS`          | `600`   | Node only: how stale a missed occurrence may be and still fire, once. |
-| `MARIMOHUB_JOBS_LIVE_RUNS`                       | `off`   | Node only: let users follow a run while it executes.                  |
-
-On Node, the tuning variables apply only while `MARIMOHUB_JOBS=on`. Jobs grant
-editors nothing an edit session does not; unattended cost is bounded by the
-caps and timeouts, and a deployment can turn the feature off at any time.
+The `MARIMOHUB_JOBS_*` variables and their defaults are listed in
+[Configuration](./configuration.md#jobs). On Node, the tuning variables apply only while
+`MARIMOHUB_JOBS=on`. Jobs grant editors nothing an edit session does not; unattended cost is
+bounded by the caps and timeouts, and a deployment can turn the feature off at any time.
 
 ::: tip Cloudflare Workers
 The Workers reference deployment reads the same `MARIMOHUB_JOBS` toggle from
 its wrangler vars and ticks the scheduler from its five-minute cron trigger, so
 schedules finer than five minutes are Node-only, and a run is bounded by the
-Workers invocation limits. It ignores the tuning variables in the table and
-uses their listed defaults, except that tick cadence comes from the five-minute
-platform trigger.
+Workers invocation limits. It ignores the tuning variables and uses their
+defaults, except that tick cadence comes from the five-minute platform trigger.
 :::
-
-See [Configuration](./configuration.md) for the full reference.

@@ -34,6 +34,8 @@ describe('metadata placement manifest', () => {
 		'_system/working-branches/notebooks/p/n/saves/s/capture.json',
 		'projects/p/notebooks/n/proposals/p/changes/0',
 		'projects/p/object-uploads/u/parts/1',
+		'_system/.cas-probe',
+		'_system/.cas-probe-00000000-0000-4000-8000-000000000000',
 	])('keeps payload %s in artifacts', (key) => {
 		expect(classifyMetadataKey(key)).toBe('artifact');
 	});
@@ -48,6 +50,10 @@ describe('metadata placement manifest', () => {
 		'projects/p/notebooks/n/jobs/j//prune-runs.json',
 		'projects/p/notebooks/n/jobs/j//prune-occurrences.json',
 		'projects/p/notebooks/n/uploads/index.json',
+		'_system/dev/local-notebook-seed.json',
+		'_system/retention-notebook_gc-lock.json',
+		'_system/retention-snapshot_expiry-lock.json',
+		'_system/retention-jobs-lock.json',
 	])('keeps operational record %s in metadata', (key) => {
 		expect(classifyMetadataKey(key)).toBe('metadata');
 	});
@@ -63,33 +69,43 @@ describe('metadata placement manifest', () => {
 it('classifies literal key families declared outside the shared path builders', async () => {
 	const { readFile, readdir } = await import('node:fs/promises');
 	const ts = await import('typescript');
-	const root = new URL('../', import.meta.url);
-	const files = await readdir(root, { recursive: true });
+	const core = new URL('../', import.meta.url);
+	const roots = [
+		core,
+		new URL('../../../api/src/', import.meta.url),
+		new URL('../../../../apps/server/src/', import.meta.url),
+	];
 	const keys = new Set<string>();
-	for (const file of files) {
-		if (
-			!file.endsWith('.ts') ||
-			file.endsWith('.test.ts') ||
-			file.startsWith('testing/') ||
-			file.startsWith('specs/') ||
-			file.startsWith('storage/')
-		)
-			continue;
-		const text = await readFile(new URL(file, root), 'utf8');
-		if (!text.includes('_system/') && !text.includes('projects/')) continue;
-		const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-		function visit(node: Node): void {
-			let key: string | undefined;
-			if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) key = node.text;
-			else if (ts.isTemplateExpression(node))
-				key =
-					node.head.text + node.templateSpans.map((span) => `fixture${span.literal.text}`).join('');
-			if (key && /^(?:_system|projects)\//.test(key) && /(?:\.json|\.lock)$/.test(key))
-				keys.add(key);
-			ts.forEachChild(node, visit);
+	for (const root of roots) {
+		const files = await readdir(root, { recursive: true });
+		for (const file of files) {
+			if (
+				!file.endsWith('.ts') ||
+				file.endsWith('.test.ts') ||
+				(root === core &&
+					(file.startsWith('testing/') || file.startsWith('specs/') || file.startsWith('storage/')))
+			)
+				continue;
+			const text = await readFile(new URL(file, root), 'utf8');
+			if (!text.includes('_system/') && !text.includes('projects/')) continue;
+			const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+			function visit(node: Node): void {
+				let key: string | undefined;
+				if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) key = node.text;
+				else if (ts.isTemplateExpression(node))
+					key =
+						node.head.text +
+						node.templateSpans.map((span) => `fixture${span.literal.text}`).join('');
+				if (key && /^(?:_system|projects)\//.test(key) && /(?:\.json|\.lock)$/.test(key))
+					keys.add(key);
+				ts.forEachChild(node, visit);
+			}
+			visit(source);
 		}
-		visit(source);
 	}
+	// cron.ts interpolates a closed set of task names; the retention lock cases above cover them.
+	keys.delete('_system/retention-fixture-lock.json');
+	expect(keys).toContain('_system/dev/local-notebook-seed.json');
 	expect(keys.size).toBeGreaterThan(20);
 	for (const key of keys) expect(() => classifyMetadataKey(key), key).not.toThrow();
 });

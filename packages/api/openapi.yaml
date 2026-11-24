@@ -80,6 +80,7 @@ components:
                 - SERVICE_UNAVAILABLE
                 - SESSION_PERSISTENCE_REQUIRED
                 - PYTHON_ENV_SETUP_FAILED
+                - RUNTIME_CAPTURE_SETUP_FAILED
                 - RESOURCE_EXHAUSTED
                 - SURFACE_NOT_ENABLED
                 - SURFACE_UNAVAILABLE
@@ -93,6 +94,7 @@ components:
                 - PAYLOAD_TOO_LARGE
                 - NO_HTML_SNAPSHOT
                 - NO_RUN_OUTPUT
+                - STREAM_EXPIRED
                 - INTERNAL_ERROR
             message:
               type: string
@@ -4552,9 +4554,9 @@ components:
             - shared
           description: Defaults to private (triggerer and editors). Shared exposes run
             identity, status, triggerer, timestamps, tags and completed
-            parameters to current source readers. Active inputs and diagnostics
-            remain private. Disabling sharing restricts future reads; viewed
-            data cannot be recalled.
+            parameters to other authorized app users and viewers. Active inputs
+            and diagnostics remain private. Disabling sharing restricts future
+            reads; viewed data cannot be recalled.
         enabled:
           type: boolean
         schedule:
@@ -4677,9 +4679,9 @@ components:
             - shared
           description: Defaults to private (triggerer and editors). Shared exposes run
             identity, status, triggerer, timestamps, tags and completed
-            parameters to current source readers. Active inputs and diagnostics
-            remain private. Disabling sharing restricts future reads; viewed
-            data cannot be recalled.
+            parameters to other authorized app users and viewers. Active inputs
+            and diagnostics remain private. Disabling sharing restricts future
+            reads; viewed data cannot be recalled.
         enabled:
           type: boolean
           default: true
@@ -4724,9 +4726,9 @@ components:
             - shared
           description: Defaults to private (triggerer and editors). Shared exposes run
             identity, status, triggerer, timestamps, tags and completed
-            parameters to current source readers. Active inputs and diagnostics
-            remain private. Disabling sharing restricts future reads; viewed
-            data cannot be recalled.
+            parameters to other authorized app users and viewers. Active inputs
+            and diagnostics remain private. Disabling sharing restricts future
+            reads; viewed data cannot be recalled.
         enabled:
           type: boolean
         schedule:

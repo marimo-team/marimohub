@@ -18,5 +18,5 @@ export {
 } from './runFollow';
 export type { LiveJobRun, RunFollowBatch, RunFollowEvent, RunFollowTokenClaims } from './runFollow';
 
-export { jobCapabilities, toSharedJobRunSummary } from './access';
+export { jobCapabilities, MAX_ACTIVE_CONSUMER_RUNS_PER_JOB, toSharedJobRunSummary } from './access';
 export type { JobCapabilities } from './access';

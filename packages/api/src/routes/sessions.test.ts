@@ -5346,6 +5346,27 @@ describe('Session routes', () => {
 			expect(calls.destroy).toBe(0);
 		});
 
+		it('reuses rather than retires a session whose kernel is busy (probe unresponsive)', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const probe = vi.fn(async () => 'unresponsive' as const);
+			const app = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: fakeComputeFrom(instance),
+				deps: { kernelProbe: probe },
+			}).request;
+
+			const first = await expectOk<ApiSession>(await app('POST', sessionsPath()));
+			const startProcesses = calls.startProcess.length;
+			const second = await expectOk<ApiSession>(await app('POST', sessionsPath()));
+
+			expect(probe).toHaveBeenCalled();
+			expect(second.session_id).toBe(first.session_id);
+			expect(second.reused).toBe(true);
+			expect(calls.startProcess.length).toBe(startProcesses);
+			expect(calls.destroy).toBe(0);
+		});
+
 		it('does not probe (or retire) a reused session that is still starting', async () => {
 			const probe = vi.fn(async () => 'dead' as const);
 			const app = createTestApi({

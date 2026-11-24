@@ -2,7 +2,11 @@ import type { UserId } from '../../ids';
 import type { JobDefinition, JobRun, PublicJobRun } from '../../schema';
 import { isTerminalRunStatus } from './runState';
 
+// Per non-editor, per job: one consumer must not fill the shared queue and lock others out.
+export const MAX_ACTIVE_CONSUMER_RUNS_PER_JOB = 3;
+
 export interface JobCapabilities {
+	editor: boolean;
 	canTrigger: boolean;
 	history: 'none' | 'summary' | 'full';
 	canReadHtml: boolean;
@@ -25,6 +29,7 @@ export function jobCapabilities({
 }): JobCapabilities {
 	const full = run !== undefined && (editor || run.triggered_by === userId);
 	return {
+		editor,
 		canTrigger: editor || (job.consumer_execution === true && triggerAllowed),
 		history: full ? 'full' : run && job.consumer_history === 'shared' ? 'summary' : 'none',
 		canReadHtml: full,

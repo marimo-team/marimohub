@@ -114,7 +114,7 @@ def run(cfg):
                       data=None if body is None else json.dumps(body).encode())
         return opener.open(req, timeout=15)
     kinds = "project,notebook,runtime" if cfg["request"]["path"] == "/catalog" else "project,notebook"
-    with request("/events?types=" + kinds) as response:
+    with request("/events?kinds=" + kinds) as response:
         catalog = events(response, snapshot=True)
     projects = {e["data"]["project"]["id"]: e["data"]["project"] for e in catalog if e["event"] == "project"}
     notebooks = [e["data"]["notebook"] for e in catalog if e["event"] == "notebook"]
