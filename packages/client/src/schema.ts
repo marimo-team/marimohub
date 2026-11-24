@@ -1997,7 +1997,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Cancel a run
-		 * @description Marks the run cancelled and destroys its sandbox when one exists. Runs are history and are never deleted individually.
+		 * @description Stops a run. Optional grace_seconds requests cooperative stopping for up to 300 seconds. Cancellation does not imply results were saved.
 		 */
 		post: operations['jobs.runs.cancel'];
 		delete?: never;
@@ -4914,7 +4914,7 @@ export interface components {
 			/** @description Allow authorized consumers to trigger this job. Scoped credentials also need job.trigger and source access. Defaults to false. */
 			consumer_execution?: boolean;
 			/**
-			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
+			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags, metadata and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
 			 * @enum {string}
 			 */
 			consumer_history?: 'private' | 'shared';
@@ -4972,7 +4972,7 @@ export interface components {
 			/** @description Allow authorized consumers to trigger this job. Scoped credentials also need job.trigger and source access. Defaults to false. */
 			consumer_execution?: boolean;
 			/**
-			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
+			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags, metadata and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
 			 * @enum {string}
 			 */
 			consumer_history?: 'private' | 'shared';
@@ -4998,7 +4998,7 @@ export interface components {
 			/** @description Allow authorized consumers to trigger this job. Scoped credentials also need job.trigger and source access. Defaults to false. */
 			consumer_execution?: boolean;
 			/**
-			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
+			 * @description Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags, metadata and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.
 			 * @enum {string}
 			 */
 			consumer_history?: 'private' | 'shared';
@@ -5035,6 +5035,18 @@ export interface components {
 			} | null;
 		};
 		JobRun: {
+			metadata?: {
+				[key: string]: string | number | boolean;
+			};
+			stop_request?: {
+				/** Format: date-time */
+				requested_at: string;
+				/** Format: date-time */
+				deadline_at: string;
+				requested_by: string;
+				/** Format: date-time */
+				acknowledged_at?: string;
+			};
 			tags?: {
 				[key: string]: string;
 			};
@@ -5109,6 +5121,9 @@ export interface components {
 			cancelled_by?: string;
 		};
 		JobRunTriggerBody: {
+			metadata?: {
+				[key: string]: string | number | boolean;
+			};
 			/**
 			 * @description Immutable submission tags. Exact-match history filters use these values; tags never grant access.
 			 * @example {
@@ -20740,9 +20755,15 @@ export interface operations {
 			};
 			cookie?: never;
 		};
-		requestBody?: never;
+		requestBody?: {
+			content: {
+				'application/json': {
+					grace_seconds?: number;
+				};
+			};
+		};
 		responses: {
-			/** @description Run cancelled (or already terminal) */
+			/** @description Stop requested, cancelled, or already terminal */
 			200: {
 				headers: {
 					[name: string]: unknown;

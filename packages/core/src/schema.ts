@@ -1321,6 +1321,31 @@ export const RunTagsSchema = z
 	)
 	.meta({ maxProperties: 32 });
 export type RunTags = z.infer<typeof RunTagsSchema>;
+export const RunMetadataSchema = z
+	.record(RunTagKeySchema, z.union([z.string().max(2048), z.number(), z.boolean()]))
+	.refine((value) => Object.keys(value).length <= 32, 'At most 32 metadata entries are allowed')
+	.refine(
+		(value) => new TextEncoder().encode(JSON.stringify(value)).length <= 8192,
+		'Metadata must fit in 8192 UTF-8 bytes',
+	)
+	.meta({ maxProperties: 32 });
+export type RunMetadata = z.infer<typeof RunMetadataSchema>;
+export const RunMetadataPatchSchema = z
+	.record(RunTagKeySchema, z.union([z.string().max(2048), z.number(), z.boolean(), z.null()]))
+	.refine((value) => Object.keys(value).length <= 32, 'At most 32 patch entries are allowed')
+	.refine(
+		(value) => new TextEncoder().encode(JSON.stringify(value)).length <= 8192,
+		'Patch must fit in 8192 UTF-8 bytes',
+	);
+export const RunStopRequestSchema = z.object({
+	requested_at: utcTimestamp(),
+	deadline_at: utcTimestamp(),
+	requested_by: UserIdSchema,
+	acknowledged_at: utcTimestamp().optional(),
+});
+export const RunStopBodySchema = z.strictObject({
+	grace_seconds: z.number().int().min(1).max(300).optional(),
+});
 export const ProjectRunIndexSchema = z.object({
 	notebook_id: NotebookIdSchema,
 	job_id: JobIdSchema,
@@ -1329,6 +1354,10 @@ export const ProjectRunIndexSchema = z.object({
 export type ProjectRunIndex = z.infer<typeof ProjectRunIndexSchema>;
 
 export const JobRunSchema = z.looseObject({
+	metadata: RunMetadataSchema.optional(),
+	initial_metadata: RunMetadataSchema.optional(),
+	stop_request: RunStopRequestSchema.optional(),
+	execution_credential_hash: z.string().optional(),
 	tags: RunTagsSchema.optional(),
 	schema_version: z.literal(CURRENT_JOB_RUN_VERSION),
 	run_id: RunIdSchema,
@@ -1491,6 +1520,8 @@ export function toPublicJobDefinition(job: JobDefinition): PublicJobDefinition {
 export type PublicJobRun = Pick<
 	JobRun,
 	| 'tags'
+	| 'metadata'
+	| 'stop_request'
 	| 'run_id'
 	| 'job_id'
 	| 'notebook_id'
@@ -1520,6 +1551,8 @@ export type PublicJobRun = Pick<
 
 export function toPublicJobRun(run: JobRun): PublicJobRun {
 	return {
+		metadata: run.metadata,
+		stop_request: run.stop_request,
 		tags: run.tags,
 		run_id: run.run_id,
 		job_id: run.job_id,

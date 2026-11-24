@@ -203,10 +203,7 @@ describe('Job routes', () => {
 			await consumer('GET', `${base()}/${restricted.id}/runs/${hidden.run_id}/logs`),
 			403,
 		);
-		await expectError(
-			await consumer('POST', `${base()}/${allowed.id}/runs/${own.run_id}/cancel`),
-			403,
-		);
+		await expectOk(await consumer('POST', `${base()}/${allowed.id}/runs/${own.run_id}/cancel`));
 	});
 
 	it.each([
@@ -479,6 +476,28 @@ describe('Job routes', () => {
 		);
 		expect(b.run_id).toBe(a.run_id);
 		expect(await expectPage(await request('GET', `${base()}/${job.id}/runs`))).toHaveLength(1);
+	});
+
+	it('accepts bounded cooperative grace without destroying a running sandbox', async () => {
+		const job = await createJob();
+		const run = await services.jobRuns.enqueue({
+			job,
+			trigger: 'manual',
+			triggeredBy: ACTOR,
+			timeoutSeconds: 600,
+		});
+		await services.jobRuns.transition(run, 'provision', () => ({
+			sandbox_id: SandboxId.parse('sb-0123456789abcdef'),
+		}));
+		await services.jobRuns.transition(run, 'start');
+		const url = `${base()}/${job.id}/runs/${run.run_id}/cancel`;
+		await expectError(await request('POST', url, { grace_seconds: 301 }), 422);
+		const stopped = await expectOk<any>(await request('POST', url, { grace_seconds: 30 }));
+		expect(stopped.status).toBe('running');
+		expect(stopped.stop_request).toBeDefined();
+		expect(destroyed).toEqual([]);
+		expect((await expectOk<any>(await request('POST', url))).status).toBe('cancelled');
+		expect(destroyed).toHaveLength(1);
 	});
 
 	it('cancels an active run and destroys its sandbox', async () => {

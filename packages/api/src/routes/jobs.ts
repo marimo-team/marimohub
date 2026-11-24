@@ -11,6 +11,7 @@ import {
 	ForbiddenError,
 	NotFoundError,
 	RunId,
+	RunStopBodySchema,
 	toPublicJobDefinition,
 	toPublicJobRun,
 } from '@marimo-hub/core';
@@ -36,6 +37,7 @@ import {
 	createNotebookJob,
 	updateNotebookJob,
 	triggerJobRun,
+	requestJobRunStop,
 } from '../jobs/operations';
 import { idempotentCreate } from '../idempotency';
 import { appendAudit, describeError, logEvent } from '../log';
@@ -236,12 +238,15 @@ const cancelRun = createRoute({
 	tags: ['Jobs'],
 	summary: 'Cancel a run',
 	description:
-		'Marks the run cancelled and destroys its sandbox when one exists. Runs are history and are never deleted individually.',
-	request: { params: RunIdParam },
+		'Stops a run. Optional grace_seconds requests cooperative stopping for up to 300 seconds. Cancellation does not imply results were saved.',
+	request: {
+		params: RunIdParam,
+		body: { required: false, content: { 'application/json': { schema: RunStopBodySchema } } },
+	},
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: JobRunResponseSchema }),
-			'Run cancelled (or already terminal)',
+			'Stop requested, cancelled, or already terminal',
 		),
 		...commonErrors(),
 		...errorResponses(403, 404),
@@ -489,17 +494,17 @@ app.openapi(cancelRun, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid, nid, jid, rid } = c.req.valid('param');
-	const { job } = await loadAuthorizedJob(
-		c.get('deps'),
-		c.get('user'),
-		pid,
-		nid,
-		jid,
-		'notebook.write',
+	const { target } = await resolveJobAccess('job.trigger', (action) =>
+		loadAuthorizedJob(deps, user, pid, nid, jid, action),
 	);
-	const existing = await loadJobRun(deps, job, rid);
-	const { run, transitioned } = await deps.services.jobRuns.cancel(existing, user.id);
-	if (transitioned) {
+	const existing = await loadJobRun(deps, target.job, rid);
+	const { run, transitioned } = await requestJobRunStop(
+		deps,
+		target,
+		existing,
+		c.req.valid('json')?.grace_seconds,
+	);
+	if (transitioned && isTerminalRunStatus(run.status)) {
 		if (run.sandbox_id) {
 			await destroySandboxes(deps, [run.sandbox_id], {
 				project_id: pid,

@@ -5,6 +5,23 @@ import { expectOk } from '../testing';
 import { createAppJobsFixture } from '../testing/appJobs';
 
 describe('app jobs', () => {
+	it('allows the triggerer to stop but rejects other consumers and revoked visits', async () => {
+		const f = await createAppJobsFixture();
+		const other = await f.visitAs(uid('other-consumer'));
+		const run = await expectOk<PublicJobRun>(
+			await f.call('trigger', { job_id: f.job.id, input: { metadata: { report: 'initial' } } }),
+		);
+		expect(run.metadata).toEqual({ report: 'initial' });
+		expect((await other.call('stop', { job_id: f.job.id, run_id: run.run_id })).status).toBe(403);
+		const stopped = await expectOk<PublicJobRun>(
+			await f.call('stop', { job_id: f.job.id, run_id: run.run_id, input: { grace_seconds: 10 } }),
+		);
+		expect(stopped.status).toBe('cancelled');
+		expect(stopped.stop_request).toBeUndefined();
+		await expectOk(await f.leave());
+		expect((await f.call('stop', { job_id: f.job.id, run_id: run.run_id })).status).toBe(403);
+	});
+
 	it('isolates pooled visitors and recovers accepted runs after a visit ends', async () => {
 		const f = await createAppJobsFixture(ACTOR);
 		const second = await f.visitAs(uid('another-visitor'));

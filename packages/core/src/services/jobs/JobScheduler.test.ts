@@ -123,6 +123,110 @@ describe('JobScheduler', () => {
 		await s.drain();
 	};
 
+	it.each(['acknowledge', 'deadline'] as const)(
+		'reclaims a stop after restart through %s and retains failed cleanup',
+		async (mode) => {
+			now = Date.now();
+			const job = await createJob({
+				schedule: undefined,
+				retry: { max_retries: 2, backoff_seconds: 0 },
+			});
+			const run = await env.jobRuns.enqueue({
+				job,
+				trigger: 'manual',
+				triggeredBy: ACTOR,
+				timeoutSeconds: 600,
+			});
+			await env.jobRuns.transition(run, 'provision', () => ({
+				sandbox_id: SB,
+				deadline_at: new Date(now + 600_000).toISOString(),
+			}));
+			await env.jobRuns.transition(run, 'start');
+			await env.jobRuns.requestStop(run, ACTOR, 30);
+			await env.jobRuns.patchMetadata(run, { saved: true, report: 's3://results/report' });
+			if (mode === 'acknowledge') await env.jobRuns.acknowledgeStop(run);
+			else now += 31_000;
+			const destroy = vi
+				.fn()
+				.mockRejectedValueOnce(new Error('compute unavailable'))
+				.mockResolvedValue(undefined);
+			const provider = {
+				proxy: compute.proxy.bind(compute),
+				create: () => ({ destroy }) as unknown as SandboxInstance,
+			};
+			const runner = { execute: vi.fn() };
+			const first = scheduler(runner, { compute: provider });
+			expect((await first.tick()).errors).toBe(1);
+			expect(await env.jobRuns.getMarker(run)).not.toBeNull();
+			const restarted = scheduler(runner, { compute: provider });
+			await restarted.tick();
+			expect(destroy).toHaveBeenCalledTimes(2);
+			expect(await env.jobRuns.getMarker(run)).toBeNull();
+			expect(runner.execute).not.toHaveBeenCalled();
+			const records = await env.jobRuns.listRuns(pid, nid, job.id);
+			expect(records).toHaveLength(1);
+			expect(records[0]).toMatchObject({ status: 'cancelled', metadata: { saved: true } });
+		},
+	);
+
+	it('continues cleanup of other runs and preserves capacity while destruction fails', async () => {
+		now = Date.now();
+		const job = await createJob({ schedule: undefined, concurrency_policy: 'allow' });
+		const firstId = SandboxId.parse('sb-0123456789abcdef');
+		const secondId = SandboxId.parse('sb-1123456789abcdef');
+		const stopped = [];
+		for (const id of [firstId, secondId]) {
+			const run = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 600 });
+			await env.jobRuns.transition(run, 'provision', () => ({ sandbox_id: id }));
+			await env.jobRuns.transition(run, 'start');
+			await env.jobRuns.requestStop(run, ACTOR, 1);
+			stopped.push(run);
+		}
+		const queued = await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 600 });
+		now += 2000;
+		const destroy = vi.fn(async (id: string) => {
+			if (id === firstId) throw new Error('compute unavailable');
+		});
+		const provider = {
+			proxy: compute.proxy.bind(compute),
+			create: (id: SandboxId) => ({ destroy: () => destroy(id) }) as unknown as SandboxInstance,
+		};
+		const runner = { execute: vi.fn() };
+		const clock = scheduler(runner, {
+			compute: provider,
+			config: { ...CONFIG, maxConcurrentRuns: 1 },
+		});
+		expect((await clock.tick()).errors).toBe(1);
+		expect(await env.jobRuns.getMarker(stopped[0])).not.toBeNull();
+		expect(await env.jobRuns.getMarker(stopped[1])).toBeNull();
+		expect((await clock.tick()).errors).toBe(1);
+		expect(runner.execute).not.toHaveBeenCalled();
+		expect((await env.jobRuns.getRun(pid, nid, job.id, queued.run_id)).status).toBe('queued');
+	});
+
+	it('retries with initial metadata, excluding computed results', async () => {
+		now = Date.now();
+		const job = await createJob({
+			schedule: undefined,
+			retry: { max_retries: 1, backoff_seconds: 0 },
+		});
+		const run = await env.jobRuns.enqueue({
+			job,
+			trigger: 'manual',
+			timeoutSeconds: 600,
+			metadata: { seed: 'original' },
+		});
+		await env.jobRuns.transition(run, 'provision');
+		await env.jobRuns.transition(run, 'start');
+		await env.jobRuns.patchMetadata(run, { seed: 'computed', report: 'failed-attempt' });
+		await env.jobRuns.transition(run, 'fail');
+		await scheduler(fakeRunner(env), { config: NO_DISPATCH_CONFIG }).tick();
+		const retry = (await env.jobRuns.listRuns(pid, nid, job.id)).find(
+			(item) => item.retry_of === run.run_id,
+		);
+		expect(retry?.metadata).toEqual({ seed: 'original' });
+	});
+
 	it('memoizes completed occurrences across the catch-up window without hiding the next occurrence', async () => {
 		await createJob({ schedule: { cron: '0 * * * *', timezone: 'UTC' } });
 		const clock = scheduler(fakeRunner(env));

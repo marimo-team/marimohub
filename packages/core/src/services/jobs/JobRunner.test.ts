@@ -106,6 +106,59 @@ describe('JobRunner', () => {
 			...overrides,
 		});
 
+	it.each(['acknowledge', 'deadline', 'poll_failure'] as const)(
+		'observes %s and destroys an executing sandbox',
+		async (mode) => {
+			const sandbox = makeJobSandbox();
+			const original = sandbox.instance.exec.bind(sandbox.instance);
+			let release: (() => void) | undefined;
+			sandbox.instance.exec = async (command, options) => {
+				if (!command.includes('__MARIMOHUB_JOB_EXIT__')) return original(command, options);
+				await new Promise<void>((resolve) => {
+					release = resolve;
+				});
+				return { success: true, stdout: '', stderr: '' };
+			};
+			const queued = await enqueue();
+			const execution = runner(sandbox).execute(queued);
+			try {
+				await vi.waitFor(() => expect(release).toBeDefined());
+				const reads =
+					mode === 'poll_failure'
+						? vi
+								.spyOn(env.jobRuns, 'getRun')
+								.mockRejectedValueOnce(new Error('storage temporarily unavailable'))
+						: undefined;
+				await env.jobRuns.requestStop(queued, ACTOR, 1);
+				if (mode !== 'deadline') {
+					await env.jobRuns.patchMetadata(queued, { saved: true });
+					await env.jobRuns.acknowledgeStop(queued);
+				}
+				expect((await execution).status).toBe('cancelled');
+				expect(sandbox.calls.destroy).toBeGreaterThan(0);
+				if (reads) expect(reads.mock.calls.length).toBeGreaterThan(1);
+			} finally {
+				release?.();
+			}
+		},
+	);
+
+	it('provisions a run credential with the execution environment', async () => {
+		const sandbox = makeJobSandbox();
+		const prepare = vi.spyOn(SandboxProvisioner.prototype, 'prepare');
+		const queued = await enqueue();
+		await runner(sandbox, {
+			appBaseUrl: 'https://hub.test',
+			resolveSessionEnv: async () => ({ vars: { APP_VAR: 'kept' } }),
+		}).execute(queued);
+		const sessionEnv = await prepare.mock.calls[0][0].sessionEnv;
+		expect(sessionEnv?.vars?.MARIMOHUB_RUN_URL).toBe('https://hub.test/api/job-execution/v1');
+		expect(sessionEnv?.vars?.APP_VAR).toBe('kept');
+		expect(
+			(await env.jobRuns.authenticateExecution(sessionEnv!.vars!.MARIMOHUB_RUN_CREDENTIAL)).run_id,
+		).toBe(queued.run_id);
+	});
+
 	it('runs a subtree pull source from the subtree beside the repository Git directory', async () => {
 		const encode = (value: string) => new TextEncoder().encode(value);
 		const { meta } = await env.notebooks.synced.create(

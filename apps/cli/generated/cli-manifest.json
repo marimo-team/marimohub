@@ -2831,7 +2831,7 @@
 						"name": "consumer_history",
 						"cli_name": "consumer-history",
 						"required": false,
-						"description": "Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.",
+						"description": "Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags, metadata and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.",
 						"value_type": "string",
 						"repeatable": false
 					},
@@ -3033,7 +3033,7 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/cancel",
 			"summary": "Cancel a run",
-			"description": "Marks the run cancelled and destroys its sandbox when one exists. Runs are history and are never deleted individually.",
+			"description": "Stops a run. Optional grace_seconds requests cooperative stopping for up to 300 seconds. Cancellation does not imply results were saved.",
 			"parameters": [
 				{
 					"name": "jid",
@@ -3068,6 +3068,18 @@
 					"repeatable": false
 				}
 			],
+			"body": {
+				"required": false,
+				"properties": [
+					{
+						"name": "grace_seconds",
+						"cli_name": "grace-seconds",
+						"required": false,
+						"value_type": "integer",
+						"repeatable": false
+					}
+				]
+			},
 			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
@@ -3342,6 +3354,13 @@
 				"required": false,
 				"properties": [
 					{
+						"name": "metadata",
+						"cli_name": "metadata",
+						"required": false,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
 						"name": "parameters",
 						"cli_name": "parameters",
 						"required": false,
@@ -3428,7 +3447,7 @@
 						"name": "consumer_history",
 						"cli_name": "consumer-history",
 						"required": false,
-						"description": "Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.",
+						"description": "Defaults to private (triggerer and editors). Shared exposes run identity, status, triggerer, timestamps, tags, metadata and completed parameters to other authorized app users and viewers. Active inputs and diagnostics remain private. Disabling sharing restricts future reads; viewed data cannot be recalled.",
 						"value_type": "string",
 						"repeatable": false
 					},

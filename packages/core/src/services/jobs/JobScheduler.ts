@@ -288,6 +288,7 @@ export class JobScheduler {
 					result.markersPruned++;
 				} catch (err) {
 					result.errors++;
+					if (run.status === 'cancelled' && run.sandbox_id) running.push(run);
 					logOperationalError(
 						'job_finalization_failed',
 						{ operation: 'job.scheduler.finalize', run_id: run.run_id },
@@ -313,6 +314,21 @@ export class JobScheduler {
 					continue;
 				}
 				if (!run.eligible_at || Date.parse(run.eligible_at) <= now) queued.push(run);
+				continue;
+			}
+			if (run.stop_request && Date.parse(run.stop_request.deadline_at) <= now) {
+				try {
+					const { run: stopped } = await this.deps.runs.cancel(run, run.stop_request.requested_by);
+					await this.finalize(stopped);
+				} catch (error) {
+					result.errors++;
+					running.push(run);
+					logOperationalError(
+						'job_stop_cleanup_failed',
+						{ operation: 'job.scheduler.stop', run_id: run.run_id },
+						error,
+					);
+				}
 				continue;
 			}
 			if (await this.watchdog(run, now)) {
@@ -624,6 +640,9 @@ export class JobScheduler {
 	private async finalizeLocked(finished: JobRun): Promise<void> {
 		const marker = await this.deps.runs.getMarker(finished);
 		if (!marker) return;
+		if (finished.status === 'cancelled' && finished.sandbox_id) {
+			await this.deps.compute.create(SandboxId.parse(finished.sandbox_id)).destroy();
+		}
 		// A locator write that fails must retry on the next tick before any alert is sent.
 		await this.deps.runs.publishProjectRun(finished);
 		await this.afterRun(finished, marker.continuation_run_id);
@@ -634,7 +653,7 @@ export class JobScheduler {
 	private async afterRun(finished: JobRun, continuationRunId: RunId): Promise<void> {
 		if (!isTerminalRunStatus(finished.status)) return;
 		await this.audit(finished);
-		if (finished.status === 'cancelled') return;
+		if (finished.status === 'cancelled' || finished.stop_request) return;
 		const job = await this.loadJob(finished.project_id, finished.notebook_id, finished.job_id);
 		if (!job) return;
 		const failed = finished.status === 'failed' || finished.status === 'timed_out';
@@ -651,6 +670,7 @@ export class JobScheduler {
 				scheduledFor: finished.scheduled_for,
 				parameters: finished.parameters,
 				tags: finished.tags,
+				metadata: finished.initial_metadata,
 				sourceVersionId: finished.source_version_id,
 				timeoutSeconds: finished.timeout_seconds,
 				attempt: finished.attempt + 1,

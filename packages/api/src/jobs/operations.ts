@@ -215,6 +215,7 @@ export async function triggerJobRun(
 				triggeredBy: user.id,
 				parameters: body?.parameters ?? current.parameters,
 				tags: body?.tags,
+				metadata: body?.metadata,
 				sourceVersionId:
 					(await deps.services.notebooks.getNotebookSource(project.id, notebook.id))
 						.current_version_id ?? undefined,
@@ -271,6 +272,20 @@ export async function getJobCapabilities(
 		editor: editor.allowed,
 		triggerAllowed: trigger.allowed,
 	});
+}
+
+export async function requestJobRunStop(
+	deps: ApiDeps,
+	target: Awaited<ReturnType<typeof loadAuthorizedJob>>,
+	run: JobRun,
+	graceSeconds?: number,
+) {
+	if (
+		run.triggered_by !== target.user.id &&
+		!(await getJobCapabilities(deps, target, target.job, run)).editor
+	)
+		throw new ForbiddenError('Run belongs to another user');
+	return deps.services.jobRuns.requestStop(run, target.user.id, graceSeconds);
 }
 
 export async function authorizeJobTrigger(

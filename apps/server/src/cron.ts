@@ -319,6 +319,7 @@ function createJobScheduler(
 	config: JobsConfig,
 ): JobScheduler {
 	const runner = new JobRunner({
+		appBaseUrl: deps.sandbox.appBaseUrl,
 		bucket: deps.bucket,
 		compute: deps.compute,
 		notebooks: deps.services.notebooks,
