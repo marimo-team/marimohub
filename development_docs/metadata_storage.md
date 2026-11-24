@@ -15,10 +15,18 @@ Use separate database credentials:
 
 See [configuration](../docs/configuration.md#metadata-storage) for connection limits and timeouts.
 
+Both URLs must verify the server certificate (`sslmode=verify-full` or `verify-ca`) unless the host is loopback or a Unix socket.
+Startup and the administration commands reject other URLs. `MARIMOHUB_METADATA_POSTGRES_ALLOW_INSECURE_TRANSPORT=true` overrides this check.
+
+Each administration command has two forms. From a repository checkout, use `pnpm --filter @marimo-hub/server metadata:<command>`.
+In the container image, which has no `tsx`, use `node dist/metadata-<command>.mjs` with the same arguments.
+
 Run migrations with the schema-owner credential:
 
 ```sh
 pnpm --filter @marimo-hub/server metadata:migrate-schema
+# container image
+node dist/metadata-migrate-schema.mjs
 ```
 
 Migration sources live in `packages/metadata-postgres/sql/`.
@@ -29,6 +37,8 @@ Inspect the bucket marker, key counts, and transfer state:
 
 ```sh
 pnpm --filter @marimo-hub/server metadata:inspect
+# container image
+node dist/metadata-inspect.mjs
 ```
 
 SQL inspection requires the administrative URL and `MARIMOHUB_METADATA_NAMESPACE`.
@@ -51,8 +61,7 @@ GRANT EXECUTE ON FUNCTION
     TO hub_runtime;
 ```
 
-PostgreSQL requires update privilege for `SELECT FOR SHARE`.
-The restricted `SECURITY DEFINER` function acquires this lock without granting deployment-write access. Its search path is fixed.
+The restricted `SECURITY DEFINER` function reads deployment state without granting deployment-write access. Its search path is fixed.
 
 Namespaces separate data, not database permissions. Mutually untrusted deployments require separate roles and databases.
 
@@ -60,6 +69,7 @@ Namespaces separate data, not database permissions. Mutually untrusted deploymen
 
 Before either transfer direction:
 
+0. While hosts still run, run `metadata:inspect --audit` to find blockers: undrained pools, live sessions, pending operations, and unclassified keys (`counts.unknown`). Fix them, then run the audit again after step 4.
 1. Stop requests, schedulers, maintenance, embedded hosts, and runtimes with storage credentials.
 2. Drain and reclaim sessions and pools.
 3. Reconcile uploads, moves, previews, and pending external publications.
@@ -79,8 +89,13 @@ Run these commands in order:
 pnpm --filter @marimo-hub/server metadata:transfer --input transfer.json --writers-stopped
 pnpm --filter @marimo-hub/server metadata:inspect
 pnpm --filter @marimo-hub/server metadata:activate --input transfer.json --writers-stopped
+# container image
+node dist/metadata-transfer.mjs --input transfer.json --writers-stopped
+node dist/metadata-inspect.mjs
+node dist/metadata-activate.mjs --input transfer.json --writers-stopped
 ```
 
+Before it freezes anything, the transfer runs the same reference audit as `metadata:inspect --audit` and stops if the audit fails.
 The transfer freezes the bucket marker and copies metadata into an isolated SQL namespace.
 It preserves bytes, object metadata, and upload timestamps, with new ETags.
 A second inventory pass reconciles updates and deletions without rewriting unchanged SQL records. Owner-schema and reference checks block invalid records, unsafe workspace paths, missing artifacts, and unresolved operations.
@@ -97,13 +112,29 @@ Complete pending activation before starting another transfer.
 For an empty deployment, add `"fresh":true`. This rejects any existing bucket object or namespace.
 After interrupted initialization, remove `fresh` and resume with the same ID.
 Keep old bucket metadata read-only through the rollback window.
+No command deletes it afterwards. Until you remove it, logical listings also read the stale bucket copies and discard them.
+
+### Abort a transfer
+
+A transfer can stop after the freeze, for example when the final audit reports an undrained pool. Hosts cannot start while the marker is frozen. To return to the source backend, abort with the same input file:
+
+```sh
+pnpm --filter @marimo-hub/server metadata:transfer --input transfer.json --writers-stopped --abort
+# container image
+node dist/metadata-transfer.mjs --input transfer.json --writers-stopped --abort
+```
+
+Abort waits for the 60-second lease of a crashed worker to expire. It refuses an activated transfer.
+A forward abort deletes the importing namespace, its records, and its transfer rows, then resets the bucket marker to `active`.
+A reverse abort sets the SQL deployment back to `active`, deletes the transfer rows, and resets the marker. Bucket objects that the reverse transfer already wrote stay as stale copies; SQL stays authoritative.
+After the abort, fix the reported problem with hosts running, then start a new transfer with a new ID.
 
 ## Reverse transfer
 
 To return to bucket metadata, use the active SQL namespace and a new transfer ID.
 Set `"direction":"sql_to_bucket"` in the input file. Use the same transfer and activation commands.
 
-Reverse transfer freezes SQL under an exclusive deployment lock.
+Reverse transfer freezes SQL under an exclusive deployment lock. The freeze waits for in-flight SQL operations to commit.
 It copies current metadata, checks bytes and object metadata, and deletes stale bucket metadata. Artifacts stay unchanged.
 Exported objects receive bucket-generated ETags and upload timestamps. Activation retires the SQL namespace but retains its records and receipts.
 
@@ -137,7 +168,7 @@ Only config imports the PostgreSQL adapter. Core services use `HubStorage` and m
 The logical bucket routes keys through a versioned placement manifest. Unknown keys and backend control records fail closed.
 External adapters need placement rules and owner schemas. SQL reads never fall back to old bucket metadata.
 
-Each SQL operation holds a shared deployment lock until its transaction ends.
+Each SQL operation holds a shared advisory lock on its namespace until its transaction ends. Freeze and activation take the same lock exclusively. Reads therefore take no row lock and assign no transaction ID.
 The deployment must be active and match the configured namespace, epoch, and artifact-store identity.
 A mismatch is an availability error, not a missing object. Unavailable storage returns HTTP 503.
 Uncertain commits still fail without automatic retries.
@@ -192,6 +223,8 @@ For an existing disposable database, set `MARIMOHUB_TEST_POSTGRES_URL` with perm
 MARIMOHUB_REQUIRE_POSTGRES_TESTS=1 \
   pnpm --filter @marimo-hub/metadata-postgres test
 ```
+
+Set `MARIMOHUB_METADATA_BENCHMARK_LOG=1` to print the performance report described below.
 
 CI requires this URL. Three streaming contract cases do not apply to the metadata interface.
 The suites cover:

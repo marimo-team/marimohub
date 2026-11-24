@@ -17,6 +17,8 @@ import { ProjectId, UserId } from '@marimo-hub/core/ids';
 import { PostgresMetadataStore, createMetadataPool } from './index';
 import { migrateSchema } from './migrations';
 import { migrationSources } from './schema';
+import { getRecord } from './records';
+import { guardedTransaction } from './transactions';
 
 it('rejects namespaces that cannot round-trip through UTF-8', () => {
 	expect(
@@ -31,14 +33,19 @@ it('rejects namespaces that cannot round-trip through UTF-8', () => {
 });
 
 const url = process.env.MARIMOHUB_TEST_POSTGRES_URL;
+// The exclusive side of guard_deployment's shared advisory lock, as taken by freeze paths.
+const FREEZE_LOCK = 'SELECT pg_advisory_xact_lock(hashtextextended($1,0))';
 if (process.env.MARIMOHUB_REQUIRE_POSTGRES_TESTS === '1' && !url)
 	throw new Error('MARIMOHUB_TEST_POSTGRES_URL is required');
 
 it('embeds the authoritative SQL files without drift', async () => {
 	const files = await Promise.all(
-		['001-initial.sql', '002-deployment-guard.sql', '003-transfer-states.sql'].map((name) =>
-			readFile(new URL(`../sql/${name}`, import.meta.url), 'utf8'),
-		),
+		[
+			'001-initial.sql',
+			'002-deployment-guard.sql',
+			'003-transfer-states.sql',
+			'004-advisory-deployment-guard.sql',
+		].map((name) => readFile(new URL(`../sql/${name}`, import.meta.url), 'utf8')),
 	);
 	expect(migrationSources).toEqual(files);
 });
@@ -312,9 +319,7 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 		const blocker = await admin.connect();
 		try {
 			await blocker.query('BEGIN');
-			await blocker.query('SELECT * FROM hub_metadata.deployments WHERE namespace=$1 FOR UPDATE', [
-				namespace,
-			]);
+			await blocker.query(FREEZE_LOCK, [namespace]);
 			await expect(store.put('x', 'x')).rejects.toMatchObject({
 				kind: 'unavailable',
 				sqlState: '55P03',
@@ -416,9 +421,7 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 		let write: Promise<unknown> | undefined;
 		try {
 			await blocker.query('BEGIN');
-			await blocker.query('SELECT * FROM hub_metadata.deployments WHERE namespace=$1 FOR UPDATE', [
-				namespace,
-			]);
+			await blocker.query(FREEZE_LOCK, [namespace]);
 			write = store.put('pending', 'ok');
 			void write.catch(() => {});
 			await waitForBlockedRuntime();
@@ -441,10 +444,7 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 			let write: Promise<unknown> | undefined;
 			try {
 				await blocker.query('BEGIN');
-				await blocker.query(
-					'SELECT * FROM hub_metadata.deployments WHERE namespace=$1 FOR UPDATE',
-					[namespace],
-				);
+				await blocker.query(FREEZE_LOCK, [namespace]);
 				write = store.put('interrupted', 'wrong');
 				void write.catch(() => {});
 				const pid = await waitForBlockedRuntime();
@@ -471,9 +471,7 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 		const closes: Promise<void>[] = [];
 		try {
 			await blocker.query('BEGIN');
-			await blocker.query('SELECT * FROM hub_metadata.deployments WHERE namespace=$1 FOR UPDATE', [
-				namespace,
-			]);
+			await blocker.query(FREEZE_LOCK, [namespace]);
 			write = store.put('pending', 'ok');
 			void write.catch(() => {});
 			await waitForBlockedRuntime();
@@ -558,16 +556,19 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 			void write.catch(() => {});
 			await waitForBlockedRuntime();
 			await freezer.query("SET lock_timeout='50ms'");
-			await expect(
-				freezer.query("UPDATE hub_metadata.deployments SET state='frozen' WHERE namespace=$1", [
-					namespace,
-				]),
-			).rejects.toMatchObject({ code: '55P03' });
+			await freezer.query('BEGIN');
+			await expect(freezer.query(FREEZE_LOCK, [namespace])).rejects.toMatchObject({
+				code: '55P03',
+			});
+			await freezer.query('ROLLBACK');
 			await blocker.query('ROLLBACK');
 			await write;
+			await freezer.query('BEGIN');
+			await freezer.query(FREEZE_LOCK, [namespace]);
 			await freezer.query("UPDATE hub_metadata.deployments SET state='frozen' WHERE namespace=$1", [
 				namespace,
 			]);
+			await freezer.query('COMMIT');
 			await expect(store.put('blocked', 'late')).rejects.toMatchObject({ kind: 'unavailable' });
 			const row = (
 				await admin.query<{ body: Buffer }>(
@@ -579,9 +580,30 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 		} finally {
 			await blocker.query('ROLLBACK');
 			blocker.release();
+			await freezer.query('ROLLBACK');
 			await freezer.query('RESET lock_timeout');
 			freezer.release();
 			await write?.catch(() => {});
+		}
+	});
+
+	it('guards reads without assigning a transaction ID', async () => {
+		const { store, namespace, artifactStoreId } = await fixture();
+		await store.put('read', 'value');
+		const pool = createMetadataPool({ url: runtimeUrl, poolMax: 1 });
+		try {
+			const xid = await guardedTransaction(
+				pool,
+				{ namespace, epoch: 1, artifactStoreId },
+				async (client) => {
+					const record = await getRecord(client, namespace, 'read');
+					expect(record && 'text' in record ? await record.text() : null).toBe('value');
+					return (await client.query('SELECT txid_current_if_assigned() AS xid')).rows[0].xid;
+				},
+			);
+			expect(xid).toBeNull();
+		} finally {
+			await pool.end();
 		}
 	});
 
@@ -592,9 +614,7 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 		let close: Promise<void> | undefined;
 		try {
 			await blocker.query('BEGIN');
-			await blocker.query('SELECT * FROM hub_metadata.deployments WHERE namespace=$1 FOR UPDATE', [
-				namespace,
-			]);
+			await blocker.query(FREEZE_LOCK, [namespace]);
 			ready = store.ready();
 			void ready.catch(() => {});
 			await waitForBlockedRuntime();
@@ -688,9 +708,10 @@ describe.skipIf(!url)('PostgreSQL metadata (live)', () => {
 			sessions: consolidated.store.sessions,
 			transactions: consolidated.store.transactions,
 		});
-		console.log(
-			JSON.stringify({ metadataPerformance: { baseline, compatibility, consolidation } }),
-		);
+		if (process.env.MARIMOHUB_METADATA_BENCHMARK_LOG === '1')
+			console.log(
+				JSON.stringify({ metadataPerformance: { baseline, compatibility, consolidation } }),
+			);
 		expect(consolidation.counters.transactions).toBeGreaterThan(0);
 	}, 60000);
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
-import { makeHubStorage } from './metadata';
+import { UnavailableError } from '@marimo-hub/core/errors';
+import { makeHubStorage, metadataPostgresUrl } from './metadata';
 import type { MetadataFactory } from './metadata';
 
 const marker = {
@@ -15,7 +16,7 @@ const marker = {
 const env = {
 	MARIMOHUB_METADATA_BACKEND: 'postgres',
 	MARIMOHUB_METADATA_NAMESPACE: 'test',
-	MARIMOHUB_METADATA_POSTGRES_URL: 'postgres://example.invalid/hub',
+	MARIMOHUB_METADATA_POSTGRES_URL: 'postgres://example.invalid/hub?sslmode=verify-full',
 };
 function factory() {
 	const data = new MemoryBucket();
@@ -68,7 +69,9 @@ describe('metadata composition', () => {
 		const bucket = new MemoryBucket();
 		const { create, runtime } = factory();
 		const storage = makeHubStorage(bucket, env, create);
-		expect(() => storage.logicalBucket.get('_system/catalog.json')).toThrow('not ready');
+		const early = storage.logicalBucket.get('_system/catalog.json');
+		await expect(early).rejects.toBeInstanceOf(UnavailableError);
+		await expect(early).rejects.toThrow('not ready');
 		await bucket.put('_system/metadata-backend.json', JSON.stringify(marker));
 		await Promise.all([storage.ready(), storage.ready()]);
 		expect(runtime.ready).toHaveBeenCalledOnce();
@@ -80,7 +83,68 @@ describe('metadata composition', () => {
 		expect(await (await runtime.get('_system/catalog.json'))!.text()).toBe('metadata');
 		await storage.close();
 		expect(runtime.close).toHaveBeenCalledOnce();
-		expect(() => storage.logicalBucket.get('_system/catalog.json')).toThrow('not ready');
+		await expect(storage.logicalBucket.get('_system/catalog.json')).rejects.toBeInstanceOf(
+			UnavailableError,
+		);
+		await expect(storage.sessions!.list({ limit: 1 })).rejects.toBeInstanceOf(UnavailableError);
+		await expect(storage.transactions!.run(['a'], async () => {})).rejects.toBeInstanceOf(
+			UnavailableError,
+		);
+	});
+	it('rejects artifact keys on the direct metadata store', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put('_system/metadata-backend.json', JSON.stringify(marker));
+		const { create, runtime } = factory();
+		const storage = makeHubStorage(bucket, env, create);
+		await storage.ready();
+		const artifact = 'projects/p/notebooks/n/workspace/data.json';
+		await expect(storage.metadata.put(artifact, 'x')).rejects.toThrow('metadata key');
+		await expect(storage.metadata.get(artifact)).rejects.toThrow('metadata key');
+		await expect(storage.metadata.head(artifact)).rejects.toThrow('metadata key');
+		await expect(storage.metadata.delete(['_system/catalog.json', artifact])).rejects.toThrow(
+			'metadata key',
+		);
+		await expect(storage.metadata.put('_system/metadata-backend.json', '{}')).rejects.toThrow(
+			'metadata key',
+		);
+		expect(await runtime.get(artifact)).toBeNull();
+		await storage.metadata.put('_system/catalog.json', '{}');
+		expect(await runtime.get('_system/catalog.json')).not.toBeNull();
+		await storage.close();
+	});
+	it.each([
+		'postgres://user:secret@localhost/hub',
+		'postgres://127.0.0.1:5432/hub',
+		'postgres://[::1]/hub',
+		'postgres:///hub?host=/var/run/postgresql',
+		'postgres://%2Fvar%2Frun%2Fpostgresql/hub',
+		'postgres://db.example.com/hub?sslmode=verify-full',
+		'postgres://db.example.com/hub?sslmode=verify-ca',
+	])('accepts local or verified PostgreSQL transport %s', (url) => {
+		expect(
+			metadataPostgresUrl(
+				{ MARIMOHUB_METADATA_POSTGRES_URL: url },
+				'MARIMOHUB_METADATA_POSTGRES_URL',
+			),
+		).toBe(url);
+	});
+	it.each([
+		'postgres://user:secret@db.example.com/hub',
+		'postgres://db.example.com/hub?sslmode=require',
+		'postgres://localhost/hub?host=db.example.com&sslmode=prefer',
+	])('rejects unverified remote PostgreSQL transport %s', (url) => {
+		const variable = 'MARIMOHUB_METADATA_ADMIN_POSTGRES_URL';
+		expect(() => metadataPostgresUrl({ [variable]: url }, variable)).toThrow(variable);
+		expect(() => metadataPostgresUrl({ [variable]: url }, variable)).not.toThrow('secret');
+		expect(
+			metadataPostgresUrl(
+				{ [variable]: url, MARIMOHUB_METADATA_POSTGRES_ALLOW_INSECURE_TRANSPORT: 'true' },
+				variable,
+			),
+		).toBe(url);
+		expect(() =>
+			makeHubStorage(new MemoryBucket(), { ...env, MARIMOHUB_METADATA_POSTGRES_URL: url }, vi.fn()),
+		).toThrow('MARIMOHUB_METADATA_POSTGRES_URL');
 	});
 	it('disposes failed initialization and retries with a new runtime', async () => {
 		const bucket = new MemoryBucket();
@@ -92,7 +156,7 @@ describe('metadata composition', () => {
 		const storage = makeHubStorage(bucket, env, create);
 		await expect(storage.ready()).rejects.toThrow('connection unavailable');
 		expect(first.close).toHaveBeenCalledOnce();
-		expect(() => storage.metadata.get('_system/catalog.json')).toThrow('not ready');
+		await expect(storage.metadata.get('_system/catalog.json')).rejects.toThrow('not ready');
 		await storage.ready();
 		await storage.close();
 		expect(next.close).toHaveBeenCalledOnce();

@@ -324,12 +324,16 @@ export class SessionLifecycleService {
 				if (snapshotDue && sandbox && !sandboxGone) {
 					const captured = await this.capture.capture(s, sandbox, { includeWorkspace: false });
 					if (captured.critical.status === 'durable') result.snapshotted++;
-					else if (captured.critical.status === 'not_required')
+					else if (captured.critical.status === 'not_required') {
 						await this.sessions.markSnapshotted(
 							s.project_id,
 							s.session_id,
 							new Date(now).toISOString(),
 						);
+						// Remote sources never publish a capture, so the save intent would otherwise
+						// make every sweep capture this session again.
+						await this.sessions.clearSaveDirty(s);
+					}
 				}
 			} catch (error) {
 				logOperationalError(

@@ -132,6 +132,22 @@ describe('bootstrap', () => {
 		expect(deps.storageLifecycle.close).toHaveBeenCalledOnce();
 	});
 
+	it('closes ready storage when dependency preparation fails', async () => {
+		deps.storageLifecycle = { ready: vi.fn(async () => {}), close: vi.fn(async () => {}) };
+		const harness = makeHarness(deps);
+		await expect(
+			bootstrap(BASE_ENV, {
+				...harness.overrides,
+				prepareDeps: async () => {
+					throw new Error('dependency preparation failed');
+				},
+			}),
+		).rejects.toThrow('dependency preparation failed');
+		expect(deps.storageLifecycle.close).toHaveBeenCalledOnce();
+		expect(harness.serveFn).not.toHaveBeenCalled();
+		expect(startMigrations).not.toHaveBeenCalled();
+	});
+
 	it.each(['true', 'false'])(
 		'starts migrations independently of maintenance (%s)',
 		async (maintenance) => {

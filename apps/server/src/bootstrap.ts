@@ -98,11 +98,11 @@ export async function bootstrap(
 		});
 		try {
 			await deps.storageLifecycle?.ready();
+			await prepareDeps?.(deps);
 		} catch (error) {
 			await deps.storageLifecycle?.close();
 			throw error;
 		}
-		await prepareDeps?.(deps);
 	} catch (err) {
 		if (isConfigError(err)) {
 			console.error(`\n${err.format()}\n`);

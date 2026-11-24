@@ -13,6 +13,7 @@ import type { SessionCaptureResult } from './sessionCapture';
 import { logOperationalError } from '../../operationalLog';
 import { logEvent } from '../../logs';
 import type { Metrics } from '../../ports/metrics';
+import { ConflictError } from '../../errors';
 
 export class SessionCaptureCoordinator {
 	constructor(
@@ -47,6 +48,7 @@ export class SessionCaptureCoordinator {
 		let retain = false;
 		let outcome: SessionCaptureResult | undefined;
 		let resumed: Promise<SessionCaptureResult['runtimeState']> | undefined;
+		let ownershipLost = false;
 		const resume = () =>
 			(resumed ??= telemetry
 				.time('resume', () => runtime!.resume(checkpoint!))
@@ -73,10 +75,15 @@ export class SessionCaptureCoordinator {
 					workspace: skipped,
 				};
 			const { source } = publicationToken;
-			await telemetry.time(
-				'ownership',
-				() => options.assertOwnership?.() ?? sessions.assertCaptureOwnership(session),
-			);
+			await telemetry
+				.time(
+					'ownership',
+					() => options.assertOwnership?.() ?? sessions.assertCaptureOwnership(session),
+				)
+				.catch((error: unknown) => {
+					ownershipLost = error instanceof ConflictError;
+					throw error;
+				});
 			await telemetry.time('attempt', () => sessions.recordCaptureAttempt(session));
 			if (
 				!options.retainRuntime &&
@@ -174,7 +181,11 @@ export class SessionCaptureCoordinator {
 				critical: {
 					status: 'failed',
 					code: criticalCode,
-					retryable: criticalCode === 'RUNTIME_CAPTURE_UNAVAILABLE',
+					// A background capture that lost ownership cannot succeed on retry. Stops keep
+					// retrying because a non-retryable stop failure blocks automatic teardown.
+					retryable:
+						criticalCode === 'RUNTIME_CAPTURE_UNAVAILABLE' &&
+						!(ownershipLost && !options.retainRuntime),
 					cause,
 				},
 				workspace: skipped,

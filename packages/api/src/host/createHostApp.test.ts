@@ -9,6 +9,7 @@ import {
 	NotFoundError,
 	ProjectId,
 	SandboxId,
+	SessionCaptureCoordinator,
 	SessionId,
 	SessionRetirer,
 	UnavailableError,
@@ -734,6 +735,36 @@ describe('hub host protocol', () => {
 		expect(vi.mocked(requestRuntimeHost).mock.calls[0][1].headers).toMatchObject({
 			'If-Match': 'saved',
 		});
+	});
+
+	it.each([
+		['durable', false],
+		['uncertain', true],
+	] as const)('leaves save intent after a %s host save capture: %s', async (status, dirty) => {
+		const { request, deps, id, runtime, project } = await setup();
+		const session = await runtime();
+		const { instance } = makeFsSandbox({ files: { 'notebook.py': 'saved source' } });
+		vi.spyOn(deps.compute, 'create').mockReturnValue(instance);
+		if (status === 'uncertain')
+			vi.spyOn(SessionCaptureCoordinator.prototype, 'capture').mockResolvedValue({
+				critical: {
+					status: 'uncertain',
+					code: 'PUBLICATION_UNCERTAIN',
+					retryable: true,
+					cause: new Error('lost acknowledgement'),
+				},
+				workspace: { status: 'skipped' },
+			});
+		vi.mocked(requestRuntimeHost).mockResolvedValue(
+			runtimeReply({
+				status: 200,
+				body: { document: { notebook_id: 'local', saved_etag: 'saved' }, cells: {} },
+			}),
+		);
+		const response = await request('POST', `/notebooks/${id}/save`, {}, 'save-intent');
+		expect(response.status).toBe(status === 'durable' ? 200 : 409);
+		const stored = await deps.services.sessions.getSession(project.id, session.session_id);
+		expect(!!stored.save_dirty).toBe(dirty);
 	});
 
 	it('saves only the source and reports capture metrics, leaving the workspace mirror to teardown', async () => {

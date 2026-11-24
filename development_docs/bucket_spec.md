@@ -2,7 +2,7 @@
 
 **Schema Design, Storage Architecture & CRUD API**
 
-> Scale target: 10 Projects × 100 Notebooks · Iceberg-inspired metadata layer · No database
+> Scale target: 10 Projects × 100 Notebooks · Iceberg-inspired metadata layer · No database by default (optional PostgreSQL metadata: [metadata_storage.md](./metadata_storage.md))
 
 ---
 
@@ -24,7 +24,7 @@ coordination records outside the content snapshot chain.
 
 ### Design Goals
 
-- No database — the configured `Bucket` adapter is the persistence layer
+- No database by default — the configured `Bucket` adapter is the persistence layer. With `MARIMOHUB_METADATA_BACKEND=postgres`, the metadata records below live in PostgreSQL and artifacts stay in the bucket; see [metadata_storage.md](./metadata_storage.md).
 - O(1) reads for listing projects and notebooks — no object scanning
 - Immutable snapshots give audit history for free
 - Self-describing notebooks — each notebook folder is a complete, portable unit
@@ -109,6 +109,7 @@ the next snapshot. It does not rewrite old snapshots.
 s3-bucket/
 ├── _system/
 │   ├── catalog.json                        ← THE single mutable pointer
+│   ├── metadata-backend.json               ← metadata backend marker; always in the bucket (CAS, MetadataTransfer)
 │   ├── snapshots/
 │   │   └── {snapshot-id}.json              ← immutable, one per write
 │   ├── sessions/
@@ -181,6 +182,8 @@ s3-bucket/
     └── {project-id}/
         ├── project.json                    ← project metadata
         ├── alerts.json                     ← project alert destinations (CAS-owned, encrypted)
+        ├── run-index/
+        │   └── {reverse-ulid}.json         ← immutable, rebuildable project run locator (JobRunService)
         ├── integrations/
         │   ├── _names/
         │   │   └── {name}.json             ← per-name singleton claim (CAS, app-claim pattern)
@@ -260,6 +263,7 @@ Version rollback and pruning remove the manifest with the rest of the version.
 | Path                                                                      | Type     | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `_system/catalog.json`                                                    | JSON     | Single entry point. Points to the current snapshot. This is the only mutable content pointer.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `_system/metadata-backend.json`                                           | JSON     | Metadata backend marker: backend, epoch, artifact-store UUID, and transfer state. It stays in the bucket for both backends. `MetadataTransfer` writes it by CAS; hosts refuse to start while it is frozen. See [metadata_storage.md](./metadata_storage.md).                                                                                                                                                                                                                                                                                       |
 | `_system/snapshots/{id}.json`                                             | JSON     | Immutable index snapshot. Lists all projects and notebooks with metadata. Written once, never modified.                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `_system/sessions/{pid}/{sid}.json`                                       | JSON     | Live session record, partitioned by project so a project-scoped read lists only `_system/sessions/{pid}/`. Created on notebook open, updated by heartbeat, and retired by an explicit stop or lifecycle deadline. Closing a browser tab does not immediately delete it.                                                                                                                                                                                                                                                                            |
 | `_system/version-prune-cutoffs/{pid}/{nid}.json`                          | JSON     | Monotonic `{ cutoff_version_id }` advanced before pruning old version folders. A new source-pinned session writes its record and then rejects itself if its version is at or before the cutoff; otherwise a later cutoff advance must see and protect that session. CAS updates are owned by `SessionService`. Hard deletion removes the record.                                                                                                                                                                                                   |

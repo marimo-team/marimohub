@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { signAppJobCredential, verifyAppJobCredential, UnavailableError } from '@marimo-hub/core';
-import { ACTOR } from '@marimo-hub/core/testing';
+import { MAX_ACTIVE_CONSUMER_RUNS_PER_JOB } from '@marimo-hub/core/jobs';
+import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { expectOk } from '../testing';
 import {
 	createAppJobsFixture as fixture,
@@ -69,6 +70,25 @@ describe('app job failure boundaries', () => {
 			expect((await f.call('trigger', undefined, token)).status).toBe(401);
 		}
 		expect(await f.services.jobRuns.listActive()).toEqual([]);
+	});
+
+	it('caps each visitor in-flight runs per job without limiting other visitors or editors', async () => {
+		const f = await fixture();
+		for (let i = 0; i < MAX_ACTIVE_CONSUMER_RUNS_PER_JOB; i++)
+			await expectOk(await f.call('trigger'));
+		const capped = await f.call('trigger');
+		expect(capped.status).toBe(429);
+		expect(await capped.json()).toMatchObject({
+			success: false,
+			error: { code: 'RESOURCE_EXHAUSTED' },
+		});
+		await expectOk(await (await f.visitAs(uid('second-visitor'))).call('trigger'));
+		const editor = await f.visitAs(ACTOR);
+		for (let i = 0; i <= MAX_ACTIVE_CONSUMER_RUNS_PER_JOB; i++)
+			await expectOk(await editor.call('trigger'));
+		expect(await f.services.jobRuns.listActive()).toHaveLength(
+			2 * MAX_ACTIVE_CONSUMER_RUNS_PER_JOB + 2,
+		);
 	});
 
 	it('cannot target jobs in another project even when the user can read both projects', async () => {

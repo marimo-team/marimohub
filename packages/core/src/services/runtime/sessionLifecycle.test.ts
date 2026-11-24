@@ -1032,6 +1032,21 @@ describe('SessionLifecycleService', () => {
 			expect(notebooks.commitSession).not.toHaveBeenCalled();
 			expect((await getStored(s)).last_snapshot_at).toBe(iso(0));
 		});
+
+		it('clears save intent for a synced source so later sweeps do not capture again', async () => {
+			vi.mocked(notebooks.prepareSessionCapture).mockResolvedValue(null);
+			const capture = vi.spyOn(SessionCaptureCoordinator.prototype, 'capture');
+			const s = await putSession({ last_snapshot_at: iso(-1000) });
+			await sessions.acknowledgeRuntimeSave(s.project_id, s.session_id);
+
+			await makeService({ snapshotIntervalMs: 0 }).sweep(now);
+			expect(capture).toHaveBeenCalledOnce();
+			expect((await getStored(s)).save_dirty).toBeUndefined();
+
+			vi.setSystemTime(now + 120_000);
+			await makeService({ snapshotIntervalMs: 0 }).sweep(now + 120_000);
+			expect(capture).toHaveBeenCalledOnce();
+		});
 	});
 
 	describe('candidate selection', () => {

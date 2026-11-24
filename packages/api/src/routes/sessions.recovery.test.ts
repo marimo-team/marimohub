@@ -478,6 +478,33 @@ it.each(['expires_at', 'sandbox_deadline_at'] as const)(
 	},
 );
 
+it('rejects and reclaims when the deadline passes during completion on the launch path', async () => {
+	const env = await fixture();
+	const sessions = env.api.deps.services.sessions;
+	const complete = sessions.completeStartup.bind(sessions);
+	vi.spyOn(sessions, 'completeStartup').mockImplementationOnce(async (pid, sid, id) => {
+		const stored = await sessions.getSession(pid, sid);
+		await env.bucket.put(
+			paths.session(pid, sid),
+			JSON.stringify({
+				...stored,
+				startup_completion: {
+					...stored.startup_completion,
+					expires_at: new Date(Date.now() - 1000).toISOString(),
+				},
+			}),
+		);
+		return complete(pid, sid, id);
+	});
+	await expectError(await env.api.request('POST', env.path), 409);
+	const [session] = await sessions.listSessions();
+	expect(session).toMatchObject({ status: 'failed', sandbox_reclaimed_at: expect.any(String) });
+	expect(env.calls.destroy).toBe(1);
+	expect((await sessions.getEditorClaim(env.project.id, env.notebook.id))?.session_id).not.toBe(
+		session.session_id,
+	);
+});
+
 it('rechecks notebook security labels before publishing a prepared runtime', async () => {
 	const security = localResourceSecurity(
 		['PUBLIC', 'SECRET'],

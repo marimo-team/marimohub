@@ -24,6 +24,7 @@ export const DOMAIN_ERROR_CODES = [
 	'SERVICE_UNAVAILABLE',
 	'SESSION_PERSISTENCE_REQUIRED',
 	'PYTHON_ENV_SETUP_FAILED',
+	'RUNTIME_CAPTURE_SETUP_FAILED',
 	'RESOURCE_EXHAUSTED',
 	'SURFACE_NOT_ENABLED',
 	'SURFACE_UNAVAILABLE',
@@ -106,6 +107,14 @@ export class ConflictError extends DomainError {
 	constructor(message = 'Conflict', options?: ErrorOptions) {
 		super(message, options);
 		this.name = 'ConflictError';
+	}
+}
+
+/** A prepared startup receipt passed one of its deadlines before the session ran. */
+export class StartupCompletionExpiredError extends ConflictError {
+	constructor() {
+		super('The prepared runtime has expired');
+		this.name = 'StartupCompletionExpiredError';
 	}
 }
 
@@ -234,6 +243,16 @@ export class PythonEnvironmentSetupError extends DomainError {
 	constructor(message = 'Failed to prepare the notebook Python environment') {
 		super(message);
 		this.name = 'PythonEnvironmentSetupError';
+	}
+}
+
+/** The deployment cannot set up runtime capture; retrying cannot succeed until it is fixed. */
+export class RuntimeCaptureSetupError extends DomainError {
+	readonly code = 'RUNTIME_CAPTURE_SETUP_FAILED';
+	readonly status = 500;
+	constructor(missing: string) {
+		super(`Runtime capture setup failed: ${missing}`);
+		this.name = 'RuntimeCaptureSetupError';
 	}
 }
 

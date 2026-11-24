@@ -25,7 +25,11 @@ import { notebookBridgePaths, resolveBridgeLauncher } from './notebookBridgePath
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
 import { Millis } from '../../duration';
-import { PythonEnvironmentSetupError, UnavailableError } from '../../errors';
+import {
+	PythonEnvironmentSetupError,
+	RuntimeCaptureSetupError,
+	UnavailableError,
+} from '../../errors';
 import type { SourceControlCommitIdentity } from '../../ports/sourceControl';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { effectivePersistenceMode } from './sessionPersistence';
@@ -480,7 +484,10 @@ function provisionFailure(step: string, err: unknown): UnavailableError {
 
 function notebookBridgeFailure(options: ProvisionOptions, error: unknown): void {
 	// Capture is required for safe publication and stop; the UI extension is optional.
-	if (options.runtimeCapture) throw provisionFailure('preparing runtime capture', error);
+	if (options.runtimeCapture)
+		throw error instanceof RuntimeCaptureSetupError
+			? error
+			: provisionFailure('preparing runtime capture', error);
 	logEvent(
 		{
 			level: 'warn',
@@ -1026,9 +1033,14 @@ export class SandboxProvisioner {
 					await sandbox.writeFiles([...batch, ...bridgeFiles]);
 				} catch (error) {
 					if (bridgeFiles.length === 0) throw error;
-					notebookBridgeFailure(options, error);
+					// Retry each half alone so the error names the write that actually failed.
 					if (batch.length > 0) await writeFiles(batch);
-					bridgeUnavailable = true;
+					try {
+						await writeFiles(bridgeFiles);
+					} catch (bridgeError) {
+						notebookBridgeFailure(options, bridgeError);
+						bridgeUnavailable = true;
+					}
 				}
 			})();
 			const started = Date.now();
@@ -1235,7 +1247,7 @@ export class SandboxProvisioner {
 		const payload = options.notebookBridge;
 		if (!payload) {
 			if (options.runtimeCapture)
-				notebookBridgeFailure(options, new Error('Capture bridge payload is required'));
+				throw new RuntimeCaptureSetupError('the notebook bridge payload is not configured');
 			return;
 		}
 		const { directory } = notebookBridgePaths(options.sandboxId, payload.launcher);
@@ -1258,7 +1270,9 @@ export class SandboxProvisioner {
 				launcher: payload.launcher,
 			});
 			if (options.runtimeCapture && !launcher)
-				throw new Error('Capture bridge launcher is required');
+				throw new RuntimeCaptureSetupError(
+					`the sandbox cannot resolve the bridge launcher ${payload.launcher}`,
+				);
 			return launcher;
 		} catch (error) {
 			notebookBridgeFailure(options, error);
@@ -1309,7 +1323,9 @@ export class SandboxProvisioner {
 				`python ${shellQuote(launcher)} --quiet `,
 			);
 			if (options.runtimeCapture && start === startup.plan.start)
-				throw new Error('Capture launcher could not be configured');
+				throw new RuntimeCaptureSetupError(
+					'the sandbox start command does not launch marimo, so the bridge launcher cannot wrap it',
+				);
 			startup.plan.start = start;
 		} catch (error) {
 			notebookBridgeFailure(options, error);
