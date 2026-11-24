@@ -33,13 +33,43 @@ describe('probeKernelLiveness', () => {
 		expect(await probeKernelLiveness(URL, { fetchImpl, attempts: 1 })).toBe('dead');
 	});
 
-	it('reports dead when the request is aborted by the timeout', async () => {
+	it('reports unresponsive, not dead, when the request is aborted by the timeout', async () => {
 		// Honor the abort signal so the AbortController + timeout path is exercised.
 		const fetchImpl = ((_url: string, init?: RequestInit) =>
 			new Promise((_resolve, reject) => {
 				init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
 			})) as unknown as typeof fetch;
-		expect(await probeKernelLiveness(URL, { fetchImpl, attempts: 1, timeoutMs: 5 })).toBe('dead');
+		expect(
+			await probeKernelLiveness(URL, { fetchImpl, attempts: 2, retryDelayMs: 0, timeoutMs: 5 }),
+		).toBe('unresponsive');
+	});
+
+	it('reports dead when the last attempt is refused after an earlier timeout', async () => {
+		let calls = 0;
+		const fetchImpl = ((_url: string, init?: RequestInit) => {
+			calls += 1;
+			if (calls > 1) return Promise.reject(new Error('ECONNREFUSED'));
+			return new Promise((_resolve, reject) => {
+				init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+			});
+		}) as unknown as typeof fetch;
+		expect(
+			await probeKernelLiveness(URL, { fetchImpl, attempts: 2, retryDelayMs: 0, timeoutMs: 5 }),
+		).toBe('dead');
+	});
+
+	it('reports dead when the first attempt is refused and the retry times out', async () => {
+		let calls = 0;
+		const fetchImpl = ((_url: string, init?: RequestInit) => {
+			calls += 1;
+			if (calls === 1) return Promise.reject(new Error('ECONNREFUSED'));
+			return new Promise((_resolve, reject) => {
+				init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+			});
+		}) as unknown as typeof fetch;
+		expect(
+			await probeKernelLiveness(URL, { fetchImpl, attempts: 2, retryDelayMs: 0, timeoutMs: 5 }),
+		).toBe('dead');
 	});
 
 	it('retries a transient gateway blip, then reports alive', async () => {

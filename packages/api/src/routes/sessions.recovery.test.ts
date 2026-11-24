@@ -137,19 +137,22 @@ it('a stale original saga cannot destroy or fail a runtime completed by racing r
 	expect(env.calls.destroy).toBe(0);
 });
 
-it.each(['dead'] as const)('retains the receipt when readiness is %s', async (readiness) => {
-	const env = await fixture();
-	const original = await env.prepare();
-	await expectError(
-		await env.replica({ deps: { kernelProbe: async () => readiness } }).request('POST', env.path),
-		503,
-	);
-	expect(
-		(await env.api.deps.services.sessions.getSession(env.project.id, original.session_id)).status,
-	).toBe('starting');
-	expect(env.create).toHaveBeenCalledTimes(1);
-	expect(env.calls.destroy).toBe(0);
-});
+it.each(['dead', 'unresponsive'] as const)(
+	'retains the receipt when readiness is %s',
+	async (readiness) => {
+		const env = await fixture();
+		const original = await env.prepare();
+		await expectError(
+			await env.replica({ deps: { kernelProbe: async () => readiness } }).request('POST', env.path),
+			503,
+		);
+		expect(
+			(await env.api.deps.services.sessions.getSession(env.project.id, original.session_id)).status,
+		).toBe('starting');
+		expect(env.create).toHaveBeenCalledTimes(1);
+		expect(env.calls.destroy).toBe(0);
+	},
+);
 
 it('does not publish a prepared runtime when stop wins during its readiness probe', async () => {
 	const env = await fixture();
