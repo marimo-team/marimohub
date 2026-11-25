@@ -336,8 +336,10 @@ function createJobScheduler(
 			computeProfile: deps.sandbox.computeProfile,
 			computeProfiles: deps.sandbox.computeProfiles,
 			computeProfileOverride: deps.sandbox.computeProfileOverride,
+			assetUrl: deps.sandbox.assetUrl,
 		},
 		resolveSessionEnv: (context) => resolveJobSandboxEnv(deps, context),
+		liveRuns: config.liveRuns !== undefined,
 		metrics,
 	});
 	return new JobScheduler({

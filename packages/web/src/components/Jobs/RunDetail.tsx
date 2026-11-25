@@ -1,7 +1,12 @@
 import { useId, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { XCircle } from 'lucide-react';
-import { useJobRunHtmlQuery, useJobRunLogsQuery, useUsersQuery } from '@/api/hooks';
+import {
+	useJobRunFollowQuery,
+	useJobRunHtmlQuery,
+	useJobRunLogsQuery,
+	useUsersQuery,
+} from '@/api/hooks';
 import { Button, Skeleton, UserLabel } from '@/components/ui';
 import { useNow } from '@/hooks/useNow';
 import { isTerminalRun, runDurationMs } from '@/lib/jobs';
@@ -37,6 +42,9 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 		run.run_id,
 		terminal && canEdit && tab === 'logs',
 	);
+	// A live run executes under a notebook server, so its output can be followed as it runs.
+	const followable = run.status === 'running' && run.live === true;
+	const follow = useJobRunFollowQuery(projectId, notebookId, job.id, run.run_id, followable);
 	const duration = runDurationMs(run, now);
 	const { data: users } = useUsersQuery([run.triggered_by, run.cancelled_by]);
 	const moveArtifactTab = (event: KeyboardEvent<HTMLButtonElement>, current: ArtifactTab) => {
@@ -145,14 +153,7 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 							) : html.isError ? (
 								<ArtifactError artifact="output" onRetry={() => void html.refetch()} />
 							) : html.data ? (
-								<div className="min-h-[24rem] flex-1 overflow-hidden rounded-md border">
-									<iframe
-										className="size-full min-h-[24rem] border-0"
-										srcDoc={html.data}
-										sandbox="allow-scripts"
-										title={`${job.name} output`}
-									/>
-								</div>
+								<RunFrame html={html.data} title={`${job.name} output`} />
 							) : (
 								<p className="text-xs text-muted-foreground">This run produced no output.</p>
 							)
@@ -175,14 +176,43 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 				<p className="text-xs text-muted-foreground">
 					This run has a status this version of marimohub does not recognize.
 				</p>
+			) : followable && follow.data ? (
+				<>
+					<p className="text-xs text-muted-foreground">
+						Following the run as it executes. The final output replaces this view when the run
+						finishes.
+					</p>
+					<RunFrame
+						// A renewed view carries a new credential and must start a new document.
+						key={follow.data.expires_at}
+						html={follow.data.html}
+						title={`${job.name} live run`}
+					/>
+				</>
 			) : (
 				<p className="text-xs text-muted-foreground">
 					{run.status === 'queued'
 						? 'Waiting for the scheduler to pick this run up.'
-						: 'The notebook is running in its own sandbox; output appears when it finishes.'}
+						: followable
+							? 'The notebook is running in its own sandbox. A live view appears when its notebook server answers; the output appears when the run finishes.'
+							: 'The notebook is running in its own sandbox; output appears when it finishes.'}
 				</p>
 			)}
 		</section>
+	);
+}
+
+/** Notebook-authored HTML, kept off the app origin by a sandbox without `allow-same-origin`. */
+function RunFrame({ html, title }: { html: string; title: string }) {
+	return (
+		<div className="min-h-[24rem] flex-1 overflow-hidden rounded-md border">
+			<iframe
+				className="size-full min-h-[24rem] border-0"
+				srcDoc={html}
+				sandbox="allow-scripts"
+				title={title}
+			/>
+		</div>
 	);
 }
 

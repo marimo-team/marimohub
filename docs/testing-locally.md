@@ -183,6 +183,20 @@ MARIMO_INTEGRATION_PYTHON="$PWD/.context/marimo-test/bin/python" \
 For another runtime, replace the marimo version. Without `MARIMO_INTEGRATION_PYTHON`,
 the normal test suite skips these tests.
 
+## Live job run integration tests
+
+These tests run and follow notebooks with the live job runner. They need a marimo
+release that serves the host protocol:
+
+```bash
+MARIMO_HOST_INTEGRATION_PYTHON="/path/to/python-with-host-protocol-marimo" \
+  pnpm --filter @marimo-hub/core test src/services/jobs/liveRunner.integration.test.ts
+```
+
+To also test the fallback to `marimo export html`, set
+`MARIMO_LEGACY_INTEGRATION_PYTHON` to the interpreter from the previous section.
+The suite takes about four minutes. The normal test suite skips it.
+
 ## Thumbnail and app security tests
 
 The thumbnail tests use Chromium to render saved HTML and check that HTTP, WebSocket, and WebRTC requests cannot reach external listeners.

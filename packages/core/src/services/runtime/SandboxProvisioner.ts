@@ -357,6 +357,8 @@ export interface ProvisionOptions {
 	 * workspace would let notebook code write through to the bucket.
 	 */
 	launchMode?: MarimoLaunchMode;
+	/** Job mode: runner source executed in place of `marimo export html`. */
+	jobRunner?: string;
 	/** How to load the cached workspace into the sandbox. Defaults to mount-or-copy. */
 	workspaceLoadMode?: WorkspaceLoadMode;
 	/**
@@ -1324,10 +1326,14 @@ export class SandboxProvisioner {
 					timeoutError: () => new Error('Bridge configuration timed out'),
 				},
 			);
-			const start = startup.plan.start.replace(
-				/(?:python -m )?marimo (?=--quiet |export html )/,
-				`python ${shellQuote(launcher)} `,
-			);
+			// A job runner starts marimo itself, so it takes the launcher as its last option.
+			const start =
+				options.launchMode === 'job' && options.jobRunner !== undefined
+					? `${startup.plan.start} --launcher ${shellQuote(launcher)}`
+					: startup.plan.start.replace(
+							/(?:python -m )?marimo (?=--quiet |export html )/,
+							`python ${shellQuote(launcher)} `,
+						);
 			if ((options.runtimeCapture || options.launchMode === 'job') && start === startup.plan.start)
 				throw new RuntimeCaptureSetupError(
 					'the sandbox start command does not launch marimo, so the bridge launcher cannot wrap it',
@@ -1790,6 +1796,7 @@ export class SandboxProvisioner {
 					port: MARIMO_PORT,
 					host: '0.0.0.0',
 					mode: options.launchMode,
+					jobRunner: options.jobRunner,
 					assetUrl: options.assetUrl,
 					baseUrl: options.baseUrl,
 					cookiePartitioned: options.cookiePartitioned && publicUrl?.protocol === 'https:',

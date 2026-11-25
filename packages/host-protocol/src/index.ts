@@ -20,6 +20,7 @@ export type {
 	HostUpdateNotebookInput,
 } from './platform';
 export { HostProblemError, OPERATIONS, RUNTIME_OPERATIONS } from './protocol';
+export { sseResponse } from './streams';
 export type { ErrorStatus, HostDecision, RuntimeOperation } from './protocol';
 export type {
 	HostMutationReply,

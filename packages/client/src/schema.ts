@@ -2026,6 +2026,26 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/follow': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Open a live view of a running run
+		 * @description Returns an HTML page that renders a `live` run while it is `running`, for callers who can read the run output. The page embeds a short-lived credential: show it in a sandboxed frame, never as a document on this origin. Otherwise 409 with code `RUN_NOT_FOLLOWABLE`, also in the first seconds of a live run; retry while it is running.
+		 */
+		post: operations['jobs.runs.follow'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/logs': {
 		parameters: {
 			query?: never;
@@ -2979,6 +2999,7 @@ export interface components {
 					| 'CONFLICT'
 					| 'APP_ASSIGNMENT_EXPIRED'
 					| 'PREVIEW_NOT_READY'
+					| 'RUN_NOT_FOLLOWABLE'
 					| 'PROPOSAL_RETRY_REQUIRED'
 					| 'IMPORT_RESTART_REQUIRED'
 					| 'EDIT_SESSION_OWNED'
@@ -5106,7 +5127,7 @@ export interface components {
 			 * @description Present after provisioning establishes the watchdog deadline.
 			 */
 			deadline_at?: string;
-			/** @description Process exit code when the export command reported one. */
+			/** @description Process exit code when the run command reported one. */
 			exit_code?: number;
 			/** @description Sanitized failure detail, present on failed, timed-out, or skipped runs. */
 			error?: {
@@ -5119,6 +5140,8 @@ export interface components {
 				logs_bytes?: number;
 			};
 			cancelled_by?: string;
+			/** @description True when the run executes under a marimo server in its sandbox. `jobs.runs.follow` returns a live view of such a run while it is running. */
+			live?: boolean;
 		};
 		JobRunTriggerBody: {
 			metadata?: {
@@ -5139,6 +5162,15 @@ export interface components {
 		JobRunPage: {
 			items: components['schemas']['JobRun'][];
 			next_cursor: string | null;
+		};
+		JobRunFollowView: {
+			/** @description The live view document. */
+			html: string;
+			/**
+			 * Format: date-time
+			 * @description When the embedded credential expires. Request a new view before then.
+			 */
+			expires_at: string;
 		};
 		ProjectRunPage: {
 			items: components['schemas']['JobRun'][];
@@ -20886,6 +20918,109 @@ export interface operations {
 			};
 			/** @description Not found */
 			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'jobs.runs.follow': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				jid: string;
+				rid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Live view */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['JobRunFollowView'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
 				headers: {
 					[name: string]: unknown;
 				};

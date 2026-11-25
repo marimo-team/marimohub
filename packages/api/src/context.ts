@@ -106,6 +106,11 @@ export interface JobsConfig {
 	runRetentionMs: Millis;
 	/** How stale an occurrence may be and still fire (once). */
 	catchupWindowMs: Millis;
+	/**
+	 * Execute runs under a marimo host so they can be followed while running.
+	 * `signingSecret` keys the per-user, per-run follow tokens.
+	 */
+	liveRuns?: { signingSecret: string };
 }
 
 export const DEFAULT_JOBS_CONFIG: JobsConfig = {

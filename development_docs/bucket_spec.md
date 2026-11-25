@@ -1101,7 +1101,9 @@ status. See
 - `run.json` — an operational record like a session (§4.8): every status
   change is a CAS transition through the run state machine, **written only by
   `JobRunService`**. Terminal runs are never rewritten; retention deletes whole
-  `runs/{rid}/` prefixes.
+  `runs/{rid}/` prefixes. A live run (`MARIMOHUB_JOBS_LIVE_RUNS=on`) also carries
+  `live: { workdir }` and an optional `reconnect_reference`, written by the
+  `start` transition. They locate the sandbox for followers and hold no credential.
 - `occurrences/{key}.json` — create-if-absent, immutable. The key is the UTC
   minute of the occurrence, so replicas with skewed clocks compute the same key
   and collide on the conditional PUT: the fire-exactly-once anchor. A crash

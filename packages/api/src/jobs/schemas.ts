@@ -196,7 +196,7 @@ export const JobRunResponseSchema = z
 			description: 'Present after provisioning establishes the watchdog deadline.',
 		}),
 		exit_code: z.number().int().optional().openapi({
-			description: 'Process exit code when the export command reported one.',
+			description: 'Process exit code when the run command reported one.',
 		}),
 		error: RunErrorSchema.optional().openapi({
 			description: 'Sanitized failure detail, present on failed, timed-out, or skipped runs.',
@@ -209,5 +209,9 @@ export const JobRunResponseSchema = z
 			.optional()
 			.openapi({ description: 'Captured write-once artifacts, present after execution.' }),
 		cancelled_by: z.string().optional(),
+		live: z.boolean().optional().openapi({
+			description:
+				'True when the run executes under a marimo server in its sandbox. `jobs.runs.follow` returns a live view of such a run while it is running.',
+		}),
 	})
 	.openapi('JobRun');

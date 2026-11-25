@@ -374,6 +374,20 @@ const DEFAULT_JOBS_MAX_TIMEOUT_S = 14_400;
 const DEFAULT_JOBS_RUN_RETENTION_DAYS = 30;
 const DEFAULT_JOBS_CATCHUP_WINDOW_S = 600;
 
+function parseLiveRuns(env: Env): JobsConfig['liveRuns'] {
+	if (!parseOnOff(env, 'MARIMOHUB_JOBS_LIVE_RUNS', { fallback: false, docs: 'docs/jobs.md' })) {
+		return undefined;
+	}
+	const signingSecret = env.MARIMOHUB_AUTH_SESSION_SECRET;
+	if (!signingSecret) {
+		throw new ConfigError(
+			'MARIMOHUB_JOBS_LIVE_RUNS=on requires MARIMOHUB_AUTH_SESSION_SECRET to protect run follow tokens',
+			{ variable: 'MARIMOHUB_AUTH_SESSION_SECRET', docs: 'docs/jobs.md' },
+		);
+	}
+	return { signingSecret };
+}
+
 function parseJobsConfig(env: Env): JobsConfig | undefined {
 	if (!parseOnOff(env, 'MARIMOHUB_JOBS', { fallback: false, docs: 'docs/jobs.md' })) {
 		return undefined;
@@ -426,6 +440,7 @@ function parseJobsConfig(env: Env): JobsConfig | undefined {
 			dflt: DEFAULT_JOBS_CATCHUP_WINDOW_S,
 			max: MAX_NODE_TIMER_SECONDS,
 		}),
+		liveRuns: parseLiveRuns(env),
 	};
 }
 

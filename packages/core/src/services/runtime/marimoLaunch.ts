@@ -13,8 +13,9 @@ import { mergeRuntimePackages } from '../integrations/runtimePackages';
 export { MARIMO_VERSION_COMMAND } from './runtimePackageCommand';
 
 /**
- * `edit`/`app` serve a browser; `job` runs the notebook to completion with
- * `marimo export html` and exits (see services/jobs/JobRunner.ts).
+ * `edit`/`app` serve a browser; `job` runs the notebook to completion and exits:
+ * with `marimo export html`, or with `jobRunner` when one is supplied
+ * (see services/jobs/JobRunner.ts).
  */
 export type MarimoLaunchMode = SessionMode | 'job';
 
@@ -31,6 +32,11 @@ export interface MarimoLaunchParams extends RuntimeContributions {
 	mode?: MarimoLaunchMode;
 	/** Job mode: workdir-relative path the rendered HTML is written to. */
 	outputFile?: string;
+	/**
+	 * Job mode: Python source that runs the notebook in place of `marimo export html`,
+	 * invoked as `python -c <source> <notebook> -o <outputFile>` in the notebook's environment.
+	 */
+	jobRunner?: string;
 	/** Optional CDN base for the frontend, passed as --asset-url. */
 	assetUrl?: string;
 	/** File containing marimo's session token. Jobs and legacy tokenless launches omit it. */
@@ -131,6 +137,15 @@ function marimoCommand(p: MarimoLaunchParams, extraFlags = ''): string {
 }
 
 function launchCommand(p: MarimoLaunchParams, sandbox = false): string {
+	// `marimo --sandbox` re-executes under uv, so a runner could not supervise that server.
+	if (!sandbox && p.mode === 'job' && p.jobRunner !== undefined) {
+		const assetUrl = p.assetUrl ? ` --asset-url ${shellQuote(p.assetUrl)}` : '';
+		const runner = `python -c ${shellQuote(p.jobRunner)} ${shellQuote(p.notebookFile)} -o ${shellQuote(p.outputFile ?? DEFAULT_JOB_OUTPUT_FILE)}${assetUrl}`;
+		return runtimePackageCommand(
+			p.runtimePackages ?? [],
+			loggingCommand(p.loggingDirectory, runner),
+		);
+	}
 	if (sandbox) {
 		const packages = mergeRuntimePackages(p.runtimePackages ?? []);
 		const flags = packages.map((requirement) => ` --with ${shellQuote(requirement)}`).join('');

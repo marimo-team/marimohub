@@ -36,6 +36,7 @@ import { listFileSizes, readCappedFile } from '../runtime/sandboxFiles';
 import { shellQuote } from '../runtime/shell';
 import type { JobsService } from './JobsService';
 import type { JobRunService } from './JobRunService';
+import { JOB_LIVE_RUNNER } from './liveRunner';
 
 /** Where the export lands inside the sandbox working dir; never persisted to the workspace. */
 export const JOB_OUTPUT_FILE = '__marimo__/job_output.html';
@@ -63,6 +64,8 @@ export interface JobRunnerSandboxConfig {
 	computeProfile?: string;
 	computeProfiles?: { name: string; resources: ComputeResources }[];
 	computeProfileOverride?: 'none' | 'editors';
+	/** Frontend asset base for a live run's follow view and stored output. Unset uses marimo's CDN. */
+	assetUrl?: string;
 }
 
 export interface JobRunContext {
@@ -91,6 +94,12 @@ export interface JobRunnerDeps {
 	 * entrypoint so this stays vendor-agnostic. Absent = nothing injected.
 	 */
 	resolveSessionEnv?: (context: JobRunContext) => Promise<SessionEnv | undefined>;
+	/**
+	 * Execute runs under a marimo host inside the sandbox, so a run can be followed
+	 * while it executes. Off runs `marimo export html`. Requires a sandbox image whose
+	 * marimo serves the host protocol.
+	 */
+	liveRuns?: boolean;
 	provisioner?: SandboxProvisioner;
 	metrics?: Metrics;
 }
@@ -180,9 +189,9 @@ export interface ExportOutcome {
 }
 
 /**
- * Map what the export command reported onto the run's terminal transition.
- * marimo exits non-zero when a cell raised but still writes the HTML, so
- * success requires both a zero status and an output file.
+ * Map what the run command reported onto the run's terminal transition.
+ * `marimo export html` and the live runner both exit non-zero when a cell raised
+ * but still write the HTML, so success requires both a zero status and an output file.
  */
 export function classifyExport(input: {
 	result: ExecResult;
@@ -202,8 +211,8 @@ export function classifyExport(input: {
 			error: {
 				code: 'NOTEBOOK_FAILED',
 				message: hasHtml
-					? `One or more cells failed (marimo export exited with status ${exitCode})`
-					: `marimo export exited with status ${exitCode} without producing output`,
+					? `One or more cells failed (the run exited with status ${exitCode})`
+					: `The run exited with status ${exitCode} without producing output`,
 			},
 		};
 	}
@@ -211,7 +220,7 @@ export function classifyExport(input: {
 		event: 'fail',
 		error: {
 			code: 'RUN_FAILED',
-			message: `The export command failed (${result.success ? 'no exit status' : result.error.code})`,
+			message: `The run command failed (${result.success ? 'no exit status' : result.error.code})`,
 		},
 	};
 }
@@ -225,7 +234,8 @@ interface ExportCapture {
 
 /**
  * Execute one queued run to completion: provision a copy-only sandbox with the
- * notebook's credentials, run `marimo export html` with the run's parameters,
+ * notebook's credentials, run the notebook once with the run's parameters
+ * (`marimo export html`, or the live runner when `liveRuns` is set),
  * capture the rendered output and logs onto the run record, and destroy the
  * sandbox on every path. Never writes to the notebook's workspace or version
  * chain — outputs live under the run prefix and only there.
@@ -304,9 +314,11 @@ export class JobRunner {
 			}
 		};
 		try {
-			const preparing = this.provisionOptions(context, sandboxId).then((options) =>
-				this.provisioner.prepare(options),
-			);
+			let live = false;
+			const preparing = this.provisionOptions(context, sandboxId).then((options) => {
+				live = options.jobRunner !== undefined;
+				return this.provisioner.prepare(options);
+			});
 			let prepared: PreparedSandbox;
 			try {
 				prepared = await beforeDeadline(preparing);
@@ -319,7 +331,17 @@ export class JobRunner {
 			Object.assign(stopwatch.timings, prepared.timings);
 			counters = prepared.counters;
 
-			const started = await runs.transition(claimed.run, 'start');
+			const reconnectReference = prepared.sandbox.reconnectReference;
+			const started = await runs.transition(claimed.run, 'start', () =>
+				live
+					? {
+							live: { workdir: prepared.workdir },
+							...(reconnectReference !== undefined
+								? { reconnect_reference: reconnectReference }
+								: {}),
+						}
+					: {},
+			);
 			if (!started.transitioned) throw new RunCancelledError();
 			context.run = started.run;
 
@@ -565,6 +587,12 @@ export class JobRunner {
 			});
 		});
 		void sessionEnv?.catch(() => {});
+		// `uv-sandbox` re-executes marimo under uv, which the runner cannot supervise. A provider
+		// that cannot reattach to a sandbox has no way to serve a follower, so it keeps the export.
+		const live =
+			this.deps.liveRuns === true &&
+			launchStrategy.strategy !== 'uv-sandbox' &&
+			this.deps.compute.connectExisting !== undefined;
 		const executionEnv = this.deps.appBaseUrl
 			? mergeSessionEnv(await sessionEnv, {
 					vars: {
@@ -590,6 +618,8 @@ export class JobRunner {
 			entryNotebook,
 			launchStrategy: launchStrategy.strategy,
 			launchMode: 'job' as const,
+			jobRunner: live ? JOB_LIVE_RUNNER : undefined,
+			assetUrl: live ? sandbox.assetUrl : undefined,
 			notebookBridge: this.deps.appBaseUrl ? this.deps.notebookBridge : undefined,
 			// Never a mount: an unattended sandbox must not write through to the
 			// workspace mirror, and outputs belong under the run prefix only.

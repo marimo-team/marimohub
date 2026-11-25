@@ -10,6 +10,7 @@ export const DOMAIN_ERROR_CODES = [
 	'CONFLICT',
 	'APP_ASSIGNMENT_EXPIRED',
 	'PREVIEW_NOT_READY',
+	'RUN_NOT_FOLLOWABLE',
 	'PROPOSAL_RETRY_REQUIRED',
 	'IMPORT_RESTART_REQUIRED',
 	'EDIT_SESSION_OWNED',
@@ -343,6 +344,16 @@ export class PreviewNotReadyError extends DomainError {
 	constructor() {
 		super('Preview is not ready');
 		this.name = 'PreviewNotReadyError';
+	}
+}
+
+/** The run is not executing under a marimo host that answers right now; retry while it runs. */
+export class RunNotFollowableError extends DomainError {
+	readonly code = 'RUN_NOT_FOLLOWABLE';
+	readonly status = 409;
+	constructor() {
+		super('This run cannot be followed right now');
+		this.name = 'RunNotFollowableError';
 	}
 }
 

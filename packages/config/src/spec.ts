@@ -2094,6 +2094,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: '30',
 					},
 					{
+						id: 'MARIMOHUB_JOBS_LIVE_RUNS',
+						name: 'Live runs',
+						description:
+							'Node only: run each job under a marimo server in its sandbox, so that users can follow the run while it executes. Requires `MARIMOHUB_AUTH_SESSION_SECRET`. Accepted values are `on` and `off`.',
+						default: 'off',
+						example: 'on',
+					},
+					{
 						id: 'MARIMOHUB_JOBS_CATCHUP_WINDOW_SECONDS',
 						name: 'Catch-up window (seconds)',
 						description:

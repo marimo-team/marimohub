@@ -7489,6 +7489,19 @@ components:
           type: string
         sandbox_id:
           type: string
+        reconnect_reference:
+          type: string
+          minLength: 1
+          maxLength: 4096
+        live:
+          type: object
+          properties:
+            workdir:
+              type: string
+              minLength: 1
+          required:
+            - workdir
+          additionalProperties: {}
         image:
           type: string
         compute_profile:

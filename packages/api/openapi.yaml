@@ -65,6 +65,7 @@ components:
                 - CONFLICT
                 - APP_ASSIGNMENT_EXPIRED
                 - PREVIEW_NOT_READY
+                - RUN_NOT_FOLLOWABLE
                 - PROPOSAL_RETRY_REQUIRED
                 - IMPORT_RESTART_REQUIRED
                 - EDIT_SESSION_OWNED
@@ -4921,7 +4922,7 @@ components:
           description: Present after provisioning establishes the watchdog deadline.
         exit_code:
           type: integer
-          description: Process exit code when the export command reported one.
+          description: Process exit code when the run command reported one.
         error:
           type: object
           properties:
@@ -4948,6 +4949,11 @@ components:
           description: Captured write-once artifacts, present after execution.
         cancelled_by:
           type: string
+        live:
+          type: boolean
+          description: True when the run executes under a marimo server in its sandbox.
+            `jobs.runs.follow` returns a live view of such a run while it is
+            running.
       required:
         - run_id
         - job_id
@@ -4998,6 +5004,19 @@ components:
       required:
         - items
         - next_cursor
+    JobRunFollowView:
+      type: object
+      properties:
+        html:
+          type: string
+          description: The live view document.
+        expires_at:
+          type: string
+          format: date-time
+          description: When the embedded credential expires. Request a new view before then.
+      required:
+        - html
+        - expires_at
     ProjectRunPage:
       type: object
       properties:
@@ -23597,6 +23616,120 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/follow:
+    post:
+      operationId: jobs.runs.follow
+      x-cli-hidden: true
+      tags:
+        - Jobs
+      summary: Open a live view of a running run
+      description: 'Returns an HTML page that renders a `live` run while it is
+        `running`, for callers who can read the run output. The page embeds a
+        short-lived credential: show it in a sandboxed frame, never as a
+        document on this origin. Otherwise 409 with code `RUN_NOT_FOLLOWABLE`,
+        also in the first seconds of a live run; retry while it is running.'
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^job-[0-9a-z]{16}$
+            example: job-7h2k9qm4xz7rp3w8
+          required: true
+          name: jid
+          in: path
+        - schema:
+            type: string
+            pattern: ^run_[0-9A-HJKMNP-TV-Z]{26}$
+            example: run_01HXYZ33333RSTUVWXYZABCDEF
+          required: true
+          name: rid
+          in: path
+      responses:
+        '200':
+          description: Live view
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/JobRunFollowView'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
           content:
             application/json:
               schema:

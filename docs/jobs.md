@@ -103,7 +103,7 @@ complete app.
   captured stdout/stderr live under the run only. They are **not** notebook
   versions and never advance the notebook's head.
 - **Parameters reach the notebook as `mo.cli_args()`.** Each `key=value`
-  becomes `--key value` after `--` on the export command, so
+  becomes `--key value` after `--` on the run command, so
   `mo.cli_args().get("region")` reads it. Values are strings and are never
   shell-interpolated. A manual run can override the job's stored parameters
   for that run only. Parameters are visible to project members who can read the
@@ -152,6 +152,48 @@ complete app.
   records every outcome (status, attempt, exit code, sanitized error code,
   duration), attributed to the manual triggerer or to `system` for scheduled
   runs.
+
+## Follow a run while it executes
+
+With `MARIMOHUB_JOBS_LIVE_RUNS=on`, a `running` run on the **Jobs** page shows
+each cell's output as the cell finishes. When the run ends, the page shows the
+stored output.
+
+The run executes under a marimo server on the sandbox's loopback interface. The
+notebook still runs once, reads its parameters from `mo.cli_args()`, and stores
+the same HTML output and logs.
+
+Requirements:
+
+- `MARIMOHUB_AUTH_SESSION_SECRET`.
+- A compute backend that can reattach to a running sandbox. Cloudflare cannot.
+- A sandbox image whose marimo serves the host protocol.
+
+Without a suitable backend or image, the run uses `marimo export html` and
+cannot be followed.
+
+A live run differs from other runs:
+
+- A cell that reads standard input fails with `EOFError`. Other runs wait for
+  the timeout.
+- A notebook that ends its own Python process fails with exit status 2 and no
+  output. Other runs wait for the timeout.
+- With `MARIMOHUB_COMPUTE_ASSET_URL` set, the stored output loads the marimo
+  frontend from that origin. Keep staged versions while you retain run outputs.
+  See [Shared marimo assets](./marimo-assets.md).
+
+Limits of the live view:
+
+- It is read-only. Table search, pagination, and other kernel calls do not work.
+- It shows no code or console output. Editors read console output on the
+  **Logs** tab after the run ends.
+- Outputs over 4 MiB, and outputs that reference kernel-served files, appear
+  only in the stored output.
+- Each open view runs one short command per second in the sandbox. An API
+  replica serves at most eight views of a run.
+
+Anyone who can open the run's output can follow it. The hub rechecks access
+every 10 seconds.
 
 ## Run states
 
@@ -234,6 +276,7 @@ for the intended notebooks before using this configuration in production.
 | See job definitions               | Yes                               | Yes                          |
 | See run history                   | Own runs, or shared history       | Yes                          |
 | Open rendered output              | Own runs                          | Yes                          |
+| Follow a running run              | Own runs                          | Yes                          |
 | Create, configure, or delete jobs | No                                | Yes                          |
 | Trigger a run                     | With `consumer_execution` enabled | Yes                          |
 | Stop a run                        | Own runs, with current access     | Yes                          |
@@ -282,9 +325,16 @@ standard envelope. Job creation and manual run triggers accept an
 | `GET`    | `/{jid}/runs/{rid}`        | One run.                                                 |
 | `POST`   | `/{jid}/runs/{rid}/cancel` | Cancel (runs are history; never deleted individually).   |
 | `GET`    | `/{jid}/runs/{rid}/html`   | Rendered output, raw `text/html`.                        |
+| `POST`   | `/{jid}/runs/{rid}/follow` | Live view of a running run; see below.                   |
 | `GET`    | `/{jid}/runs/{rid}/logs`   | Captured logs, raw `text/plain`, editor-only.            |
 
-The CLI exposes the same operations under `jobs …`.
+The CLI exposes the same operations under `jobs …`, except `follow`.
+
+`follow` returns `{ html, expires_at }` for a `running` run with `live: true`.
+The HTML embeds a credential for the caller and the run. Show it in a frame with
+`sandbox="allow-scripts"`, and request a new view before `expires_at`. Any other
+run answers 409 with code `RUN_NOT_FOLLOWABLE`. So does a live run in its first
+seconds; retry while it is running.
 
 ## Run metadata
 
