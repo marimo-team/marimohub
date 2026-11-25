@@ -20,7 +20,7 @@ afterEach(async () => {
 async function runtime(
 	autoRun: boolean,
 	prefix = '',
-	fault?: 'fail' | 'delay' | 'startup-delay' | 'catalog-delay',
+	fault?: 'fail' | 'delay' | 'startup-delay' | 'catalog-delay' | 'attachment-delay',
 	authenticated = true,
 	bridge = false,
 ) {
@@ -100,13 +100,14 @@ if __name__ == "__main__":
             await asyncio.sleep(2)
             return session
         SessionManager._create_session = delayed_startup
-    if ${fault === 'catalog-delay' ? 'True' : 'False'}:
+    if ${fault === 'catalog-delay' || fault === 'attachment-delay' ? 'True' : 'False'}:
         import asyncio
         from marimo._server.host.session import SessionEventStream
         prepare = SessionEventStream._prepare_session
         async def delayed_catalog(self, session):
+            SessionEventStream._prepare_session = prepare
             await prepare(self, session)
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(${fault === 'attachment-delay' ? 2 : 0.25})
         SessionEventStream._prepare_session = delayed_catalog
     sys.argv[0] = "marimo"
     from marimo._cli.cli import main
@@ -365,7 +366,7 @@ async with cm.get_context() as ctx:
 		expect(await listKernelSessions(rt.base, rt.request)).toEqual([]);
 	}, 30_000);
 
-	it.each(['fail', 'delay', 'startup-delay'] as const)(
+	it.each(['fail', 'delay', 'startup-delay', 'attachment-delay'] as const)(
 		'recovers from initialization %s without rerunning cells',
 		async (fault) => {
 			const rt = await runtime(true, '', fault);

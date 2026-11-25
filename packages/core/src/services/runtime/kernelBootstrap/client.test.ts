@@ -159,17 +159,18 @@ with TemporaryDirectory() as directory:
         assert Path(cfg["token_file"] + ".bootstrap.lock").read_text() == ""
 `);
 	});
-	it('does not wait for a busy bootstrap lock during read-only inspection', async () => {
+	it('does not queue startup or inspection behind an active bootstrap', async () => {
 		await python(String.raw`
 from tempfile import TemporaryDirectory
 with TemporaryDirectory() as directory:
     token_file = directory + "/token"
     with bootstrap_lock(token_file, False, lambda: 1):
-        try:
-            with bootstrap_lock(token_file, True, lambda: 1):
-                raise AssertionError("acquired an occupied lock")
-        except TimeoutError:
-            pass
+        for inspect in (False, True):
+            try:
+                with bootstrap_lock(token_file, inspect, lambda: 1):
+                    raise AssertionError("acquired an occupied lock")
+            except TimeoutError:
+                pass
     with bootstrap_lock(token_file, True, lambda: 1):
         pass
 `);

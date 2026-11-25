@@ -143,14 +143,11 @@ def bootstrap_lock(token_file, inspect, remaining):
     # Use the sandbox-scoped token path to keep coordination outside workspace capture.
     Path(token_file).parent.mkdir(parents=True, exist_ok=True)
     with open(token_file + ".bootstrap.lock", "a+") as lock:
-        while True:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if inspect:
-                    raise TimeoutError()
-                time.sleep(min(0.05, remaining()))
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            # Another bounded startup owns the connection; a later poll can retry.
+            raise TimeoutError() from None
         yield lock
 
 def bootstrap(cfg, remaining):
