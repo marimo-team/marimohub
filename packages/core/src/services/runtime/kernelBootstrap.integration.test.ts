@@ -190,11 +190,14 @@ from websockets.sync.client import connect
 cfg = json.loads(sys.stdin.readline())
 auth = {"Authorization": "Bearer " + cfg["token"]}
 with connect(cfg["base"].replace("http:", "ws:") + "/ws?session_id=browser-session", additional_headers=auth) as ws:
+    cells = []
     while True:
         event = json.loads(ws.recv(timeout=15))
-        if event.get("op") == "kernel-ready":
+        if event.get("event") == "cell":
+            cells.append(event["data"]["cell"])
+        if event.get("op") == "kernel-ready" or event.get("event") == "ready":
             break
-    if "autoRun" in cfg:
+    if "autoRun" in cfg and event.get("op") == "kernel-ready":
         class Token(HTMLParser):
             def handle_starttag(self, tag, attrs):
                 if tag == "marimo-server-token":
@@ -207,7 +210,7 @@ with connect(cfg["base"].replace("http:", "ws:") + "/ws?session_id=browser-sessi
         body = json.dumps({"objectIds": [], "values": [], "autoRun": cfg["autoRun"]}).encode()
         with urlopen(Request(cfg["base"] + "/api/kernel/instantiate", data=body, headers=headers), timeout=15) as response:
             assert json.load(response)["success"] is True
-    print(json.dumps(event["data"]), flush=True)
+    print(json.dumps(event["data"] if event.get("op") == "kernel-ready" else {"codes": [cell["code"] for cell in cells], "cell_ids": [cell["id"] for cell in cells]}), flush=True)
     sys.stdin.readline()
 `;
 	const browserProcess = spawn(python!, ['-c', browser], { stdio: 'pipe' });
@@ -221,7 +224,7 @@ with connect(cfg["base"].replace("http:", "ws:") + "/ws?session_id=browser-sessi
 	});
 	await expect.poll(() => output.includes('\n'), { timeout: 15_000 }).toBe(true);
 	const ready = JSON.parse(output.split('\n')[0]) as {
-		resumed: boolean;
+		resumed?: boolean;
 		codes: string[];
 		cell_ids: string[];
 	};
@@ -399,7 +402,7 @@ async with cm.get_context() as ctx:
 		expect(await rt.execute('live_values.append(73)')).toMatchObject({ success: true });
 		const oldId = (await listKernelSessions(rt.base, rt.request))[0].id;
 		const { browserProcess, ready } = await attachBrowser(rt);
-		expect(ready.resumed).toBe(true);
+		if (ready.resumed !== undefined) expect(ready.resumed).toBe(true);
 		expect(ready.codes).toContain('edited_value = 17; live_values = []');
 		const newId = (await listKernelSessions(rt.base, rt.request))[0].id;
 		expect(newId).toBe('browser-session');

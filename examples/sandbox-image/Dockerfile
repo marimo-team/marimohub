@@ -11,7 +11,7 @@ FROM python:3.13-slim
 
 # marimo version baked into the image. Pinned (not `latest`) so rebuilds don't
 # silently upgrade marimo; bump it to upgrade.
-ARG MARIMO_VERSION=0.23.10
+ARG MARIMO_VERSION=0.26.0
 ENV MARIMO_VERSION=${MARIMO_VERSION}
 
 # uv (+uvx) on PATH — the launch is `uv sync` / `uv run`.
