@@ -1,5 +1,5 @@
 import { spawn, exec as nodeExec } from 'node:child_process';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -185,6 +185,14 @@ if __name__ == "__main__":
 		sandbox,
 		request,
 		async execute(code: string) {
+			// Ready permits a running kernel; state assertions need its startup cell to finish.
+			if (autoRun) {
+				await expect
+					.poll(() => readFile(join(root, 'runs.txt'), 'utf8').catch(() => ''), {
+						timeout: 10_000,
+					})
+					.toBe('x');
+			}
 			const sessions = await listKernelSessions(base, request);
 			expect(sessions).toHaveLength(1);
 			return executeInKernel(
