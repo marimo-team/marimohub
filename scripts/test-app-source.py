@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.13"
-# dependencies = ["marimo==0.25.2", "websockets>=15,<17"]
+# dependencies = ["marimo==0.26.0", "websockets>=15,<17"]
 # ///
 """Run with `uv run scripts/test-app-source.py`. Uses a real marimo app kernel."""
 
@@ -127,7 +127,12 @@ async def check_kernel(origin):
         origin.replace("http:", "ws:") + f"/ws?session_id={session}"
     ) as ws:
         received = await set_slider(origin, session, ws, 7)
-        await receive_until(ws, received, "marimo-error")
+        await receive_until(ws, received, '"kind":"failed"')
+        assert any(
+            event.get("event") == "execution"
+            and event["data"]["execution"]["state"].get("outcome", {}).get("kind") == "failed"
+            for event in map(json.loads, received)
+        ), "Missing failed execution notification"
         for path in [
             "/api/files/read_code",
             "/api/export/script",

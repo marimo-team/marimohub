@@ -93,9 +93,15 @@ class MarimoClient:
     def initialize(self, session_id):
         # Marimo ignores CreateNotebook commands once cells are registered, so
         # an ambiguously accepted POST can be retried without replaying cells.
-        response = json.loads(self.request("/api/kernel/instantiate", {
-            "objectIds": [], "values": [], "autoRun": self.auto_run,
-        }, session_id))
+        try:
+            response = json.loads(self.request("/api/kernel/instantiate", {
+                "objectIds": [], "values": [], "autoRun": self.auto_run,
+            }, session_id))
+        except HTTPError as error:
+            # Marimo 0.26 initializes on WebSocket connection and removes this endpoint.
+            if error.code != 404:
+                raise
+            response = {"success": True}
         if not isinstance(response, dict) or response.get("success") is not True:
             raise InitializationFailed()
         if not self.is_live(session_id):
@@ -117,7 +123,7 @@ class MarimoClient:
         ) as ws:
             while True:
                 message = json.loads(ws.recv(timeout=self.remaining()))
-                if isinstance(message, dict) and message.get("op") == "kernel-ready":
+                if isinstance(message, dict) and (message.get("op") == "kernel-ready" or message.get("event") == "ready"):
                     break
             yield session_id
 

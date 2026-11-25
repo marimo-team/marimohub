@@ -38,11 +38,9 @@ def main():
     (root / 'install.json').write_text(json.dumps({'identity': payload['identity'], 'wheel': payload['name']}))
     command = [str(python), str(launcher), 'export', 'html', 'app.py']
     subprocess.run(command, check=True)
-    # Detach uv's hardlinked cache entries before simulating an old installation.
-    jobs = site / 'marimohub' / 'jobs.py'
-    jobs.unlink()
-    jobs.write_text('class Jobs: pass\n')
-    identity = site / 'marimohub_notebook_bridge' / 'identity'
-    identity.unlink()
-    identity.write_text('old')
+    # uv can hardlink installed files to its cache; replace them without modifying the cached wheel.
+    (site / 'marimohub' / 'jobs.py').unlink()
+    (site / 'marimohub_notebook_bridge' / 'identity').unlink()
+    (site / 'marimohub' / 'jobs.py').write_text('class Jobs: pass\n')
+    (site / 'marimohub_notebook_bridge' / 'identity').write_text('old')
     subprocess.run(command, check=True)

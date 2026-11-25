@@ -147,7 +147,7 @@ After a failed stop, the next automatic attempt waits 1 minute × 2^n, to a maxi
 A non-retryable failure blocks automatic attempts until a newer capture succeeds.
 Authorization expiry enforces security teardown even when the save fails.
 
-Safe capture requires the Linux lifecycle supervisor and marimo 0.24.x or 0.25.x.
+Safe capture requires the Linux lifecycle supervisor and marimo 0.24.x, 0.25.x, or 0.26.x.
 The default sandbox image includes a supported version. Native macOS runtimes and
 unsupported launch strategies retain the editor on a normal stop. Users can force stop it.
 Proxy saves record pending intent before capture admission. A successful save response

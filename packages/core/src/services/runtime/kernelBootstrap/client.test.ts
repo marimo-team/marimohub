@@ -9,6 +9,28 @@ async function python(assertions: string) {
 }
 
 describe.concurrent('sandbox bootstrap protocol', () => {
+	it('waits for readiness with legacy and current WebSocket events', async () => {
+		await python(String.raw`
+import sys
+from types import ModuleType
+from unittest.mock import MagicMock, patch
+module = ModuleType("websockets.sync.client")
+module.connect = MagicMock()
+client = object.__new__(MarimoClient)
+client.base = "http://127.0.0.1:2718"
+client.auth = {}
+client.diagnostics = {}
+client.remaining = lambda: 1
+for ready in ({"op": "kernel-ready"}, {"event": "ready", "data": {}}):
+    ws = module.connect.return_value.__enter__.return_value
+    ws.recv.reset_mock()
+    ws.recv.side_effect = [json.dumps({"event": "runtime"}), json.dumps(ready)]
+    with patch.dict(sys.modules, {"websockets.sync.client": module}):
+        with client.session({}) as session_id:
+            assert uuid.UUID(session_id)
+            assert ws.recv.call_count == 2
+`);
+	});
 	it('omits bearer authentication for tokenless servers without reading a token file', async () => {
 		await python(String.raw`
 from tempfile import TemporaryDirectory
@@ -222,6 +244,27 @@ with TemporaryDirectory() as directory:
         assert diagnostics == {"stage": stage, "reason": "initialization_failed"}
         assert opener.open.call_count == 2 + len(responses)
         assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+`);
+	});
+	it('checks kernel liveness when connection-time initialization replaces the endpoint', async () => {
+		await python(String.raw`
+from unittest.mock import Mock
+client = object.__new__(MarimoClient)
+client.auto_run = True
+for state in ("idle", "running", "stopped"):
+    client.request = Mock(side_effect=[HTTPError("url", 404, "missing", {}, None), json.dumps({"state": state})])
+    try:
+        client.initialize("session")
+        assert state != "stopped"
+    except InitializationFailed:
+        assert state == "stopped"
+for code in (401, 403, 500):
+    client.request = Mock(side_effect=HTTPError("url", code, "failed", {}, None))
+    try:
+        client.initialize("session")
+        raise AssertionError("ignored initialization error")
+    except HTTPError as error:
+        assert error.code == code
 `);
 	});
 	it('rejects failed initialization responses and stopped kernels', async () => {

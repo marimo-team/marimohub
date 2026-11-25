@@ -199,7 +199,7 @@ base), so the common case is a near-instant no-op.
 
 Pin marimo to a specific version so it's consistent and never silently upgrades;
 bump it deliberately. Encode the Python + marimo version in the image tag (e.g.
-`py3.13-marimo0.23.10`) so each image is traceable.
+`py3.13-marimo0.26.0`) so each image is traceable.
 
 ## Build your own
 
@@ -210,7 +210,7 @@ directory is a ready-to-fork starting point. marimo is pinned via the
 
 ```dockerfile
 FROM python:3.13-slim
-ARG MARIMO_VERSION=0.23.10
+ARG MARIMO_VERSION=0.26.0
 ENV MARIMO_VERSION=${MARIMO_VERSION}
 COPY --from=ghcr.io/astral-sh/uv:0.10.9 /uv /uvx /usr/local/bin/
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
@@ -231,9 +231,9 @@ WORKDIR /workspace
 Build with a version-stamped tag, push, and point `MARIMOHUB_COMPUTE_IMAGE` at it:
 
 ```sh
-docker build --build-arg MARIMO_VERSION=0.23.10 \
-  -t ghcr.io/orgname/marimo-sandbox:py3.13-marimo0.23.10 examples/sandbox-image
-docker push ghcr.io/orgname/marimo-sandbox:py3.13-marimo0.23.10
+docker build --build-arg MARIMO_VERSION=0.26.0 \
+  -t ghcr.io/orgname/marimo-sandbox:py3.13-marimo0.26.0 examples/sandbox-image
+docker push ghcr.io/orgname/marimo-sandbox:py3.13-marimo0.26.0
 ```
 
 To upgrade marimo, bump `MARIMO_VERSION` and rebuild. To change the pre-installed

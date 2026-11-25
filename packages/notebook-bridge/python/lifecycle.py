@@ -3,6 +3,7 @@ import errno
 from collections import deque
 import importlib
 import importlib.metadata
+import inspect
 import json
 import os
 from pathlib import Path
@@ -164,9 +165,11 @@ class CaptureGate:
         native_path = entry.parent / "__marimo__" / "session" / (entry.name + ".json")
         if matches:
             session = matches[0]
+            # Preserve displayed cached outputs across captures before a cell runs again.
+            display = {'for_display': True} if 'for_display' in inspect.signature(serializer).parameters else {}
             snapshot = serializer(session.session_view, session.document.cell_ids,
                                   drop_virtual_file_outputs=True,
-                                  script_metadata_hash=metadata_hash(str(source)))
+                                  script_metadata_hash=metadata_hash(str(source)), **display)
             write_file(checkpoint / native_path, json.JSONEncoder().iterencode(snapshot))
         else:
             try:
@@ -304,7 +307,7 @@ def install_status_only(directory):
 
 def install():
     version = importlib.metadata.version("marimo").split(".")
-    if version[:2] not in (["0", "24"], ["0", "25"]):
+    if version[:2] not in (["0", "24"], ["0", "25"], ["0", "26"]):
         raise CaptureUnsupported("CAPTURE_RUNTIME_UNSUPPORTED")
     gate = CaptureGate()
     extensions = importlib.import_module("marimo._session.extensions.extensions")

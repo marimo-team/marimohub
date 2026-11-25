@@ -22,15 +22,15 @@ Dockerfile). Tag the image with the Python + marimo version so it's traceable an
 never upgrades unexpectedly:
 
 ```sh
-docker build --build-arg MARIMO_VERSION=0.23.10 \
-  -t ghcr.io/<you>/marimo-sandbox:py3.13-marimo0.23.10 examples/sandbox-image
-docker push ghcr.io/<you>/marimo-sandbox:py3.13-marimo0.23.10
+docker build --build-arg MARIMO_VERSION=0.26.0 \
+  -t ghcr.io/<you>/marimo-sandbox:py3.13-marimo0.26.0 examples/sandbox-image
+docker push ghcr.io/<you>/marimo-sandbox:py3.13-marimo0.26.0
 ```
 
 Then point the deployment at that exact tag:
 
 ```sh
-MARIMOHUB_COMPUTE_IMAGE=ghcr.io/<you>/marimo-sandbox:py3.13-marimo0.23.10
+MARIMOHUB_COMPUTE_IMAGE=ghcr.io/<you>/marimo-sandbox:py3.13-marimo0.26.0
 ```
 
 To **upgrade marimo**, bump `MARIMO_VERSION`, rebuild, and retag — it's a

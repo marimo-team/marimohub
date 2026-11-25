@@ -16,7 +16,7 @@ from lifecycle_supervisor import LifecycleError, Supervisor
 
 class RuntimeCompatibilityTests(unittest.TestCase):
     def test_unvalidated_versions_fail_before_installing_hooks(self):
-        for version in ('0.23.10', '0.26.0', '1.0.0'):
+        for version in ('0.23.10', '0.27.0', '1.0.0'):
             with self.subTest(version=version), patch('importlib.metadata.version', return_value=version), patch('importlib.import_module') as imports:
                 with self.assertRaisesRegex(CaptureUnsupported, 'CAPTURE_RUNTIME_UNSUPPORTED'):
                     install()

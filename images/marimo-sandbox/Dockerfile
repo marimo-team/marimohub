@@ -7,7 +7,7 @@
 # 3.14 forces a source build that needs a compiler absent from -slim.
 FROM python:3.13-slim@sha256:2d44738ebf4ce5f63b9d9ea871e9c7cfdc0426f7b0c97cac915fd88ded1d86bb AS base
 
-ARG MARIMO_VERSION=0.25.2
+ARG MARIMO_VERSION=0.26.0
 ENV MARIMO_VERSION=${MARIMO_VERSION}
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.1@sha256:cf4eedcaa81655197f625739489effcbe71b61ceb1506f332c3facae5deceded /uv /uvx /usr/local/bin/
