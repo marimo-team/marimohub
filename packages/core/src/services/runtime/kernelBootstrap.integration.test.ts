@@ -75,7 +75,22 @@ if __name__ == "__main__":
             original(self, *args, **kwargs)
             import time
             time.sleep(2)
-        Session.instantiate = faulty
+        if ${fault === 'fail' ? 'True' : 'False'}:
+            from importlib.metadata import version
+            if tuple(map(int, version("marimo").split(".")[:2])) >= (0, 26):
+                # Connection-time initialization replaced the HTTP instantiate endpoint.
+                from marimo._server.session_manager import SessionManager
+                create = SessionManager.create_session
+                async def fail_creation(self, *args, **kwargs):
+                    from pathlib import Path
+                    if not Path("recover").exists():
+                        raise RuntimeError("private initialization error")
+                    return await create(self, *args, **kwargs)
+                SessionManager.create_session = fail_creation
+            else:
+                Session.instantiate = faulty
+        else:
+            Session.instantiate = faulty
     sys.argv[0] = "marimo"
     from marimo._cli.cli import main
     main(prog_name="marimo")

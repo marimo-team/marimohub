@@ -97,7 +97,7 @@ class PairConnectionTest(unittest.TestCase):
         command = self.command
         if listing:
             setup = command.split("uv run --no-sync marimo pair execute", 1)[0]
-            command = setup + 'uv run --no-sync marimo pair notebook list "${kernel_args[@]}"'
+            command = setup + 'uv run --no-sync marimo pair list "${kernel_args[@]}"'
         result = subprocess.run(
             ["bash", "-c", command], cwd=self.cwd,
             env=self.env, text=True, capture_output=True, timeout=15,
@@ -133,7 +133,7 @@ class PairConnectionTest(unittest.TestCase):
                         self.assertTrue(executed["success"])
                         self.assertEqual(executed["session"], {"id": "stable-session-1"})
                         self.assertEqual(executed["stdout"], "42\n")
-                        self.assert_requests("/api/sessions", "/api/kernel/execute")
+                        self.assert_requests("/api/sessions", "/api/sessions", "/api/kernel/execute")
                         self.assertTrue(all(auth == self.expected_token for _, auth in self.requests))
 
     def test_missing_token_file_fails_before_network(self):
@@ -174,7 +174,7 @@ class PairConnectionTest(unittest.TestCase):
     def test_interrupted_execution_is_not_replayed(self):
         self.execution = b'event: stdout\ndata: {"data":"partial output"}\n\n'
         self.run_pair(success=False)
-        self.assert_requests("/api/sessions", "/api/kernel/execute")
+        self.assert_requests("/api/sessions", "/api/sessions", "/api/kernel/execute")
 
 
 if __name__ == "__main__":
