@@ -37,7 +37,7 @@ jobs:
           test "$(sed -n 's/^version = "\([^"]*\)"$/\1/p' apps/cli/Cargo.toml | head -1)" = "$VERSION"
 
       - name: Tag merged release
-        uses: marimo-team/internal-gh-actions/release-tag@36a2bd9a76109b91c9dc0bc65bfab95c9b632a3b
+        uses: marimo-team/internal-gh-actions/release-tag@3c6ddeb4b132541309e3c56bbca8b3605d24ecfd
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -53,6 +53,6 @@ jobs:
       pull-requests: read
       contents: read
     steps:
-      - uses: marimo-team/internal-gh-actions/release-approval-notification@0a3db0e04217aaa03b3d011502874b020e9466a3
+      - uses: marimo-team/internal-gh-actions/release-approval-notification@3c6ddeb4b132541309e3c56bbca8b3605d24ecfd
         with:
           slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL_RELEASES }}

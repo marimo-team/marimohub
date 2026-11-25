@@ -1,9 +1,8 @@
 # Releasing
 
 Run `pnpm release patch` (or `minor`, `major`, or a stable `X.Y.Z`) to request a release PR.
-Review and merge it to approve publication.
-The jobs that open the release PR and create the tag wait for approval in the `release` environment.
-A member of `marimo-eng` must approve each job. The person who started the run cannot approve it.
+Review and merge the PR after CI passes. Then another `marimo-eng` member approves tagging
+in the protected `release` environment. Preparation needs no environment approval.
 See the [maintainer runbook](https://github.com/marimo-team/github-maintenance/blob/main/docs/releases.md) (internal) for approvals, access, and setup.
 
 The PR updates the root, CLI, and IaC package versions together.
@@ -143,3 +142,14 @@ Only this job has `id-token: write`. It uses Node 24 and requires npm >= 11.5.1.
 Runs for the same tag cannot cancel an active publication.
 
 After publication, consumers run `deno install` in their copied example and commit `deno.lock`.
+
+## Local preparation
+
+Install Node 22+, Git, Docker with a running local daemon, and the shared
+[`gh release-control` command](https://github.com/marimo-team/internal-gh-actions#release-command).
+Authenticate with `gh auth login`.
+
+The shortcut prepares fresh `main` in a credential-free Docker container and opens the PR
+using your GitHub login. Your checkout stays untouched. Normal PR review and CI still apply.
+Use `gh release-control request patch --dry-run` to validate without creating a PR.
+Use `gh release-control status` to follow the PR, final approval, and publication.

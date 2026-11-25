@@ -20,7 +20,7 @@ afterEach(async () => {
 async function runtime(
 	autoRun: boolean,
 	prefix = '',
-	fault?: 'fail' | 'delay',
+	fault?: 'fail' | 'delay' | 'startup-delay' | 'catalog-delay' | 'attachment-delay',
 	authenticated = true,
 	bridge = false,
 ) {
@@ -64,7 +64,7 @@ if __name__ == "__main__":
     import uvicorn
     original_run = uvicorn.Server.run
     uvicorn.Server.run = lambda self: original_run(self, sockets=[listener])
-    if ${fault ? 'True' : 'False'}:
+    if ${fault === 'fail' || fault === 'delay' ? 'True' : 'False'}:
         from marimo._session.session import SessionImpl as Session
         original = Session.instantiate
         def faulty(self, *args, **kwargs):
@@ -91,6 +91,24 @@ if __name__ == "__main__":
                 Session.instantiate = faulty
         else:
             Session.instantiate = faulty
+    if ${fault === 'startup-delay' ? 'True' : 'False'}:
+        import asyncio
+        from marimo._server.session_manager import SessionManager
+        create = SessionManager._create_session
+        async def delayed_startup(self, *args, **kwargs):
+            session = await create(self, *args, **kwargs)
+            await asyncio.sleep(2)
+            return session
+        SessionManager._create_session = delayed_startup
+    if ${fault === 'catalog-delay' || fault === 'attachment-delay' ? 'True' : 'False'}:
+        import asyncio
+        from marimo._server.host.session import SessionEventStream
+        prepare = SessionEventStream._prepare_session
+        async def delayed_catalog(self, session):
+            SessionEventStream._prepare_session = prepare
+            await prepare(self, session)
+            await asyncio.sleep(${fault === 'attachment-delay' ? 2 : 0.25})
+        SessionEventStream._prepare_session = delayed_catalog
     sys.argv[0] = "marimo"
     from marimo._cli.cli import main
     main(prog_name="marimo")
@@ -218,7 +236,8 @@ with connect(cfg["base"].replace("http:", "ws:") + "/ws?session_id=browser-sessi
         event = json.loads(ws.recv(timeout=15))
         if event.get("event") == "cell":
             cells.append(event["data"]["cell"])
-        if event.get("op") == "kernel-ready" or event.get("event") == "ready":
+        notification = event.get("data", {}).get("marimo", {}) if event.get("event") == "marimo" else event
+        if notification.get("op") == "kernel-ready":
             break
     if "autoRun" in cfg and event.get("op") == "kernel-ready":
         class Token(HTMLParser):
@@ -355,23 +374,35 @@ async with cm.get_context() as ctx:
 		expect(await listKernelSessions(rt.base, rt.request)).toEqual([]);
 	}, 30_000);
 
-	it.each(['fail', 'delay'] as const)(
+	it.each(['fail', 'delay', 'startup-delay', 'attachment-delay'] as const)(
 		'recovers from initialization %s without rerunning cells',
 		async (fault) => {
 			const rt = await runtime(true, '', fault);
 			expect(
-				await bootstrapKernel(rt.sandbox, { timeoutMs: fault === 'delay' ? 1_000 : 5_000 }),
-			).toMatchObject({ status: fault === 'delay' ? 'initializing' : 'unavailable' });
+				await bootstrapKernel(rt.sandbox, { timeoutMs: fault === 'fail' ? 5_000 : 1_000 }),
+			).toMatchObject({ status: fault === 'fail' ? 'unavailable' : 'initializing' });
 			if (fault === 'fail') await writeFile(join(rt.root, 'recover'), '');
 			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 10_000 })).toMatchObject({
 				status: 'ready',
 			});
-			expect(
-				await rt.execute('from pathlib import Path; print(Path("runs.txt").read_text())'),
-			).toMatchObject({ success: true, stdout: 'x\n' });
+			const result = await rt.execute(
+				'from pathlib import Path; print(Path("runs.txt").read_text())',
+			);
+			expect(result, JSON.stringify(result)).toMatchObject({ success: true, stdout: 'x\n' });
 		},
 		30_000,
 	);
+
+	it('waits for kernel initialization after the host catalog is ready', async () => {
+		const rt = await runtime(true, '', 'catalog-delay');
+		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 10_000 })).toMatchObject({
+			status: 'ready',
+		});
+		const result = await rt.execute(
+			'from pathlib import Path; print(Path("runs.txt").read_text())',
+		);
+		expect(result, JSON.stringify(result)).toMatchObject({ success: true, stdout: 'x\n' });
+	}, 30_000);
 
 	it('retries initialization within one wait window without rerunning cells', async () => {
 		const rt = await runtime(true, '', 'delay');

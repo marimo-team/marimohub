@@ -109,12 +109,14 @@ class MarimoClient:
 
     @contextmanager
     def session(self, sessions):
-        if sessions:
+        # Rejoin our own startup handshake after a timeout: a listed kernel may
+        # still be awaiting initialization. Leave browser-owned sessions alone.
+        session_id = str(uuid.uuid5(uuid.NAMESPACE_URL, self.base))
+        if sessions and session_id not in sessions:
             yield next(iter(sessions))
             return
         self.diagnostics["stage"] = "websocket"
         from websockets.sync.client import connect
-        session_id = str(uuid.uuid4())
         with connect(
             self.base.replace("http://", "ws://", 1) + "/ws?session_id=" + session_id,
             additional_headers=self.auth,
@@ -123,7 +125,16 @@ class MarimoClient:
         ) as ws:
             while True:
                 message = json.loads(ws.recv(timeout=self.remaining()))
-                if isinstance(message, dict) and (message.get("op") == "kernel-ready" or message.get("event") == "ready"):
+                if not isinstance(message, dict):
+                    continue
+                # Host catalog readiness precedes the kernel connection handshake.
+                if message.get("event") == "marimo":
+                    message = message.get("data", {}).get("marimo", {})
+                notice = message.get("data", message)
+                if message.get("op") == "kernel-ready" or (
+                    session_id in sessions and message.get("op") == "alert"
+                    and notice.get("title") == "Reconnected"
+                ):
                     break
             yield session_id
 
@@ -132,14 +143,11 @@ def bootstrap_lock(token_file, inspect, remaining):
     # Use the sandbox-scoped token path to keep coordination outside workspace capture.
     Path(token_file).parent.mkdir(parents=True, exist_ok=True)
     with open(token_file + ".bootstrap.lock", "a+") as lock:
-        while True:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if inspect:
-                    raise TimeoutError()
-                time.sleep(min(0.05, remaining()))
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            # Another bounded startup owns the connection; a later poll can retry.
+            raise TimeoutError() from None
         yield lock
 
 def bootstrap(cfg, remaining):
