@@ -367,9 +367,10 @@ async with cm.get_context() as ctx:
 			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 10_000 })).toMatchObject({
 				status: 'ready',
 			});
-			expect(
-				await rt.execute('from pathlib import Path; print(Path("runs.txt").read_text())'),
-			).toMatchObject({ success: true, stdout: 'x\n' });
+			const result = await rt.execute(
+				'from pathlib import Path; print(Path("runs.txt").read_text())',
+			);
+			expect(result, JSON.stringify(result)).toMatchObject({ success: true, stdout: 'x\n' });
 		},
 		30_000,
 	);
