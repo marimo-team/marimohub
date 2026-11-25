@@ -113,6 +113,13 @@ class PairConnectionTest(unittest.TestCase):
         self.assertEqual([path for path, _ in self.requests],
                          [self.base_path + path for path in paths])
 
+    def assert_single_execution(self):
+        paths = [path for path, _ in self.requests]
+        self.assertGreaterEqual(len(paths), 2)
+        self.assertEqual(paths[-1], self.base_path + "/api/kernel/execute")
+        # Harness inbox discovery can read sessions again before execution.
+        self.assertTrue(all(path == self.base_path + "/api/sessions" for path in paths[:-1]))
+
     def test_skill_commands_connect_without_a_server_registry(self):
         bare_cwd = self.cwd
         for project in (False, True):
@@ -133,7 +140,7 @@ class PairConnectionTest(unittest.TestCase):
                         self.assertTrue(executed["success"])
                         self.assertEqual(executed["session"], {"id": "stable-session-1"})
                         self.assertEqual(executed["stdout"], "42\n")
-                        self.assert_requests("/api/sessions", "/api/sessions", "/api/kernel/execute")
+                        self.assert_single_execution()
                         self.assertTrue(all(auth == self.expected_token for _, auth in self.requests))
 
     def test_missing_token_file_fails_before_network(self):
@@ -174,7 +181,7 @@ class PairConnectionTest(unittest.TestCase):
     def test_interrupted_execution_is_not_replayed(self):
         self.execution = b'event: stdout\ndata: {"data":"partial output"}\n\n'
         self.run_pair(success=False)
-        self.assert_requests("/api/sessions", "/api/sessions", "/api/kernel/execute")
+        self.assert_single_execution()
 
 
 if __name__ == "__main__":
