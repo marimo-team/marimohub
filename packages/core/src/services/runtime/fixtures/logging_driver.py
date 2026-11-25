@@ -201,11 +201,11 @@ if mode in ('edit', 'app'):
         with connect(f'ws://127.0.0.1:{port}/ws?session_id=logging-test') as ws:
             while True:
                 event = json.loads(ws.recv(timeout=15))
-                if event.get('op') == 'kernel-ready':
+                if event.get('op') == 'kernel-ready' or event.get('event') == 'ready':
                     break
             headers = {'Marimo-Server-Token': token.value, 'Marimo-Session-Id': 'logging-test', 'Content-Type': 'application/json'}
             body = json.dumps({'objectIds': [], 'values': [], 'autoRun': True}).encode()
-            if mode == 'edit':
+            if mode == 'edit' and event.get('op') == 'kernel-ready':
                 with urlopen(Request(base + '/api/kernel/instantiate', data=body, headers=headers), timeout=15) as response:
                     assert json.load(response)['success']
             deadline = time.monotonic() + 15

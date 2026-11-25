@@ -19,8 +19,8 @@ uv run --no-sync marimo pair execute "${kernel_args[@]}" \
   -c 'import marimo._code_mode as cm; help(cm)'
 ```
 
-Include these arguments on every `execute` and `notebook list` call.
-Use `--file` to select a notebook when more than one is open.
+Include these arguments on every `execute` and `list` call.
+Use `--notebook` with an ID from `marimo pair list` when more than one notebook is open.
 For another server, use its URL and credentials instead of the hub connection arguments.
 
 If no session is active, open the existing notebook in marimo.

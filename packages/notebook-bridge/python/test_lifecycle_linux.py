@@ -76,6 +76,7 @@ class LinuxRuntimeTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
+        (root / '.marimo.toml').write_text('[runtime]\nauto_instantiate = false\n')
         source = root / 'notebook.py'
         source.write_text('import marimo\napp = marimo.App()\n\n@app.cell\ndef _():\n    value = 42\n    value\n    return (value,)\n')
         if restore:
@@ -86,7 +87,7 @@ class LinuxRuntimeTests(unittest.TestCase):
         directory = root / ('sandbox-' + 'x' * 100) / 'lifecycle' / 'captures' / str(uuid.uuid4())
         log = (root / 'server.log').open('w+')
         self.addCleanup(log.close)
-        process = subprocess.Popen([sys.executable, __file__, '--worker', str(source)], cwd=root, env={**os.environ, 'MARIMOHUB_LIFECYCLE_DIR': str(directory), **({'TEST_CRASH_AFTER_READY': '1'} if crash else {}), **({'TEST_PAUSE_SAVE': '1'} if pause_save else {}), **({'TEST_CRASH_AFTER_STOP_RECEIPT': '1'} if crash_stop else {})}, start_new_session=True, stdout=log, stderr=log)
+        process = subprocess.Popen([sys.executable, __file__, '--worker', str(source)], cwd=root, env={**os.environ, 'XDG_STATE_HOME': str(root / 'state'), 'MARIMOHUB_LIFECYCLE_DIR': str(directory), **({'TEST_CRASH_AFTER_READY': '1'} if crash else {}), **({'TEST_PAUSE_SAVE': '1'} if pause_save else {}), **({'TEST_CRASH_AFTER_STOP_RECEIPT': '1'} if crash_stop else {})}, start_new_session=True, stdout=log, stderr=log)
 
         def cleanup():
             try:
@@ -107,37 +108,68 @@ class LinuxRuntimeTests(unittest.TestCase):
             self.session_id = str(uuid.uuid4())
             ws = connect(f'ws://127.0.0.1:2718/ws?session_id={self.session_id}', open_timeout=10, legacy=True)
             self.addCleanup(ws.close)
-            self.ready = json.loads(ws.recv(timeout=10))
+            self.source = source
+            self.cells = []
+            received = []
+            while True:
+                event = json.loads(ws.recv(timeout=10))
+                received.append(event)
+                if event.get('event') == 'notebook':
+                    self.notebook_id = event['data']['notebook']['id']
+                elif event.get('event') == 'cell':
+                    self.cells.append(event['data']['cell'])
+                elif event.get('event') == 'ready':
+                    break
+            self.ready = {'data': {
+                'cell_ids': [cell['id'] for cell in self.cells],
+                'codes': [cell['code'] for cell in self.cells],
+                'names': [cell['name'] for cell in self.cells],
+                'configs': [cell['config'] for cell in self.cells],
+            }}
+            if restore:
+                expected = json.loads(restore['__marimo__/session/notebook.py.json'])['cells'][0]['outputs'][0]['data']['text/html']
+                while not any(expected in json.dumps(event) for event in received):
+                    received.append(json.loads(ws.recv(timeout=10)))
         except BaseException:
             log.seek(0)
             print(log.read(), file=sys.stderr)
             raise
         return root, source, directory, process, ws
 
-    def post(self, path, body):
-        request = urllib.request.Request('http://127.0.0.1:2718/api/kernel/' + path, data=json.dumps(body).encode(), headers={'Content-Type': 'application/json', 'Marimo-Session-Id': self.session_id})
+    def host_post(self, path, body):
+        records = self.source.parent / 'state' / 'marimo' / 'hosts-v1'
+        record = json.loads(next(records.glob('*.json')).read_text())
+        request = urllib.request.Request(record['url'] + '/notebooks/' + self.notebook_id + path,
+            data=json.dumps(body).encode(), headers={'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + record['token'], 'Idempotency-Key': str(uuid.uuid4())})
         with urllib.request.urlopen(request, timeout=30) as response:
-            return response.read()
+            return json.load(response)
+
+    def post(self, path, body):
+        if path == 'save':
+            self.host_post('/edits', {'changes': [
+                {'kind': 'replace_cell', 'base_etag': '*', 'cell': {
+                    'id': cell_id, 'code': code, 'name': name, 'config': config}}
+                for cell_id, code, name, config in zip(body['cellIds'], body['codes'], body['names'], body['configs'])
+            ]})
+            self.host_post('/save', {})
+            return self.source.read_bytes()
+        raise AssertionError(path)
 
     def prepare(self, directory, source):
         status = exchange(directory / 'control.sock', {'action': 'status'})
         return exchange(directory / 'control.sock', {'action': 'prepare', 'generation': status['generation'], 'token': str(uuid.uuid4()), 'entry': source.name, 'workdir': str(source.parent)}, timeout=40)
 
-    def execute(self, ws, codes=None, value=42):
-        if codes is None:
-            self.post('instantiate', {'objectIds': [], 'values': [], 'autoRun': True})
-        else:
-            self.post('run', {'cellIds': self.ready['data']['cell_ids'], 'codes': codes})
+    def execute(self, ws, value=42):
+        self.host_post('/runtime/runs', {'cells': [{'id': cell['id']} for cell in self.cells]})
         output_seen = False
         while True:
             message = json.loads(ws.recv(timeout=10))
-            if message.get('op') != 'cell-op':
-                continue
-            output = message['data'].get('output') or {}
-            if output.get('mimetype') == 'text/html' and output.get('data') == f"<pre class='text-xs'>{value}</pre>":
+            if f"<pre class='text-xs'>{value}</pre>" in json.dumps(message):
                 output_seen = True
-            if output_seen and message['data'].get('status') == 'idle':
-                return
+            if output_seen and message.get('event') == 'execution':
+                if message['data']['execution']['state']['status'] == 'completed':
+                    return
 
     def snapshot(self, checkpoint, source):
         root = Path(checkpoint['checkpoint'])
@@ -164,7 +196,7 @@ class LinuxRuntimeTests(unittest.TestCase):
                 ready = self.ready['data']
                 codes = [code.replace('42', '84') for code in ready['codes']]
                 self.post('save', {'cellIds': ready['cell_ids'], 'codes': codes, 'names': ready['names'], 'configs': ready['configs'], 'filename': str(source)})
-                self.execute(ws, codes, 84)
+                self.execute(ws, value=84)
                 latest = self.prepare(directory, source)
                 latest_snapshot = self.snapshot(latest, source)
                 self.assert_output(latest_snapshot, 84)

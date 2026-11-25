@@ -8,7 +8,7 @@ import { expect, test as base } from '@playwright/test';
 import { notebookBridgeRuntime } from '../src/runtime';
 import { harness } from './harness';
 
-const versions = ['0.23.10', '0.24.2'];
+const versions = ['0.23.10', '0.24.2', '0.26.0'];
 const exec = promisify(execFile);
 const test = base.extend<{ runtime: { root: string; launcher: string } }>({
 	// eslint-disable-next-line no-empty-pattern -- Playwright requires destructured fixture dependencies.

@@ -175,7 +175,7 @@ From the repository root:
 
 ```bash
 uv venv .context/marimo-test
-uv pip install --python .context/marimo-test/bin/python 'marimo==0.24.2'
+uv pip install --python .context/marimo-test/bin/python 'marimo==0.26.0'
 MARIMO_INTEGRATION_PYTHON="$PWD/.context/marimo-test/bin/python" \
   pnpm --filter @marimo-hub/core test src/services/runtime/kernelBootstrap.integration.test.ts
 ```

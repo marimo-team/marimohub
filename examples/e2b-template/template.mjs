@@ -12,7 +12,7 @@
 import { Template } from 'e2b';
 
 // Pin marimo so rebuilds don't silently upgrade it (match your sandbox image).
-const MARIMO_VERSION = '0.23.11';
+const MARIMO_VERSION = '0.26.0';
 
 export const template = Template()
 	.fromImage('python:3.13-slim')
