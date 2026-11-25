@@ -26,6 +26,7 @@ Selector: `MARIMOHUB_COMPUTE_BACKEND`. Full variables:
 | E2B        | `e2b`        | Managed code sandboxes                      |
 | Fargate    | `fargate`    | Private on-demand tasks in your AWS account |
 | Kubernetes | `kubernetes` | Pods in your own cluster                    |
+| boxd       | `boxd`       | One isolated machine per session            |
 | Docker     | `docker`     | Single-host container per kernel            |
 | Podman     | `podman`     | Rootless or remote container per kernel     |
 | Local      | `local`      | Local development with `uv run marimo edit` |
@@ -49,7 +50,8 @@ MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=sandboxes.example.net
 `MARIMOHUB_COMPUTE_IMAGE` is the per-kernel container you bring. It also accepts
 a comma-separated list of images — the first is the default, and the rest are
 selectable per notebook (for `e2b`, `MARIMOHUB_COMPUTE_E2B_TEMPLATE` takes a
-list of template ids the same way). See [Sandbox image](./sandbox-image.md) for
+list of template ids the same way, and for `boxd`, `MARIMOHUB_COMPUTE_BOXD_SNAPSHOT`
+takes a list of snapshot names). See [Sandbox image](./sandbox-image.md) for
 the contract, a pre-warmed example, and how multiple images behave.
 
 The Fargate task definition sets the image. The backend rejects
@@ -131,7 +133,7 @@ MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
   started.
 - Docker, Podman, Kubernetes, Modal, CoreWeave, and W&B apply profiles. Fargate
   applies CPU and memory profiles and rejects GPU values before launch. E2B,
-  Cloudflare, local, and none ignore profiles and hide the feature from the UI.
+  boxd, Cloudflare, local, and none ignore profiles and hide the feature from the UI.
 - An external library adapter applies CPU and memory profiles when it declares
   `capabilities.computeProfiles`, and GPU profiles when it declares
   `capabilities.gpuProfiles`. Otherwise it ignores profiles. See
@@ -166,6 +168,10 @@ sandboxes at the largest profile can exceed the host's capacity.
 ### Kubernetes
 
 <!--@include: ./setup/compute/kubernetes.md-->
+
+### boxd
+
+<!--@include: ./setup/compute/boxd.md-->
 
 ### Docker
 
