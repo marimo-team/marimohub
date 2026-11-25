@@ -950,10 +950,9 @@ describe('KubernetesCompute', () => {
 			expect(world.execCalls.find((c) => c.stdin)?.stdin).toContain("export SESSION_TOKEN='a b';");
 			expect(shCmd(launch)).not.toContain('OMITTED');
 			expect(shCmd(launch)).toContain('uv run marimo edit --port 2718');
-			// Outer shell non-login (its stdout is the parsed PID); the detached
-			// inner shell is a login shell so profile env reaches the kernel.
+			// Profile output must not contaminate the PID returned by the supervisor.
 			expect(launch.command[1]).toBe('-c');
-			expect(shCmd(launch)).toContain('setsid sh -lc');
+			expect(shCmd(launch)).toContain('setsid sh -c');
 			expect(proc.id).toBe('kernel-process');
 		});
 
@@ -977,7 +976,7 @@ describe('KubernetesCompute', () => {
 					if (cmd[2].includes('setsid')) return { stdout: '4242', stderr: '', exitCode: 0 };
 					if (cmd[2].includes('connect_ex')) return { stdout: '', stderr: '', exitCode: 1 };
 					if (cmd[2].startsWith('kill -0')) return { stdout: '', stderr: '', exitCode: 1 };
-					if (cmd[2].includes('cat /tmp/mh-proc')) {
+					if (cmd[2].startsWith('cat ') && cmd[2].includes('/tmp/mh-proc')) {
 						return { stdout: 'Traceback: boom', stderr: '', exitCode: 0 };
 					}
 					return;
@@ -997,7 +996,7 @@ describe('KubernetesCompute', () => {
 					if (cmd[2].includes('setsid')) return { stdout: '4242', stderr: '', exitCode: 0 };
 					if (cmd[2].includes('connect_ex')) return { stdout: '', stderr: '', exitCode: 1 };
 					if (cmd[2].startsWith('kill -0')) return { stdout: '', stderr: '', exitCode: 0 };
-					if (cmd[2].includes('cat /tmp/mh-proc')) {
+					if (cmd[2].startsWith('cat ') && cmd[2].includes('/tmp/mh-proc')) {
 						return { stdout: 'still importing', stderr: '', exitCode: 0 };
 					}
 					return;
@@ -1013,7 +1012,7 @@ describe('KubernetesCompute', () => {
 			const world = makeWorld({
 				execImpl: (cmd) => {
 					if (cmd[2].includes('setsid')) return { stdout: '4242\n', stderr: '', exitCode: 0 };
-					if (cmd[2].includes('cat /tmp/mh-proc')) {
+					if (cmd[2].startsWith('cat ') && cmd[2].includes('/tmp/mh-proc')) {
 						return { stdout: 'kernel log', stderr: '', exitCode: 0 };
 					}
 					return;
@@ -1399,7 +1398,7 @@ computeContract(
 					if (cmd.startsWith('kill -0 ')) {
 						return { stdout: '', stderr: '', exitCode: launch?.portOpen ? 0 : 1 };
 					}
-					if (cmd.startsWith('cat /tmp/mh-proc-')) {
+					if (cmd.startsWith('cat ') && cmd.includes('/tmp/mh-proc-')) {
 						return { stdout: launch?.transcript ?? '', stderr: '', exitCode: 0 };
 					}
 					if (cmd === 'false') {

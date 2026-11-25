@@ -64,6 +64,7 @@ import type { SandboxId } from '@marimo-hub/core/ids';
 import type { Timings } from '@marimo-hub/core/timing';
 import { createK8sClient } from './client';
 import { validatePodTemplate } from './podTemplate';
+import { detachedLaunch, processLogCommand } from './process';
 import { MANAGED_BY_VALUE, resolveIngressTlsMode, validateIngressHostnameTemplate } from './shared';
 import type {
 	EnsureSandboxOptions,
@@ -678,21 +679,19 @@ class KubernetesSandboxInstance implements SandboxInstance {
 
 	async startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess> {
 		await this.ensure();
-		const logFile = `/tmp/mh-proc-${++PROC_SEQ}.log`;
+		// Separate launches from different hub replicas must not share completion markers.
+		const logFile = `/tmp/mh-proc-${++PROC_SEQ}-${crypto.randomUUID()}.log`;
 		const cwd = options?.cwd ? `cd ${shellQuote(options.cwd)}; ` : '';
 		const processCommand = await this.environment.command(cmd, removeUndefined(options?.env ?? {}));
-		// Launch marimo detached so it outlives this exec session (the kernel must keep
-		// serving after startProcess returns). setsid + redirect + background; echo PID.
-		// The OUTER shell is non-login (its stdout is the PID we parse); the inner
-		// detached shell is a login shell so profile-provided env reaches the kernel
-		// (its output goes to the log file, where profile noise is harmless).
-		const launch = `${cwd}setsid sh -lc ${shellQuote(processCommand)} >${logFile} 2>&1 </dev/null & echo $!`;
+		// Only the command uses a login shell: profile output stays in local logs,
+		// while the supervisor reports its PID over the non-login exec transport.
+		const launch = `${cwd}${detachedLaunch(processCommand, logFile)}`;
 		const started = await this.execInPod(launch);
 		const pid = started.stdout.trim();
 
 		const execIn = (c: string) => this.execInPod(c);
 		const execLogin = (c: string) => this.execInPod(c, { login: true });
-		const readLog = async () => (await execIn(`cat ${logFile} 2>/dev/null || true`)).stdout;
+		const readLog = async () => (await execIn(processLogCommand(logFile))).stdout;
 		const name = this.name;
 		return {
 			id: options?.processId ?? `k8s-proc-${pid || PROC_SEQ}`,
