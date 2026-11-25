@@ -20,7 +20,7 @@ afterEach(async () => {
 async function runtime(
 	autoRun: boolean,
 	prefix = '',
-	fault?: 'fail' | 'delay' | 'startup-delay',
+	fault?: 'fail' | 'delay' | 'startup-delay' | 'catalog-delay',
 	authenticated = true,
 	bridge = false,
 ) {
@@ -100,6 +100,14 @@ if __name__ == "__main__":
             await asyncio.sleep(2)
             return session
         SessionManager._create_session = delayed_startup
+    if ${fault === 'catalog-delay' ? 'True' : 'False'}:
+        import asyncio
+        from marimo._server.host.session import SessionEventStream
+        prepare = SessionEventStream._prepare_session
+        async def delayed_catalog(self, session):
+            await prepare(self, session)
+            await asyncio.sleep(0.25)
+        SessionEventStream._prepare_session = delayed_catalog
     sys.argv[0] = "marimo"
     from marimo._cli.cli import main
     main(prog_name="marimo")
@@ -219,7 +227,8 @@ with connect(cfg["base"].replace("http:", "ws:") + "/ws?session_id=browser-sessi
         event = json.loads(ws.recv(timeout=15))
         if event.get("event") == "cell":
             cells.append(event["data"]["cell"])
-        if event.get("op") == "kernel-ready" or event.get("event") == "ready":
+        notification = event.get("data", {}).get("marimo", {}) if event.get("event") == "marimo" else event
+        if notification.get("op") == "kernel-ready":
             break
     if "autoRun" in cfg and event.get("op") == "kernel-ready":
         class Token(HTMLParser):
@@ -374,6 +383,17 @@ async with cm.get_context() as ctx:
 		},
 		30_000,
 	);
+
+	it('waits for kernel initialization after the host catalog is ready', async () => {
+		const rt = await runtime(true, '', 'catalog-delay');
+		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 10_000 })).toMatchObject({
+			status: 'ready',
+		});
+		const result = await rt.execute(
+			'from pathlib import Path; print(Path("runs.txt").read_text())',
+		);
+		expect(result, JSON.stringify(result)).toMatchObject({ success: true, stdout: 'x\n' });
+	}, 30_000);
 
 	it('retries initialization within one wait window without rerunning cells', async () => {
 		const rt = await runtime(true, '', 'delay');

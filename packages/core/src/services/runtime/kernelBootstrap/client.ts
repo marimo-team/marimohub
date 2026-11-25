@@ -125,7 +125,16 @@ class MarimoClient:
         ) as ws:
             while True:
                 message = json.loads(ws.recv(timeout=self.remaining()))
-                if isinstance(message, dict) and (message.get("op") == "kernel-ready" or message.get("event") == "ready"):
+                if not isinstance(message, dict):
+                    continue
+                # Host catalog readiness precedes the kernel connection handshake.
+                if message.get("event") == "marimo":
+                    message = message.get("data", {}).get("marimo", {})
+                notice = message.get("data", message)
+                if message.get("op") == "kernel-ready" or (
+                    session_id in sessions and message.get("op") == "alert"
+                    and notice.get("title") == "Reconnected"
+                ):
                     break
             yield session_id
 

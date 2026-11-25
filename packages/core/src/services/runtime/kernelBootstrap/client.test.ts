@@ -21,14 +21,14 @@ client.base = "http://127.0.0.1:2718"
 client.auth = {}
 client.diagnostics = {}
 client.remaining = lambda: 1
-for ready in ({"op": "kernel-ready"}, {"event": "ready", "data": {}}):
+for ready in ({"op": "kernel-ready"}, {"event": "marimo", "data": {"marimo": {"op": "kernel-ready"}}}):
     ws = module.connect.return_value.__enter__.return_value
     ws.recv.reset_mock()
-    ws.recv.side_effect = [json.dumps({"event": "runtime"}), json.dumps(ready)]
+    ws.recv.side_effect = [json.dumps({"event": "runtime"}), json.dumps({"event": "ready", "data": {}}), json.dumps(ready)]
     with patch.dict(sys.modules, {"websockets.sync.client": module}):
         with client.session({}) as session_id:
             assert uuid.UUID(session_id)
-            assert ws.recv.call_count == 2
+            assert ws.recv.call_count == 3
 `);
 	});
 	it('rejoins its startup session but does not take over a browser session', async () => {
@@ -38,17 +38,22 @@ from types import ModuleType
 from unittest.mock import MagicMock, patch
 module = ModuleType("websockets.sync.client")
 module.connect = MagicMock()
-module.connect.return_value.__enter__.return_value.recv.return_value = json.dumps({"event": "ready"})
+module.connect.return_value.__enter__.return_value.recv.return_value = json.dumps({"op": "kernel-ready"})
 client = MarimoClient({"port": 2718, "base_url": "/prefix", "authenticated": False}, lambda: 1)
 with patch.dict(sys.modules, {"websockets.sync.client": module}):
     with client.session({}) as first:
         assert module.connect.call_count == 1
-    with client.session({first: {}}) as resumed:
-        assert resumed == first
-        assert module.connect.call_count == 2
+    for reconnected in (
+        {"op": "alert", "data": {"title": "Reconnected"}},
+        {"event": "marimo", "data": {"marimo": {"op": "alert", "title": "Reconnected"}}},
+    ):
+        module.connect.return_value.__enter__.return_value.recv.return_value = json.dumps(reconnected)
+        with client.session({first: {}}) as resumed:
+            assert resumed == first
+    assert module.connect.call_count == 3
     with client.session({"browser-owned": {}}) as existing:
         assert existing == "browser-owned"
-        assert module.connect.call_count == 2
+        assert module.connect.call_count == 3
 `);
 	});
 	it('omits bearer authentication for tokenless servers without reading a token file', async () => {
