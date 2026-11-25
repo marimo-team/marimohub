@@ -356,16 +356,16 @@ printf '#!/usr/bin/env bash\nexit 1\n' >"$release_repo/bin/git"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$release_repo/bin/cargo"
 cat >"$release_repo/bin/gh" <<'MOCK'
 #!/usr/bin/env bash
-printf '%s\n' "$*" > "$GH_CALL_LOG"
+printf '%s\n' "$* $GITHUB_REPOSITORY" > "$GH_CALL_LOG"
 MOCK
 chmod +x "$release_repo/bin/"*
 (
 	cd "$release_repo"
 	GH_CALL_LOG="$temporary/gh-dispatch.log" PATH="$release_repo/bin:$PATH" node scripts/release.mjs 1.2.4
 )
-[[ "$(cat "$temporary/gh-dispatch.log")" == 'workflow run release-pr.yml --repo marimo-team/marimohub --ref main -f version=1.2.4' ]] || \
-	fail 'release command did not dispatch preparation on main'
-grep -q '"version":"1.2.3"' "$release_repo/package.json" || fail 'dispatch changed local version'
+[[ "$(cat "$temporary/gh-dispatch.log")" == 'release-control request 1.2.4 marimo-team/marimohub' ]] || \
+	fail 'release command did not select shared preparation'
+grep -q '"version":"1.2.3"' "$release_repo/package.json" || fail 'request changed local version'
 (
 	cd "$release_repo"
 	PATH="$release_repo/bin:$PATH" node scripts/prepare-release.mjs 1.2.4

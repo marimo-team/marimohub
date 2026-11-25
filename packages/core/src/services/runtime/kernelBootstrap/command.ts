@@ -4,7 +4,7 @@ import { shellQuote } from '../shell';
 import { KERNEL_BOOTSTRAP_CLIENT } from './client';
 
 export const KERNEL_BOOTSTRAP_LAUNCHER = String.raw`
-import json, shlex, subprocess, time
+import json, shlex, subprocess, tempfile, time
 from pathlib import Path
 
 def ps_arguments(line, bridge_launcher):
@@ -109,6 +109,25 @@ def client_outcome(result, diagnostics=None):
     diagnostics["reason"] = "invalid_output"
     return "unavailable"
 
+def run_probe(args, *, input, timeout, inspect):
+    if inspect:
+        return subprocess.run(args, input=input, text=True, capture_output=True, timeout=timeout)
+    # A short poll must not cancel connection-time initialization. The client has
+    # its own 30-second deadline and the sandbox lock prevents queued startups.
+    # An anonymous file lets it finish after this launcher returns, without
+    # leaving a result file or writing to an abandoned pipe.
+    with tempfile.TemporaryFile(mode="w+") as output:
+        process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=output,
+                                   stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+        try:
+            process.communicate(input, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if process.stdin is not None:
+                process.stdin.close()
+            raise
+        output.seek(0)
+        return subprocess.CompletedProcess(args, process.returncode, output.read())
+
 def run_launcher(token_file, seconds, inspect, client, expected_port, bridge_launcher=None, diagnostics=None):
     if diagnostics is None:
         diagnostics = {}
@@ -124,11 +143,11 @@ def run_launcher(token_file, seconds, inspect, client, expected_port, bridge_lau
             diagnostics.update(stage="client", authenticated=authenticated,
                                runtime_kind="bridge" if is_bridge(args, bridge_launcher) else "marimo")
             config = {"token_file": token_file, "port": port, "base_url": base_url,
-                      "seconds": remaining, "inspect": inspect, "authenticated": authenticated}
+                      "seconds": remaining if inspect else 30, "inspect": inspect, "authenticated": authenticated}
             # Use the server's environment without installing dependencies. Credentials
             # and routing prefixes stay inside the sandbox, outside command arguments.
-            result = subprocess.run([executable, "-c", client], input=json.dumps(config),
-                text=True, capture_output=True, timeout=remaining)
+            result = run_probe([executable, "-c", client], input=json.dumps(config),
+                timeout=remaining, inspect=inspect)
             return client_outcome(result, diagnostics)
         diagnostics["reason"] = "runtime_not_found"
         return "awaiting_client"
