@@ -109,12 +109,14 @@ class MarimoClient:
 
     @contextmanager
     def session(self, sessions):
-        if sessions:
+        # Rejoin our own startup handshake after a timeout: a listed kernel may
+        # still be awaiting initialization. Leave browser-owned sessions alone.
+        session_id = str(uuid.uuid5(uuid.NAMESPACE_URL, self.base))
+        if sessions and session_id not in sessions:
             yield next(iter(sessions))
             return
         self.diagnostics["stage"] = "websocket"
         from websockets.sync.client import connect
-        session_id = str(uuid.uuid4())
         with connect(
             self.base.replace("http://", "ws://", 1) + "/ws?session_id=" + session_id,
             additional_headers=self.auth,

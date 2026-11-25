@@ -31,6 +31,26 @@ for ready in ({"op": "kernel-ready"}, {"event": "ready", "data": {}}):
             assert ws.recv.call_count == 2
 `);
 	});
+	it('rejoins its startup session but does not take over a browser session', async () => {
+		await python(String.raw`
+import sys
+from types import ModuleType
+from unittest.mock import MagicMock, patch
+module = ModuleType("websockets.sync.client")
+module.connect = MagicMock()
+module.connect.return_value.__enter__.return_value.recv.return_value = json.dumps({"event": "ready"})
+client = MarimoClient({"port": 2718, "base_url": "/prefix", "authenticated": False}, lambda: 1)
+with patch.dict(sys.modules, {"websockets.sync.client": module}):
+    with client.session({}) as first:
+        assert module.connect.call_count == 1
+    with client.session({first: {}}) as resumed:
+        assert resumed == first
+        assert module.connect.call_count == 2
+    with client.session({"browser-owned": {}}) as existing:
+        assert existing == "browser-owned"
+        assert module.connect.call_count == 2
+`);
+	});
 	it('omits bearer authentication for tokenless servers without reading a token file', async () => {
 		await python(String.raw`
 from tempfile import TemporaryDirectory

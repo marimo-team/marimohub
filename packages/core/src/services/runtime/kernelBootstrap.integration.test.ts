@@ -20,7 +20,7 @@ afterEach(async () => {
 async function runtime(
 	autoRun: boolean,
 	prefix = '',
-	fault?: 'fail' | 'delay',
+	fault?: 'fail' | 'delay' | 'startup-delay',
 	authenticated = true,
 	bridge = false,
 ) {
@@ -64,7 +64,7 @@ if __name__ == "__main__":
     import uvicorn
     original_run = uvicorn.Server.run
     uvicorn.Server.run = lambda self: original_run(self, sockets=[listener])
-    if ${fault ? 'True' : 'False'}:
+    if ${fault === 'fail' || fault === 'delay' ? 'True' : 'False'}:
         from marimo._session.session import SessionImpl as Session
         original = Session.instantiate
         def faulty(self, *args, **kwargs):
@@ -91,6 +91,15 @@ if __name__ == "__main__":
                 Session.instantiate = faulty
         else:
             Session.instantiate = faulty
+    if ${fault === 'startup-delay' ? 'True' : 'False'}:
+        import asyncio
+        from marimo._server.session_manager import SessionManager
+        create = SessionManager._create_session
+        async def delayed_startup(self, *args, **kwargs):
+            session = await create(self, *args, **kwargs)
+            await asyncio.sleep(2)
+            return session
+        SessionManager._create_session = delayed_startup
     sys.argv[0] = "marimo"
     from marimo._cli.cli import main
     main(prog_name="marimo")
@@ -347,13 +356,13 @@ async with cm.get_context() as ctx:
 		expect(await listKernelSessions(rt.base, rt.request)).toEqual([]);
 	}, 30_000);
 
-	it.each(['fail', 'delay'] as const)(
+	it.each(['fail', 'delay', 'startup-delay'] as const)(
 		'recovers from initialization %s without rerunning cells',
 		async (fault) => {
 			const rt = await runtime(true, '', fault);
 			expect(
-				await bootstrapKernel(rt.sandbox, { timeoutMs: fault === 'delay' ? 1_000 : 5_000 }),
-			).toMatchObject({ status: fault === 'delay' ? 'initializing' : 'unavailable' });
+				await bootstrapKernel(rt.sandbox, { timeoutMs: fault === 'fail' ? 5_000 : 1_000 }),
+			).toMatchObject({ status: fault === 'fail' ? 'unavailable' : 'initializing' });
 			if (fault === 'fail') await writeFile(join(rt.root, 'recover'), '');
 			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 10_000 })).toMatchObject({
 				status: 'ready',
