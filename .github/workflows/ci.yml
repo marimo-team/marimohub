@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         suite: [backend, web]
-    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
+    runs-on: ${{ vars.CI_RUNNER_LARGE || vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -111,7 +111,7 @@ jobs:
   runtime-integrations:
     name: Runtime integrations
     # The Chromium AppArmor profile and Playwright install-deps target Ubuntu 24.04.
-    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.CI_RUNNER_LARGE || vars.CI_RUNNER_SMALL || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -211,7 +211,7 @@ jobs:
           METADATA: ${{ needs.metadata-postgres.result }}
 
   verify:
-    runs-on: ${{ vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
+    runs-on: ${{ vars.CI_RUNNER_LARGE || vars.CI_RUNNER_SMALL || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
