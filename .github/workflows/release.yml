@@ -28,7 +28,7 @@ jobs:
           fetch-depth: 0
       - name: Validate tag
         id: v
-        uses: marimo-team/internal-gh-actions/validate-release@36a2bd9a76109b91c9dc0bc65bfab95c9b632a3b
+        uses: marimo-team/internal-gh-actions/validate-release@3c6ddeb4b132541309e3c56bbca8b3605d24ecfd
 
   cli-assets:
     name: Test and generate CLI assets
@@ -540,7 +540,7 @@ jobs:
     if: always()
     steps:
       - name: Notify release result
-        uses: marimo-team/internal-gh-actions/release-notification@0a3db0e04217aaa03b3d011502874b020e9466a3
+        uses: marimo-team/internal-gh-actions/release-notification@3c6ddeb4b132541309e3c56bbca8b3605d24ecfd
         with:
           results: ${{ toJSON(needs) }}
           slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL_RELEASES }}
