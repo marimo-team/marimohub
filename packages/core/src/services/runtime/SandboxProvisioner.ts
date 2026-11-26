@@ -1648,14 +1648,6 @@ export class SandboxProvisioner {
 			);
 		const gitIdentity = invalidGitIdentity ? undefined : requestedGitIdentity;
 		const kernelAuthToken = options.kernelAuthToken;
-		if (
-			!resolvedEnv &&
-			!gitIdentity &&
-			kernelAuthToken === undefined &&
-			!options.contextFile &&
-			!options.restoreFilesystemSnapshotId
-		)
-			return;
 		await time(async () => {
 			try {
 				const sessionEnv = prepareMarimoPresentation(
@@ -1692,7 +1684,7 @@ export class SandboxProvisioner {
 					vars.MARIMOHUB_CONTEXT_FILE =
 						sandbox.resolveProcessPath?.(options.contextFile.path) ?? options.contextFile.path;
 				}
-				const defaults = sessionEnv?.defaults;
+				const defaults = { MARIMO_SERVER_TRANSPORT: 'sse', ...sessionEnv?.defaults };
 				const writeFiles = async () => {
 					if (
 						!options.restoreFilesystemSnapshotId &&

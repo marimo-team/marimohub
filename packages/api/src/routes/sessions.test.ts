@@ -2754,6 +2754,7 @@ describe('Session routes', () => {
 		);
 		// Cache/state redirects are fallbacks — an image defining its own wins.
 		expect(calls.setEnvDefaults).toContainEqual({
+			MARIMO_SERVER_TRANSPORT: 'sse',
 			XDG_CACHE_HOME: '/tmp/marimohub-cache',
 			XDG_STATE_HOME: '/tmp/marimohub-state',
 		});

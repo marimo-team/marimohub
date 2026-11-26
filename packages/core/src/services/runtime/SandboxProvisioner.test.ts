@@ -927,7 +927,12 @@ describe('SandboxProvisioner', () => {
 						: exec(command, options),
 				);
 			} else {
-				vi.spyOn(instance, 'setEnvVars').mockRejectedValue(new Error('private environment'));
+				const setEnvVars = instance.setEnvVars.bind(instance);
+				vi.spyOn(instance, 'setEnvVars').mockImplementation((vars, options) =>
+					'PYTHONPATH' in vars
+						? Promise.reject(new Error('private environment'))
+						: setEnvVars(vars, options),
+				);
 			}
 			await expect(
 				new SandboxProvisioner(fakeComputeFrom(instance)).provision({
@@ -2451,7 +2456,12 @@ describe('SandboxProvisioner', () => {
 				files: [{ path: '.claude/CLAUDE.md', content: 'Use polars.' }],
 			});
 			expect(calls.startProcess).toHaveLength(1);
-			expect(calls.sequence).toEqual(['writeFiles', 'installAgentContext', 'startProcess']);
+			expect(calls.sequence).toEqual([
+				'setEnvDefaults',
+				'writeFiles',
+				'installAgentContext',
+				'startProcess',
+			]);
 		});
 
 		it('injects environment variables while agent HOME lookup is pending', async () => {
@@ -2473,7 +2483,10 @@ describe('SandboxProvisioner', () => {
 			try {
 				await vi.waitFor(() => {
 					expect(calls.setEnvVars).toContainEqual({ TEAM_SETTING: 'value' });
-					expect(calls.setEnvDefaults).toContainEqual({ MARIMO_SETTING: 'default' });
+					expect(calls.setEnvDefaults).toContainEqual({
+						MARIMO_SERVER_TRANSPORT: 'sse',
+						MARIMO_SETTING: 'default',
+					});
 				});
 				expect(calls.startProcess).toEqual([]);
 			} finally {
@@ -2925,7 +2938,12 @@ describe('SandboxProvisioner', () => {
 				{ path: '/var/run/marimohub/wif-token', content: 'eyJ.jwt.sig' },
 			]);
 			// Env + token file must land before the kernel process starts.
-			expect(calls.sequence).toEqual(['writeFiles', 'setEnvVars', 'startProcess']);
+			expect(calls.sequence).toEqual([
+				'writeFiles',
+				'setEnvVars',
+				'setEnvDefaults',
+				'startProcess',
+			]);
 		});
 
 		it('batches the kernel token, context, and credentials before launching marimo', async () => {
@@ -2956,7 +2974,12 @@ describe('SandboxProvisioner', () => {
 				{ path: KERNEL_AUTH_TOKEN_FILE, content: TEST_KERNEL_AUTH_TOKEN },
 			]);
 			expect(calls.writeFiles).toHaveLength(1);
-			expect(calls.sequence).toEqual(['writeFiles', 'setEnvVars', 'startProcess']);
+			expect(calls.sequence).toEqual([
+				'writeFiles',
+				'setEnvVars',
+				'setEnvDefaults',
+				'startProcess',
+			]);
 			expect(calls.startProcess[0].cmd).toContain(
 				`--token --token-password-file '${KERNEL_AUTH_TOKEN_FILE}'`,
 			);
@@ -3059,12 +3082,14 @@ describe('SandboxProvisioner', () => {
 				sessionEnv: { defaults: { XDG_CACHE_HOME: '/tmp/marimohub-cache' } },
 			});
 
-			expect(calls.setEnvDefaults).toEqual([{ XDG_CACHE_HOME: '/tmp/marimohub-cache' }]);
+			expect(calls.setEnvDefaults).toEqual([
+				{ MARIMO_SERVER_TRANSPORT: 'sse', XDG_CACHE_HOME: '/tmp/marimohub-cache' },
+			]);
 			expect(calls.setEnvVars).toHaveLength(0);
 			expect(calls.sequence).toEqual(['setEnvDefaults', 'startProcess']);
 		});
 
-		it('skips the env calls when sessionEnv holds only empty objects', async () => {
+		it('defaults to SSE when sessionEnv holds only empty objects', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 
@@ -3078,8 +3103,8 @@ describe('SandboxProvisioner', () => {
 			});
 
 			expect(calls.setEnvVars).toHaveLength(0);
-			expect(calls.setEnvDefaults).toHaveLength(0);
-			expect(calls.sequence).toEqual(['startProcess']);
+			expect(calls.setEnvDefaults).toEqual([{ MARIMO_SERVER_TRANSPORT: 'sse' }]);
+			expect(calls.sequence).toEqual(['setEnvDefaults', 'startProcess']);
 		});
 
 		it('does not call setEnvVars/writeFile when sessionEnv is omitted', async () => {
@@ -3096,7 +3121,20 @@ describe('SandboxProvisioner', () => {
 
 			expect(calls.setEnvVars).toHaveLength(0);
 			expect(calls.writeFile).toHaveLength(0);
-			expect(calls.sequence).toEqual(['startProcess']);
+			expect(calls.sequence).toEqual(['setEnvDefaults', 'startProcess']);
+		});
+
+		it('preserves a project transport override', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				sessionEnv: { defaults: { MARIMO_SERVER_TRANSPORT: 'ws' } },
+			});
+			expect(calls.setEnvDefaults).toEqual([{ MARIMO_SERVER_TRANSPORT: 'ws' }]);
 		});
 
 		it('fallback path: mountBucket throws -> usedFallback true, restoreWorkspace copies the workspace in', async () => {
